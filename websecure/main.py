@@ -1,0 +1,3084 @@
+from __future__ import annotations
+from websecure.core.http import verify_for_phase
+import inspect
+import importlib.util
+from websecure.core.auth_flow import run_auto_signup, run_device_code_flow
+from importlib.util import find_spec as _find_spec
+from importlib import import_module as _import_module
+from websecure.core.fuzzer import verify_and_score
+from websecure.core.flows import run_business_logic_flows
+from websecure.core.bl_concurrency import run_race_conditions
+import re as _re_urlnorm
+from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
+import os, sys, argparse, json, time, socket
+from websecure.core.phases import build_plan
+import importlib, importlib.util as _ws_imp_util
+import socket, ssl, json, importlib, importlib.util as _iul
+import logging as _logging
+import sys as _sys, pathlib as _pathlib
+from urllib.parse import urlparse, urljoin, urldefrag
+from time import sleep
+import importlib.util
+import asyncio
+import shutil
+import subprocess
+from urllib.parse import urlparse
+import importlib.util as _ilu_patch
+import sys
+import time
+import os as _ab_os
+from pathlib import Path as _P
+import importlib as _im
+import importlib.util as _iul
+import argparse
+from websecure.core.utils import ensure_wordlists as _ensure_wl
+from concurrent.futures import ThreadPoolExecutor
+import time as _t
+_p = _pathlib.Path(__file__).resolve()
+_pkg_root = str(_p.parent.parent)
+if _pkg_root not in _sys.path:
+    _sys.path.insert(0, _pkg_root)
+del _sys, _pathlib, _p, _pkg_root
+
+import sys as _ws_sys_path_guard, os as _ws_os_path_guard
+_ws_pkg_dir = _ws_os_path_guard.path.dirname(_ws_os_path_guard.path.abspath(__file__))
+_ws_parent_dir = _ws_os_path_guard.path.dirname(_ws_pkg_dir)
+if _ws_parent_dir not in _ws_sys_path_guard.path:
+    _ws_sys_path_guard.path.insert(0, _ws_parent_dir)
+del _ws_pkg_dir, _ws_parent_dir, _ws_sys_path_guard, _ws_os_path_guard
+
+import sys as _sys, os as _os  # restored legacy aliases for path guard
+_logger = _logging.getLogger(__name__)
+_req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
+requests = _req_mod  # alias; may be None
+
+_BOUNDARY_EXC = tuple([
+    (_req_mod.exceptions.RequestException if (_req_mod and hasattr(_req_mod, "exceptions")) else Exception),
+    TimeoutError,
+    ssl.SSLError,
+    socket.gaierror,
+    OSError,
+    json.JSONDecodeError,
+    ImportError,
+    ValueError,
+])
+
+def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
+    _rmod = None
+    if _iul.find_spec('websecure.core.reporting') is not None:
+        _rmod = importlib.import_module('websecure.core.reporting')
+    elif _iul.find_spec('core.reporting') is not None:
+        _rmod = importlib.import_module('core.reporting')
+    if _rmod is not None and hasattr(_rmod, 'add_result'):
+        _rmod.add_result(
+            type="phase_error",
+            severity="error",
+            message=str(_err),
+            meta={
+                "phase": _phase,
+                "where": _where,
+                "exc_type": _err.__class__.__name__,
+            },
+        )
+# --- end auto-injected header ---
+
+
+def _ws_import_any(*names: str):
+    """
+    Belirtilen modül adlarını sırayla dener ve ilkini import eder.
+    Sadece bu yardımcı içinde find_spec kullanılır (1.2 gereği).
+    Çalışma sırasında modül çevirmez; deterministik ve tek-yön.
+    """
+    for n in names:
+        if not isinstance(n, str) or not n.strip():
+            continue
+        try:
+            if _ws_imp_util.find_spec(n) is not None:
+                return importlib.import_module(n)
+        except _BOUNDARY_EXC as e:
+            _logger.error('phase error [main]', exc_info=True)
+            _report_phase_error('main', 'main.py', e)
+            continue
+    return None
+
+def _ws_import_attr(names, attr: str, default=None):
+    m = _ws_import_any(*names) if isinstance(names, (list, tuple)) else _ws_import_any(names)
+    if m is None:
+        return default
+    return getattr(m, attr, default)
+
+def _ws_spec(name: str):
+    try:
+        return _ws_imp_util.find_spec(name)
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [main]', exc_info=True)
+        _report_phase_error('main', 'main.py', e)
+        return None
+
+def _ws_has(*names: str) -> bool:
+    return _ws_import_any(*names) is not None
+
+
+
+if __package__ is None or __package__ == "":
+    _pkg_dir = _os.path.dirname(_os.path.abspath(__file__))
+    _parent = _os.path.dirname(_pkg_dir)
+    if _parent not in _sys.path:
+        _sys.path.insert(0, _parent)
+    __package__ = "websecure"
+def _guess_host_from_url(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        h = urlparse(url).hostname or ""
+        return h
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [main]', exc_info=True)
+        _report_phase_error('main', 'main.py', e)
+        return ""
+
+def _load_config(p: str) -> dict:
+    if not p or not os.path.exists(p):
+        return {}
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+
+_ALLOWED_SCHEMES = ("https", "http")
+_DOMAIN_RE__WS3 = _re_urlnorm.compile(r"^(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}\.?$")
+_IPV4_RE__WS3 = _re_urlnorm.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+
+def _ws3_is_ipv6_literal(s: str) -> bool:
+    return (s.startswith("[") and s.endswith("]")) or (":" in s)
+
+
+def _ws3_looks_like_host(s: str) -> bool:
+    return bool(
+        _DOMAIN_RE__WS3.match(s) or _IPV4_RE__WS3.match(s) or _ws3_is_ipv6_literal(s) or s.lower() == "localhost")
+
+
+def _ws3_fix_scheme_and_netloc(p: _SplitResult) -> _SplitResult:
+    sch = (p.scheme or "").lower()
+    netloc = p.netloc
+    path = p.path
+    if not netloc and path and _ws3_looks_like_host(path):
+        netloc = path
+        path = ""
+    return _SplitResult(sch, netloc, path, p.query, p.fragment)
+
+
+def _ws3_normalize_input_url(raw: str) -> str | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if "://" not in s and _ws3_looks_like_host(s):
+        s = "https://" + s
+    p = _urlsplit(s)
+    p2 = _ws3_fix_scheme_and_netloc(p)
+    if not p2.netloc:
+        return None
+    return _urlunsplit((p2.scheme, p2.netloc, p2.path, p2.query, p2.fragment))
+
+
+def _ws3_curl_effective_url(url: str, timeout_s: float) -> str:
+    curl_bin = shutil.which("curl")
+    if not curl_bin:
+        return url
+    cp = subprocess.run(
+        [curl_bin, "-I", "-L", "-m", str(int(timeout_s)), "-sS", "-o", "/dev/null", "-w", "%{url_effective}", url],
+        capture_output=True, text=True, check=False,
+    )
+    eff = (cp.stdout or "").strip()
+    return eff or url
+
+
+def _detect_final_url_and_scheme_robust(raw_input_url: str, timeout_s: float = 6.0) -> tuple[str | None, str | None]:
+    s = (raw_input_url or "").strip()
+    if not s:
+        return None, None
+
+    if "://" in s:
+        norm = _ws3_normalize_input_url(s)
+        if not norm:
+            return None, None
+        eff = _ws3_curl_effective_url(norm, timeout_s)
+        norm2 = _ws3_normalize_input_url(eff) or norm
+        sch = (_urlsplit(norm2).scheme or "http").lower()
+        return norm2, sch
+
+
+    host = s.strip("/")
+    candidates = [
+        f"https://{host}",
+        f"http://{host}",
+        f"https://www.{host}",
+        f"http://www.{host}",
+    ]
+
+
+    curl_bin = shutil.which("curl")
+    if curl_bin:
+        for u in candidates:
+            cp = subprocess.run(
+                [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout_s)), u, "-w",
+                 "%{url_effective} %{http_code}", "-o", "/dev/null"],
+
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+            )
+            if cp.returncode != 0 or not cp.stdout:
+                continue
+            parts = (cp.stdout.strip()).split()
+            if len(parts) >= 2 and parts[-1].isdigit():
+                code = int(parts[-1])
+                final = " ".join(parts[:-1])
+                if 200 <= code < 600:
+                    eff = final.split("#", 1)[0].rstrip("/")
+                    sch = (_urlsplit(eff).scheme or "http").lower()
+                    return eff, sch
+
+
+    u0 = candidates[0]
+    sch = (_urlsplit(u0).scheme or "http").lower()
+    return u0, sch
+
+
+def _session_priming(session, base_url, cfg):
+    # Kimliksiz mod priming kapalıysa geç
+    if not (((cfg or {}).get("kimliksiz_mod") or {}).get("priming") or {}).get("enabled"):
+        return
+
+    url = (base_url or "").strip() or "http://localhost"
+
+
+    p = _urlsplit(url if "://" in url else "http://" + url)
+    host = p.hostname or (p.netloc or "").split("/")[0]
+
+    https_open = False
+    if host:
+        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
+        s = socket.socket(fam, socket.SOCK_STREAM)
+        s.settimeout(5)
+        code = s.connect_ex((host, 443))
+        s.close()
+        https_open = (code == 0)
+
+    http_cfg = dict((cfg or {}).get("http") or {})
+    tls_cfg = dict((cfg or {}).get("tls") or {})
+    verify_flag = getattr(session, "verify", True)
+
+    u = url if "://" in url else ("http://" + url)
+
+    if bool(http_cfg.get("insecure_skip_verify", False)):
+        verify_flag = False
+    elif https_open and bool(tls_cfg.get("soft_fail", True)):
+
+        verify_flag = False
+
+    r = session.get(u, timeout=6, allow_redirects=True,
+                    verify=verify_for_phase(cfg, 'egress', u))
+
+    hdr_token = r.headers.get("x-csrf-token") or r.headers.get("x-xsrf-token")
+    if hdr_token:
+        session.headers.update({"X-CSRF-Token": hdr_token})
+
+
+if _ws_spec('doctest') is not None:
+    from doctest import debug  # optional
+else:
+    debug = None
+
+if _ws_spec('discovered') is not None:
+    import discovered  # optional
+else:
+    discovered = None
+if _ws_spec('starlette') is not None:
+    from starlette import endpoints  # optional
+else:
+    endpoints = None
+if _ws_spec('urllib3.util') is not None:
+    from urllib3.util import url  # optional
+else:
+    url = None
+
+_discover_func = None
+
+if _find_spec("websecure.crawler") is not None:
+    _mod = _import_module("websecure.crawler")
+    _discover_func = getattr(_mod, "discover_dynamic_endpoints", None)
+elif _find_spec("crawler") is not None:
+    _mod = _import_module("crawler")
+    _discover_func = getattr(_mod, "discover_dynamic_endpoints", None)
+
+if callable(_discover_func):
+    discover_dynamic_endpoints = _discover_func  # dış API korunur
+    DISCOVER_DYNAMIC_ENDPOINTS_SOURCE = _mod.__name__
+else:
+    DISCOVER_DYNAMIC_ENDPOINTS_SOURCE = "unavailable"
+
+
+# Basit, sağlam ve bağımsız dinamik keşif (Selenium tabanlı)
+# Not: try/except yok; hata yakalama Future.exception() ile üst katmanda yapılır.
+def discover_dynamic_endpoints(start_url: str,
+                               headless: bool = True,
+                               timeout_ms: int = 15000,
+                               max_pages: int = 200,
+                               record_dir: str | None = None,
+                               prefer: str = "selenium",
+                               return_artifacts: bool = True) -> tuple[list[str], dict]:
+
+    # İç iş: browser işi (istisna atmadan bırakılır, Future.exception ile gözlemlenir)
+    def _job() -> tuple[list[str], dict]:
+        # WebDriver ayağa kaldır
+        from websecure.core.utils import setup_webdriver  # mevcut modülden kullan
+        drv = setup_webdriver()
+        if drv is None:
+            return ([], {"reason": "webdriver_unavailable"} if return_artifacts else {})
+        # Zaman aşımı ve başlangıç parametreleri
+        pl_timeout = max(1, int(timeout_ms / 1000))
+        if hasattr(drv, "set_page_load_timeout"):
+            drv.set_page_load_timeout(pl_timeout)
+        parsed = urlparse(start_url)
+        origin = (parsed.scheme, parsed.netloc)
+        q: list[str] = [start_url]
+        seen: set[str] = set()
+        found: list[str] = []
+        steps = 0
+        while q and len(seen) < int(max_pages):
+            u = q.pop(0)
+            if u in seen:
+                continue
+            seen.add(u)
+            drv.get(u)
+            # Bağlantıları DOM'dan topla
+            hrefs = drv.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
+            if isinstance(hrefs, list):
+                for h in hrefs:
+                    if not isinstance(h, str):
+                        continue
+                    p = urlparse(h)
+                    if (p.scheme, p.netloc) != origin:
+                        continue
+                    h2, _ = urldefrag(h)
+                    if h2 not in found:
+                        found.append(h2)
+                    if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
+                        q.append(h2)
+            steps += 1
+            if steps % 5 == 0:
+                sleep(0.05)  # küçük nefes molası
+        # Kapat
+        if hasattr(drv, "quit"):
+            drv.quit()
+        art = {"visited": len(seen), "found": len(found), "source": "selenium_fallback"} if return_artifacts else {}
+        return (found, art)
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_job)
+        # 2x page_load_timeout + tavan
+        hard_timeout = max(5, int((timeout_ms / 1000) * 2 + 10))
+        # exception propagasyonunu engelle: sonucu ancak exception yoksa al
+        # Burada future.exception hiç try/except kullanmadan kontrol sağlar
+        end = None
+        t0 = __import__("time").time()
+        res: tuple[list[str], dict] | None = None
+        while end is None and (__import__("time").time() - t0) < hard_timeout:
+            exc = fut.exception(timeout=0.1)
+            if exc is None and fut.done():
+                res = fut.result()
+                end = True
+            elif exc is not None:
+                # başarısızlık: sessizce boş dön
+                end = True
+        if res is None:
+            return ([], {"reason": "timeout"} if return_artifacts else {})
+        return res
+
+
+
+def ensure_session(cfg):
+    if _ws_spec('core.http') is not None:
+        from websecure.core.http import hardened_session, instrument_requests_session  # type: ignore
+        http_cfg = {}
+        if isinstance(cfg, dict):
+            http_cfg = dict(cfg.get("http") or {})
+            # Backward-compat: allow passing http keys at top-level too
+            for k in ("headers","proxies","verify","timeout","pool_maxsize","retries","rate_limit","idempotent_first","default_headers","identity_pools"):
+                if k in cfg and k not in http_cfg:
+                    http_cfg[k] = cfg[k]
+        s = hardened_session(http_cfg)
+        instrument_requests_session(s, cfg or {})
+        return s
+    import requests
+    s = requests.Session()
+    return s
+
+    import requests
+    s = requests.Session()
+    return s
+
+
+
+
+if _ws_spec("core.utils") is not None:
+    from websecure.core.utils import (
+        current_identity,
+        apply_detected_scheme,
+        load_config,
+        run_content_discovery,
+        setup_logging,
+        setup_webdriver,
+        silence_insecure_request_warnings,
+        validate_url,
+    )
+elif _ws_spec("utils") is not None:
+    from utils import (
+        current_identity,
+        apply_detected_scheme,
+        load_config,
+        run_content_discovery,
+        setup_logging,
+        setup_webdriver,
+        silence_insecure_request_warnings,
+        validate_url,
+    )
+else:
+    raise ImportError("Neither 'core.utils' nor 'utils' is importable")
+
+_det_spec = _ws_spec("core.detect")
+if _det_spec is not None:
+    _det = importlib.import_module('websecure.core.detect')
+    _classify_cb = getattr(_det, 'classify_access_block', None)
+    if callable(_classify_cb):
+        classify_access_block = _classify_cb  # re-export locally
+    else:
+        def classify_access_block(status: int, headers: dict, body: str) -> str:
+            hdrs = headers or {}
+            ua = (hdrs.get('server', '') + ' ' + hdrs.get('via', '')).lower()
+            text = (body or '').lower()
+            if status == 429:
+                return 'rate_limit'
+            if 'cloudflare' in ua or 'attention required' in text:
+                return 'waf_challenge'
+            if status in (401, 403):
+                if 'captcha' in text or 'recaptcha' in text:
+                    return 'captcha_block'
+                return 'auth_required'
+            return 'unknown'
+    _prime = getattr(_det, 'prime_session', None)
+    if callable(_prime):
+        prime_session = _prime  # mevcut (core.http)’teki varsa üzerine yazar
+else:
+    def classify_access_block(status: int, headers: dict, body: str) -> str:
+        hdrs = headers or {}
+        ua = (hdrs.get('server', '') + ' ' + hdrs.get('via', '')).lower()
+        text = (body or '').lower()
+        if status == 429:
+            return 'rate_limit'
+        if 'cloudflare' in ua or 'attention required' in text:
+            return 'waf_challenge'
+        if status in (401, 403):
+            if 'captcha' in text or 'recaptcha' in text:
+                return 'captcha_block'
+            return 'auth_required'
+        return 'unknown'
+
+
+    def classify_access_block(status: int, headers: dict, body: str) -> str:  # minimal heuristic, istisnasız
+        get_hdr = headers.get if isinstance(headers, dict) or hasattr(headers, "get") else (lambda k, d=None: d)
+
+        server_raw = get_hdr("server", "")
+        via_raw = get_hdr("via", "")
+
+        server = server_raw.lower() if isinstance(server_raw, str) else str(server_raw).lower()
+        via = via_raw.lower() if isinstance(via_raw, str) else str(via_raw).lower()
+        ua = (server + " " + via).strip()
+
+        text = body.lower() if isinstance(body, str) else str(body or "").lower()
+        sc = status if isinstance(status, int) else -1
+
+        if sc == 429:
+            return "rate_limit"
+        if "cloudflare" in ua or "attention required" in text:
+            return "waf_challenge"
+        if sc in (401, 403):
+            if "captcha" in text or "recaptcha" in text:
+                return "captcha_block"
+            return "auth_required"
+        return "unknown"
+
+
+    _rep_spec = _ws_spec("core.reporting")
+    reporting_addendum = importlib.import_module("websecure.core.reporting") if _rep_spec is not None else None
+
+
+from contextlib import suppress
+
+_plan_spec = _ws_spec("core.phases")
+if _plan_spec is not None:
+    _phases = importlib.import_module("websecure.core.phases")
+    build_plan = getattr(_phases, "build_plan", None)
+else:
+    build_plan = None
+
+
+# === Dinamik kanonik çözümleyici (core.utils.resolve_canonical_base) ===
+def _get_resolve_canonical_base():
+    # Öncelik: core.utils, sonra kök utils
+    mod_name = None
+    if _ws_spec("core.utils") is not None:
+        mod_name = "core.utils"
+    elif _ws_spec("utils") is not None:
+        mod_name = "utils"
+
+    if mod_name is not None:
+        mod = importlib.import_module(mod_name)
+        func = getattr(mod, "resolve_canonical_base", None)
+        if callable(func):
+            return func
+
+    # Minimal fallback (modül bulunamazsa en azından erişim deneyelim)
+    import subprocess
+    import shutil
+    def _fallback(target, session, timeout=6, try_www=True):
+        t = (target or "").strip()
+        if not t:
+            return None
+
+        if "://" in t:
+            candidates = [t]
+        else:
+            host = t.strip("/")
+            if try_www:
+                candidates = [
+                    f"https://{host}",
+                    f"https://www.{host}",
+                    f"http://{host}",
+                    f"http://www.{host}",
+                ]
+            else:
+                candidates = [f"https://{host}", f"http://{host}"]
+
+        ua = "Mozilla/5.0"
+        sess_headers = getattr(session, "headers", None)
+        if isinstance(sess_headers, dict):
+            ua = (sess_headers.get("User-Agent") or ua) or "Mozilla/5.0"
+        verify = getattr(session, "verify", True)
+
+        curl_bin = shutil.which("curl")
+
+        if curl_bin:
+            def _probe_with_curl(url: str) -> str | None:
+                args = [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout)), "-A", ua, url,
+                        "-w", "%{url_effective} %{http_code}\n", "-o", "/dev/null"]
+                if isinstance(verify, bool) and verify is False:
+                    args.insert(1, "--insecure")
+                elif isinstance(verify, str) and verify:
+                    args[1:1] = ["--cacert", verify]
+
+                cp = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+                if cp.returncode == 0:
+                    out = (cp.stdout or "").strip()
+                    if out:
+                        parts = out.split()
+                        if len(parts) >= 2 and parts[-1].isdigit():
+                            code = int(parts[-1])
+                            final = " ".join(parts[:-1])
+                            if 200 <= code < 600:
+                                return final.split("#", 1)[0].rstrip("/")
+                return None
+
+            for url in candidates:
+                ok = _probe_with_curl(url)
+                if ok:
+                    return ok
+            return None
+
+        # curl yoksa, sessiyonla ilerle (istisna yakalama YOK; hata olursa bastırılmaz)
+        get = getattr(session, "get", None)
+        if not callable(get):
+            return None
+
+        req_headers = {"User-Agent": ua}
+        for url in candidates:
+            r = get(url, headers=req_headers, timeout=timeout, allow_redirects=True, verify=verify)
+            sc = getattr(r, "status_code", 0)
+            if 200 <= sc < 600:
+                return r.url.split("#", 1)[0].rstrip("/")
+
+        return None
+
+    return _fallback
+
+
+_scan_spec = _ws_spec("core.scan_modes")
+if _scan_spec is not None:
+    _scan_mod = importlib.import_module("websecure.core.scan_modes")
+    ScanContext = getattr(_scan_mod, "ScanContext", None)
+    ScanMode = getattr(_scan_mod, "ScanMode", None)
+    run_mode = getattr(_scan_mod, "run_mode", None)
+else:
+    ScanContext = None
+    ScanMode = None
+
+
+    def run_mode(*_a, **_k):
+        return None
+
+# --- Faz Planı / Orkestrasyon ---
+_flow_spec = _ws_spec("core.flow_runner")
+if _flow_spec is not None:
+    _flow_mod = importlib.import_module("websecure.core.flow_runner")
+    run_plan_if_needed = getattr(_flow_mod, "run_plan_if_needed", None)
+else:
+    run_plan_if_needed = None
+
+# --- TLS ---
+_tls_spec = _ws_spec("scanners.tls")
+if _tls_spec is not None:
+    _tls_mod = importlib.import_module('websecure.scanners.tls')
+    _check = getattr(_tls_mod, "check_ssl_certificate", None)
+    if callable(_check):
+        check_ssl_certificate = _check
+    else:
+        def check_ssl_certificate(*a, **k):
+            return {
+                "host": None,
+                "subject_CN": None,
+                "not_before": None,
+                "not_after": None,
+                "days_remaining": None,
+                "tls_version": None,
+                "problems": ["tls_module_missing"],
+            }
+else:
+    def check_ssl_certificate(*a, **k):
+        return {
+            "host": None,
+            "subject_CN": None,
+            "not_before": None,
+            "not_after": None,
+            "days_remaining": None,
+            "tls_version": None,
+            "problems": ["tls_module_missing"],
+        }
+
+# --- Raporlama / sonuç kovaları ---
+import importlib, importlib.util as _iul
+
+_reporting_mod = None
+_ROOT = __file__
+
+
+
+_spec_core = _ws_spec("core.reporting")
+if _spec_core is not None:
+    _org = getattr(_spec_core, "origin", None)
+    if isinstance(_org, str) and _org != "built-in":
+        _reporting_mod = _im.import_module("core.reporting")
+
+# İkinci şans: düz 'reporting' ama sadece proje kökündense
+if _reporting_mod is None:
+    _spec_plain = _ws_spec("reporting")
+    if _spec_plain is not None:
+        _org = getattr(_spec_plain, "origin", None)
+        if isinstance(_org, str):
+            _org_p = str(_P(_org).resolve())
+            _root_p = str(_P(__file__).resolve().parent)
+            _is_local = _org_p.startswith(_root_p)
+            _is_site = ("site-packages" in _org_p.lower()) or ("dist-packages" in _org_p.lower())
+            if _is_local and not _is_site:
+                _reporting_mod = _im.import_module("reporting")
+
+if _reporting_mod is None:
+    def add_result(*_a, **_k):
+        return None
+
+
+    def configure_logging(*_a, **_k):
+        return None
+
+
+    def perform_reporting(*_a, **_k):
+        return {"written": {}}
+
+
+    def redact_sensitive(x):
+        return x
+
+
+    def get_bucket_results():
+        return {}
+
+
+    def note_auth_outcome(*_a, **_k):
+        return None
+else:
+    add_result = getattr(_reporting_mod, "add_result", lambda *_a, **_k: None)
+    configure_logging = getattr(_reporting_mod, "configure_logging", lambda *_a, **_k: None)
+    _pri = getattr(_reporting_mod, "perform_reporting_and_integration", None)
+    if _pri is not None:
+        perform_reporting = _pri
+    else:
+        _pri = getattr(_reporting_mod, "perform_reporting", None)
+    if _pri is None:
+        def perform_reporting(*_a, **_k):
+            _flush = getattr(_reporting_mod, "flush", None)
+            if callable(_flush):
+                _flush()
+            return {"written": {}}
+    else:
+        perform_reporting = _pri
+    redact_sensitive = getattr(_reporting_mod, "redact_sensitive", lambda x: x)
+    get_bucket_results = getattr(_reporting_mod, "get_bucket_results", lambda: {})
+    note_auth_outcome = getattr(_reporting_mod, "note_auth_outcome", lambda *_a, **_k: None)
+
+
+# --- Skorlama & entegrasyon ---
+
+# --- Port tarama & discovery ---
+def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: bool = False, protocol: str = "tcp"):
+    rw = ((cfg.get('remote_workers') or {}).get('port_scan') or {}) if isinstance(cfg, dict) else {}
+    if rw.get('enabled') and rw.get('workers'):
+        targets = [url] if isinstance(url, str) else list(url or [])
+        ports = list(range(1, 1024))
+        return scan_ports_distributed(targets, ports, rw.get('workers'), shared_key=rw.get('shared_key'))
+    return scan_ports(url, results, detailed=detailed, debug=debug, protocol=protocol)
+
+
+# --- Port Scanner ---
+    # Auto-binded orphan modules (plugin imports) — DO NOT REMOVE
+    for _m in [
+        'core.captcha',
+        'core.injection',
+        'core.runner',
+        'core.safe_regex',
+        'core.auth',
+        'crawler.crawler',
+    ]:
+        if _ws_spec(_m) is not None:
+            importlib.import_module(_m)
+
+
+# --- Crawler ---
+_crawl_mod = importlib.import_module('crawler') if _ws_spec('crawler') is not None else None
+crawl_website = getattr(_crawl_mod, 'crawl_website', None) if _crawl_mod else None
+WebCrawler = getattr(_crawl_mod, 'WebCrawler', None) if _crawl_mod else None
+CrawlerConfig = getattr(_crawl_mod, 'CrawlerConfig', None) if _crawl_mod else None
+
+if crawl_website is None:
+    def crawl_website(*a, **k):
+        return None
+
+# --- Güvenlik başlıkları ---
+# [WS12_RULE] scanner modül adı ≡ dosya adı (headers.py)
+from websecure.scanners.headers import get_security_headers as scan_security_headers
+from websecure.core.utils.ports import scan_ports
+
+
+# --- GraphQL ---
+from websecure.scanners.graphql import GraphQLScanner
+# --- SSRF/XXE ---
+_ssrf_mod = importlib.import_module('websecure.scanners.ssrf_xxe') if _ws_spec('websecure.scanners.ssrf_xxe') is not None else None
+ssrf_xxe_scan = getattr(_ssrf_mod, 'scan', None) if _ssrf_mod else None
+if ssrf_xxe_scan is None:
+    def ssrf_xxe_scan(*a, **k):
+        return None
+
+# --- OWASP / Nuclei (yeni entegrasyon) ---
+_owasp_mod = None
+if _ws_spec('scanners.owasp') is not None:
+    _owasp_mod = importlib.import_module('scanners.owasp')
+elif _ws_spec('owasp') is not None:
+    _owasp_mod = importlib.import_module('owasp')
+
+run_owasp_and_nuclei = getattr(_owasp_mod, 'run_owasp_and_nuclei', None) if _owasp_mod else None
+if run_owasp_and_nuclei is None:
+    def run_owasp_and_nuclei(*a, **k):
+        return {}
+
+
+def _call_scanner_if_available(mod_name: str, url, session=None, debug=False, auth_ctx=None):
+    spec = _ws_spec(mod_name)
+    mod = None
+    if spec is not None:
+        mod = importlib.import_module(mod_name)
+    else:
+        # Fallback: if module is like "scanners.xxx", try top-level "xxx"
+        if "." in mod_name:
+            fallback = mod_name.split(".", 1)[1]
+            if _ws_spec(fallback) is not None:
+                mod = importlib.import_module(fallback)
+    if mod is None:
+        return None
+
+    run = getattr(mod, "run", None)
+    if not callable(run):
+        return None
+
+    sig = inspect.signature(run)
+    params = sig.parameters
+    kw = {}
+    if "url" in params:
+        kw["url"] = url
+    if "session" in params:
+        kw["session"] = session
+    if "debug" in params:
+        kw["debug"] = debug
+    if "auth_ctx" in params:
+        kw["auth_ctx"] = auth_ctx
+    return run(**kw)
+
+
+def _bind_offensive(modname: str, fallback_name: str):
+    fn = None
+    if _ws_spec(modname) is not None:
+        _m = importlib.import_module(modname)
+        _r = getattr(_m, "run", None)
+        if callable(_r):
+            fn = _r
+    if fn is None:
+        def _fallback(*a, **k):
+            return None
+
+        _fallback.__name__ = fallback_name
+        return _fallback
+    return fn
+
+
+offensive_request_smuggling = _bind_offensive('scanners.request_smuggling', 'offensive_request_smuggling')
+offensive_mass_assignment = _bind_offensive('scanners.mass_assignment', 'offensive_mass_assignment')
+offensive_jwt = _bind_offensive('scanners.jwt', 'offensive_jwt')
+offensive_nosqli = _bind_offensive('scanners.nosqli', 'offensive_nosqli')
+offensive_ws_fuzz = _bind_offensive('scanners.ws_fuzz', 'offensive_ws_fuzz')
+
+# ws_fuzz modülü yoksa, ek saldırı taramalarını tetikleyen anlamlı bir fallback sağla
+if _ws_spec('scanners.ws_fuzz') is None:
+    def offensive_ws_fuzz(url, session=None, debug=False, auth_ctx=None):
+        _call_scanner_if_available("scanners.authorization", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("scanners.file_upload", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("scanners.graphql_attacks", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("scanners.ssrf_xxe", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("scanners.tls", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("scanners.owasp", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        return None
+
+# --- Authorization ---
+_authz = importlib.import_module('scanners.authorization') if _ws_spec(
+    'scanners.authorization') is not None else None
+RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
+RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
+authorization_run = getattr(_authz, 'run', None) if _authz else None
+if authorization_run is None:
+    def authorization_run(*a, **k):
+        return []
+
+# --- Authenticated helpers (auth-only probe) ---
+_authscan = importlib.import_module('scanners.authenticated_scan') if _ws_spec(
+    'scanners.authenticated_scan') is not None else None
+probe_auth_only = getattr(_authscan, 'probe_auth_only', None) if _authscan else None
+if probe_auth_only is None:
+    def probe_auth_only(*a, **k):
+        return None
+
+# --- Fuzzing / OAST ---
+_pf = importlib.import_module('fuzzing.param_fuzzer') if _ws_spec('fuzzing.param_fuzzer') is not None else None
+discover_params_from_crawl = getattr(_pf, 'discover_params_from_crawl', None) if _pf else None
+fuzz_endpoint = getattr(_pf, 'fuzz_endpoint', None) if _pf else None
+guess_additional_params = getattr(_pf, 'guess_additional_params', None) if _pf else None
+
+if discover_params_from_crawl is None:
+    def discover_params_from_crawl(*a, **k):
+        return {"query": [], "body": [], "json": []}
+if guess_additional_params is None:
+    def guess_additional_params(d, *a, **k):
+        return d
+if fuzz_endpoint is None:
+    def fuzz_endpoint(*a, **k):
+        return None
+
+_oast = importlib.import_module('fuzzing.osat') if _ws_spec('fuzzing.osat') is not None else None
+OASTClient = getattr(_oast, 'OASTClient', None) if _oast else None
+run_oast_on_target = getattr(_oast, 'run_oast_on_target', None) if _oast else None
+
+if OASTClient is None:
+    class OASTClient:
+        def __init__(self, *a, **k):
+            pass
+if run_oast_on_target is None:
+    def run_oast_on_target(*a, **k):
+        return []
+
+
+# ------------------ Yardımcılar ------------------
+
+# ------------------ Tarama yoğunluğu (Agresif/Normal) teklifi ------------------
+def _estimate_minutes(config: dict, profile: str) -> tuple[int, int]:
+    """Çok kaba bir süre kestirimi (dakika). Raporsal amaçlıdır; garanti vermez.
+
+    """
+    import re
+
+    def _to_float(x, default: float) -> float:
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, str):
+            s = x.strip()
+            if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', s):
+                return float(s)
+        return default
+
+    def _to_int(x, default: int) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, float) and x.is_integer():
+            return int(x)
+        if isinstance(x, str):
+            s = x.strip()
+            if re.fullmatch(r'[+-]?\d+', s):
+                return int(s)
+        return default
+
+    cfg = config if isinstance(config, dict) else {}
+
+    # fuzz ayarları
+    fz = cfg.get("fuzz")
+    fz = fz if isinstance(fz, dict) else {}
+
+    rps = _to_float(fz.get("rps"), 0.0)
+    if rps <= 0.0:
+        rate_ms = _to_float(fz.get("rate_ms"), 0.0)
+        rps = 1000.0 / rate_ms if rate_ms > 0.0 else 10.0
+
+    max_total = _to_int(fz.get("max_total"), 2000)
+    if max_total < 1:
+        max_total = 2000
+
+    base_sec = max_total / (rps if rps > 0.0 else 1.0)
+
+    # discovery overhead
+    disc = cfg.get("content_discovery")
+    disc = disc if isinstance(disc, dict) else {}
+    disc_over = 8 * 60 if bool(disc.get("enabled")) else 0
+
+    # offensive overhead
+    off = cfg.get("offensive")
+    off = off if isinstance(off, dict) else {}
+    of_count = sum(1 for v in off.values() if isinstance(v, dict) and bool(v.get("enabled")))
+
+    prof = profile.lower() if isinstance(profile, str) else ""
+    off_over = of_count * (90 if prof == "aggressive" else 45)  # saniye
+
+    sec = base_sec + disc_over + off_over
+    lo = int(max(1, round((sec / 60.0) * 0.8)))
+    hi = int(max(1, round((sec / 60.0) * 1.4)))
+    if hi < lo:
+        hi = lo + 1
+
+    return (lo, hi)
+
+
+def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
+    """Config üzerinde NORMAL (stealth) profil ayarı yapar ve yoğunluğu azaltır.
+    Mutasyon: verilen sözlüğü yerinde günceller, ayrıca değişiklik notlarını döndürür.
+    """
+    import re
+
+    def _to_int(x, default: int) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, float) and x.is_integer():
+            return int(x)
+        if isinstance(x, str):
+            s = x.strip()
+            if re.fullmatch(r'[+-]?\d+', s):
+                return int(s)
+        return default
+
+    if not isinstance(config, dict):
+        return {}, ["Config sözlük değil; normal profil uygulanamadı"]
+
+    notes: list[str] = []
+
+    # --- Fuzz ---
+    fz = config.setdefault("fuzz", {})
+    if not isinstance(fz, dict):
+        fz = {}
+        config["fuzz"] = fz
+
+    if "per_param" in fz:
+        old = _to_int(fz.get("per_param"), 10)
+        new = max(1, old // 2)
+        fz["per_param"] = new
+        notes.append(f"Parametre başına mutasyon sayısı {old}→{new}")
+    else:
+        fz["per_param"] = 3
+        notes.append("Parametre başına mutasyon sayısı 3 olarak sınırlandı")
+
+    if "max_total" in fz:
+        old = _to_int(fz.get("max_total"), 1000)
+        new = max(50, old // 2)
+        fz["max_total"] = new
+        notes.append(f"Toplam enjeksiyon {old}→{new}")
+    else:
+        fz["max_total"] = 500
+        notes.append("Toplam enjeksiyon 500 ile sınırlandı")
+
+    if "rps" in fz:
+        old = _to_int(fz.get("rps"), 20)
+        new = max(1, old // 2)
+        fz["rps"] = new
+        notes.append(f"Fuzz RPS {old}→{new}")
+    elif ("rate_ms" in fz) and bool(fz.get("rate_ms")):
+        old = _to_int(fz.get("rate_ms"), 100)
+        new = max(50, old * 2)
+        fz["rate_ms"] = new
+        notes.append(f"Fuzz rate_ms {old}→{new}")
+    else:
+        fz["rps"] = 10
+        notes.append("Fuzz RPS 10 olarak ayarlandı")
+
+    # --- Offensive (stealth) ---
+    off = config.setdefault("offensive", {})
+    if not isinstance(off, dict):
+        off = {}
+        config["offensive"] = off
+    off["profile"] = "stealth"
+    for k in ("request_smuggling", "mass_assignment", "websocket_fuzz"):
+        node = off.setdefault(k, {})
+        if isinstance(node, dict):
+            node.setdefault("enabled", False)
+    for k in ("jwt_attacks", "nosql_injection"):
+        node = off.setdefault(k, {})
+        if isinstance(node, dict):
+            node.setdefault("enabled", True)
+
+    # --- WAF ---
+    waf = config.setdefault("waf", {})
+    if not isinstance(waf, dict):
+        waf = {}
+        config["waf"] = waf
+    if "max_variants_per_payload" in waf:
+        old = _to_int(waf.get("max_variants_per_payload"), 6)
+        new = max(1, old // 2)
+        waf["max_variants_per_payload"] = new
+        notes.append(f"WAF payload varyantları {old}→{new}")
+
+    # --- OAST ---
+    oast = config.setdefault("oast", {})
+    if not isinstance(oast, dict):
+        oast = {}
+        config["oast"] = oast
+    if "max_injections_per_loc" in oast:
+        old = _to_int(oast.get("max_injections_per_loc"), 3)
+        new = max(1, old // 2)
+        oast["max_injections_per_loc"] = new
+        notes.append(f"OAST enjeksiyonları {old}→{new}")
+
+    # --- GraphQL ---
+    gql = config.setdefault("graphql", {})
+    if not isinstance(gql, dict):
+        gql = {}
+        config["graphql"] = gql
+    if bool(gql.get("deep", True)):
+        gql["deep"] = False
+        notes.append("GraphQL derin testler sadeleştirildi (introspection + temel kontroller)")
+
+    # --- İçerik keşfi ---
+    cd = config.setdefault("content_discovery", {})
+    if not isinstance(cd, dict):
+        cd = {}
+        config["content_discovery"] = cd
+    rate = _to_int(cd.get("rate_limit"), 50)
+    new_rate = max(10, rate // 2)
+    cd["rate_limit"] = new_rate
+    notes.append(f"İçerik keşfi hız limiti {rate}→{new_rate}")
+
+    return config, notes
+
+
+def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
+    """Kullanıcıya Agresif/Normal profilini sorar ve cfg'yi buna göre ayarlar."""
+    import sys
+
+    def _prompt(msg: str, default: str) -> str:
+        try:
+            val = input(msg)
+            s = (val if isinstance(val, str) else "").strip()
+            return s if s != "" else default
+        except EOFError:
+            return default
+
+    while True:
+        print("""
+[?] Tarama yoğunluğu:
+    1) Agresif — kapsam ve mutasyonlar tam (daha uzun sürebilir)
+    2) Normal   — payload/mutasyon yoğunluğu azaltılır (kapsam korunur)
+""".rstrip())
+
+        sel = (_prompt("Seçiminiz [1/2, varsayılan=1]: ", "1") or "1").strip()
+        if sel not in ("1", "2"):
+            print("Geçersiz seçim.")
+            continue
+
+        if sel == "1":
+            lo, hi = _estimate_minutes(cfg, "aggressive")
+            print(f"[!] Agresif modu seçtiniz. Yaklaşık {lo}–{hi} dakika sürebilir.")
+            ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
+            if ans.startswith("b"):
+                continue
+            cfg.setdefault("_profile", {})["selected"] = "aggressive"
+            off = cfg.setdefault("offensive", {})
+            off["profile"] = "deep"
+            for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
+                node = off.setdefault(k, {})
+                if isinstance(node, dict):
+                    node["enabled"] = True
+            return "aggressive", cfg
+
+        # sel == "2"
+        cfg2, notes = _apply_normal_profile(dict(cfg))  # kopya üstünde
+        print("[i] Normal mod: aşağıdaki alanlarda yoğunluk azaltılacak:")
+        for n in notes:
+            print("   - ", n)
+        ans = (_prompt("Devam edilsin mi? [D]evam / [B]aşa dön: ", "D") or "D").lower()
+        if ans.startswith("b"):
+            continue
+        cfg2.setdefault("_profile", {})["selected"] = "normal"
+        off = cfg2.setdefault("offensive", {})
+        off["profile"] = "stealth"
+        for k in ("request_smuggling", "mass_assignment", "websocket_fuzz"):
+            node = off.setdefault(k, {})
+            if isinstance(node, dict):
+                node["enabled"] = False
+        for k in ("jwt_attacks", "nosql_injection"):
+            node = off.setdefault(k, {})
+            if isinstance(node, dict):
+                node.setdefault("enabled", True)
+        return "normal", cfg2
+
+
+def _pick_from_config(cfg: dict, key: str, default=None):
+    v = cfg.get(key)
+    return default if v is None else v
+
+
+def _choose_mode_from_config(config: dict | None) -> str:
+    """Mode seçimi: sadece kullanıcı açıkça AUTHENTICATED seçerse auth moduna geç.
+    Otomatik şarta (auth.enabled/username/token) bakarak asla AUTHENTICATED seçme.
+    Aksi halde NORMAL/DETAILED/DEEP mantığı korunur."""
+    if not config:
+        return ScanMode.NORMAL
+
+    # Explicit mode
+    m = str((config.get("mode") or "")).strip().lower()
+    alias = {"auth":"authenticated","kimlikli":"authenticated","detaylı":"detailed","detayli":"detailed","derin":"deep"}
+    if m in alias:
+        m = alias[m]
+    if m in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.AUTHENTICATED, ScanMode.DEEP):
+        return m
+
+    # Profile fallback (never escalates to AUTHENTICATED implicitly)
+    prof = ((config.get("settings") or {}).get("scan_profile") or "").strip().lower()
+    if prof == "detailed":
+        return ScanMode.DETAILED
+    if prof == "deep":
+        return ScanMode.DEEP
+    return ScanMode.NORMAL
+
+
+    # Normalize/alias explicit mode if provided
+    m = str((config.get("mode") or "")).strip().lower()
+    alias = {
+        "auth": "authenticated",
+        "kimlikli": "authenticated",
+        "detaylı": "detailed",
+        "detayli": "detailed",
+        "derin": "deep",
+    }
+    if m in alias:
+        m = alias[m]
+    if m in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.AUTHENTICATED, ScanMode.DEEP):
+        return m
+
+    # Only auto-pick AUTHENTICATED when it is explicitly enabled or clearly configured
+    auth = config.get("auth") or {}
+    if isinstance(auth, dict):
+        if auth.get("enabled") is True:
+            return ScanMode.AUTHENTICATED
+        user_pass = bool(auth.get("username")) and bool(auth.get("password"))
+        bearerish = bool(auth.get("bearer") or auth.get("bearer_token") or auth.get("token"))
+        cookies = auth.get("cookies")
+        cookies_ok = isinstance(cookies, dict) and len(cookies) > 0
+        if user_pass or bearerish or cookies_ok:
+            return ScanMode.AUTHENTICATED
+
+    prof = (config.get("settings") or {}).get("scan_profile")
+    prof = (str(prof).strip().lower() if prof is not None else "")
+    if prof in ("detailed", "detaylı", "detayli"):
+        return ScanMode.DETAILED
+    if prof == "deep":
+        return ScanMode.DEEP
+
+    return ScanMode.NORMAL
+    m = (config.get("mode") or "").strip().lower()
+    if m in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.AUTHENTICATED, ScanMode.DEEP):
+        return m
+    # backward/fallback
+    if config.get("auth"):
+        return ScanMode.AUTHENTICATED
+    prof = (config.get("settings") or {}).get("scan_profile")
+    if prof == "detailed":
+        return ScanMode.DETAILED
+    if prof == "deep":
+        return ScanMode.DEEP
+    return ScanMode.NORMAL
+
+
+def _parse_host_port_from_proxy(url: str) -> tuple[str, int]:
+    u = str(url or "").strip()
+    if not u:
+        return "", 0
+    # allow forms like socks5h://127.0.0.1:9150 or http://127.0.0.1:8080
+    # very small parser
+    if "://" in u:
+        rest = u.split("://", 1)[1]
+    else:
+        rest = u
+    # strip userinfo if any
+    if "@" in rest:
+        rest = rest.rsplit("@", 1)[-1]
+    host = rest
+    port = 0
+    if "[" in rest and "]" in rest:
+        # IPv6 literal like [::1]:9150
+        host_part = rest.split("]", 1)[0] + "]"
+        tail = rest.split("]", 1)[1]
+        host = host_part
+        if tail.startswith(":"):
+            p = tail[1:]
+            port = int(p) if p.isdigit() else 0
+    else:
+        if ":" in rest:
+            host, p = rest.rsplit(":", 1)
+            port = int(p) if p.isdigit() else 0
+        else:
+            host = rest
+            port = 0
+    return host.strip(), port
+
+
+def _tcp_port_open(host: str, port: int, timeout_s: float = 1.0) -> bool:
+    if not host or port <= 0 or port > 65535:
+        return False
+    s = __import__("socket").socket(__import__("socket").AF_INET, __import__("socket").SOCK_STREAM)
+    try_set = getattr(s, "settimeout", None)
+    if try_set:
+        try_set(timeout_s)
+    rc = s.connect_ex((host, port))
+    try_close = getattr(s, "close", None)
+    if try_close:
+        try_close()
+    return rc == 0
+
+
+def _proxy_alive(url: str) -> bool:
+    host, port = _parse_host_port_from_proxy(url)
+    return _tcp_port_open(host, port, 1.0)
+
+
+def _setup_session_from_config(config: dict) -> requests.Session:
+    import importlib, importlib.util, os, re
+
+    def _to_bool(x, default: bool) -> bool:
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, (int, float)):
+            return x != 0
+        if isinstance(x, str):
+            s = x.strip().lower()
+            if s in ("1", "true", "yes", "on"):  return True
+            if s in ("0", "false", "no", "off"): return False
+        return default
+
+    def _to_int(x, default: int) -> int:
+        if isinstance(x, int):
+            return x
+        if isinstance(x, float) and x.is_integer():
+            return int(x)
+        if isinstance(x, str) and re.fullmatch(r"[+-]?\d+", x.strip() or ""):
+            return int(x.strip())
+        return default
+
+    def _to_float(x, default: float) -> float:
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, str) and re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", x.strip() or ""):
+            return float(x.strip())
+        return default
+
+    def _to_upper_methods(x, default: list[str]) -> set[str]:
+        if isinstance(x, (list, tuple)):
+            out = []
+            for m in x:
+                if isinstance(m, str) and m.strip():
+                    out.append(m.strip().upper())
+            return set(out) if out else set(default)
+        return set(default)
+
+    def _to_int_list(x, default: list[int]) -> list[int]:
+        if isinstance(x, (list, tuple)):
+            out: list[int] = []
+            for v in x:
+                iv = _to_int(v, None)  # type: ignore[arg-type]
+                if isinstance(iv, int):
+                    out.append(iv)
+            return out if out else list(default)
+        return list(default)
+
+    cfg = config if isinstance(config, dict) else {}
+
+    s = ensure_session(cfg)
+
+    # User-Agent
+    ua_cfg = _pick_from_config(cfg, "user_agent", "WebSecScanner/1.2")
+    ua = ua_cfg if isinstance(ua_cfg, str) and ua_cfg.strip() else "WebSecScanner/1.2"
+    s.headers.update({"User-Agent": ua})
+
+    # TLS verify
+    verify_cfg = _pick_from_config(cfg, "tls_verify", True)
+    s.verify = _to_bool(verify_cfg, True)
+
+    # --- WS3: Privacy Identity selection ---
+    ident = current_identity(cfg)
+    ident = ident if isinstance(ident, dict) else {}
+
+    ua_id = str(ident.get("ua") or "") if ident.get("ua") is not None else ""
+    al_id = str(ident.get("accept_language") or "") if ident.get("accept_language") is not None else ""
+    if ua_id:
+        s.headers.update({"User-Agent": ua_id})
+    if al_id:
+        s.headers.update({"Accept-Language": al_id})
+
+    px = ident.get("proxy_url")
+    if isinstance(px, (str, bytes)):
+        pxs = px.decode() if isinstance(px, bytes) else px
+    else:
+        pxs = None
+    if pxs and _proxy_alive(str(pxs)):
+        s.proxies.update({"http": str(pxs), "https": str(pxs)})
+
+    if pxs:
+        os.environ["WEBSEC_PROXY"] = str(pxs)
+    if al_id:
+        os.environ["WEBSEC_ACCEPT_LANGUAGE"] = al_id
+    if ua_id:
+        os.environ["WEBSEC_UA"] = ua_id
+
+    # Proxies (settings.proxy_pool ilkini kullan)
+    settings = cfg.get("settings")
+    if isinstance(settings, dict):
+        proxy_pool = settings.get("proxy_pool") or []
+        if isinstance(proxy_pool, (list, tuple)) and proxy_pool:
+            first = proxy_pool[0]
+            if isinstance(first, (str, bytes)):
+                purl = first.decode() if isinstance(first, bytes) else first
+                s.proxies.update({"http": purl, "https": purl})
+
+    # Retry (opsiyonel, istisnasız)
+    # Yalnızca modüller mevcutsa etkinleştir.
+    has_retry = _ws_spec("urllib3.util.retry") is not None
+    has_adapter = _ws_spec("requests.adapters") is not None
+    if has_retry and has_adapter:
+        Retry = importlib.import_module("urllib3.util.retry").Retry  # type: ignore[attr-defined]
+        HTTPAdapter = importlib.import_module("requests.adapters").HTTPAdapter  # type: ignore[attr-defined]
+
+        http_total = _to_int(cfg.get("http_retries"), 2)
+        if http_total < 0:
+            http_total = 0
+
+        backoff = _to_float(cfg.get("http_backoff"), 0.3)
+        if backoff < 0.0:
+            backoff = 0.0
+
+        status_list = _to_int_list(cfg.get("retry_status_forcelist"), [429, 500, 502, 503, 504])
+        allowed = cfg.get("retry_allowed_methods")
+        allowed_methods = _to_upper_methods(allowed, ["HEAD", "GET", "OPTIONS"])
+
+        policy = Retry(
+            total=http_total,
+            read=http_total,
+            connect=http_total,
+            backoff_factor=backoff,
+            status_forcelist=tuple(status_list),
+            allowed_methods=frozenset(allowed_methods),
+            raise_on_status=False,
+            respect_retry_after_header=True,
+        )
+        pool_max = _to_int(cfg.get("pool_maxsize"), 10)
+        if pool_max < 1:
+            pool_max = 1
+        adapter = HTTPAdapter(max_retries=policy, pool_maxsize=pool_max)
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+
+    # Configured HTTP proxies (e.g., Tor SOCKS) take precedence if provided
+    http_cfg = cfg.get("http")
+    if isinstance(http_cfg, dict):
+        http_proxies = http_cfg.get("proxies") or {}
+        if isinstance(http_proxies, dict):
+            purl = http_proxies.get("http") or http_proxies.get("https")
+            if isinstance(purl, (str, bytes)):
+                purls = purl.decode() if isinstance(purl, bytes) else purl
+                if _proxy_alive(str(purls)):
+                    s.proxies.update({"http": purls, "https": purls})
+
+    return s
+
+
+def _detect_final_url_and_scheme(raw: str, session_for_discovery: requests.Session) -> tuple[str, str]:
+    """
+    Önce resolve_canonical_base (discover_base_url tabanlı) ile http/https + www + port keşfi yapılır.
+    Bulunamazsa son çare apply_detected_scheme kullanılır.
+    """
+    resolver = _get_resolve_canonical_base()
+    final_url = resolver(raw, session_for_discovery, timeout=6, try_www=True)
+    if not final_url:
+        # Son çare: eski tespit (başarısız olursa istisna fırlatır)
+        final_url = apply_detected_scheme(raw, timeout=6)
+    sch = (urlparse(final_url).scheme or "").lower()
+    if sch not in ("http", "https"):
+        raise RuntimeError("Geçersiz şema tespit edildi.")
+    return final_url, sch
+
+
+def _build_auth_ctx(session: requests.Session, cfg: dict) -> dict | None:
+    """
+    Config + session'dan kimlik bağlamını (headers/cookies) üretir.
+
+    """
+    config = cfg if isinstance(cfg, dict) else {}
+    auth = config.get("auth")
+    auth = auth if isinstance(auth, dict) else {}
+
+    headers: dict[str, str] = {}
+    cookies: dict[str, str] = {}
+
+    # Bearer / Token
+    tok = auth.get("bearer") or auth.get("bearer_token") or auth.get("token")
+    if isinstance(tok, (str, bytes)):
+        token_s = tok.decode() if isinstance(tok, bytes) else tok
+        if token_s.strip():
+            headers["Authorization"] = f"Bearer {token_s.strip()}"
+
+    # API key header
+    api_hdr = auth.get("api_key_header")
+    api_val = auth.get("api_key")
+    if isinstance(api_hdr, (str, bytes)) and isinstance(api_val, (str, bytes)):
+        h = api_hdr.decode() if isinstance(api_hdr, bytes) else api_hdr
+        v = api_val.decode() if isinstance(api_val, bytes) else api_val
+        if h.strip() and v.strip():
+            headers[h.strip()] = v
+
+    # Extra auth headers
+    extra_hdrs = auth.get("headers")
+    if isinstance(extra_hdrs, dict):
+        for k, v in extra_hdrs.items():
+            ks = str(k)
+            vs = str(v)
+            if ks:
+                headers[ks] = vs
+
+    # Cookies from config
+    ck = auth.get("cookie") or auth.get("cookies")
+    if isinstance(ck, dict):
+        for k, v in ck.items():
+            cookies[str(k)] = str(v)
+
+    if isinstance(auth.get("cookie_name"), (str, bytes)) and isinstance(auth.get("cookie_value"), (str, bytes)):
+        cn = auth["cookie_name"].decode() if isinstance(auth["cookie_name"], bytes) else auth["cookie_name"]
+        cv = auth["cookie_value"].decode() if isinstance(auth["cookie_value"], bytes) else auth["cookie_value"]
+        if cn:
+            cookies[str(cn)] = str(cv)
+
+    # Session-derived Authorization (override only if not already set)
+    sess_headers = getattr(session, "headers", None)
+    if isinstance(sess_headers, dict) or hasattr(sess_headers, "get"):
+        auth_in_sess = sess_headers.get("Authorization") if hasattr(sess_headers,
+                                                                    "get") else None  # type: ignore[func-returns-value]
+        if ("Authorization" not in headers) and isinstance(auth_in_sess, (str, bytes)):
+            headers["Authorization"] = auth_in_sess.decode() if isinstance(auth_in_sess, bytes) else auth_in_sess
+
+    # Session cookies
+    sess_cj = getattr(session, "cookies", None)
+    if sess_cj is not None:
+        get_dict = getattr(sess_cj, "get_dict", None)
+        if callable(get_dict):
+            for k, v in get_dict().items():
+                cookies[str(k)] = str(v)
+
+    if not headers and not cookies:
+        return None
+    return {"headers": headers, "cookies": cookies}
+
+
+def _off_enabled(cfg: dict, key: str) -> bool:
+    """config.offensive.<key>.enabled -> bool (istisnasız parse)"""
+
+    def _to_bool(x, default: bool = False) -> bool:
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, (int, float)):
+            return x != 0
+        if isinstance(x, str):
+            s = x.strip().lower()
+            if s in ("1", "true", "yes", "on", "enable", "enabled"):
+                return True
+            if s in ("0", "false", "no", "off", "disable", "disabled"):
+                return False
+        return default
+
+    if not isinstance(cfg, dict):
+        return False
+    off = cfg.get("offensive")
+    if not isinstance(off, dict):
+        return False
+    node = off.get(key)
+    if not isinstance(node, dict):
+        return False
+    return _to_bool(node.get("enabled"), False)
+
+
+def _off_profile_allows(cfg: dict, key: str) -> bool:
+    """
+    Offensive profil kapısı. 'stealth' az gürültülü; 'deep' hepsi.
+    Varsayılan: 'stealth'.
+    """
+    prof = (((cfg.get("offensive") or {}).get("profile")) or "stealth").strip().lower()
+    stealth = {"jwt_attacks", "nosql_injection"}
+    deep = {"request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"}
+    allowed_set = deep if prof == "deep" else stealth
+    return key in allowed_set
+
+
+def _has_hsts(results: dict) -> bool:
+    """security_headers çıktısından HSTS var mı? (istisnasız, bastırmasız)"""
+
+    def _norm(x) -> str:
+        return (str(x).strip().lower()) if x is not None else ""
+
+    POSITIVE = {"mevcut", "present", "enabled", "ok", "yes", "true", "var", "on"}
+
+    if not isinstance(results, dict):
+        return False
+
+    sh = results.get("security_headers")
+    if sh is None:
+        return False
+
+    # Liste biçimi: [{"header": "...", "status": "..."}]
+    if isinstance(sh, (list, tuple)):
+        for it in sh:
+            if isinstance(it, dict):
+                h = _norm(it.get("header"))
+                st_raw = it.get("status")
+                st = _norm(st_raw)
+                if h == "strict-transport-security" and (st in POSITIVE or (isinstance(st_raw, bool) and st_raw)):
+                    return True
+            elif isinstance(it, (list, tuple)) and len(it) >= 2:
+                h = _norm(it[0])
+                st_raw = it[1]
+                st = _norm(st_raw)
+                if h == "strict-transport-security" and (st in POSITIVE or (isinstance(st_raw, bool) and st_raw)):
+                    return True
+        return False
+
+    # Sözlük biçimi: {"Strict-Transport-Security": "Mevcut"/True/...}
+    if isinstance(sh, dict):
+        h = _norm("Strict-Transport-Security")
+        val = sh.get("Strict-Transport-Security") or sh.get("strict-transport-security")
+        if val is not None:
+            st = _norm(val)
+            if st in POSITIVE or (isinstance(val, bool) and val):
+                return True
+        # Bazı raporlarda {"header": {"status": ...}} şeklinde olabilir
+        node = sh.get("header") if isinstance(sh.get("header"), dict) else None
+        if node and _norm(node.get("name")) == "strict-transport-security":
+            v = node.get("status")
+            return (isinstance(v, bool) and v) or (_norm(v) in POSITIVE)
+        return False
+
+    return False
+
+
+def _auth_cov_note(kind: str) -> None:
+    k = (kind or "").lower()
+    if "waf" in k:
+        note_auth_outcome("WAF");
+        return
+    if "rate" in k:
+        note_auth_outcome("RateLimit");
+        return
+    note_auth_outcome("Auth")
+
+
+def _public_surface_seeds(base_url: str) -> list[str]:
+    base = base_url.rstrip("/")
+    candidates = [
+        "/robots.txt", "/sitemap.xml",
+        "/api/public", "/api/health", "/api/status",
+        "/guest", "/login", "/auth/login", "/auth/status",
+        "/_next/data/index.json", "/static/app.js",
+    ]
+    return [base + p for p in candidates]
+
+
+
+
+if _ilu_patch.find_spec('core.reporting') is not None:
+    from websecure.core.reporting import _phase_rec
+elif _ilu_patch.find_spec('reporting') is not None:
+    from websecure.core.reporting import _phase_rec
+else:
+    _phase_rec = None
+
+
+# --- Parametre imza filtresi yardımcıları (erken tanım) ---
+def _sig_params(fn) -> set[str]:
+    return set(inspect.signature(fn).parameters.keys()) if callable(fn) else set()
+
+
+def _kw_filter(fn, **kw):
+    ps = _sig_params(fn)
+    return {k: v for k, v in kw.items() if k in ps}
+
+
+def _passive_js_analyze(session: requests.Session, js_urls: list[str], results: dict) -> None:
+    """Hafif JS pasif analiz: potansiyel anahtar izleri toplar (best-effort, istisnasız)."""
+    keys: list[dict] = []
+    curl_bin = shutil.which("curl")
+
+    if not isinstance(js_urls, (list, tuple)) or not js_urls:
+        return
+
+    if curl_bin:
+        # curl ile istisnasız içerik alma
+        for u in js_urls:
+            if not isinstance(u, str) or not u.strip():
+                continue
+            # yalnızca http/https şemaları
+            pr = urlparse(u)
+            if pr.scheme not in ("http", "https"):
+                continue
+
+            # -L (redirect), --max-time 5s, -sS sessiz, -w kodu yaz, içerik stdout'a düşer
+            # not: check=False → istisna yok; returncode üzerinden karar
+            cp = subprocess.run(
+                [curl_bin, "-L", "--max-time", "5", "-sS", u, "-w", "\n%{http_code}\n"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if cp.returncode != 0:
+                continue
+            out = cp.stdout or ""
+            if not out:
+                continue
+            *body_lines, last = out.splitlines()
+            # Son satır HTTP kodu; geri kalanı gövde
+            try_code = last.strip()
+            http_code = int(try_code) if try_code.isdigit() else 0
+            body = "\n".join(body_lines)
+            if 200 <= http_code < 400 and body:
+                lbody = body.lower()
+                # Basit anahtar ipuçları
+                if ("apikey" in lbody) or ("mapbox" in lbody) or ("google_maps" in lbody) or ("AIza" in body):
+                    keys.append({"url": u, "hint": "key_like"})
+    else:
+        # curl yoksa sessizce atlamayalım: sonuçlara nedenini yazalım
+        results.setdefault("artifacts", {}).setdefault("notes", []).append(
+            {"component": "js_passive", "note": "curl_missing; js anahtar taraması atlandı"}
+        )
+
+    if keys:
+        results.setdefault("artifacts", {}).setdefault("js_keys", []).extend(keys)
+
+
+# ------------------ Faz Planı Çalıştırıcı (YENİ) ------------------
+def _run_phase_plan(ctx, *, skip_legacy_offensive=True):
+
+    results = getattr(ctx, "results", {})
+    if not isinstance(results, dict):
+        results = {}
+        setattr(ctx, "results", results)
+
+    plan = build_plan(ctx)  # hata olursa yükselir; bastırma yok
+
+    ran = 0
+    enabled = 0
+    visible_meta = []
+    results.setdefault("phase_timings", {})
+
+    if not isinstance(plan, (list, tuple)):
+        # Protokol: plan beklenen formatta değilse koşma
+        add_result("phase_plan", {"visible": [], "enabled_total": 0, "ran": 0, "error": "invalid_plan_format"})
+        if skip_legacy_offensive:
+            results["_skip_legacy_offensive"] = True
+        return {"ran": 0, "enabled": 0}
+
+    for item in plan:
+        if not isinstance(item, dict):
+            continue
+        rid = item.get("id")
+        visible_meta.append({
+            "id": rid,
+            "title": item.get("title"),
+            "enabled": bool(item.get("enabled")),
+            "reason": item.get("reason"),
+            "tags": item.get("tags", []),
+        })
+
+        runner = item.get("runner")
+        if item.get("enabled") and callable(runner):
+            enabled += 1
+            t0 = time.time()
+            runner(ctx)  # hata olursa yükselir; bastırma yok
+            ran += 1
+            results["phase_timings"][rid] = round(time.time() - t0, 2)
+
+    add_result("phase_plan", {"visible": visible_meta, "enabled_total": enabled, "ran": ran})
+
+    if skip_legacy_offensive:
+        results["_skip_legacy_offensive"] = True
+
+    return {"ran": ran, "enabled": enabled}
+
+if 'ctx' not in globals():
+    from types import SimpleNamespace as _SNS
+    _cfg = globals().get('config') or {}
+    _sess = globals().get('session') or None
+    _http_client = globals().get('http_client') or globals().get('client') or None
+    _results = globals().get('results') or {}
+    _debug = bool((_cfg or {}).get('debug', False)) if isinstance(_cfg, dict) else False
+    ctx = _SNS(config=_cfg, session=_sess, http_client=_http_client, results=_results, debug=_debug)
+
+# ------------------ Ana akış ------------------
+def _enforce_egress_policy(cfg):
+    pr = (cfg.get('privacy') or {}).get('egress') if isinstance(cfg, dict) else None
+    if not isinstance(pr, dict):
+        return
+    if pr.get('kill_switch'):
+        raise SystemExit('Egress kill-switch aktif. Ağ çıkışı engellendi.')
+    if pr.get('required'):
+        proxies = ((cfg.get('http') or {}).get('proxies') or {})
+        if not isinstance(proxies, dict):
+            proxies = {}
+        from websecure.core.utils import current_identity
+
+        px = (current_identity(cfg) or {}).get('proxy_url')
+        if not proxies and not px:
+            raise SystemExit('Egress proxy zorunlu ancak configte yok ve identity proxy de boş.')
+
+
+def _egress_health_check(session, cfg: dict, results: dict) -> None:
+
+    privacy = (cfg.get("privacy") or {}) if isinstance(cfg, dict) else {}
+    egress = (privacy.get("egress") or {}) if isinstance(privacy, dict) else {}
+    eps_cfg = list((egress.get("ip_echo_endpoints") or [])) if isinstance(egress, dict) else []
+
+
+    defaults = [
+        "https://api.ipify.org?format=text",
+        "https://checkip.amazonaws.com/",
+        "https://www.cloudflare.com/cdn-cgi/trace",
+        "https://check.torproject.org/api/ip",
+    ]
+    eps = eps_cfg if eps_cfg else defaults
+
+    eps = eps[:3]
+
+
+    proxies_in_sess = getattr(session, "proxies", {}) or {}
+    unique_proxies = {str(v) for v in proxies_in_sess.values() if v}
+    any_proxy = bool(unique_proxies)
+
+
+    proxy_alive = False
+    if any_proxy:
+        for purl in unique_proxies:
+            if _proxy_alive(purl):
+                proxy_alive = True
+                break
+
+    observations = []
+    for u in eps:
+        # verify bayrağını faz bağlamına göre hesapla
+        ver = verify_for_phase(cfg, 'egress', u)
+
+        # Proxy BYPASS gerekiyorsa call-level override yap
+        call_kwargs = dict(timeout=6, allow_redirects=True, verify=ver)
+        if any_proxy and not proxy_alive:
+            # Proxy configured fakat **up değil** → bypass
+            call_kwargs['proxies'] = {}
+
+        try:
+            r = session.get(u, **call_kwargs)
+            txt = (getattr(r, "text", "") or "").strip()
+            ip = txt
+            # cloudflare trace: "ip=1.2.3.4" biçimini ayrıştır
+            if "ip=" in txt:
+                for line in txt.splitlines():
+                    if line.startswith("ip="):
+                        ip = line.split("=", 1)[1].strip()
+                        break
+            code = int(getattr(r, "status_code", 0) or 0)
+            observations.append({
+                "endpoint": u,
+                "code": code,
+                "ip": (ip or "")[:128],
+                "used_proxy": (any_proxy and proxy_alive)
+            })
+        except _BOUNDARY_EXC as e:
+            _logger.error('phase error [main]', exc_info=True)
+            _report_phase_error('main', 'main.py', e)
+            # Hataları saklamadan rapora yaz
+            observations.append({
+                "endpoint": u,
+                "error": f"{e.__class__.__name__}: {e}",
+                "used_proxy": (any_proxy and proxy_alive)
+            })
+
+
+    if "sections" not in results or not isinstance(results.get("sections"), list):
+        results["sections"] = []
+    results["egress_health"] = {
+        "observations": observations,
+        "proxy_configured": any_proxy,
+        "proxy_alive": proxy_alive,
+    }
+
+def _safe_call(func, *args, call_timeout: float | None = None, **kwargs):
+
+
+    if not callable(func):
+        return False, "not_callable"
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(func, *args, **kwargs)
+        if call_timeout is None or call_timeout <= 0:
+            while not fut.done():
+                _t.sleep(0.01)
+        else:
+            t0 = _t.time()
+            while not fut.done():
+                if (_t.time() - t0) > call_timeout:
+                    fut.cancel()
+                    return False, "timeout"
+                _t.sleep(0.01)
+        exc = fut.exception()
+        if exc is not None:
+            return False, str(exc)
+        return True, fut.result()
+
+
+def _normalize_webdriver_cfg(cfg: dict) -> dict:
+
+    def _to_bool(x, default=None):
+        if isinstance(x, bool): return x
+        if isinstance(x, (int, float)): return x != 0
+        if isinstance(x, str):
+            s = x.strip().lower()
+            if s in ("1","true","yes","on"): return True
+            if s in ("0","false","no","off"): return False
+        return default
+
+    out = {"webdriver": {}}
+    c = cfg if isinstance(cfg, dict) else {}
+
+    headless = None
+    tls_wd = ((c.get("tls") or {}).get("webdriver") or {}) if isinstance(c.get("tls"), dict) else {}
+    if isinstance(tls_wd, dict) and "headless" in tls_wd:
+        headless = _to_bool(tls_wd.get("headless"), None)
+    if headless is None and isinstance((c.get("crawl") or {}), dict) and "headless" in c.get("crawl", {}):
+        headless = _to_bool(c.get("crawl", {}).get("headless"), None)
+    if headless is None and isinstance((c.get("crawler") or {}), dict) and "headless" in c.get("crawler", {}):
+        headless = _to_bool(c.get("crawler", {}).get("headless"), None)
+    if headless is None and isinstance(((c.get("crawl") or {}).get("browser") or {}), dict):
+        headless = _to_bool((c.get("crawl") or {}).get("browser", {}).get("headless"), None)
+    if headless is None and isinstance(((c.get("crawler") or {}).get("browser") or {}), dict):
+        headless = _to_bool((c.get("crawler") or {}).get("browser", {}).get("headless"), None)
+
+    if headless is None:
+        headless = False  # varsayılan: görünür tarayıcı
+
+    out["webdriver"]["headless"] = bool(headless)
+
+    bin_path = None
+    if isinstance(tls_wd, dict) and isinstance(tls_wd.get("binary"), str) and tls_wd.get("binary").strip():
+        bin_path = tls_wd.get("binary").strip()
+        out["webdriver"]["binary"] = bin_path
+
+
+    out["webdriver"]["allow_bad_tls"] = False
+
+
+    return out
+
+
+def main():
+    print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
+
+    print(r"""
+    ██████████████████   █████████████████   ████      ████    ██████████████    █████████████████    ██████████████
+                  ███   ████                █████    █████   ████               ████                ████
+              ████      ████                ██████  ██████   ████               ████                ████
+           ████         ████████████        ████ ████ ████    ███████████       ████████████        ████
+        ████            ████                ████  ██  ████               ████   ████                ████
+     ████               ████                ████      ████               ████   ████                ████
+    █████████████████   █████████████████   ████      ████    █████████████     █████████████████    ██████████████
+
+           ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════│╴[▒▒▒▒▒▒▒▒]
+               ══════════════════════════════════════════════════════════════════════════════════════════════════════════════│
+           11010                                         01110101000101
+            110                                         10001101010
+             101                                         10110010101100
+              11                                          10110101001
+               0                                           110100110
+                                                             0011010                                                                        1
+                                                              110110
+                                                               11001
+
+
+    """)
+    print("")
+    print("⚠️  UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
+    print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
+    print("")
+    cfg = load_config()
+
+
+    try_prime = True
+
+    _ = _ensure_wl(cfg)
+
+    _ab_ps = ((cfg.get("anti_blocking") or {}).get("port_scan") or {}) if isinstance(cfg, dict) else {}
+    _ab_val = _ab_ps.get("rps")
+    _s = str(_ab_val) if _ab_val is not None else ""
+    if _s.strip() != "":
+        _tmp = _s.replace('.', '', 1)
+        if _tmp.isdigit():
+            _ab_rps = int(float(_s))
+            if _ab_rps > 0:
+                _ab_os.environ["WEBSEC_PORTSCAN_RPS"] = str(_ab_rps)
+
+    # === Sonuç kovası (yerel ve global bağ) ===
+    results: dict = {"phase_timings": {}, "sections": []}
+    globals()['results'] = results
+    globals()['cfg'] = cfg
+
+    # Profil çözümleme (settings.profiles → _resolved_profile)
+    # Profil çözümleme (settings.profiles → _resolved_profile)
+    _profiles = (cfg.get("settings") or {}).get("profiles") or {}
+    _active = (cfg.get("settings") or {}).get("scan_profile") or "stealth"
+    cfg.setdefault("_resolved_profile", _profiles.get(_active, {}))
+
+    # Raporlama modülüne tüm config’i ver
+    configure_logging(level=str(((cfg or {}).get("settings") or {}).get("logging", {}).get("level", "INFO")))
+
+    # InsecureRequestWarning sustur
+    silence_insecure_request_warnings()
+
+    # CLI argümanları
+    parser = argparse.ArgumentParser(description="WebSecure hedef seçimi")
+    parser.add_argument("--waf", action="store_true", help="WAF bypass modunu etkinleştir")
+    parser.add_argument("--fuzz-ml", action="store_true", help="Heuristik tabanlı anomali tespiti")
+    parser.add_argument("--target", "-t", help="Hedef domain veya URL")
+    parser.add_argument("--attack", action="store_true", help="Offensive D-fazını etkinleştir (güvenli mod)")
+    parser.add_argument("--attack-unsafe", action="store_true",
+                        help="Offensive fazı güvenli olmayan modda çalıştır (dikkat!)")
+    parser.add_argument("--verify-only", action="store_true", help="Yalnız bulguları doğrula & skorla")
+    parser.add_argument("--oast-domain", help="OAST için kök domain (DNS tabanlı callback)")
+    parser.add_argument("--oast-url", help="OAST HTTP callback tabanı (örn. https://oast.example)")
+    args = parser.parse_args()
+
+    off = (cfg.setdefault('offensive', {}) if isinstance(cfg, dict) else {})
+    if args.attack or args.attack_unsafe or (off.get('enabled') is True):
+        off['enabled'] = True
+        off.setdefault('safe', True)
+        if args.attack_unsafe:
+            off['safe'] = False
+    if args.verify_only:
+        off['enabled'] = True
+        off['verify'] = {'enabled': True}
+    # OAST ayarları
+    if args.oast_domain or args.oast_url:
+        oast = cfg.setdefault('oast', {})
+        if args.oast_domain:
+            oast['dns_domain'] = args.oast_domain
+        if args.oast_url:
+            oast['http_base'] = args.oast_url
+
+    if args.fuzz_ml:
+        cfg.setdefault('fuzz', {}).setdefault('heuristics', {})
+        cfg['fuzz']['heuristics']['enabled'] = True
+
+    if args.waf:
+        cfg.setdefault('waf', {})
+        cfg['waf']['enabled'] = True
+
+    def _readline_default(prompt: str, default: str) -> str:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        si = getattr(sys, "stdin", None)
+        # TTY olmasa da oku
+        if si is not None and hasattr(si, "readline"):
+            line = si.readline()
+            if isinstance(line, str):
+                line = line.rstrip("\r\n")
+            if line:
+                return line.strip()
+        return default
+
+    def _detect_final_url_and_scheme_safe(raw: str, timeout_s: float = 6.0) -> tuple[str | None, str | None]:
+        if not isinstance(raw, str) or not raw.strip():
+            return None, None
+
+        t = raw.strip()
+        if "://" in t:
+            candidates = [t]
+        else:
+            host = t.strip("/")
+            candidates = [
+                f"https://{host}",
+                f"https://www.{host}",
+                f"http://{host}",
+                f"http://www.{host}",
+            ]
+
+        curl_bin = shutil.which("curl")
+        if not curl_bin:
+            # curl yoksa, ilk adayı normalize edip dön (erişilebilirlik doğrulaması yapmadan)
+            u0 = candidates[0]
+            sch = urlparse(u0).scheme or "http"
+            return u0, sch
+
+        for u in candidates:
+            # -I başlık isteği, -L yönlendirme, --max-time süre, -sS sessiz, -o /dev/null gövdeyi at
+            cp = subprocess.run(
+                [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout_s)), u, "-w",
+                 "%{url_effective} %{http_code}\n", "-o", "/dev/null"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if cp.returncode != 0:
+                continue
+            out = (cp.stdout or "").strip()
+            if not out:
+                continue
+            parts = out.split()
+            if len(parts) >= 2 and parts[-1].isdigit():
+                code = int(parts[-1])
+                final = " ".join(parts[:-1])
+                if 200 <= code < 600:
+                    eff = final.split("#", 1)[0].rstrip("/")
+                    sch = urlparse(eff).scheme or "http"
+                    return eff, sch
+        return None, None
+
+    # ---------------- snippet replacement (istisnasız) ----------------
+
+    if args.target:
+        raw_input_url = args.target.strip()
+    else:
+        try:
+            raw_input_url = input("Hedef (domain veya URL) gir: ").strip()
+        except EOFError:
+            raw_input_url = ""
+        raw_input_url = (raw_input_url if isinstance(raw_input_url, str) else "").strip() or str(
+            cfg.get("base_url") or "")
+
+    # Keşif için geçici session (config'ten bağımsız, sadece ulaşılabilirliği bulmak için)
+    temp_session = ensure_session({})
+    temp_session.verify = True
+
+    final_url, scheme = _detect_final_url_and_scheme_robust(raw_input_url, timeout_s=6.0)
+    if final_url:
+        ok, valid_url, scheme_checked = validate_url(final_url)
+    else:
+        ok, valid_url, scheme_checked = (False, None, None)
+
+    if ok and valid_url:
+        url = valid_url
+        scheme = scheme_checked or scheme or "https"
+    else:
+        if final_url:
+            print("[WARN] validate_url başarısız; normalize edilmiş URL ile devam ediliyor.")
+            url = final_url
+            scheme = scheme or "https"
+        else:
+            print(f"[HATA] URL çözümlenemedi; http ile devam deneniyor. Girdi: {raw_input_url!r}")
+            _close = getattr(temp_session, "close", None)
+            if callable(_close):
+                _close()
+            # Fallback: şema yoksa http ile deneriz, varsa olduğu gibi bırakırız
+            host = (raw_input_url or "").strip()
+            if "://" not in host and host:
+                url = "http://" + host
+            else:
+                url = host or "http://localhost"
+            scheme = ("http" if url.lower().startswith("http://") else
+                      "https" if url.lower().startswith("https://") else
+                      (url.split(':', 1)[0].lower() if ':' in url else "http"))
+
+    # >>> RUN-TIME OVERRIDE: Kullanıcıdan gelen (kanonik/valid edilmiş) URL'i config'e uygula
+    cfg["target"] = url
+    cfg["base_url"] = url
+    # <<< OVERRIDE
+
+    print(f"[URL] Kanonik erişim: {url}  (Mod: {scheme.upper()})")
+
+    _close = getattr(temp_session, "close", None)
+    if callable(_close):
+        _close()
+
+    # --- Tor (SOCKS) Seçimi ---
+    print("Tor (SOCKS) kullanılsın mı? (E/h)")
+    use_tor = (input("> ").strip().lower() or "h")
+    if use_tor.startswith("e"):
+        host = (input("SOCKS host [127.0.0.1]: ").strip() or "127.0.0.1")
+        port = (input("SOCKS port [9150]: ").strip() or "9150")
+        scheme = "socks5h"  # DNS de tünelden geçsin
+        socks_url = f"{scheme}://{host}:{port}"
+        http_cfg = cfg.setdefault("http", {})
+        _cur = http_cfg.get("proxies")
+        if isinstance(_cur, dict):
+            proxies = _cur
+        else:
+            proxies = {}
+            http_cfg["proxies"] = proxies
+        # Liveness check (connect_ex)
+        if _proxy_alive(socks_url):
+            proxies["http"] = socks_url
+            proxies["https"] = socks_url
+            # Egress sağlık kontrolüne Tor kontrol uç noktasını öne ekle
+            privacy = cfg.setdefault("privacy", {})
+            egress = privacy.setdefault("egress", {})
+            endpoints = egress.setdefault("ip_echo_endpoints", [])
+            if "https://check.torproject.org/api/ip" not in endpoints:
+                endpoints.insert(0, "https://check.torproject.org/api/ip")
+            print(f"[TOR] Proxy etkin: {socks_url}")
+        else:
+            print(f"[TOR] Uyarı: {host}:{port} erişilemiyor, proxy uygulanmadı.")
+    else:
+        print("[Egress] Tor devre dışı.")
+
+
+    _read = globals().get("_readline_default")
+    if not callable(_read):
+
+        def _read(prompt: str, default: str) -> str:
+            try:
+                val = input(prompt)
+                s = (val if isinstance(val, str) else "").strip()
+                return s if s != "" else default
+            except EOFError:
+                return default
+
+    print("")
+    print("Kimlikli tarama (oturum/cookie/token ile) yapmak ister misiniz? (E/h)")
+    ans = (_read("> ", "h") or "h").strip().lower()
+
+    if ans.startswith("e"):
+        cfg.setdefault("auth", {}).update({"enabled": True})
+        print("")
+        print("Yöntem seçin:")
+        print("  [1] Cookie (ör. sessionid=...; diğerleri noktalı virgülle)")
+        print("  [2] Bearer Token (sadece değer, 'Bearer' yazmayın)")
+        print("  [3] API Key (Header adı + anahtar)")
+        print("  [4] Form Login (login URL + kullanıcı + parola)")
+        sel = (_read("Seçim (1-4): ", "0") or "0").strip()
+        m = int(sel) if sel.isdigit() else 0
+
+        if m == 1:
+            raw = _read("Cookie girin (ör. sessionid=abc123; csrftoken=xyz): ", "").strip()
+            cookies = {}
+            for part in raw.split(";"):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                cookies[k.strip()] = v.strip()
+            cfg["auth"]["cookie"] = cookies
+            cfg["mode"] = "authenticated"
+        elif m == 2:
+            tok = _read("Bearer token değerini girin: ", "").strip()
+            cfg["auth"]["bearer"] = tok
+            cfg["mode"] = "authenticated"
+        elif m == 3:
+            hdr = (_read("API Key header adı (örn: X-API-Key): ", "X-API-Key") or "X-API-Key").strip()
+            key = _read("API key değeri: ", "").strip()
+            cfg["auth"]["api_key_header"] = hdr
+            cfg["auth"]["api_key"] = key
+            cfg["mode"] = "authenticated"
+        elif m == 4:
+            lu = _read("Login URL: ", "").strip()
+            un = _read("Kullanıcı adı/E-posta: ", "").strip()
+            pw = _read("Parola: ", "").strip()
+            cfg["auth"].update({
+                "login_url": lu,
+                "username_field": cfg.get("auth", {}).get("username_field", "username"),
+                "password_field": cfg.get("auth", {}).get("password_field", "password"),
+                "creds": {"username": un, "password": pw},
+                "enabled": True
+            })
+            cfg["mode"] = "authenticated"
+        else:
+            print("[i] Geçersiz seçim; kimliksiz taramaya geçiliyor.")
+            cfg["mode"] = "unauthenticated"
+            cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
+    else:
+        # Kimliksiz tarama
+        cfg["mode"] = "unauthenticated"
+        cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
+
+    # Opsiyonel: kurumsal proxy/VPN gibi bir çıkış kullanmak ister misiniz?
+    # Proxy tercihi (istisnasız)
+    _read = globals().get("_readline_default") or globals().get("_read")
+    if not callable(_read):
+        def _read(prompt: str, default: str) -> str:
+            try:
+                val = input(prompt)
+                s = (val if isinstance(val, str) else "").strip()
+                return s if s != "" else default
+            except EOFError:
+                return default
+    use_proxy = (_read("Çıkış trafiği için bir HTTPS proxy kullanmak ister misiniz? (E/h): ",
+                       "h") or "h").strip().lower()
+    if use_proxy.startswith("e"):
+        purl = (_read("Proxy URL (örn: http://127.0.0.1:8080 veya http://user:pass@host:port): ", "").strip())
+        http_cfg = cfg.setdefault("http", {})
+        proxies = http_cfg.setdefault("proxies", {})
+        if purl:
+            proxies["http"] = purl
+            proxies["https"] = purl
+            print("[i] Proxy ayarlandı.")
+
+
+    profile, cfg = _offer_scan_profile_and_confirm(cfg)
+    mode = _choose_mode_from_config(cfg)
+    detailed = (mode == ScanMode.DETAILED) or bool((cfg.get("settings") or {}).get("detailed", False))
+    print(f"[MOD] {mode.upper()}  |  Detay: {'EVET' if detailed else 'HAYIR'}  |  Profil: {profile.upper()}")
+
+    debug = str((cfg.get("settings") or {}).get("logging", {}).get("level", "")).upper() == "DEBUG"
+    logger = setup_logging(debug=debug)
+
+
+    driver = None
+    if True:  # FIX: block alignment; always run pipeline
+        driver = setup_webdriver(_normalize_webdriver_cfg(cfg))
+        if not driver:
+            print("[i] WebDriver açılamadı; dinamik gezinme olmadan devam edilecek.")
+
+        session = _setup_session_from_config(cfg)
+        # --- Ön tanımlar: daha sonra kullanılan bağlamlar (lint/akış güvenliği) ---
+        auth_ctx = _build_auth_ctx(session, cfg) if (mode == ScanMode.AUTHENTICATED) else None
+        oast_cfg = (cfg.get('oast') or {})
+        _enforce_egress_policy(cfg)
+        _egress_health_check(session, cfg, results)
+
+        if callable(globals().get("prime_session")):
+            _ = prime_session(session, url, cfg, logger=logger)
+
+        _install = globals().get("install_auth_retry_adapter")
+        if callable(_install):
+            _install(session, cfg)
+
+        results.setdefault("phase_timings", {})
+
+        meta = results.setdefault("meta", {})
+        ci = current_identity(cfg)
+        meta["egress"] = ci if isinstance(ci, (dict, list, str)) else str(ci)
+
+        meta["scan_profile"] = profile
+        if callable(globals().get("add_result")):
+            add_result("meta", {"scan_profile": profile})
+
+        auth_ok = False
+        _run_auth_flow = globals().get("run_auth_flow")
+        if callable(_run_auth_flow):
+            auth_ok = bool(_run_auth_flow(session, cfg, driver=driver, base_url=url, debug=debug))
+
+        def _auth_is_configured(_cfg: dict) -> bool:
+            a = (_cfg.get('auth') or {}) if isinstance(_cfg, dict) else {}
+            if a.get('bearer') or a.get('bearer_token') or a.get('token'):
+                return True
+            if a.get('api_key_header') and a.get('api_key'):
+                return True
+            if a.get('headers'):
+                return True
+            if a.get('cookie') or a.get('cookies'):
+                return True
+            if a.get('login_url') and (a.get('creds') or {}).get('username') and (a.get('creds') or {}).get('password'):
+                return True
+            return False
+
+        _auth_node = (cfg.get('auth') or {}) if isinstance(cfg, dict) else {}
+        if _auth_node.get('enabled') and _auth_node.get('strict_required'):
+            if _auth_is_configured(cfg) and not auth_ok:
+                raise RuntimeError(
+                    'Kimlikli tarama başarısız (strict_required). Kimlik bilgileri var ama login kalıcı olmadı.')
+            if not _auth_is_configured(cfg):
+                raise RuntimeError(
+                    'strict_required=true fakat kullanılabilir kimlik yöntemi yapılandırılmamış (bearer/api_key/cookie veya login_url+creds eksik).')
+
+
+        def _build_ctx():
+            required = {"url", "scheme", "config", "driver", "session", "results", "detailed", "save_report", "debug",
+                        "logger"}
+            if callable(ScanContext):
+                sig = inspect.signature(ScanContext)  # Python sınıfıysa bu güvenli; C-extension değilse istisna atmaz
+                params = set(sig.parameters.keys())
+                if required.issubset(params):
+                    return ScanContext(
+                        url=url, scheme=scheme, config=cfg, driver=driver,
+                        session=session, results=results, detailed=detailed,
+                        save_report=True, debug=debug, logger=logger
+                    )
+
+            class _Ctx:
+                __slots__ = (
+                    "url", "scheme", "config", "driver", "session", "results", "detailed", "save_report", "debug",
+                    "logger", "base_plan")
+
+            ctx = _Ctx()
+            ctx.url, ctx.scheme, ctx.config, ctx.driver = url, scheme, cfg, driver
+            ctx.session, ctx.results, ctx.detailed = session, results, detailed
+            ctx.save_report, ctx.debug, ctx.logger = True, debug, logger
+            
+            # [WS3] Inject manual phases for correct reporting
+            manual_plan = [
+                {"id": "discovery", "title": "Keşif", "enabled": True, "visible": True},
+                {"id": "portscan", "title": "Port Taraması", "enabled": True, "visible": True},
+                {"id": "tls", "title": "TLS Analizi", "enabled": True, "visible": True},
+                {"id": "headers", "title": "Güvenlik Başlıkları", "enabled": True, "visible": True},
+                {"id": "crawl", "title": "Gezinme (Crawl)", "enabled": True, "visible": True},
+            ]
+            
+            # Try to populate base_plan if ctx supports it
+            try:
+                ctx.base_plan = manual_plan
+            except Exception:
+                pass
+
+            if callable(build_plan):
+                # Get the plan (which might be just offensive if base_plan failed)
+                raw_plan = build_plan(ctx)
+                
+                # Merge manually if needed
+                plan_map = {p["id"]: p for p in manual_plan}
+                for p in raw_plan:
+                    plan_map[p["id"]] = p
+                
+                results["phase_plan"] = list(plan_map.values())
+            else:
+                 results["phase_plan"] = manual_plan
+            
+            return ctx
+
+        ctx = _build_ctx()
+
+        if callable(globals().get("_session_priming")):
+            _session_priming(session, url, cfg)
+
+        _auth = (cfg.get('auth') or {}) if isinstance(cfg, dict) else {}
+        _auto = (_auth.get('auto_signup') or {}) if isinstance(_auth, dict) else {}
+        _assi = (_auth.get('assisted') or {}) if isinstance(_auth, dict) else {}
+
+        if bool(_auto.get('enabled')) and callable(globals().get("run_auto_signup")):
+            if run_auto_signup(session, cfg):
+                print('[Auth] Auto-Signup başarılı.')
+        if bool(_assi.get('enabled')) and callable(globals().get("run_device_code_flow")):
+            if run_device_code_flow(session, cfg):
+                print('[Auth] Device Code ile token alındı.')
+
+        def mark(phase_name, start_t=None):
+            if 'phase_timings' not in results or not isinstance(results.get('phase_timings'), dict):
+                results['phase_timings'] = {}
+            if start_t is None:
+                return time.time()
+            results["phase_timings"][phase_name] = round(time.time() - start_t, 2)
+
+        if mode == ScanMode.AUTHENTICATED:
+            print("[*] Kimlikli tarama başlatılıyor…")
+            snap = dict(results)
+            run_mode(ctx, ScanMode.AUTHENTICATED)
+            meta = ctx.results.get("meta", {})
+            auth_failed = (ctx.results == snap) or meta.get("auth_fallback") or meta.get("auth_error")
+            if auth_failed:
+                print("[!] Kimlikli tarama başarısız/atlandı; standart taramaya düşülüyor.")
+        else:
+            print("[*] Standart tarama başlatılıyor…")
+
+        print("[•] Port taraması (TCP)…")
+        t = mark("ports")
+        open_tcp = scan_ports_or_distributed(url, results, cfg, detailed=detailed, debug=debug, protocol="tcp")
+        mark("ports", t)
+
+        print("[•] Discovery (DNS/servis/tech)…")
+        t = mark("discovery")
+        discovery_enrich(url, results, open_ports=open_tcp, detailed=detailed, debug=debug)
+        mark("discovery", t)
+
+        def _curl_head(url_s: str, timeout_s: float = 8.0):
+            curl_bin = shutil.which("curl")
+            if not curl_bin:
+                return None
+            # -I (HEAD), -L (redirect), -sS (sessiz), --max-time, -w code ekle, header'ları stdout'a dök
+            cp = subprocess.run(
+                [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout_s)), url_s, "-w", "\n%{http_code}\n"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+            )
+            if cp.returncode != 0 or not cp.stdout:
+                return None
+            lines = [ln for ln in (cp.stdout.splitlines()) if ln.strip() != ""]
+            if not lines:
+                return None
+            code_line = lines[-1]
+            sc = int(code_line) if code_line.isdigit() else 0
+            server = ""
+            via = ""
+            for ln in reversed(lines[:-1]):
+                if ln.lower().startswith("server:") and not server:
+                    server = ln.split(":", 1)[1].strip()
+                if ln.lower().startswith("via:") and not via:
+                    via = ln.split(":", 1)[1].strip()
+                if server and via:
+                    break
+            hdrs = {}
+            if server:
+                hdrs["server"] = server
+            if via:
+                hdrs["via"] = via
+            return sc, hdrs
+
+        seeds = _public_surface_seeds(url)
+        if isinstance(seeds, (list, tuple)):
+            for su in seeds:
+                if not isinstance(su, str) or not su:
+                    continue
+                res = _curl_head(su, timeout_s=8.0)
+                if not res:
+                    continue
+                sc, hdrs = res
+                if sc in (401, 403):
+                    kind = classify_access_block(sc, hdrs, "")
+                    add_result('auth_gap', {'url': su, 'status': sc, 'class': kind})
+                elif 200 <= sc < 500:
+                    results.setdefault('endpoints', [])
+                    if su not in results['endpoints']:
+                        results['endpoints'].append(su)
+
+        print("[•] Crawler çalışıyor…")
+        t = mark("crawl")
+        crawl_cfg = (cfg.get("crawl") or {})
+        crawl_website(
+            url, results, driver, debug=debug,
+            max_depth=int(crawl_cfg.get("max_depth", 3)),
+            max_pages=int(crawl_cfg.get("max_pages", 600)),
+        )
+        mark("crawl", t)
+
+        js_urls = []
+        for ep in list(results.get('endpoints', []) or []):
+            if isinstance(ep, str) and ep.lower().endswith('.js'):
+                js_urls.append(ep)
+        base = url.rstrip('/')
+        js_urls += [
+            base + '/_next/static/chunks/main.js',
+            base + '/_next/static/chunks/pages/index.js',
+            base + '/static/app.js',
+        ]
+        _passive_js_analyze(session, js_urls, results)
+
+        _run_cd = None
+        _ci_fn = None
+
+        if _ws_spec('core.utils') is not None:
+            _cu = importlib.import_module('websecure.core.utils')
+            _run_cd = getattr(_cu, 'run_content_discovery', None)
+            _ci_fn = getattr(_cu, 'current_identity', None)
+        elif _ws_spec('utils') is not None:
+            _u = importlib.import_module('utils')
+            _run_cd = getattr(_u, 'run_content_discovery', None)
+            _ci_fn = getattr(_u, 'current_identity', None)
+
+        ci_fn = _ci_fn if callable(_ci_fn) else (lambda _cfg: {})
+        # --- İçerik Keşfi (content discovery) ---
+        _cd_enabled = bool(((cfg.get("content_discovery") or {}).get("enabled")))
+        if _cd_enabled and callable(globals().get("run_content_discovery")):
+            print("[•] İçerik keşfi çalışıyor…")
+            t_cd = mark("content_discovery")
+            ok_cd, new_urls = _safe_call(
+                run_content_discovery, url, cfg, results, timeout=900, debug=debug, call_timeout=900.0
+            )
+            results.setdefault("_content_discovery_count", len(new_urls or []) if ok_cd else 0)
+            if not ok_cd and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "content_discovery", "error": str(new_urls)})
+            mark("content_discovery", t_cd)
+        else:
+            results.setdefault("_content_discovery_count", 0)
+
+        print("[•] Güvenlik başlıkları kontrolü…")
+        t = mark("headers")
+        if callable(globals().get("scan_security_headers")):
+            ok_hdr, _ = _safe_call(scan_security_headers, url, results, session, debug=debug, call_timeout=120.0)
+            if not ok_hdr and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "security_headers", "error": "scan_security_headers_failed"})
+        else:
+            if callable(globals().get("add_result")):
+                add_result("errors", {"stage": "security_headers", "error": "module_missing"})
+        mark("headers", t)
+
+        print("[•] TLS sertifika kontrolü…")
+        t = mark("tls")
+        tls_ok = False
+        cert = {}
+        if callable(globals().get("check_ssl_certificate")):
+            ok_tls, cert_res = _safe_call(
+                check_ssl_certificate, url, results=results, session=session, config=cfg, debug=debug, call_timeout=90.0
+            )
+            if ok_tls and isinstance(cert_res, dict):
+                cert = cert_res
+                tls_ok = True
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "tls", "error": str(cert_res)})
+        else:
+            if callable(globals().get("add_result")):
+                add_result("errors", {"stage": "tls", "error": "module_missing"})
+
+        hsts = _has_hsts(results)
+        issues = list(cert.get("problems") or []) if isinstance(cert, dict) else []
+        min_ver = ((cfg.get("tls") or {}).get("min_version") or "TLS1.2").upper()
+        ver = (cert.get("tls_version") or "").upper() if isinstance(cert, dict) else ""
+        order = {"TLS1.0": 1, "TLS1.1": 2, "TLS1.2": 3, "TLS1.3": 4}
+        if order.get(ver, 0) < order.get(min_ver, 3):
+            issues.append(f"min_version:{min_ver}")
+        if not hsts:
+            issues.append("hsts_missing")
+
+        tls_row = {
+            "host": cert.get("host") if isinstance(cert, dict) else None,
+            "cn": cert.get("subject_CN") if isinstance(cert, dict) else None,
+            "valid_from": cert.get("not_before") if isinstance(cert, dict) else None,
+            "valid_to": cert.get("not_after") if isinstance(cert, dict) else None,
+            "days_left": cert.get("days_remaining") if isinstance(cert, dict) else None,
+            "protocol": cert.get("tls_version") if isinstance(cert, dict) else None,
+            "hsts": hsts,
+            "issues": issues,
+        }
+        if callable(globals().get("add_result")):
+            add_result("tls_summary", tls_row)
+        results["tls_summary"] = [tls_row]
+        mark("tls", t)
+
+        # OWASP + Nuclei imza taramaları
+        if callable(globals().get("run_owasp_and_nuclei")):
+            ok_on, err_or_none = _safe_call(
+                run_owasp_and_nuclei, url, results, session, config=cfg, debug=debug,
+                auth_ctx=_build_auth_ctx(session, cfg), call_timeout=900.0
+            )
+            if not ok_on and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "owasp_nuclei", "error": str(err_or_none)})
+
+        # --- Coverage / Keşif Özeti ---
+        crawled_pages = _as_int(((results.get("crawl_summary") or {}).get("pages") or 0), 0)
+        cd_count = _as_int(results.pop("_content_discovery_count", 0) or 0, 0)
+        total_endpoints = len(set(results.get("endpoints", []) or []))
+        cov = {
+            "crawled_pages": crawled_pages,
+            "crawl_endpoints": _as_int(((results.get("crawl_summary") or {}).get("endpoints") or total_endpoints),
+                                       total_endpoints),
+            "content_discovery_endpoints": cd_count,
+            "total_unique_endpoints": total_endpoints,
+        }
+        results["coverage_summary"] = cov
+        if callable(globals().get("add_result")):
+            add_result("coverage_summary", cov)
+
+        endpoints = list(results.get("endpoints", [])) or [url]
+        crawled_pf_items = [{"url": u, "method": "GET", "params": {"query": {}, "body": {}, "json": {}}} for u in
+                            endpoints]
+        discovered = discover_params_from_crawl(crawled_pf_items) if callable(
+            globals().get("discover_params_from_crawl")) else {"query": [], "body": [], "json": []}
+
+        def _normalize_discovered(x):
+            keys = ("query", "body", "json", "headers", "cookies", "path")
+            out = {k: [] for k in keys}
+            if isinstance(x, dict):
+                for k in keys:
+                    v = x.get(k, [])
+                    if isinstance(v, (list, tuple)):
+                        out[k] = list(v)
+                    elif isinstance(v, set):
+                        out[k] = list(v)
+                    elif v is None:
+                        out[k] = []
+                    else:
+                        out[k] = [v]
+                return out
+            if isinstance(x, (set, list, tuple)):
+                out["query"] = list(x)
+                return out
+            return out
+
+        discovered_map = _normalize_discovered(discovered)
+        discovered = discovered_map
+        extra_names = set()
+        if callable(globals().get("guess_additional_params")):
+            extra_names = set(guess_additional_params(discovered_map, extra_words=list(
+                ((cfg.get("fuzz") or {}).get("extra_words") or []))))
+
+        _names = []
+        for _k in ("query", "body", "json", "headers", "cookies", "path"):
+            _v = discovered_map.get(_k, []) if isinstance(discovered_map, dict) else []
+            if isinstance(_v, (list, tuple, set)):
+                _names.extend(list(_v))
+        discovered_names_for_fuzz = set(str(x) for x in _names) | set(extra_names)
+        fuzz_cfg = (cfg.get("fuzz") or {})
+        fuzz_limits = {
+            "per_param": _as_int(fuzz_cfg.get("per_param", 6), 6),
+            "max_total": _as_int(fuzz_cfg.get("max_total", 250), 250),
+            "rate_ms": _as_int(fuzz_cfg.get("rate_ms", 0), 0),
+            "stop_on_high": bool(fuzz_cfg.get("stop_on_high", False)),
+            "backoff_factor": float((fuzz_cfg.get("rate_limit") or {}).get("backoff_factor", 2.0)) if isinstance(
+                fuzz_cfg.get("rate_limit"), dict) else 2.0,
+            "max_rate_ms": _as_int((fuzz_cfg.get("rate_limit") or {}).get("max_rate_ms", 2000), 2000) if isinstance(
+                fuzz_cfg.get("rate_limit"), dict) else 2000,
+            "max_consecutive_429": _as_int((fuzz_cfg.get("rate_limit") or {}).get("max_consecutive_429", 6),
+                                           6) if isinstance(fuzz_cfg.get("rate_limit"), dict) else 6,
+            "jitter_ms": _as_int((fuzz_cfg.get("rate_limit") or {}).get("jitter_ms", 0), 0) if isinstance(
+                fuzz_cfg.get("rate_limit"), dict) else 0,
+            "proxy": (ci_fn(cfg).get("proxy_url") if callable(
+                ci_fn) and ci_fn(cfg) else None),
+        }
+
+        print("[•] Param")
+
+        crawl_cfg = (cfg.get("crawler") or {}) if isinstance(cfg, dict) else {}
+
+        # Static crawler via WebCrawler if available
+        if 'WebCrawler' in globals() and callable(globals().get("WebCrawler")) and callable(
+                globals().get("CrawlerConfig")):
+            wc = WebCrawler(
+                session,
+                url,
+                driver=driver,
+                config=CrawlerConfig(
+                    max_depth=_as_int(crawl_cfg.get("max_depth", 4), 4),
+                    max_pages=_as_int(crawl_cfg.get("max_pages", 1000), 1000),
+                    timeout_http=_as_int(crawl_cfg.get("timeout_http", 12), 12),
+                    strict_same_origin=bool(crawl_cfg.get("strict_same_origin", True)),
+                    ignore_robots=bool(crawl_cfg.get("ignore_robots", False)),
+                ),
+                debug=debug,
+            )
+            ok_wc, cout = _safe_call(wc.run, call_timeout=600.0)
+            if ok_wc and isinstance(cout, dict):
+                new_eps = list(set((cout.get("endpoints") or [])))
+                endpoints.extend([u for u in new_eps if u not in endpoints])
+                if callable(globals().get("add_result")):
+                    add_result("crawl", {"static": {"new": len(new_eps)}})
+            elif not ok_wc and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "crawl_static", "error": str(cout)})
+
+
+        if bool(crawl_cfg.get("browser_js_discovery", True)) and callable(globals().get("discover_dynamic_endpoints")):
+            ok_dyn, res = _safe_call(
+                discover_dynamic_endpoints,
+                url,
+                headless=bool(crawl_cfg.get("headless", True)),
+                timeout_ms=_as_int(crawl_cfg.get("browser_timeout_ms", 15000), 15000),
+                max_pages=_as_int(crawl_cfg.get("browser_max_pages", 200), 200),
+                record_dir=crawl_cfg.get("record_dir"),
+                prefer=str(crawl_cfg.get("browser_prefer", "playwright")),
+                return_artifacts=True,
+                call_timeout=900.0,
+            )
+            if ok_dyn:
+                eps, artifacts = (res or ([], []))
+                if eps:
+                    new_eps = [e.get("url") if isinstance(e, dict) else e for e in (eps or [])]
+                    new_eps = [u for u in new_eps if isinstance(u, str)]
+                    endpoints.extend([u for u in new_eps if u not in endpoints])
+                    if callable(globals().get("add_result")):
+                        add_result("crawl", {"browser": {"new": len(new_eps)}})
+                if artifacts and callable(globals().get("add_result")):
+                    add_result("artifacts", {"browser": artifacts})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "crawl_browser", "error": str(res)})
+
+                    print("[•] SSRF/XXE sezgisel kontroller…")
+                    t = mark("ssrf_xxe")
+                    if callable(globals().get("ssrf_xxe_scan")):
+                        kw = dict(session=session, endpoints=endpoints[:40], oast_cfg=oast_cfg, results=results,
+                                  debug=debug,
+                                  auth_ctx=auth_ctx)
+                        # imza uyumu için anahtar adlarını fonskiyon imzasına göre filtrele
+                        fk = _kw_filter(ssrf_xxe_scan, **kw)
+                        # bazı sürümlerde 'endpoints' yerine yalnızca pozisyonel kullanılıyor olabilir:
+                        if not fk:
+                            # minimum pozisyonel: (session, endpoints, oast_cfg, results)
+                            ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, endpoints[:40], oast_cfg, results,
+                                                           call_timeout=900.0)
+                        else:
+                            ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, **fk, call_timeout=900.0)
+                        if not ok_ssrf and callable(globals().get("add_result")):
+                            add_result("errors", {"stage": "ssrf_xxe", "error": str(res_ssrf)})
+                    else:
+                        if callable(globals().get("add_result")):
+                            add_result("errors", {"stage": "ssrf_xxe", "error": "module_missing"})
+                    mark("ssrf_xxe", t)
+
+                gql_eps = [u for u in endpoints if isinstance(u, str) and ("/graphql" in u.lower())]
+                gql_cfg = (cfg.get("graphql") or {})
+                cfg_eps = list(gql_cfg.get("endpoints") or [])
+                all_gql_eps = list(dict.fromkeys((gql_eps or []) + cfg_eps))
+
+                if all_gql_eps:
+                    print("[•] GraphQL RPC testleri…")
+                    t = mark("graphql")
+                    if callable(globals().get("graphql_scan")):
+                        base_kw = dict(
+                            session=session,
+                            endpoints=all_gql_eps[:10],
+                            results=results,
+                            debug=debug,
+                            base_url=url,
+                            verify=bool(cfg.get('tls_verify', True)),
+                            timeout=int((cfg.get('graphql') or {}).get('timeout', 20)),
+                        )
+                        fkw = _kw_filter(graphql_scan, **base_kw)
+
+                        ok_gql, err_or_none = _safe_call(graphql_scan, **fkw,
+                                                         call_timeout=900.0) if fkw else _safe_call(
+                            graphql_scan, session, all_gql_eps[:10], results, call_timeout=900.0
+                        )
+                        if not ok_gql and callable(globals().get("add_result")):
+                            add_result("errors", {"stage": "graphql", "error": str(err_or_none)})
+                    else:
+                        if callable(globals().get("add_result")):
+                            add_result("errors", {"stage": "graphql", "error": "module_missing"})
+                    mark("graphql", t)
+
+                    if bool(gql_cfg.get("deep", True)):
+                        print("[•] GraphQL derin saldırı testleri…")
+                        t = mark("graphql_deep")
+                        if callable(globals().get("graphql_attack_scan")):
+                            deep_kw = dict(session=session, endpoints=all_gql_eps[:10], results=results, debug=debug,
+                                           config=cfg)
+                            fkw = _kw_filter(graphql_attack_scan, **deep_kw)
+                            ok_gqa, err_or_none = _safe_call(graphql_attack_scan, **fkw,
+                                                             call_timeout=900.0) if fkw else _safe_call(
+                                graphql_attack_scan, session, all_gql_eps[:10], results, call_timeout=900.0
+                            )
+                            if not ok_gqa and callable(globals().get("add_result")):
+                                add_result("errors", {"stage": "graphql_deep", "error": str(err_or_none)})
+                        else:
+                            if callable(globals().get("add_result")):
+                                add_result("errors", {"stage": "graphql_deep", "error": "module_missing"})
+                        mark("graphql_deep", t)
+
+                upload_eps = []
+                for fm in results.get("forms_meta", []):
+                    if any(inp.get("type") == "file" for inp in (fm.get("inputs") or [])):
+                        upload_eps.append(fm.get("action") or fm.get("page"))
+                upload_eps = list(dict.fromkeys([u for u in upload_eps if u]))
+                # File-Upload
+                if upload_eps and callable(globals().get("file_upload_scan")):
+                    print("[•] Dosya yükleme testleri…")
+                    t = mark("file_upload")
+                    ok_fu, err_or_none = _safe_call(
+                        file_upload_scan,
+                        session, upload_eps[:15], results,
+                        debug=debug, base_url=url,
+                        call_timeout=900.0
+                    )
+                    if not ok_fu and callable(globals().get("add_result")):
+                        add_result("errors", {"stage": "file_upload", "error": str(err_or_none)})
+                    mark("file_upload", t)
+
+                if callable(globals().get("build_plan")):
+                    print("[•] Faz planı (koşul bazlı) çalıştırılıyor…")
+                    t = mark("phase_plan")
+                    _run_phase_plan(ctx, skip_legacy_offensive=True)
+                    mark("phase_plan", t)
+
+                _rp = globals().get("run_plan_if_needed")
+                if callable(_rp):
+                    ok_rp, err_or_none = _safe_call(_rp, ctx, call_timeout=900.0)
+                    if not ok_rp and callable(globals().get("add_result")):
+                        add_result('errors', {'stage': 'phase_run', 'error': str(err_or_none)})
+
+                # 6) OFFENSIVE 3A
+                print("[•] Offensive modüller…")
+                if results.get("_skip_legacy_offensive"):
+                    print("    [i] Faz planı etkin: legacy offensive bloğu atlanıyor.")
+                else:
+                    def _profile_allows(key: str) -> bool:
+                        fn = globals().get("_off_profile_allows")
+                        return bool(fn(cfg, key)) if callable(fn) else True
+
+                    def _run_offensive(fn, **kw):
+                        if not callable(fn):
+                            return
+                        fkw = _kw_filter(fn, **kw) if callable(globals().get("_kw_filter")) else kw
+                        ok_off, err_or_none = _safe_call(fn, **fkw, call_timeout=900.0)
+                        if not ok_off and callable(globals().get("add_result")):
+                            add_result("errors",
+                                       {"stage": "offensive", "error": str(err_or_none),
+                                        "fn": getattr(fn, "__name__", "unknown")})
+
+                    t = mark("offensive")
+                    off_root = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
+                    if bool(off_root.get("enabled", False)):
+                        # Request Smuggling
+                        if _off_enabled(cfg, "request_smuggling") and _profile_allows("request_smuggling"):
+                            _run_offensive(offensive_request_smuggling, url=url, session=session, debug=debug,
+                                           auth_ctx=auth_ctx)
+
+                        # Mass Assignment
+                        if _off_enabled(cfg, "mass_assignment") and _profile_allows("mass_assignment"):
+                            fields = ((off_root.get("mass_assignment") or {}).get("fields"))
+                            _run_offensive(offensive_mass_assignment, url=url, session=session, debug=debug,
+                                           fields=fields,
+                                           auth_ctx=auth_ctx)
+
+                        # JWT
+                        if _off_enabled(cfg, "jwt_attacks") and _profile_allows("jwt_attacks"):
+                            _run_offensive(offensive_jwt, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+
+                        # NoSQLi
+                        if _off_enabled(cfg, "nosql_injection") and _profile_allows("nosql_injection"):
+                            _run_offensive(offensive_nosqli, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+
+                        # WebSocket Fuzz
+                        if _off_enabled(cfg, "websocket_fuzz") and _profile_allows("websocket_fuzz"):
+                            _run_offensive(offensive_ws_fuzz, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+
+                    mark("offensive", t)
+
+                print("[•] Skorlama/Doğrulama (MD)…")
+                t = mark("reporting")
+                buckets = get_bucket_results()
+
+                all_findings = []
+                for _k, _lst in (buckets or {}).items():
+                    if isinstance(_lst, list):
+                        for _it in _lst:
+                            if isinstance(_it, dict):
+                                all_findings.append(_it)
+
+                oast_events = []
+                for _it in all_findings:
+                    evs = _it.get("events")
+                    if isinstance(evs, list):
+                        for _ev in evs:
+                            if isinstance(_ev, dict):
+                                oast_events.append(_ev)
+
+                final = verify_and_score(all_findings, oast_events)
+
+                report_payload = dict(results)
+                report_payload.update(get_bucket_results())
+                report_payload.update(buckets)
+                report_payload.update({
+                    "meta": {
+                        "target": url,
+                        "mode": mode,
+                        "detailed": detailed,
+                    },
+                    "final": final,
+                    "phase_timings": results.get("phase_timings", {}),
+                    "crawl_summary": results.get("crawl_summary"),
+                    "security_headers_summary": results.get("security_headers_summary"),
+                    "port_scan_summary": results.get("port_scan_summary"),
+                    "discovery_summary": results.get("discovery_summary"),
+                    # --- TLS Özet Tablosu 2.5 ---
+                    "tls_summary": results.get("tls_summary", []),
+                })
+
+                out = perform_reporting(session, cfg, report_payload)
+                written = (out or {}).get("written", {})
+                ok = written.get("md") or written.get("json")
+
+                if driver is not None:
+                    getattr(driver, 'quit', lambda: None)()
+                s = session
+                if s is not None:
+                    getattr(s, 'close', lambda: None)()
+                print("\n[i] Tamamlandı.")
+                print(
+                    f"[i] Üretilen dosyalar: {json.dumps(written, ensure_ascii=False)}")  # yazılan dosyalar ve webhook sonucunu içerir
+
+        print("fuzzing başlıyor…")
+        t = mark("fuzzing")
+
+        auth_ctx = _build_auth_ctx(session, cfg) if (mode == ScanMode.AUTHENTICATED) else None
+
+        fuzz_fn = fuzz_endpoint if callable(globals().get("fuzz_endpoint")) else None
+        sig_params = set(inspect.signature(fuzz_fn).parameters.keys()) if callable(fuzz_fn) else set()
+
+        t_fz = mark("fuzzing")
+        for u in endpoints[:50]:  # güvenli üst sınır
+            if not callable(fuzz_fn):
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "fuzz", "url": u, "error": "fuzz_endpoint_missing"})
+                continue
+
+            kwargs = dict(
+                session=session,
+                target={"url": u, "method": "GET"},
+                method="GET",
+                base_headers=(fuzz_cfg.get("base_headers") or {}),
+                base_cookies=(fuzz_cfg.get("base_cookies") or {}),
+                discovered=discovered_names_for_fuzz,
+                limits=fuzz_limits,
+                report_cb=lambda f: add_result("fuzz", redact_sensitive(f)) if callable(
+                    globals().get("add_result")) else None,
+                debug=debug,
+                heuristics_cfg=(cfg.get('fuzz') or {}).get('heuristics'),
+            )
+            if "auth_ctx" in sig_params:
+                kwargs["auth_ctx"] = auth_ctx
+
+            ok_fz, err_or_none = _safe_call(fuzz_fn, **kwargs, call_timeout=900.0)
+            if not ok_fz and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "fuzz", "url": u, "error": str(err_or_none)})
+
+        mark("fuzzing", t_fz)
+
+        # Authorization / IDOR benzerlik kontrolleri (opsiyonel, bastırmasız)
+        auth_cfg = (cfg.get("authorization") or {}) if isinstance(cfg, dict) else {}
+        if RoleContext and bool(auth_cfg.get("enabled", False)) and callable(
+                globals().get("authorization_run")):
+            roles_cfg = auth_cfg.get("roles") or [{"name": "user", "headers": {}, "cookies": {}}]
+            roles = []
+            for rc in roles_cfg:
+                roles.append(
+                    RoleProfile(name=rc.get("name", "user"), headers=rc.get("headers", {}),
+                                cookies=rc.get("cookies", {})))
+            rctx = RoleContext(base=session, roles=roles)
+            ok_authz, auth_findings = _safe_call(authorization_run, rctx, endpoints[:30], call_timeout=600.0)
+            if ok_authz and isinstance(auth_findings, (list, tuple)):
+                for f in auth_findings:
+                    if callable(globals().get("add_result")):
+                        add_result("authorization", f)
+            elif not ok_authz and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "authorization", "error": str(auth_findings)})
+
+        # Auth-only kaynak işaretleme (kimlikli akış varsa) — bastırmasız
+        if callable(globals().get("_build_auth_ctx")) and callable(globals().get("probe_auth_only")):
+            if mode == ScanMode.AUTHENTICATED and _build_auth_ctx(session, cfg):
+                for u in endpoints[:20]:
+                    ok_probe, f = _safe_call(probe_auth_only, session, "GET", u, call_timeout=60.0)
+                    if ok_probe and f and callable(globals().get("add_result")):
+                        add_result("auth_only", f)
+                    elif not ok_probe and callable(globals().get("add_result")):
+                        add_result("errors", {"stage": "auth_only_probe", "url": u, "error": str(f)})
+
+        bl_cfg = (cfg.get("business_logic") or {}) if isinstance(cfg, dict) else {}
+        if bl_cfg.get("enabled", True):
+            print("[•] İş mantığı akış testleri…")
+            t = mark("bizlogic_flows")
+            if callable(globals().get("run_business_logic_flows")):
+                ok_bl, err_or_none = _safe_call(run_business_logic_flows, session, url, cfg, results,
+                                                debug=debug,
+                                                call_timeout=900.0)
+                if not ok_bl and callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_flows", "error": str(err_or_none)})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_flows", "error": "module_missing"})
+            mark("bizlogic_flows", t)
+
+            print("[•] Race/Concurrency testleri…")
+            t = mark("bizlogic_race")
+            if callable(globals().get("run_race_conditions")):
+                ok_rc, err_or_none = _safe_call(run_race_conditions, session, url, cfg, results, debug=debug,
+                                                call_timeout=900.0)
+                if not ok_rc and callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_race", "error": str(err_or_none)})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_race", "error": "module_missing"})
+            mark("bizlogic_race", t)
+
+
+        oast_cfg = (cfg.get("oast") or {})
+        if bool(oast_cfg.get("enabled")) and callable(globals().get("OASTClient")) and callable(
+                globals().get("run_oast_on_target")):
+            print("[•] OAST (out-of-band) testleri…")
+            t = mark("oast")
+            ok_client, client = _safe_call(OASTClient, session, oast_cfg, call_timeout=30.0)
+            if ok_client:
+                for u in endpoints[:20]:
+                    disc = {"query": discovered.get("query", []), "body": [], "json": [], "headers": [],
+                            "cookies": []}
+                    limits = {"max_injections_per_loc": int(oast_cfg.get("max_injections_per_loc", 3))}
+                    kw = dict(
+                        session=session,
+                        target={"url": u, "method": "GET"},
+                        oast_client=client,
+                        discovered=disc,
+                        report_cb=(lambda f: add_result("oast", redact_sensitive(f)) if callable(
+                            globals().get("add_result")) else None),
+                        limits=limits,
+                        auth_ctx=auth_ctx,
+                    )
+                    fkw = _kw_filter(run_oast_on_target, **kw)
+                    ok_oast, findings = _safe_call(run_oast_on_target, **fkw, call_timeout=900.0)
+                    if ok_oast and findings:
+                        for f in findings:
+                            if callable(globals().get("add_result")):
+                                add_result("oast", redact_sensitive(f))
+                    elif not ok_oast and callable(globals().get("add_result")):
+                        add_result("errors", {"stage": "oast", "url": u, "error": str(findings)})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "oast", "error": f"client_init_failed:{client}"})
+            mark("oast", t)
+
+
+def _as_int(x, default: int = 0) -> int:
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float) and x.is_integer():
+        return int(x)
+    if isinstance(x, str):
+        s = x.strip()
+        if s.lstrip("+-").isdigit():
+            return int(s)
+    return default
+
+
+if __name__ == "__main__":
+    from websecure.core.scan_modes import hpm_bootstrap_from_file
+
+    hpm_bootstrap_from_file('config.json')
+
+    _ret = main()
+    if inspect.iscoroutine(_ret):
+        asyncio.run(_ret)
+
+
+_spec = _iul.find_spec('websecure.core.reporting')
+if _spec is not None:
+    _r = importlib.import_module('websecure.core.reporting')
+    _cfg = globals().get('config') or {}
+    _ctx = globals().get('ctx') or {}
+    if callable(getattr(_r, 'finalize_reports', None)):
+        _r.finalize_reports(_ctx if isinstance(_ctx, dict) else {}, _cfg if isinstance(_cfg, dict) else {})

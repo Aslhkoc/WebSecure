@@ -1,0 +1,1483 @@
+{
+  "$schema": "./config.schema.json",
+  "_meta": {
+    "version": "2.5.2-b8",
+    "last_updated": "2025-09-14T14:36:41Z",
+    "notes": [
+      "Bu dosya, orijinal config.json üstünde GENİŞLETME yapılarak üretildi.",
+      "Yeni alanlar schema'ya eklenmeli: config.schema.json güncellemesi önerilir.",
+      "Eski alanlar korunmuştur; kaldırma yapılmadı. Yalnızca parametre GENİŞLETİLDİ.",
+      "Batch 5 entegrasyonu: SSRF/XXE ek şemalar (SMB/LDAP/TFTP) + metadata (IMDSv1/v2, GCP, Azure); SARIF & JUnit exporter ayarları ve reporting.formats güncellemesi uygulandı.",
+      "Batch 7: Otomatik rapor (flush), SARIF/JUnit güçlendirme, rule-id registry.",
+      "Batch 8: run_plan entegrasyonu; ws_fuzz endpoint düzeltmesi; JWT alias/wordlist; scan() sargıları.",
+      "Patched at 2025-09-22T16:07:57.825074Z — auth.strict_required otomatik gevşetildi (geçici), profile=aggressive uyumlandı; env yerleştirme için __guidance__ eklendi."
+    ]
+  },
+  "target": "https://target.local",
+  "base_url": "https://target.local",
+  "mode": "normal",
+  "timeout": 15,
+  "tls_verify": true,
+  "user_agent": "WebSecScanner/1.2 ",
+  "tls": {
+    "fail_on_self_signed": true,
+    "min_version": "TLS1.3",
+    "alpn": [
+      "h2",
+      "http/1.1"
+    ],
+    "webdriver": {
+      "driver_path": "./drivers/chromedriver.exe",
+      "binary": null,
+      "headless": false,
+      "remote_url": null
+    },
+    "content_discovery": {
+      "enabled": true,
+      "tool": "ffuf",
+      "binary": "C:/tools/ffuf/ffuf.exe",
+      "timeout": 30,
+      "threads": 50
+    },
+    "scanners": {
+      "authorization": true,
+      "file_upload": true,
+      "ssrf_xxe": true,
+      "graphql_rpc": true,
+      "rate_limit": true
+    },
+    "fuzz": {
+      "blind_param_fuzz": true,
+      "max_total": 1000,
+      "per_param": 25
+    },
+    "crawl": {
+      "use_browser": true,
+      "headless": true
+    },
+    "cipher_prefs": "modern",
+    "sni": true,
+    "expect_sts": true,
+    "check_ocsp": true,
+    "keylog_file": null,
+    "ja3_fingerprint": "",
+    "session_resumption": true,
+    "grease": true,
+    "soft_fail": true,
+    "soft_allowlist": [
+      "/robots.txt",
+      "/sitemap.xml",
+      "/sitemap_index.xml"
+    ],
+    "verify": true
+  },
+  "auth": {
+    "headers": {},
+    "api_key_header": "",
+    "api_key": "",
+    "http_endpoint": "",
+    "bearer": "",
+    "cookies": {},
+    "csrf": {
+      "enabled": true,
+      "param": "_csrf",
+      "header": "X-CSRF-Token",
+      "auto_extract": true
+    },
+    "two_factor": {
+      "enabled": false,
+      "provider": "totp",
+      "token_env": "WS_2FA_TOKEN",
+      "window": 1
+    },
+    "enabled": true,
+    "strict_required": false,
+    "login_url": "",
+    "username_field": "username",
+    "password_field": "password",
+    "creds": {
+      "username": "",
+      "password": ""
+    },
+    "probe_paths": [
+      "/profile",
+      "/account",
+      "/me"
+    ],
+    "__guidance__": {
+      "note": "Kimlikli taramayı zorunlu kılmak için strict_required=true yapın ve aşağıdaki yöntemlerden birini gerçek değerlerle doldurun.",
+      "options": {
+        "bearer": "auth.bearer = 'YOUR_TOKEN'  # 'Bearer ' prefix otomatik eklenir",
+        "api_key": {
+          "api_key_header": "X-API-Key",
+          "api_key": "YOUR_API_KEY"
+        },
+        "cookie": {
+          "sessionid": "YOUR_SESSION_COOKIE"
+        },
+        "form_login": {
+          "login_url": "https://target.local/login",
+          "username_field": "username",
+          "password_field": "password",
+          "creds": {
+            "username": "user@example.com",
+            "password": "S3cr3t!"
+          },
+          "success_contains": "/account",
+          "auth_check_url": "https://target.local/account"
+        }
+      }
+    },
+    "cookie": {},
+    "credential_less": {
+      "enabled": true,
+      "session_priming": true,
+      "safe_methods_only": true
+    },
+    "auto_signup": {
+      "enabled": false,
+      "signup_url": "",
+      "verify_email": true,
+      "email_field": "email",
+      "password_field": "password",
+      "username_field": "username",
+      "mailbox": {
+        "provider": "mailhog",
+        "base_url": "http://127.0.0.1:8025",
+        "search": "@example.com",
+        "type": "mailhog",
+        "imap": {
+          "host": "",
+          "port": 993,
+          "ssl": true,
+          "user": "",
+          "password": ""
+        }
+      },
+      "form_fields": {
+        "email": "email",
+        "password": "password",
+        "password2": "confirm_password"
+      }
+    },
+    "assisted": {
+      "enabled": false,
+      "device_code_endpoint": "",
+      "token_endpoint": "",
+      "client_id": "",
+      "scope": "openid profile email",
+      "audience": "",
+      "device_code": {
+        "device_url": "",
+        "token_url": "",
+        "client_id": "",
+        "scope": "openid profile email"
+      }
+    }
+  },
+  "http": {
+    "insecure_skip_verify": false,
+    "retries": 5,
+    "timeout_seconds": 20,
+    "retry_allowed_methods": [
+      "HEAD",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH"
+    ],
+    "backoff_factor": 0.3,
+    "status_forcelist": [
+      429,
+      500,
+      502,
+      503,
+      504
+    ],
+    "pool_maxsize": 20,
+    "backoff_jitter_range": [
+      0.8,
+      1.2
+    ],
+    "http2": true,
+    "max_redirects": 8,
+    "default_headers": {
+      "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    },
+    "proxies": {},
+    "dns": {
+      "resolve_ipv6": true,
+      "custom_resolvers": []
+    },
+    "user_agent": "WebSecScanner/1.2 ",
+    "identity_pools": {
+      "user_agents": [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+      ],
+      "accept_language": [
+        "de-DE,de;q=0.9,en;q=0.7,tr-TR;q=0.6",
+        "en-US,en;q=0.9,tr-TR;q=0.6",
+        "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+      ],
+      "accept": [
+        "text/html,application/json;q=0.9,*/*;q=0.8",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      ]
+    },
+    "phase_profiles": {
+      "discovery": {
+        "initial_rps": 2,
+        "max_rps": 4,
+        "header_profile": "balanced"
+      },
+      "mapping": {
+        "initial_rps": 3,
+        "max_rps": 6,
+        "header_profile": "balanced"
+      },
+      "offensive": {
+        "initial_rps": 1,
+        "max_rps": 3,
+        "header_profile": "tempered"
+      }
+    },
+    "rate_limit": {
+      "min_rps": 1,
+      "backoff_multiplier": 0.5,
+      "recover_step": 1,
+      "canary_interval_seconds": 15,
+      "respect_retry_after": true
+    },
+    "idempotent_first": {
+      "enabled": true,
+      "early_phases": [
+        "discovery",
+        "mapping"
+      ],
+      "allow_post_threshold": 0.2
+    },
+    "connect_timeout": 5,
+    "read_timeout": 15,
+    "max_retries": 1,
+    "retry_on_status": [
+      502,
+      503,
+      504
+    ],
+    "retry_on_connect": true,
+    "retry_on_read": true,
+    "tls_verify": true
+  },
+  "settings": {
+    "logging": {
+      "level": "DEBUG",
+      "json": false,
+      "file": null,
+      "redact_sensitive": true
+    },
+    "scan_profile": "aggressive",
+    "proxy_pool": [],
+    "profiles": {
+      "stealth": {
+        "rps": 5,
+        "concurrency": 10,
+        "modules": [
+          "headers",
+          "tls",
+          "owasp"
+        ]
+      },
+      "deep": {
+        "rps": 20,
+        "concurrency": 50,
+        "modules": [
+          "headers",
+          "tls",
+          "owasp",
+          "injection",
+          "graphql",
+          "file_upload",
+          "ssrf_xxe"
+        ]
+      },
+      "aggressive": {
+        "rps": 60,
+        "concurrency": 120,
+        "modules": [
+          "*"
+        ],
+        "http": {
+          "safe_methods_only": true
+        }
+      },
+      "normal": {
+        "rps": 12,
+        "concurrency": 20,
+        "allow_categories": [
+          "xss",
+          "sqli",
+          "ssrf",
+          "ssti",
+          "open_redirect"
+        ],
+        "idempotent_only": false,
+        "oast": true,
+        "heavy_modules": false,
+        "robots_respect": true,
+        "politeness_ms": 300,
+        "obs_seconds": 60,
+        "min_req": 40,
+        "up_when_block_rate_below": 0.005,
+        "down_when_block_rate_above": 0.03
+      }
+    }
+  },
+  "report": {
+    "path": "reports/last_report"
+  },
+  "reporting": {
+    "output_dir": "output",
+    "formats": [
+      "json",
+      "md",
+      "html",
+      "sarif",
+      "junit"
+    ],
+    "exit_on_fail": false,
+    "fail_on": [],
+    "redact_sensitive": true,
+    "delta": {
+      "enabled": true,
+      "baseline": "output/baseline.json"
+    },
+    "sarif": {
+      "level_min": "note",
+      "version": "2.1.0",
+      "rule_namespace": "websecure",
+      "artifact_uri_base": "",
+      "fingerprints": true
+    },
+    "junit": {
+      "suite_name": "WebSecure",
+      "split_by_target": true,
+      "classname_strategy": "by_module",
+      "include_passed": true,
+      "allow_empty_tests": false
+    },
+    "auth_gap": {
+      "enabled": true
+    },
+    "public_surface": {
+      "enabled": true
+    },
+    "egress_report": true,
+    "artifacts": {
+      "enabled": true,
+      "paths": [
+        "/.well-known/security.txt",
+        "/robots.txt",
+        "/sitemap.xml",
+        "/apple-app-site-association",
+        "/.well-known/assetlinks.json",
+        "/ads.txt"
+      ],
+      "max_bytes": 262144,
+      "timeout": 12,
+      "parallelism": 6,
+      "save_full": true
+    },
+    "_note_exit_on_fail": "Deprecated; use ci.exit_on_violation instead."
+  },
+  "integrations": {
+    "webhook": {
+      "enabled": false,
+      "url": "",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    },
+    "slack": {
+      "enabled": false,
+      "webhook_url": "",
+      "channel": ""
+    },
+    "jira": {
+      "enabled": false,
+      "url": "",
+      "project_key": "",
+      "issue_type": "Bug"
+    },
+    "gitlab": {
+      "enabled": false,
+      "url": "",
+      "token": "",
+      "project_id": ""
+    }
+  },
+  "scoring": {
+    "thresholds": {
+      "high": 80,
+      "medium": 50,
+      "low": 20
+    },
+    "cvss": {
+      "use": true,
+      "default_env": "P"
+    }
+  },
+  "i18n": {
+    "severity_canonical_locale": "tr",
+    "severity_labels": {
+      "tr": {
+        "low": "Düşük",
+        "medium": "Orta",
+        "high": "Yüksek",
+        "critical": "Kritik"
+      },
+      "en": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "critical": "Critical"
+      }
+    },
+    "severity_aliases": {
+      "Low": "Düşük",
+      "low": "Düşük",
+      "Medium": "Orta",
+      "medium": "Orta",
+      "Med": "Orta",
+      "High": "Yüksek",
+      "high": "Yüksek",
+      "Critical": "Kritik",
+      "critical": "Kritik",
+      "CRIT": "Kritik"
+    }
+  },
+  "crawl": {
+    "max_depth": 5,
+    "max_pages": 2000,
+    "timeout_http": 12,
+    "fingerprint_head_count": 25,
+    "use_browser": true,
+    "allow_paths": [],
+    "deny_paths": [],
+    "record_dir": "records",
+    "respect_robots": false,
+    "browser": {
+      "headless": true,
+      "max_concurrency": 4,
+      "wait_after_load_ms": 500,
+      "dom_snapshot": true,
+      "script_instrumentation": true
+    },
+    "downloads": {
+      "max_content_length_bytes": 2500000,
+      "disallowed_extensions": [
+        ".zip",
+        ".rar",
+        ".7z",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".mp4",
+        ".webm",
+        ".avi",
+        ".mov",
+        ".mp3",
+        ".wav",
+        ".flac",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+        ".iso",
+        ".dmg",
+        ".bin",
+        ".exe",
+        ".dll",
+        ".so",
+        ".apk",
+        ".msi",
+        ".pkg"
+      ],
+      "request_cache": {
+        "enabled": true,
+        "max_entries": 512,
+        "ttl_seconds": 900
+      }
+    },
+    "head_workers": 8,
+    "resume": true,
+    "checkpoint_every_pages": 15,
+    "checkpoint_ttl_seconds": 86400
+  },
+  "discovery": {
+    "subdomain_wordlist": [
+      "www",
+      "app",
+      "api",
+      "admin",
+      "test",
+      "dev",
+      "root"
+    ],
+    "http_title_timeout": 6,
+    "ffuf": {
+      "bin": "ffuf",
+      "wordlists": [
+        "./wordlists/dirs.txt",
+        "./wordlists/files.txt"
+      ],
+      "timeout": 10,
+      "threads": 50,
+      "follow_redirects": true,
+      "include_headers": true,
+      "include_cookies": true,
+      "max_results_per_target": 250,
+      "pass_headers_from_session": true,
+      "pass_cookies_from_session": true
+    },
+    "feroxbuster": {
+      "bin": "feroxbuster",
+      "depth": 2,
+      "threads": 10,
+      "rate_limit": 0,
+      "ignore_status": [
+        404,
+        401
+      ],
+      "max_results_per_target": 250,
+      "pass_headers_from_session": true,
+      "pass_cookies_from_session": true
+    }
+  },
+  "port_scan": {
+    "enabled": true,
+    "detailed": false,
+    "protocols": [
+      "tcp",
+      "udp"
+    ],
+    "extra_ports": [],
+    "tls_report": true,
+    "alpn": true,
+    "syn": {
+      "enabled": true,
+      "batch": 256,
+      "timeout_ms": 1200
+    },
+    "udp": {
+      "probes": [
+        "dns",
+        "ntp",
+        "snmp"
+      ],
+      "timeout_ms": 1600
+    },
+    "workers": 200
+  },
+  "authenticated": {
+    "session_ttl_seconds": 3600,
+    "endpoint_workers": 6,
+    "authenticated_endpoints": [
+      "/",
+      "/account",
+      "/profile"
+    ],
+    "tests": {
+      "headers": true,
+      "owasp": true,
+      "detect": true,
+      "injection": true
+    },
+    "auth_profiles": [
+      {
+        "username": "",
+        "password": "",
+        "login_url": "https://target.local/login",
+        "csrf_param": "_csrf"
+      }
+    ],
+    "auth_only_mark_findings": true
+  },
+  "login_discovery": {
+    "verify_tls": true
+  },
+  "fuzz": {
+    "per_param": 4,
+    "max_total": 150,
+    "rate_ms": 100,
+    "stop_on_high": false,
+    "extra_words": [
+      "redirect_uri",
+      "continue",
+      "gclid",
+      "utm_source",
+      "category"
+    ],
+    "heuristics": {
+      "enabled": true,
+      "entropy_delta_min": 0.35,
+      "semantic_ratio": 0.8,
+      "time_stddev": 250.0,
+      "lev_ratio": 0.85,
+      "time_z_min": 3.0,
+      "size_rel_min": 0.25,
+      "anomaly_threshold": 50,
+      "use_baseline": true,
+      "semantic_min": 0.8,
+      "semantic_method": "hybrid",
+      "html_aware": true
+    },
+    "rate_limit": {
+      "backoff_factor": 2.0,
+      "max_rate_ms": 1000,
+      "max_consecutive_429": 6,
+      "jitter_ms": 150,
+      "burst": 10,
+      "on_429": "slowdown"
+    },
+    "rps": 20,
+    "concurrency": 50,
+    "generators": {
+      "case_swap": true,
+      "dotted_keys": true,
+      "array_syntax": [
+        "k[]=1",
+        "k=1&k=2"
+      ]
+    },
+    "content_types": [
+      "query",
+      "json",
+      "form",
+      "xml"
+    ],
+    "learning": {
+      "enabled": true,
+      "learned_words_file": "./wordlists_custom/custom/learned.txt"
+    }
+  },
+  "file_upload": {
+    "endpoints": [],
+    "checks": {
+      "mime_sniff": true,
+      "double_extension": true,
+      "require_nosniff_response": true,
+      "magic_bytes": true,
+      "polyglot_svg_hta": true,
+      "server_echo_validation": true
+    },
+    "max_file_mb": 12
+  },
+  "ssrf_xxe": {
+    "scan_endpoints": [],
+    "use_oast": true,
+    "enable_local_schemes": true,
+    "enable_dict_scheme": false,
+    "enable_metadata_probes": true,
+    "stealth": false,
+    "scope_allowlist": [],
+    "scope_denylist": [],
+    "base_headers": {},
+    "base_cookies": {},
+    "debug": false,
+    "rate_limit": {
+      "backoff_factor": 2.0,
+      "max_rate_ms": 1000,
+      "max_consecutive_429": 6
+    },
+    "allowed_schemes": [
+      "dict",
+      "file",
+      "ftp",
+      "gopher",
+      "http",
+      "https",
+      "ldap",
+      "ldaps",
+      "smb",
+      "tftp"
+    ],
+    "deny_private_ranges": true,
+    "metadata_ips": [
+      "100.100.100.200",
+      "169.254.169.254",
+      "169.254.170.2"
+    ],
+    "metadata_hosts": [
+      "metadata.google.internal"
+    ],
+    "metadata": {
+      "providers": {
+        "aws": {
+          "imds_versions": [
+            "v1",
+            "v2"
+          ],
+          "host": "169.254.169.254",
+          "token_endpoint": "/latest/api/token",
+          "token_ttl_seconds": 21600,
+          "token_header": "X-aws-ec2-metadata-token",
+          "token_method": "PUT",
+          "default_headers": {},
+          "probe_paths": [
+            "/latest/meta-data/iam/security-credentials/",
+            "/latest/user-data",
+            "/latest/meta-data/instance-id"
+          ]
+        },
+        "gcp": {
+          "host": "169.254.169.254",
+          "hostname": "metadata.google.internal",
+          "default_headers": {
+            "Metadata-Flavor": "Google"
+          },
+          "probe_paths": [
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+            "/computeMetadata/v1/project/project-id"
+          ]
+        },
+        "azure": {
+          "host": "169.254.169.254",
+          "default_headers": {
+            "Metadata": "true"
+          },
+          "probe_paths": [
+            "/metadata/instance?api-version=2021-02-01",
+            "/metadata/instance/compute?api-version=2021-02-01"
+          ]
+        },
+        "alibaba": {
+          "host": "100.100.100.200",
+          "probe_paths": [
+            "/latest/meta-data/region-id",
+            "/latest/meta-data/instance-id"
+          ]
+        }
+      }
+    },
+    "enable_tftp_scheme": true
+  },
+  "oast": {
+    "enabled": true,
+    "provider": "generic",
+    "root_domain": "oast.example.com",
+    "dns_domain": "oast.example.com",
+    "api_url": "",
+    "api_key": "",
+    "http_endpoint": "",
+    "poll_interval": 10,
+    "timeout": 120,
+    "enable_dns": true,
+    "enable_http": true,
+    "enable_bxss": true,
+    "payload_prefix": "x",
+    "token_prefix": "x",
+    "max_injections_per_loc": 3,
+    "extra_words": [
+      "redirect_uri",
+      "continue",
+      "gclid",
+      "utm_source",
+      "category"
+    ],
+    "interactsh": {
+      "enabled": false,
+      "server": "https://interactsh.com",
+      "token": ""
+    },
+    "wait_seconds": 45,
+    "channels": [
+      "dns",
+      "http"
+    ]
+  },
+  "graphql": {
+    "endpoints": [],
+    "timeout": 20,
+    "verify": true,
+    "tests": [
+      "introspection",
+      "weak_validation",
+      "depth",
+      "alias_abuse",
+      "error_leak",
+      "auth_bypass",
+      "batch",
+      "alias_collision"
+    ],
+    "deep": true,
+    "cost_estimation": {
+      "enabled": true,
+      "max_cost": 5000
+    },
+    "alias_storm": {
+      "max_aliases": 64
+    }
+  },
+  "payloads": {
+    "providers": [
+      "seclists",
+      "pattt",
+      "wordlists_custom"
+    ],
+    "dedup": true,
+    "max_per_category": 2000,
+    "seclists": {
+      "root": "./wordlists/seclists"
+    },
+    "pattt": {
+      "root": "./wordlists/PayloadsAllTheThings"
+    },
+    "custom": {
+      "root": "./payloads"
+    },
+    "mutators": {
+      "urlencode": true,
+      "double_urlencode": true,
+      "case_shuffle": true,
+      "json_wrap": true
+    },
+    "xss": [
+      "<svg/onload=alert(1)>",
+      "\"><svg onload=confirm(1)>",
+      "<img src=x onerror=prompt(1)>",
+      "javascript:alert(1)",
+      "<script>alert(1)</script>"
+    ],
+    "sqli_boolean": [
+      "' OR 1=1--",
+      "\" OR 1=1--",
+      "' OR '1'='1'--",
+      "') OR '1'='1' -- -"
+    ],
+    "sqli_union": [
+      "' UNION SELECT NULL--",
+      "' UNION SELECT 1,2,3--",
+      "' UNION SELECT @@version, user(), database()--"
+    ],
+    "sqli_time": [
+      "'; SELECT pg_sleep(3)--",
+      "'; WAITFOR DELAY '0:0:3'--",
+      "\"; SELECT sleep(3)#"
+    ],
+    "path_traversal": [
+      "../../../../../../etc/passwd",
+      "..\\..\\..\\..\\windows\\win.ini"
+    ],
+    "lfi": [
+      "/etc/passwd",
+      "/proc/self/environ"
+    ],
+    "rce": [
+      ";id",
+      "&& id",
+      "| id"
+    ],
+    "ssrf_urls": [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://metadata.google.internal/",
+      "http://[::1]/",
+      "http://127.0.0.1:80/"
+    ],
+    "wordlists_custom": {
+      "root": "./wordlists_custom/custom"
+    }
+  },
+  "waf": {
+    "enabled": true,
+    "strategies": [
+      "encode",
+      "caseflip",
+      "comments",
+      "space",
+      "xsshex"
+    ],
+    "pad_len": 0,
+    "max_variants_per_payload": 6,
+    "header_tactics": [
+      "random_ua",
+      "x_forwarded",
+      "cache_bust",
+      "noise"
+    ],
+    "detect": {
+      "enabled": true,
+      "timing_threshold_ms": 300,
+      "fingerprints": [
+        "Cloudflare",
+        "Akamai",
+        "Incapsula"
+      ]
+    }
+  },
+  "business_logic": {
+    "enabled": true,
+    "timeout": 12,
+    "verify_tls": true,
+    "flows": [
+      {
+        "name": "sample_login_and_profile",
+        "base_headers": {
+          "Accept": "text/html,application/xhtml+xml"
+        },
+        "steps": [
+          {
+            "method": "GET",
+            "url": "/login",
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "method": "POST",
+            "url": "/login",
+            "body": "username={{username}}&password={{password}}",
+            "headers": {
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/profile",
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "contains": "profile"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "races": [
+      {
+        "name": "cart_add_race",
+        "target": {
+          "method": "POST",
+          "url": "/cart/add",
+          "body": "id=1&qty=1",
+          "headers": {
+            "Content-Type": "application/x-www-form-urlencoded"
+          }
+        },
+        "concurrency": 6,
+        "repeat": 2,
+        "timeout": 8,
+        "sync_gate": true,
+        "jitter_ms": 5
+      }
+    ],
+    "seed": 1337,
+    "idempotency": {
+      "enabled": true,
+      "repeat": 2,
+      "checks": []
+    }
+  },
+  "offensive": {
+    "enabled": true,
+    "request_smuggling": {
+      "enabled": true,
+      "variants": [
+        "CL.TE",
+        "TE.CL",
+        "H2H1"
+      ]
+    },
+    "mass_assignment": {
+      "enabled": true,
+      "fields": [
+        "role",
+        "isAdmin",
+        "price",
+        "user_id",
+        "discount"
+      ],
+      "variants": [
+        "__proto__",
+        "dot",
+        "bracket",
+        "json_merge_patch"
+      ]
+    },
+    "jwt_attacks": {
+      "enabled": true,
+      "wordlist": "./wordlists/jwt_secrets.txt",
+      "alg_confusion": true
+    },
+    "nosql_injection": {
+      "enabled": true
+    },
+    "websocket_fuzz": {
+      "enabled": true,
+      "opcode_fuzz": true,
+      "fragmentation": true,
+      "auth_carryover": true
+    },
+    "cache_poisoning": {
+      "enabled": true,
+      "vary_headers": [
+        "Host",
+        "X-Forwarded-Host",
+        "X-Original-URL"
+      ]
+    },
+    "ssti": {
+      "enabled": true
+    },
+    "dom_xss": {
+      "enabled": true
+    },
+    "oast": {
+      "enabled": true
+    },
+    "ssrf_xxe": {
+      "enabled": true
+    },
+    "jwt": {
+      "enabled": true
+    },
+    "scanners": {
+      "ws_fuzz": {
+        "enabled": true
+      }
+    },
+    "profile": "deep",
+    "graphql_attacks": {
+      "enabled": true
+    }
+  },
+  "regex": {
+    "timeout_ms": 200
+  },
+  "upload": {
+    "_deprecated": true,
+    "polyglot": true,
+    "content_type_spoof": true,
+    "max_file_mb": 8,
+    "imagetragick_tests": true
+  },
+  "ci": {
+    "profile": "aggressive",
+    "fail_on": {
+      "severity_min": "Orta",
+      "new_findings": true
+    },
+    "incremental": true,
+    "pr_comment": {
+      "enabled": false
+    },
+    "exit_on_violation": true
+  },
+  "content_discovery": {
+    "enabled": true,
+    "tool": "ffuf",
+    "wordlist": "./wordlists/common.txt",
+    "extensions": [
+      "php",
+      "asp",
+      "aspx",
+      "js",
+      "html"
+    ],
+    "rate_limit": 50,
+    "recursive": false,
+    "binary": null,
+    "extra_args": []
+  },
+  "crawler": {
+    "max_pages": 200,
+    "timeout_ms": 20000,
+    "record_dir": "./records",
+    "browser": {
+      "headless": true
+    },
+    "headless": true,
+    "max_per_template": 3,
+    "max_depth": 3,
+    "deny_regex": [
+      "/(bolum|episode)/\\d+",
+      "/(dizi|series|show|tv)/[^/]+/(sezon|season|s\\d+)/(bolum|episode|e\\d+)",
+      "/(images|img|media|static|assets)/",
+      "/(product|urun|item)/[^/]{3,}/page/\\d+",
+      "/(tag|kategori|category)/",
+      "\\.(mp4|m3u8|ts|avi|mkv|webm)(\\?|$)",
+      "\\?(page|p|offset|start)=\\d{2,}"
+    ]
+  },
+  "ffuf": {
+    "wordlist": "./wordlists/raft-small-words.txt",
+    "bin": "ffuf",
+    "wordlists": [
+      "./wordlists/dirs.txt",
+      "./wordlists/files.txt"
+    ]
+  },
+  "feroxbuster": {
+    "wordlist": "./wordlists/raft-small-words.txt"
+  },
+  "verify_tls": true,
+  "jwt": {
+    "weak_secrets": "./wordlists/jwt_secrets.txt"
+  },
+  "profiles": {
+    "stealth": {
+      "rps": 5,
+      "concurrency": 10,
+      "modules": [
+        "headers",
+        "tls",
+        "owasp"
+      ]
+    },
+    "deep": {
+      "rps": 20,
+      "concurrency": 50,
+      "modules": [
+        "headers",
+        "tls",
+        "owasp",
+        "injection",
+        "graphql",
+        "file_upload",
+        "ssrf_xxe"
+      ]
+    },
+    "aggressive": {
+      "rps": 60,
+      "concurrency": 120,
+      "modules": [
+        "*"
+      ]
+    }
+  },
+  "network": {
+    "ports_common": [
+      21,
+      22,
+      23,
+      25,
+      53,
+      80,
+      110,
+      139,
+      143,
+      443,
+      445,
+      465,
+      587,
+      631,
+      993,
+      995,
+      1024,
+      1080,
+      1194,
+      1433,
+      1521,
+      1723,
+      1883,
+      2379,
+      2380,
+      3000,
+      3306,
+      3389,
+      4444,
+      4567,
+      5000,
+      5432,
+      5601,
+      5672,
+      5900,
+      5985,
+      5986,
+      6379,
+      6443,
+      6667,
+      7001,
+      7002,
+      8080,
+      8081,
+      8443,
+      8888,
+      9200,
+      9300,
+      11211,
+      27017
+    ],
+    "scan_connect_timeout_ms": 800,
+    "banner_grab": true,
+    "proxy_pool": [
+      "socks5://127.0.0.1:9050"
+    ],
+    "max_concurrency_per_host": 4,
+    "rate_limits": {
+      "default_rps": 1.5,
+      "burst": 5
+    },
+    "budget": {
+      "per_host": 800,
+      "per_top_domain": 2500
+    },
+    "stealth": {
+      "enabled": true,
+      "random_ua": true,
+      "alpn_h2_prefer": true,
+      "header_profiles": [
+        "lite",
+        "default",
+        "chromeLike"
+      ],
+      "cooldown_after_429_sec": 45
+    }
+  },
+  "kimliksiz_mod": {
+    "priming": {
+      "enabled": true
+    },
+    "harvest": {
+      "js_keys": true
+    },
+    "idempotent_only": true
+  },
+  "http_retries": 5,
+  "http_backoff": 0.3,
+  "retry_status_forcelist": [
+    429,
+    500,
+    502,
+    503,
+    504
+  ],
+  "retry_allowed_methods": [
+    "HEAD",
+    "GET",
+    "OPTIONS",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH"
+  ],
+  "pool_maxsize": 20,
+  "privacy": {
+    "egress": {
+      "mode": "proxy_pool",
+      "rotate_every_seconds": 600,
+      "per_target_isolation": true,
+      "entries": [],
+      "dns": {
+        "strategy": "doh",
+        "endpoints": [
+          "https://cloudflare-dns.com/dns-query",
+          "https://dns.google/dns-query"
+        ],
+        "via_proxy": true,
+        "force_remote_resolve": true
+      },
+      "required": false,
+      "kill_switch": false,
+      "ip_echo_endpoints": [
+        "https://api.ipify.org",
+        "https://api.ipify.org?format=text",
+        "https://icanhazip.com",
+        "https://ifconfig.co/ip",
+        "https://ifconfig.me/ip",
+        "https://ipinfo.io/ip"
+      ]
+    },
+    "impersonation": {
+      "enabled": true,
+      "profile": "chrome_120",
+      "mode": "curl",
+      "bin_map": {
+        "chrome_120": "curl_chrome120",
+        "chrome_121": "curl_chrome121",
+        "chrome_122": "curl_chrome122",
+        "chrome_123": "curl_chrome123",
+        "chrome_124": "curl_chrome124",
+        "firefox_115": "curl_ff115",
+        "firefox_120": "curl_ff120",
+        "firefox_128": "curl_ff128"
+      }
+    },
+    "headers": {
+      "accept_language_by_geo": true,
+      "randomize_ua_family": true
+    }
+  },
+  "traffic": {
+    "rate_limit": {
+      "host_rps": 6,
+      "jitter_ms_min": 120,
+      "jitter_ms_max": 400,
+      "burst": 8,
+      "keepalive_pool": 6
+    }
+  },
+  "remote_workers": {
+    "port_scan": {
+      "enabled": false,
+      "workers": [],
+      "shared_key": ""
+    }
+  },
+  "anti_blocking": {
+    "http": {
+      "rps": 1.5,
+      "jitter_ms": [
+        120,
+        300
+      ],
+      "max_extra_delay_ms": 1200,
+      "backoff_factor": 2.5,
+      "idempotent_only_unauth": true,
+      "burst": 4,
+      "respect_retry_after": true,
+      "suppress_non_idempotent_at_start": true
+    },
+    "identity": {
+      "rotate_every_seconds": 300,
+      "header_pool": {
+        "accept_language": [
+          "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+        ],
+        "ua_family": [
+          "chrome_122",
+          "firefox_115",
+          "safari_16"
+        ]
+      },
+      "proxies": [],
+      "tor": {
+        "enabled": false,
+        "socks_url": "socks5h://127.0.0.1:9050",
+        "check_endpoints": [
+          "https://check.torproject.org/api/ip"
+        ]
+      }
+    },
+    "tls": {
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "min_version": "TLS1.2",
+      "ciphers": "DEFAULT",
+      "fail_on_self_signed": true
+    },
+    "port_scan": {
+      "rps": 60,
+      "timeout_seconds": 2.0
+    },
+    "policies": {
+      "on_429": "slowdown",
+      "on_403": "rotate_identity"
+    }
+  },
+  "stealth": {
+    "impersonate": "chrome_120",
+    "header_profiles": {
+      "ua_family": [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
+      ],
+      "accept_language": [
+        "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+      ]
+    },
+    "jitter_ms": [
+      50,
+      200
+    ],
+    "identity_rotation": "per_host",
+    "rps_max": 4
+  },
+  "budget": {
+    "requests_max": 20000,
+    "time_seconds": 3600,
+    "concurrency": 20,
+    "per_host_rps": 2,
+    "burst": 10,
+    "policy": "balanced"
+  },
+  "ssrf": {
+    "echo_endpoint": "/ssrf/echo"
+  },
+  "output_dir": "output",
+  "portscan": {
+    "enabled": true,
+    "ports": [
+      80,
+      443,
+      4444,
+      24,
+      23,
+      143,
+      161,
+      53,
+      115,
+      139,
+      3389,
+      514,
+      8080,
+      8443,
+      22,
+      21,
+      25,
+      110,
+      143,
+      3306,
+      5432,
+      6379,
+      9200
+    ]
+  },
+  "scanners": {
+    "xss": true,
+    "sqli": true,
+    "jwt": true,
+    "nosqli": true,
+    "graphql": true,
+    "request_smuggling": false,
+    "mass_assignment": true,
+    "ssrf_xxe": true,
+    "headers": true,
+    "tls": true,
+    "authorization": false
+  },
+  "wordlists": {
+    "params": "./wordlists_custom/custom/params.txt",
+    "values": "./wordlists_custom/custom/values.txt",
+    "xss": "./wordlists_custom/custom/xss.txt",
+    "sqli": "./wordlists_custom/custom/sqli.txt"
+  }
+}

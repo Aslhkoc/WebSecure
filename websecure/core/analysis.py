@@ -1,0 +1,555 @@
+"""
+websecure.core.analysis
+-----------------------
+Consolidated module for:
+- Regex Safety (formerly safe_regex.py)
+- Endpoint Storage (formerly endpoint_store.py)
+- Anomaly Detection (formerly detect.py)
+- WAF Detection & Evasion (formerly waf.py)
+- Captcha Solving (formerly captcha.py)
+- Login Dicovery (formerly login_discovery.py)
+"""
+from __future__ import annotations
+import os
+import re
+import time
+import json
+import math
+import random
+import secrets
+import string
+import logging
+import base64
+import io
+import statistics
+import threading
+import contextlib
+import importlib.util
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Callable, Iterable, Protocol, runtime_checkable
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse, urljoin, parse_qsl, urlsplit
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3 import Retry
+
+# Optional Dependencies
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
+try:
+    from rapidfuzz import fuzz as rapidfuzz_fuzz
+except ImportError:
+    rapidfuzz_fuzz = None
+
+try:
+    import Levenshtein
+except ImportError:
+    Levenshtein = None
+
+try:
+    from sentence_transformers import SentenceTransformer, util as st_util
+except ImportError:
+    SentenceTransformer = None
+    st_util = None
+
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract = None
+    Image = None
+
+# WebSecure Imports
+from websecure.core.utils import normalize_url, resolve_canonical_base, hardened_session, verify_for_phase
+from websecure.core.reporting import add_result, log_warn
+
+_logger = logging.getLogger(__name__)
+
+# ============================================================================
+# SECTION 1: SAFE REGEX (formerly safe_regex.py)
+# ============================================================================
+
+_DEFAULT_TIMEOUT_MS = 200
+_current_timeout_ms = _DEFAULT_TIMEOUT_MS
+
+def get_default_timeout_ms() -> int:
+    return int(_current_timeout_ms)
+
+def set_default_timeout_ms(ms: int) -> None:
+    global _current_timeout_ms
+    _current_timeout_ms = max(1, int(ms)) if ms > 0 else _DEFAULT_TIMEOUT_MS
+
+def _run_with_timeout(fn, timeout_ms: Optional[int] = None):
+    ms = timeout_ms if timeout_ms is not None else _current_timeout_ms
+    ms = int(ms) if ms else _DEFAULT_TIMEOUT_MS
+    
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        if ms > 0:
+            deadline = time.time() + (ms / 1000.0)
+            sleep_step = max(0.005, min(0.05, ms / 1000.0 / 10.0))
+            while True:
+                if fut.done():
+                    return fut.result()
+                if time.time() >= deadline:
+                    fut.cancel()
+                    _logger.warning(f"Regex timed out after {ms}ms")
+                    raise TimeoutError(f"Regex timed out ({ms} ms)")
+                time.sleep(sleep_step)
+        else:
+            return fut.result()
+
+def safe_compile(pattern: str, flags: int = 0) -> re.Pattern:
+    # Basic linting
+    if re.search(r"\.\{10,}", pattern):
+        _logger.warning("Potential ReDoS pattern detected: large repetition")
+    return re.compile(pattern, flags)
+
+def safe_search(pattern: str, string: str, flags: int = 0, timeout_ms: int = None):
+    return _run_with_timeout(lambda: re.search(pattern, string, flags), timeout_ms)
+
+# ============================================================================
+# SECTION 2: ENDPOINT STORE (formerly endpoint_store.py)
+# ============================================================================
+
+@dataclass
+class EndpointStore:
+    items: Set[str] = field(default_factory=set)
+
+    def add_many(self, urls: Iterable[str]) -> None:
+        for u in urls:
+            if isinstance(u, str) and u.strip():
+                self.items.add(u.strip())
+
+    def to_list(self) -> List[str]:
+        return sorted(self.items)
+
+# ============================================================================
+# SECTION 3: ANOMALY DETECTION (formerly detect.py)
+# ============================================================================
+
+class BaselineMeta(TypedDict, total=False):
+    len: int
+    time_samples: List[float]
+    body: str
+
+class CurrentMeta(TypedDict, total=False):
+    len: int
+    time_ms: float
+    body: str
+
+def size_delta(baseline_len: int, current_len: int) -> int:
+    return abs(int(current_len) - int(baseline_len))
+
+def levenshtein_ratio(a: str, b: str) -> float:
+    if a is None or b is None: return 0.0
+    a, b = str(a), str(b)
+    if rapidfuzz_fuzz: return float(rapidfuzz_fuzz.ratio(a, b)) / 100.0
+    if Levenshtein: return float(Levenshtein.ratio(a, b))
+    from difflib import SequenceMatcher
+    return float(SequenceMatcher(None, a, b).ratio())
+
+def time_stddev(samples_ms: List[float]) -> float:
+    n = max(1, len(samples_ms))
+    if n < 2: return 0.0
+    mean = sum(samples_ms) / n
+    var = sum((x - mean) ** 2 for x in samples_ms) / (n - 1)
+    return math.sqrt(var)
+
+_sem_model = None
+def _get_semantic_model():
+    global _sem_model
+    if _sem_model: return _sem_model
+    if SentenceTransformer:
+        _sem_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return _sem_model
+
+def semantic_ratio(a: str, b: str, html_aware: bool = True) -> float:
+    if not (a and b): return 0.0
+    if html_aware and BeautifulSoup:
+        a = BeautifulSoup(a, "html.parser").get_text(" ")
+        b = BeautifulSoup(b, "html.parser").get_text(" ")
+    
+    model = _get_semantic_model()
+    if model and st_util:
+        emb = model.encode([a, b], convert_to_tensor=True, show_progress_bar=False)
+        score = float(st_util.cos_sim(emb[0], emb[1]).cpu().numpy())
+        return (score + 1.0) / 2.0
+    return levenshtein_ratio(a, b)
+
+def anomaly_score(baseline: BaselineMeta, current: CurrentMeta, thresholds: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    th = {"size_delta": 1024.0, "time_stddev": 250.0, "lev_ratio": 0.85, "semantic_ratio": 0.80}
+    if thresholds: th.update(thresholds)
+
+    sd = size_delta(baseline.get("len", 0), current.get("len", 0))
+    tsamples = list(baseline.get("time_samples", []))
+    if "time_ms" in current: tsamples.append(float(current["time_ms"]))
+    tsd = time_stddev(tsamples) if tsamples else 0.0
+    
+    a_body, b_body = str(baseline.get("body", "")), str(current.get("body", ""))
+    lev = levenshtein_ratio(a_body, b_body)
+    sem = semantic_ratio(a_body, b_body)
+    
+    sig_size = sd >= float(th["size_delta"])
+    sig_time = tsd >= float(th["time_stddev"])
+    sig_diff = lev <= float(th["lev_ratio"])
+    sig_sem = sem <= float(th["semantic_ratio"])
+    
+    score = (int(sig_size) + int(sig_time) + int(sig_diff) + int(sig_sem)) / 4.0
+    
+    return {
+        "score": score,
+        "signals": {"size": sig_size, "time": sig_time, "diff": sig_diff, "semantic": sig_sem},
+        "metrics": {"size_delta": sd, "time_stddev": tsd, "lev_ratio": lev, "semantic_ratio": sem}
+    }
+
+def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, *, fetcher: Optional[callable] = None) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    # Canonicalize
+    url = normalize_url(url)
+    parsed = urlparse(url)
+    get_params = [k for k, _ in parse_qsl(parsed.query, keep_blank_values=True)]
+    
+    html = ""
+    if callable(fetcher): html = fetcher(url) or ""
+    elif driver:
+        driver.get(url)
+        html = getattr(driver, "page_source", "")
+        
+    forms = []
+    if html and BeautifulSoup:
+        soup = BeautifulSoup(html, "html.parser")
+        for idx, form in enumerate(soup.find_all("form")):
+            inputs_meta = []
+            for inp in form.find_all(["input", "textarea", "select", "button"]):
+                inputs_meta.append({
+                    "tag": inp.name,
+                    "name": inp.get("name"),
+                    "type": inp.get("type", "text"),
+                    "value": inp.get("value", "")
+                })
+            forms.append({
+                "index": idx,
+                "action": form.get("action") or url,
+                "method": (form.get("method") or "GET").upper(),
+                "inputs": inputs_meta
+            })
+            
+    return url, get_params, forms
+
+def detect_graphql(url: str, body: str | bytes) -> bool:
+    t = (body if isinstance(body, str) else body.decode("utf-8", "ignore")).lower()
+    return "__schema" in t or "graphql" in t or url.lower().endswith("/graphql")
+
+def cloud_hints(headers: Dict[str, Any]) -> List[str]:
+    hints = []
+    for v in headers.values():
+        val = str(v).lower()
+        if any(x in val for x in ["amazon", "s3", "cloudfront"]): hints.append("aws")
+        if any(x in val for x in ["google", "gcp", "appengine"]): hints.append("gcp")
+        if "azure" in val or "microsoft" in val: hints.append("azure")
+    return sorted(set(hints))
+
+def classify_401_403(resp) -> Optional[str]:
+    status = getattr(resp, "status_code", None)
+    if status not in (401, 403): return None
+    text = (getattr(resp, "text", "") or "").lower()
+    headers = {str(k).lower(): str(v).lower() for k, v in (getattr(resp, "headers", {}) or {}).items()}
+    
+    waf_keys = ("cf-ray", "cloudflare", "akamai", "imperva", "incapsula", "mod_security")
+    if any(k in headers.get("server", "") for k in waf_keys) or "waf" in text:
+        return "WAF"
+    if headers.get("retry-after") or "rate limit" in text:
+        return "RateLimit"
+    return "Auth"
+
+# ============================================================================
+# SECTION 4: WAF DETECTION & EVASION (formerly waf.py)
+# ============================================================================
+
+_WAF_SIGNS = [
+    ("cloudflare", ["cloudflare", "cf-ray", "cf-cache-status"]),
+    ("akamai", ["akamai", "akamai-ghost"]),
+    ("imperva", ["incapsula", "visid_incap"]),
+    ("modsecurity", ["mod_security", "modsecurity"]),
+]
+
+_UA_LIST = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15",
+]
+
+def _load_cfg() -> Dict[str, Any]:
+    env = os.getenv("WEBSECURE_CONFIG") or os.getenv("WEBSEC_CONFIG")
+    path = Path(env) if env else Path("config.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def get_waf_cfg() -> Dict[str, Any]:
+    cfg = _load_cfg()
+    wc = (cfg.get("waf") or {}) if isinstance(cfg, dict) else {}
+    # Defaults
+    wc.setdefault("enabled", False)
+    wc.setdefault("header_tactics", ["random_ua", "x_forwarded", "cache_bust"])
+    wc.setdefault("strategies", ["encode", "caseflip", "comments", "space", "xsshex"])
+    wc.setdefault("blocked_statuses", [406, 409, 429, 503])
+    return wc
+
+# --- Mutation Helpers ---
+_SQLI_KEYWORDS = ["select","union","from","where","and","or","sleep","updatexml"]
+def _flip_case_sql(s: str) -> str:
+    return re.sub(r"(?i)\b(" + "|".join(_SQLI_KEYWORDS) + r")\b", 
+                  lambda m: "".join(c.upper() if random.random()<0.5 else c.lower() for c in m.group(0)), s)
+
+def _insert_comments_sql(s: str) -> str:
+    return re.sub(r"(?i)\b(" + "|".join(_SQLI_KEYWORDS) + r")\b", 
+                  lambda m: m.group(0)[:len(m.group(0))//2] + "/**/" + m.group(0)[len(m.group(0))//2:], s)
+
+def _url_encode_chunks(s: str) -> str:
+    return "".join(c if c.isalnum() else f"%{ord(c):02X}" for c in s)
+
+def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> List[str]:
+    if not payload: return []
+    if not cfg or not cfg.get("enabled", False): return [payload]
+    
+    strategies = set((cfg.get("strategies") or []))
+    variants = [payload]
+    
+    if "encode" in strategies:
+        variants.append(_url_encode_chunks(payload))
+    if "caseflip" in strategies and category == "sqli":
+        variants.append(_flip_case_sql(payload))
+    if "comments" in strategies and category == "sqli":
+        variants.append(_insert_comments_sql(payload))
+    
+    return list(dict.fromkeys(variants))[:int(cfg.get("max_variants_per_payload", 5))]
+
+def mutate_payloads(category: str, payloads: Iterable[str], cfg: Dict[str, Any] | None) -> List[str]:
+    out = []
+    seen = set()
+    for p in payloads:
+        for v in mutate_payload(category, p, cfg):
+            if v not in seen:
+                seen.add(v); out.append(v)
+    return out
+
+# --- WAF Detection ---
+
+@dataclass
+class WAFDetection:
+    vendor: Optional[str]
+    blocked: bool
+    reasons: List[str]
+
+    def __bool__(self):
+        return self.blocked
+
+def detect_waf_from_response(resp: requests.Response, cfg: Dict[str, Any] | None = None) -> WAFDetection:
+    cfg = cfg or get_waf_cfg()
+    reasons = []
+    vendor = None
+    
+    # 1. Status
+    if resp.status_code in set(cfg.get("blocked_statuses", [])):
+        reasons.append(f"status={resp.status_code}")
+        
+    # 2. Headers
+    h_str = str(resp.headers).lower()
+    for name, signs in _WAF_SIGNS:
+        if any(s in h_str for s in signs):
+            vendor = name
+            reasons.append(f"header_sign={name}")
+            
+    # 3. Body
+    text = (resp.text or "").lower()
+    if "blocked" in text or "waf" in text or "denied" in text:
+        reasons.append("body_block_marker")
+        
+    return WAFDetection(vendor=vendor, blocked=bool(reasons), reasons=reasons)
+
+def next_user_agent() -> str:
+    return random.choice(_UA_LIST)
+
+def build_waf_headers(existing: Dict[str,str] = None, cfg: Dict[str,Any] = None) -> Dict[str,str]:
+    h = dict(existing or {})
+    cfg = cfg or get_waf_cfg()
+    if not cfg.get("enabled"): return h
+    
+    tactics = set(cfg.get("header_tactics") or [])
+    if "random_ua" in tactics:
+        h["User-Agent"] = next_user_agent()
+    if "x_forwarded" in tactics:
+        h["X-Forwarded-For"] = f"127.0.{random.randint(1,255)}.{random.randint(1,255)}"
+    if "cache_bust" in tactics:
+        h["Cache-Control"] = "no-cache"
+    return h
+
+def request_with_waf(session: requests.Session, method: str, url: str, **kwargs) -> requests.Response:
+    cfg = kwargs.get("cfg") or get_waf_cfg()
+    if "cfg" in kwargs: del kwargs["cfg"]
+    
+    kwargs["headers"] = build_waf_headers(kwargs.get("headers"), cfg)
+    resp = session.request(method, url, **kwargs)
+    
+    # Simple retry logic could go here if blocked
+    return resp
+
+# ============================================================================
+# SECTION 5: CAPTCHA (formerly captcha.py)
+# ============================================================================
+
+@dataclass
+class CaptchaConfig:
+    provider: str = "none"
+    api_key: Optional[str] = None
+    site_key: Optional[str] = None
+    site_url: Optional[str] = None
+    tesseract_lang: str = "eng"
+    timeout_sec: int = 90
+    poll_interval_sec: int = 5
+    two_captcha_base: str = "https://2captcha.com"
+    anti_captcha_base: str = "https://api.anti-captcha.com"
+
+def read_captcha_config(config: Dict[str, Any]) -> CaptchaConfig:
+    sec = (config or {}).get("settings", {}).get("security", {}) if config else {}
+    c = sec.get("captcha", {}) if isinstance(sec, dict) else {}
+    return CaptchaConfig(
+        provider=c.get("provider", "none"),
+        api_key=c.get("api_key"),
+        site_key=c.get("site_key"),
+        site_url=c.get("site_url"),
+        tesseract_lang=c.get("tesseract_lang", "eng"),
+        timeout_sec=int(c.get("timeout_sec", 90)),
+        poll_interval_sec=int(c.get("poll_interval_sec", 5)),
+        two_captcha_base=c.get("two_captcha_base", "https://2captcha.com"),
+        anti_captcha_base=c.get("anti_captcha_base", "https://api.anti-captcha.com"),
+    )
+
+@runtime_checkable
+class ImageCaptchaSolver(Protocol):
+    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]: ...
+
+@runtime_checkable
+class RecaptchaV2Solver(Protocol):
+    def solve(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]: ...
+
+class NoneProvider(ImageCaptchaSolver, RecaptchaV2Solver):
+    def solve(self, *a, **k) -> Optional[str]: return None
+
+class OCRProvider(ImageCaptchaSolver):
+    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
+        if not (Image and pytesseract): return None
+        img = Image.open(io.BytesIO(img_bytes))
+        return pytesseract.image_to_string(img, lang=cfg.tesseract_lang).strip() or None
+
+class TwoCaptchaProvider(ImageCaptchaSolver, RecaptchaV2Solver):
+    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
+        if not cfg.api_key: return None
+        # Simplified implementation
+        try:
+            r = requests.post(f"{cfg.two_captcha_base}/in.php", data={
+                "key": cfg.api_key, "method": "base64", 
+                "body": base64.b64encode(img_bytes).decode("ascii"), "json": 1
+            }, timeout=30)
+            if r.json().get("status") != 1: return None
+            req_id = r.json().get("request")
+            
+            start = time.time()
+            while time.time() - start < cfg.timeout_sec:
+                time.sleep(cfg.poll_interval_sec)
+                r2 = requests.get(f"{cfg.two_captcha_base}/res.php", params={
+                    "key": cfg.api_key, "action": "get", "id": req_id, "json": 1
+                }, timeout=30)
+                if r2.json().get("status") == 1: return r2.json().get("request")
+        except Exception:
+            pass
+        return None
+
+def _select_solver(cfg: CaptchaConfig):
+    if cfg.provider == "ocr": return OCRProvider()
+    if cfg.provider == "2captcha": return TwoCaptchaProvider()
+    return NoneProvider()
+
+def solve_image_captcha_png_bytes(img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
+    return _select_solver(cfg).solve(img_bytes, cfg)
+
+def solve_recaptcha_v2_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+    s = _select_solver(cfg)
+    if hasattr(s, "solve_recaptcha"): return s.solve_recaptcha(site_key, site_url, cfg)  # type: ignore
+    return None
+
+# ============================================================================
+# SECTION 6: LOGIN DISCOVERY (formerly login_discovery.py)
+# ============================================================================
+
+COMMON_LOGIN_PATHS = (
+    "/login", "/signin", "/account/login", "/auth/login", "/admin", "/wp-login.php"
+)
+
+TECH_LOGIN_HINTS = {
+    "WordPress": ["/wp-login.php", "/wp-admin/"],
+    "Joomla": ["/administrator/"],
+    "Drupal": ["/user/login"],
+    "Django": ["/admin/login", "/accounts/login/"]
+}
+
+class LoginDiscovery:
+    def __init__(self, session: requests.Session):
+        self.session = session
+        
+    def score_page(self, html: str, url: str) -> int:
+        score = 0
+        html_lower = html.lower()
+        if "password" in html_lower and "type=" in html_lower: score += 5
+        if "user" in html_lower or "email" in html_lower: score += 2
+        if "login" in url.lower() or "signin" in url.lower(): score += 3
+        if "csrf" in html_lower or "token" in html_lower: score += 1
+        return score
+
+    def discover(self, base_url: str, seeds: List[str] = None) -> List[Tuple[str, int]]:
+        candidates = set(seeds or [])
+        # 1. Common paths
+        for p in COMMON_LOGIN_PATHS:
+            candidates.add(urljoin(base_url, p))
+            
+        # 2. Check each
+        results = []
+        for url in candidates:
+            try:
+                r = self.session.get(url, timeout=5, allow_redirects=True)
+                if r.ok:
+                    sc = self.score_page(r.text, url)
+                    if sc > 0:
+                        results.append((url, sc))
+            except Exception:
+                pass
+                
+        # 3. Report
+        add_result("login_discovery", {
+            "base": base_url,
+            "candidates": [{"url": u, "score": s} for u, s in results[:10]]
+        })
+        return sorted(results, key=lambda x: x[1], reverse=True)
+
+    def extract_csrf(self, html_text: str) -> Optional[str]:
+        m = re.search(
+            r'(?:name|id)\s*=\s*["\'](?:csrf|_csrf|_token|authenticity_token)["\']\s+value\s*=\s*["\']([^"\']+)["\']',
+            html_text, re.I
+        )
+        return m.group(1) if m else None
+
+def discover_login_urls_with_config(session, base_url, cfg=None) -> List[Tuple[str, int]]:
+    ld = LoginDiscovery(session)
+    seeds = (cfg or {}).get("login_discovery", {}).get("extra_paths", []) if cfg else []
+    return ld.discover(base_url, seeds=seeds)
+
+def extract_csrf(html_text: str) -> Optional[str]:
+    return LoginDiscovery(None).extract_csrf(html_text)

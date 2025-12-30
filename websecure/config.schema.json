@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebSecure configuration",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "authenticated",
+        "unauthenticated",
+        "stealth",
+        "aggressive",
+        "deep",
+        "normal"
+      ]
+    },
+    "timeout": {
+      "type": [
+        "integer",
+        "number"
+      ],
+      "minimum": 1
+    },
+    "tls_verify": {
+      "type": "boolean"
+    },
+    "user_agent": {
+      "type": "string"
+    },
+    "output_dir": {
+      "type": "string"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "exit_on_violation": {
+          "type": "boolean"
+        },
+        "incremental": {
+          "type": "boolean"
+        },
+        "fail_on": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "severity_min": {
+              "type": "string",
+              "enum": [
+                "Bilgi",
+                "Düşük",
+                "Orta",
+                "Yüksek",
+                "Kritik"
+              ]
+            },
+            "new_findings": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "scoring": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "business_logic": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "content_discovery": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "crawler": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "crawl": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "feroxbuster": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ffuf": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "remote_workers": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "anti_blocking": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "stealth": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "egress": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "direct",
+                "proxy_pool",
+                "tor"
+              ]
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                ]
+              }
+            },
+            "per_target_isolation": {
+              "type": "boolean"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "kill_switch": {
+              "type": "boolean"
+            },
+            "rotate_every_seconds": {
+              "type": [
+                "number",
+                "integer"
+              ],
+              "minimum": 0
+            },
+            "ip_echo_endpoints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dns": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "doh",
+                    "proxy"
+                  ]
+                },
+                "endpoints": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "via_proxy": {
+                  "type": "boolean"
+                },
+                "force_remote_resolve": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ssrf": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ssrf_xxe": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "portscan": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "formats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "json",
+              "md",
+              "html",
+              "sarif",
+              "junit"
+            ]
+          }
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "sarif": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "html": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "markdown": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "json": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "redact_sensitive": {
+          "type": "boolean"
+        },
+        "delta": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "baseline": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "reject_unknown": {
+              "type": "boolean"
+            },
+            "prune_unknown": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "cipher_prefs": {
+          "type": "string"
+        },
+        "sni": {
+          "type": "boolean"
+        },
+        "expect_sts": {
+          "type": "boolean"
+        },
+        "check_ocsp": {
+          "type": "boolean"
+        },
+        "keylog_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "insecure_skip_verify": {
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "type": [
+            "integer",
+            "number"
+          ],
+          "minimum": 1
+        },
+        "pool_connections": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pool_maxsize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "backoff_factor": {
+          "type": [
+            "integer",
+            "number"
+          ],
+          "minimum": 0
+        },
+        "max_backoff": {
+          "type": [
+            "integer",
+            "number"
+          ],
+          "minimum": 0
+        },
+        "status_forcelist": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "retry_allowed_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "proxies": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "password": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "type": "string"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "device_code": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "device_url": {
+              "type": "string"
+            },
+            "token_url": {
+              "type": "string"
+            },
+            "client_id": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "offensive": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

