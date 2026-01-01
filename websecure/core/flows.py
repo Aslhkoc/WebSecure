@@ -10,8 +10,8 @@ import importlib
 import requests
 
 # add_result (opsiyonel, try/except yok)
-if _iul.find_spec("core.reporting") is not None:
-    _rep = importlib.import_module("core.reporting")
+if _iul.find_spec("websecure.core.reporting") is not None:
+    _rep = importlib.import_module("websecure.core.reporting")
     add_result = getattr(_rep, "add_result", lambda *a, **k: None)
 else:
     def add_result(*a, **k): return None

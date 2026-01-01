@@ -28,7 +28,7 @@ if _AIOHTTP:
 # =======================
 
 def _load_add_result() -> Callable[..., None]:
-    if find_spec("core.reporting"):
+    if find_spec("websecure.core.reporting"):
         from websecure.core.reporting import add_result  # type: ignore
         return add_result  # type: ignore
     # Görünür fallback: log’a yaz, susturma yok

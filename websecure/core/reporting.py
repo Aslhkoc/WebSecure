@@ -1031,8 +1031,18 @@ def _write(path: str, data: str) -> str:
 
 def _json_dump(path: str, obj: Any) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    
+    def _default(o):
+        if hasattr(o, "to_dict"):
+            return o.to_dict()
+        if hasattr(o, "__dict__"):
+            return o.__dict__
+        if hasattr(o, "name") and hasattr(o, "value"): # Enum-like
+            return o.value
+        return str(o)
+
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+        json.dump(obj, f, ensure_ascii=False, indent=2, default=_default)
     return path
 
 
@@ -1564,13 +1574,20 @@ def _diff_findings(base: Dict, cur: Dict) -> Dict:
 # -------------------- Flush (auto-report) --------------------
 def _try_load_config() -> Dict:
     # Öncelik: core.utils.load_config (varsa)
-    from importlib.util import find_spec
-    from importlib import import_module
+    from importlib.util import find_spec as _ilu_find_spec
+    from importlib import import_module as _ilu_import_module
+    from importlib.machinery import ModuleSpec as _ilu_ModuleSpec
     from pathlib import Path
     import json as _json
 
-    if find_spec("core.utils") is not None:
-        mod = import_module("core.utils")
+    def _spec_origin(spec: _ilu_ModuleSpec) -> Optional[str]:
+        return spec.origin
+
+    def _is_local_path(path: str) -> bool:
+        return Path(path).is_absolute() and Path(path).exists()
+
+    if _ilu_find_spec("websecure.core.utils") is not None:
+        mod = _ilu_import_module("websecure.core.utils")
         fn = getattr(mod, "load_config", None)
         if callable(fn):
             c = fn()

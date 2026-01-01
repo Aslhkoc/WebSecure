@@ -28,27 +28,69 @@ def setup_logging(level: str = "INFO", log_file: str = None):
 
 # ========================== WebDriver ==========================
 def setup_webdriver(headless: bool = True, proxy: str = None):
-    # Minimal stealth setup
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    
-    opts = Options()
-    if headless:
-        opts.add_argument("--headless=new")
-    if proxy:
-        opts.add_argument(f"--proxy-server={proxy}")
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options
         
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    
-    return webdriver.Chrome(options=opts)
+        opts = Options()
+        if headless:
+            opts.add_argument("--headless=new")
+        if proxy:
+            opts.add_argument(f"--proxy-server={proxy}")
+            
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+        
+        # Try to use webdriver-manager if available
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            logging.info(f"[WebDriver] Auto-configured via webdriver-manager.")
+        except ImportError:
+            # Fallback to local driver if manager is not installed
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            driver_path = os.path.join(root_dir, "drivers", "chromedriver.exe")
+            
+            if os.path.exists(driver_path):
+                 logging.warning(f"Local driver found at: {driver_path}")
+                 service = Service(executable_path=driver_path)
+            else:
+                 logging.warning("[!] webdriver-manager not found and local driver missing.")
+                 return None
+        except Exception as e:
+            logging.warning(f"[!] WebDriver Manager failed: {e}")
+            # Try local fallback even if manager failed
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            driver_path = os.path.join(root_dir, "drivers", "chromedriver.exe")
+            if os.path.exists(driver_path):
+                 service = Service(executable_path=driver_path)
+            else:
+                 return None
+
+        if service:
+            return webdriver.Chrome(service=service, options=opts)
+        return webdriver.Chrome(options=opts)
+    except Exception as e:
+        import traceback
+        
+        msg = str(e)
+        if "SessionNotCreatedException" in msg or "version" in msg:
+             logging.warning(f"[!] WebDriver Sürüm Uyumsuzluğu: Tarayıcınız ve Sürücünüzün (chromedriver.exe) sürümleri eşleşmiyor.")
+             logging.warning(f"[!] webdriver-manager kurulumu sorunu çözebilir.")
+        else:
+             logging.warning(f"WebDriver init failed: {e}")
+
+        return None
 
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
 _CURRENT_IDENTITY = {}
-def current_identity():
+def current_identity(config: Optional[dict] = None):
+    # If config provided, we could theoretically update identity from it,
+    # but for now just return the global identity to satisfy the call signature.
     return _CURRENT_IDENTITY

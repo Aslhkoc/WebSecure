@@ -80,7 +80,7 @@ _WS_PER_BUCKET_MAX = int(os.getenv("WS_PER_BUCKET_MAX", "5"))
 _WS_MAX_PAGE_PARAM = int(os.getenv("WS_MAX_PAGE_PARAM", "5"))
 _NUMERIC_ID_MINLEN = 5
 _EPISODE_KEYS = ("bolum","bölüm","episode","sezon","season","fragman","part","ep")
-_DENY_RE = re.compile(r"/(arama|search|login|logout|signin|signup|wp-admin|cart|checkout|sepet)/?", re.I)
+_DENY_RE = re.compile(r"/(logout|signout|cikis|exit)/?", re.I) # Minimal deny list for aggressive scan
 
 NETWORK_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 BROWSER_MAX_CAPTURE_BYTES = int(os.getenv("BROWSER_MAX_CAPTURE_BYTES", "1048576"))  # 1 MiB
@@ -665,7 +665,7 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
     def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False):
         endpoints = []
         artifacts = {}
-        with contextlib.suppress(Exception):
+        try:
             from playwright.sync_api import sync_playwright
             visited, queue = set(), []
             allow = make_queue_governor(start_url)
@@ -676,6 +676,7 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                     queue.append(u)
 
             with sync_playwright() as p:
+                logger.info("[Playwright] Launching browser...")
                 browser = p.chromium.launch(headless=headless, args=['--disable-webgl', '--disable-extensions'])
                 ctx = browser.new_context(ignore_https_errors=True)
                 page = ctx.new_page()
@@ -702,21 +703,46 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                             if href:
                                 full = urljoin(target, href)
                                 _enqueue(full)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Playwright] Page error {target}: {e}")
                         pass
                 browser.close()
+        except Exception as e:
+            logger.error(f"[Playwright] Strategy failed: {e}", exc_info=True)
+            
         return endpoints, (artifacts if return_artifacts else None)
 
 class _UCStrategy(_BrowserDiscoveryStrategy):
     def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False):
         endpoints = []
         if _iu.find_spec("undetected_chromedriver") is None:
+            logger.warning("[UC] undetected_chromedriver module not found.")
             return [], None
+        
+        driver = None
+        tmp_profile = None
         try:
             import undetected_chromedriver as uc
             options = uc.ChromeOptions()
             options.add_argument("--headless=new") if headless else None
-            driver = uc.Chrome(options=options)
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-popup-blocking")
+            
+            # Use temp profile to avoid locking main profile
+            tmp_profile = tempfile.mkdtemp(prefix="ws_uc_profile_")
+            options.add_argument(f"--user-data-dir={tmp_profile}")
+
+            # Check for local driver
+            driver_path = None
+            # Prioritize drivers/chromedriver.exe in project root
+            local_driver = Path(__file__).parent.parent / "drivers" / "chromedriver.exe"
+            if local_driver.exists():
+                driver_path = str(local_driver)
+                logger.info(f"[UC] Using local driver: {driver_path}")
+            
+            driver = uc.Chrome(options=options, driver_executable_path=driver_path) if driver_path else uc.Chrome(options=options)
             driver.set_page_load_timeout(timeout_ms/1000)
             
             queue, visited = [start_url], set()
@@ -727,17 +753,39 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 try:
                     driver.get(target)
                     time.sleep(1)
+                    
+                    # Capture nav 
+                    if _same_host(target, start_url):
+                        endpoints.append({"url": target, "method": "GET", "src": "nav"})
+                    
                     for a in driver.find_elements("css selector", "a[href]"):
                         href = a.get_attribute("href")
                         if href:
                             full = urljoin(target, href)
-                            if _same_host(full, start_url): queue.append(full)
+                            # Only queue internal links
+                            if _same_host(full, start_url): 
+                                queue.append(full)
+                            # But record all found links if robust
                             endpoints.append({"url": full, "method": "GET", "src": "nav"})
+                            
+                except Exception as e:
+                    logger.debug(f"[UC] Page visit error {target}: {e}")
+                    pass
+            
+        except Exception as e:
+             logger.error(f"[UC] Strategy failed: {e}", exc_info=True)
+        finally:
+            if driver:
+                try:
+                    driver.quit()
                 except Exception:
                     pass
-            driver.quit()
-        except Exception:
-            pass
+            if tmp_profile and os.path.exists(tmp_profile):
+                try:
+                    shutil.rmtree(tmp_profile, ignore_errors=True)
+                except Exception:
+                    pass
+
         return endpoints, None
 
 def discover_dynamic_endpoints(

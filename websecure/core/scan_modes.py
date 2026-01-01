@@ -373,11 +373,11 @@ def _resolve_reporter():
                 return fn
 
     # 2) core.reporting
-    spec_core = _ilu.find_spec("core.reporting")
+    spec_core = _ilu.find_spec("websecure.core.reporting")
     if spec_core is not None:
         origin = _spec_origin(spec_core)
         if origin and _is_local_path(origin):
-            mod = importlib.import_module("core.reporting")
+            mod = importlib.import_module("websecure.core.reporting")
             fn = getattr(mod, "perform_reporting_and_integration", None)
             if callable(fn):
                 return fn

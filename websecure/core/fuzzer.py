@@ -45,7 +45,7 @@ else:
 # WebSecure Core Imports
 from websecure.core.oast import IOASTClient, replace_query_param, inject_query
 from websecure.core.utils import ensure_wordlists
-if find_spec("core.reporting") is not None:
+if find_spec("websecure.core.reporting") is not None:
     from websecure.core.reporting import note_auth_outcome, note_payload_usage
 else:
     # Fallback reporting

@@ -22,7 +22,7 @@ import requests as _req
 
 # --- Dynamic Imports for Resilience ---
 httpx = import_module('httpx') if find_spec('httpx') is not None else None
-if find_spec("core.utils") is not None:
+if find_spec("websecure.core.utils") is not None:
     _utils_mod = import_module("websecure.core.utils")
     apply_auth_context = getattr(_utils_mod, "apply_auth_context", None)
     _replace_query_param = getattr(_utils_mod, "replace_query_param", None)
@@ -163,6 +163,8 @@ class IOSATClient(Protocol):
     def payloads_for(self, token: str) -> Dict[str, List[str]]: ...
     async def poll_async(self, interested_tokens: Iterable[str]) -> List[Dict[str, Any]]: ...
     async def aclose(self) -> None: ...
+
+IOASTClient = IOSATClient
 
 # =========================== Clients ===========================
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from websecure.core.http import verify_for_phase
+from websecure.core.utils import current_identity
 import inspect
 import importlib.util
 from websecure.core.auth_flow import run_auto_signup, run_device_code_flow
@@ -12,6 +13,7 @@ import re as _re_urlnorm
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
 import os, sys, argparse, json, time, socket
 from websecure.core.phases import build_plan
+from websecure.core.discovery_helpers import discovery_enrich
 import importlib, importlib.util as _ws_imp_util
 import socket, ssl, json, importlib, importlib.util as _iul
 import logging as _logging
@@ -67,18 +69,21 @@ def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
     _rmod = None
     if _iul.find_spec('websecure.core.reporting') is not None:
         _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('core.reporting') is not None:
-        _rmod = importlib.import_module('core.reporting')
+    elif _iul.find_spec('websecure.core.reporting') is not None:
+        _rmod = importlib.import_module('websecure.core.reporting')
     if _rmod is not None and hasattr(_rmod, 'add_result'):
         _rmod.add_result(
-            type="phase_error",
-            severity="error",
-            message=str(_err),
-            meta={
-                "phase": _phase,
-                "where": _where,
-                "exc_type": _err.__class__.__name__,
-            },
+            "errors",
+            {
+                "type": "phase_error",
+                "severity": "error",
+                "message": str(_err),
+                "meta": {
+                    "phase": _phase,
+                    "where": _where,
+                    "exc_type": _err.__class__.__name__,
+                },
+            }
         )
 # --- end auto-injected header ---
 
@@ -397,7 +402,7 @@ def discover_dynamic_endpoints(start_url: str,
 
 
 def ensure_session(cfg):
-    if _ws_spec('core.http') is not None:
+    if _ws_spec('websecure.core.http') is not None:
         from websecure.core.http import hardened_session, instrument_requests_session  # type: ignore
         http_cfg = {}
         if isinstance(cfg, dict):
@@ -420,7 +425,7 @@ def ensure_session(cfg):
 
 
 
-if _ws_spec("core.utils") is not None:
+if _ws_spec("websecure.core.utils") is not None:
     from websecure.core.utils import (
         current_identity,
         apply_detected_scheme,
@@ -445,7 +450,7 @@ elif _ws_spec("utils") is not None:
 else:
     raise ImportError("Neither 'core.utils' nor 'utils' is importable")
 
-_det_spec = _ws_spec("core.detect")
+_det_spec = _ws_spec("websecure.core.detect")
 if _det_spec is not None:
     _det = importlib.import_module('websecure.core.detect')
     _classify_cb = getattr(_det, 'classify_access_block', None)
@@ -508,13 +513,13 @@ else:
         return "unknown"
 
 
-    _rep_spec = _ws_spec("core.reporting")
+    _rep_spec = _ws_spec("websecure.core.reporting")
     reporting_addendum = importlib.import_module("websecure.core.reporting") if _rep_spec is not None else None
 
 
 from contextlib import suppress
 
-_plan_spec = _ws_spec("core.phases")
+_plan_spec = _ws_spec("websecure.core.phases")
 if _plan_spec is not None:
     _phases = importlib.import_module("websecure.core.phases")
     build_plan = getattr(_phases, "build_plan", None)
@@ -526,8 +531,8 @@ else:
 def _get_resolve_canonical_base():
     # Öncelik: core.utils, sonra kök utils
     mod_name = None
-    if _ws_spec("core.utils") is not None:
-        mod_name = "core.utils"
+    if _ws_spec("websecure.core.utils") is not None:
+        mod_name = "websecure.core.utils"
     elif _ws_spec("utils") is not None:
         mod_name = "utils"
 
@@ -611,7 +616,7 @@ def _get_resolve_canonical_base():
     return _fallback
 
 
-_scan_spec = _ws_spec("core.scan_modes")
+_scan_spec = _ws_spec("websecure.core.scan_modes")
 if _scan_spec is not None:
     _scan_mod = importlib.import_module("websecure.core.scan_modes")
     ScanContext = getattr(_scan_mod, "ScanContext", None)
@@ -626,7 +631,7 @@ else:
         return None
 
 # --- Faz Planı / Orkestrasyon ---
-_flow_spec = _ws_spec("core.flow_runner")
+_flow_spec = _ws_spec("websecure.core.flow_runner")
 if _flow_spec is not None:
     _flow_mod = importlib.import_module("websecure.core.flow_runner")
     run_plan_if_needed = getattr(_flow_mod, "run_plan_if_needed", None)
@@ -634,7 +639,7 @@ else:
     run_plan_if_needed = None
 
 # --- TLS ---
-_tls_spec = _ws_spec("scanners.tls")
+_tls_spec = _ws_spec("websecure.scanners.tls")
 if _tls_spec is not None:
     _tls_mod = importlib.import_module('websecure.scanners.tls')
     _check = getattr(_tls_mod, "check_ssl_certificate", None)
@@ -671,11 +676,13 @@ _ROOT = __file__
 
 
 
-_spec_core = _ws_spec("core.reporting")
+_spec_core = _ws_spec("websecure.core.reporting")
 if _spec_core is not None:
-    _org = getattr(_spec_core, "origin", None)
-    if isinstance(_org, str) and _org != "built-in":
-        _reporting_mod = _im.import_module("core.reporting")
+    try:
+        import importlib as _im
+        _reporting_mod = _im.import_module("websecure.core.reporting")
+    except ImportError:
+        _reporting_mod = None
 
 # İkinci şans: düz 'reporting' ama sadece proje kökündense
 if _reporting_mod is None:
@@ -787,8 +794,8 @@ if ssrf_xxe_scan is None:
 
 # --- OWASP / Nuclei (yeni entegrasyon) ---
 _owasp_mod = None
-if _ws_spec('scanners.owasp') is not None:
-    _owasp_mod = importlib.import_module('scanners.owasp')
+if _ws_spec("websecure.scanners.owasp") is not None:
+    _owasp_mod = importlib.import_module("websecure.scanners.owasp")
 elif _ws_spec('owasp') is not None:
     _owasp_mod = importlib.import_module('owasp')
 
@@ -846,26 +853,26 @@ def _bind_offensive(modname: str, fallback_name: str):
     return fn
 
 
-offensive_request_smuggling = _bind_offensive('scanners.request_smuggling', 'offensive_request_smuggling')
-offensive_mass_assignment = _bind_offensive('scanners.mass_assignment', 'offensive_mass_assignment')
-offensive_jwt = _bind_offensive('scanners.jwt', 'offensive_jwt')
-offensive_nosqli = _bind_offensive('scanners.nosqli', 'offensive_nosqli')
-offensive_ws_fuzz = _bind_offensive('scanners.ws_fuzz', 'offensive_ws_fuzz')
+offensive_request_smuggling = _bind_offensive("websecure.scanners.request_smuggling", "offensive_request_smuggling")
+offensive_mass_assignment = _bind_offensive("websecure.scanners.mass_assignment", "offensive_mass_assignment")
+offensive_jwt = _bind_offensive("websecure.scanners.jwt", "offensive_jwt")
+offensive_nosqli = _bind_offensive("websecure.scanners.nosqli", "offensive_nosqli")
+offensive_ws_fuzz = _bind_offensive("websecure.scanners.ws_fuzz", "offensive_ws_fuzz")
 
 # ws_fuzz modülü yoksa, ek saldırı taramalarını tetikleyen anlamlı bir fallback sağla
-if _ws_spec('scanners.ws_fuzz') is None:
+if _ws_spec("websecure.scanners.ws_fuzz") is None:
     def offensive_ws_fuzz(url, session=None, debug=False, auth_ctx=None):
-        _call_scanner_if_available("scanners.authorization", url, session=session, debug=debug, auth_ctx=auth_ctx)
-        _call_scanner_if_available("scanners.file_upload", url, session=session, debug=debug, auth_ctx=auth_ctx)
-        _call_scanner_if_available("scanners.graphql_attacks", url, session=session, debug=debug, auth_ctx=auth_ctx)
-        _call_scanner_if_available("scanners.ssrf_xxe", url, session=session, debug=debug, auth_ctx=auth_ctx)
-        _call_scanner_if_available("scanners.tls", url, session=session, debug=debug, auth_ctx=auth_ctx)
-        _call_scanner_if_available("scanners.owasp", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.authorization", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.file_upload", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.graphql_attacks", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.ssrf_xxe", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.tls", url, session=session, debug=debug, auth_ctx=auth_ctx)
+        _call_scanner_if_available("websecure.scanners.owasp", url, session=session, debug=debug, auth_ctx=auth_ctx)
         return None
 
 # --- Authorization ---
-_authz = importlib.import_module('scanners.authorization') if _ws_spec(
-    'scanners.authorization') is not None else None
+_authz = importlib.import_module("websecure.scanners.authorization") if _ws_spec(
+    "websecure.scanners.authorization") is not None else None
 RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
 RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
 authorization_run = getattr(_authz, 'run', None) if _authz else None
@@ -874,15 +881,15 @@ if authorization_run is None:
         return []
 
 # --- Authenticated helpers (auth-only probe) ---
-_authscan = importlib.import_module('scanners.authenticated_scan') if _ws_spec(
-    'scanners.authenticated_scan') is not None else None
+_authscan = importlib.import_module("websecure.scanners.authenticated_scan") if _ws_spec(
+    "websecure.scanners.authenticated_scan") is not None else None
 probe_auth_only = getattr(_authscan, 'probe_auth_only', None) if _authscan else None
 if probe_auth_only is None:
     def probe_auth_only(*a, **k):
         return None
 
 # --- Fuzzing / OAST ---
-_pf = importlib.import_module('fuzzing.param_fuzzer') if _ws_spec('fuzzing.param_fuzzer') is not None else None
+_pf = importlib.import_module("websecure.core.fuzzer") if _ws_spec("websecure.core.fuzzer") is not None else None
 discover_params_from_crawl = getattr(_pf, 'discover_params_from_crawl', None) if _pf else None
 fuzz_endpoint = getattr(_pf, 'fuzz_endpoint', None) if _pf else None
 guess_additional_params = getattr(_pf, 'guess_additional_params', None) if _pf else None
@@ -897,7 +904,7 @@ if fuzz_endpoint is None:
     def fuzz_endpoint(*a, **k):
         return None
 
-_oast = importlib.import_module('fuzzing.osat') if _ws_spec('fuzzing.osat') is not None else None
+_oast = importlib.import_module("websecure.core.oast") if _ws_spec("websecure.core.oast") is not None else None
 OASTClient = getattr(_oast, 'OASTClient', None) if _oast else None
 run_oast_on_target = getattr(_oast, 'run_oast_on_target', None) if _oast else None
 
@@ -1062,7 +1069,7 @@ def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
         old = _to_int(waf.get("max_variants_per_payload"), 6)
         new = max(1, old // 2)
         waf["max_variants_per_payload"] = new
-        notes.append(f"WAF payload varyantları {old}→{new}")
+        notes.append(f"WAF payload varyantları {old}->{new}")
 
     # --- OAST ---
     oast = config.setdefault("oast", {})
@@ -1073,7 +1080,7 @@ def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
         old = _to_int(oast.get("max_injections_per_loc"), 3)
         new = max(1, old // 2)
         oast["max_injections_per_loc"] = new
-        notes.append(f"OAST enjeksiyonları {old}→{new}")
+        notes.append(f"OAST enjeksiyonları {old}->{new}")
 
     # --- GraphQL ---
     gql = config.setdefault("graphql", {})
@@ -1092,7 +1099,7 @@ def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
     rate = _to_int(cd.get("rate_limit"), 50)
     new_rate = max(10, rate // 2)
     cd["rate_limit"] = new_rate
-    notes.append(f"İçerik keşfi hız limiti {rate}→{new_rate}")
+    notes.append(f"İçerik keşfi hız limiti {rate}->{new_rate}")
 
     return config, notes
 
@@ -1112,8 +1119,8 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
     while True:
         print("""
 [?] Tarama yoğunluğu:
-    1) Agresif — kapsam ve mutasyonlar tam (daha uzun sürebilir)
-    2) Normal   — payload/mutasyon yoğunluğu azaltılır (kapsam korunur)
+    1) Agresif - kapsam ve mutasyonlar tam (daha uzun sürebilir)
+    2) Normal   - payload/mutasyon yoğunluğu azaltılır (kapsam korunur)
 """.rstrip())
 
         sel = (_prompt("Seçiminiz [1/2, varsayılan=1]: ", "1") or "1").strip()
@@ -1123,7 +1130,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
 
         if sel == "1":
             lo, hi = _estimate_minutes(cfg, "aggressive")
-            print(f"[!] Agresif modu seçtiniz. Yaklaşık {lo}–{hi} dakika sürebilir.")
+            print(f"[!] Agresif modu seçtiniz. Yaklaşık {lo}-{hi} dakika sürebilir.")
             ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
             if ans.startswith("b"):
                 continue
@@ -1350,7 +1357,7 @@ def _setup_session_from_config(config: dict) -> requests.Session:
     s.verify = _to_bool(verify_cfg, True)
 
     # --- WS3: Privacy Identity selection ---
-    ident = current_identity(cfg)
+    ident = current_identity()
     ident = ident if isinstance(ident, dict) else {}
 
     ua_id = str(ident.get("ua") or "") if ident.get("ua") is not None else ""
@@ -1632,11 +1639,10 @@ def _public_surface_seeds(base_url: str) -> list[str]:
     ]
     return [base + p for p in candidates]
 
-
-
-
-if _ilu_patch.find_spec('core.reporting') is not None:
-    from websecure.core.reporting import _phase_rec
+# --- Raporlama Entegrasyonu ---
+if _ilu_patch.find_spec("websecure.core.reporting") is not None:
+    _rmod = _im.import_module("websecure.core.reporting")
+    _phase_rec = getattr(_rmod, "_phase_rec", None)
 elif _ilu_patch.find_spec('reporting') is not None:
     from websecure.core.reporting import _phase_rec
 else:
@@ -1929,29 +1935,15 @@ def main():
     print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
 
     print(r"""
-    ██████████████████   █████████████████   ████      ████    ██████████████    █████████████████    ██████████████
-                  ███   ████                █████    █████   ████               ████                ████
-              ████      ████                ██████  ██████   ████               ████                ████
-           ████         ████████████        ████ ████ ████    ███████████       ████████████        ████
-        ████            ████                ████  ██  ████               ████   ████                ████
-     ████               ████                ████      ████               ████   ████                ████
-    █████████████████   █████████████████   ████      ████    █████████████     █████████████████    ██████████████
-
-           ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════│╴[▒▒▒▒▒▒▒▒]
-               ══════════════════════════════════════════════════════════════════════════════════════════════════════════════│
-           11010                                         01110101000101
-            110                                         10001101010
-             101                                         10110010101100
-              11                                          10110101001
-               0                                           110100110
-                                                             0011010                                                                        1
-                                                              110110
-                                                               11001
-
-
+     __          __  _     _____
+     \ \        / / | |   / ____|
+      \ \  /\  / /__| |__| (___   ___  ___ _   _ _ __ ___
+       \ \/  \/ / _ \ '_ \\___ \ / _ \/ __| | | | '__/ _ \
+        \  /\  /  __/ |_) |___) |  __/ (__| |_| | | |  __/
+         \/  \/ \___|_.__/_____/ \___|\___|\__,_|_|  \___|
     """)
     print("")
-    print("⚠️  UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
+    print("[!] UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
     print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
     print("")
     cfg = load_config()
@@ -2272,12 +2264,13 @@ def main():
     print(f"[MOD] {mode.upper()}  |  Detay: {'EVET' if detailed else 'HAYIR'}  |  Profil: {profile.upper()}")
 
     debug = str((cfg.get("settings") or {}).get("logging", {}).get("level", "")).upper() == "DEBUG"
-    logger = setup_logging(debug=debug)
+    logger = setup_logging(level='DEBUG' if debug else 'INFO')
 
 
     driver = None
     if True:  # FIX: block alignment; always run pipeline
-        driver = setup_webdriver(_normalize_webdriver_cfg(cfg))
+        _wd_c = _normalize_webdriver_cfg(cfg)
+        driver = setup_webdriver(headless=_wd_c["webdriver"]["headless"])
         if not driver:
             print("[i] WebDriver açılamadı; dinamik gezinme olmadan devam edilecek.")
 
@@ -2483,10 +2476,13 @@ def main():
         print("[•] Crawler çalışıyor…")
         t = mark("crawl")
         crawl_cfg = (cfg.get("crawl") or {})
+        # Boost defaults for deep scan
+        default_depth = 5 
+        default_pages = 2500
         crawl_website(
             url, results, driver, debug=debug,
-            max_depth=int(crawl_cfg.get("max_depth", 3)),
-            max_pages=int(crawl_cfg.get("max_pages", 600)),
+            max_depth=int(crawl_cfg.get("max_depth", default_depth)),
+            max_pages=int(crawl_cfg.get("max_pages", default_pages)),
         )
         mark("crawl", t)
 
@@ -2685,7 +2681,7 @@ def main():
                 ),
                 debug=debug,
             )
-            ok_wc, cout = _safe_call(wc.run, call_timeout=600.0)
+            ok_wc, cout = _safe_call(wc.start, call_timeout=600.0)
             if ok_wc and isinstance(cout, dict):
                 new_eps = list(set((cout.get("endpoints") or [])))
                 endpoints.extend([u for u in new_eps if u not in endpoints])
@@ -3066,13 +3062,18 @@ def _as_int(x, default: int = 0) -> int:
 
 
 if __name__ == "__main__":
-    from websecure.core.scan_modes import hpm_bootstrap_from_file
-
-    hpm_bootstrap_from_file('config.json')
+    # from websecure.core.scan_modes import hpm_bootstrap_from_file
+    # hpm_bootstrap_from_file('config.json')
 
     _ret = main()
     if inspect.iscoroutine(_ret):
         asyncio.run(_ret)
+    
+    # Keep window open
+    try:
+        input("\n[i] Çıkmak için Enter'a basın...")
+    except:
+        pass
 
 
 _spec = _iul.find_spec('websecure.core.reporting')

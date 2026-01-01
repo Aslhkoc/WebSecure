@@ -208,3 +208,70 @@ def normalize_url(url: str) -> str:
 
 def resolve_canonical_base(url: str) -> str:
     return normalize_url(url)
+
+# ========================== Missing Helpers for Crawler ==========================
+def canonicalize_url(url: str) -> str:
+    return normalize_url(url)
+
+def same_origin(url_a: str, url_b: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        if not url_a or not url_b: return False
+        pa = urlparse(url_a)
+        pb = urlparse(url_b)
+        # Port handling: if None, infer from scheme
+        pa_port = pa.port or (443 if pa.scheme == "https" else 80)
+        pb_port = pb.port or (443 if pb.scheme == "https" else 80)
+        return (pa.scheme, pa.hostname, pa_port) == (pb.scheme, pb.hostname, pb_port)
+    except Exception:
+        return False
+
+def is_static_asset(url: str) -> bool:
+    from urllib.parse import urlparse
+    path = (urlparse(url).path or "").lower()
+    # Common static extensions
+    exts = (
+        ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp",
+        ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".mp4", ".webm", ".mp3", ".wav",
+        ".pdf", ".zip", ".tar", ".gz"
+    )
+    return path.endswith(exts)
+
+def run_content_discovery(url, cfg, results, timeout=900, debug=False, call_timeout=900.0):
+    """
+    Legacy wrapper for main.py compatibility.
+    Redirects to flow_runner.run_discovery_extended with a context object.
+    """
+    try:
+        from websecure.core.flow_runner import run_discovery_extended
+        from websecure.core.http import hardened_session # Need session
+        
+        # Emulate context
+        class Ctx: pass
+        ctx = Ctx()
+        ctx.url = url
+        ctx.target = url
+        ctx.config = cfg
+        ctx.results = results
+        ctx.debug = debug
+        # Create a temporary session if needed, although discovery usually needs a pre-configured one.
+        # But here we just create a fresh one to avoid errors.
+        ctx.session = hardened_session()
+        
+        run_discovery_extended(ctx)
+    except Exception as e:
+        # Log error but don't crash main
+        if debug:
+            print(f"[run_content_discovery] Wrapper error: {e}")
+        pass
+
+def validate_url(url: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        if p.scheme and p.netloc:
+            return True, url, p.scheme
+        return False, None, None
+    except Exception:
+        return False, None, None

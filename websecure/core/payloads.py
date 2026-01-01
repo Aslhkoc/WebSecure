@@ -91,23 +91,31 @@ def _apply_marker(payloads: list[str], marker: str | None) -> list[str]:
 
 # --- Defaults for common repos ---------------------------------------------
 
+# Helper to find package root dynamically
+def _get_package_root() -> Path:
+    # payloads.py is in websecure/core/, so root is two levels up -> websecure/
+    # If we want to point to websecure/wordlists, we go up one level from core -> websecure
+    return Path(__file__).resolve().parent.parent
+
+_PKG_ROOT = _get_package_root()
+
 _DEFAULTS = {
     "seclists": {
-        "root": "./wordlists/seclists",
+        "root": _PKG_ROOT / "wordlists/seclists",
         "git": "https://github.com/danielmiessler/SecLists.git",
         "xss": ["**/Fuzzing/XSS/*.txt", "**/Fuzzing/XSS/*/*.txt", "**/Fuzzing/xss.txt", "**/*xss*.txt"],
         "sqli": ["**/Fuzzing/SQLi/*.txt", "**/*sqli*.txt", "**/*sql-injection*.txt"],
         "rce": ["**/Fuzzing/Command Injection/*.txt", "**/*cmdi*.txt", "**/*command*injection*.txt", "**/*rce*.txt"],
     },
     "pattt": {
-        "root": "./wordlists/PayloadsAllTheThings",
+        "root": _PKG_ROOT / "wordlists/PayloadsAllTheThings",
         "git": "https://github.com/swisskyrepo/PayloadsAllTheThings.git",
         "xss": ["**/XSS/**/*.txt"],
         "sqli": ["**/SQL Injection/**/*.txt"],
         "rce": ["**/Command Injection/**/*.txt", "**/RCE/**/*.txt"],
     },
     "wordlists_custom": {
-        "root": "./wordlists_custom/custom",
+        "root": _PKG_ROOT / "wordlists_custom/custom",
         "git": None,
         "xss": ["xss.txt", "xss/*.txt"],
         "sqli": ["sqli.txt", "sqli/*.txt"],

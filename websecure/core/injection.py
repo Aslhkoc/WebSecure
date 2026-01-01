@@ -28,8 +28,10 @@ from functools import lru_cache
 
 # Harici payload sağlayıcı (SecLists + PayloadsAllTheThings + wordlists_custom)
 # --- Payload sağlayıcı (çekirdek varsa onu kullan, yoksa dosya tabanlı fallback) ---
-if _find_spec("core.payloads") is not None:
+if _find_spec("websecure.core.payloads") is not None:
     from websecure.core.payloads import load_external_payloads  # type: ignore
+
+# ... (aradaki kodlar değişmeyecek ama tek replacement içinde yapmak zor olabilir, ayrı çarklar kullanalım)
 else:
     # Dosya tabanlı payload sağlayıcı (SecLists / PayloadsAllTheThings)
     _CAT_PATTERNS: dict[str, list[str]] = {
@@ -113,7 +115,7 @@ else:
     EC = None  # type: ignore
 
 # --- Anomali metrikleri (opsiyonel): core.detect varsa kullan ---
-if _find_spec("core.detect") is not None:
+if _find_spec("websecure.core.detect") is not None:
     from websecure.core.detect import anomaly_score as _anomaly_score  # type: ignore
 else:
     _anomaly_score = None  # type: ignore

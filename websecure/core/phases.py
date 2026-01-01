@@ -16,16 +16,58 @@ from .http import hardened_session
 from .reporting import add_result
 import socket, ssl, json, importlib, importlib.util as _iul
 import logging as _logging
-from websecure.scanners import request_smuggling as _rs
-from websecure.scanners import mass_assignment as _ma
-from websecure.scanners import jwt as _jwt
-from websecure.scanners import nosqli as _nq
-from websecure.scanners import ws_fuzz as _ws
-from websecure.scanners import ssrf_xxe as _sx
-from websecure.scanners import graphql_attacks as _gqa
-from websecure.scanners import graphql_rpc as _gqr
-from websecure.scanners import file_upload as _fu
-from websecure.crawler import WebCrawler
+# Safe imports for optional scanners
+_rs = _ma = _jwt = _nq = _ws = _sx = _gqa = _gqr = _fu = None
+
+try:
+    from websecure.scanners import request_smuggling as _rs
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import mass_assignment as _ma
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import jwt as _jwt
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import nosqli as _nq
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import ws_fuzz as _ws
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import ssrf_xxe as _sx
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import graphql_attacks as _gqa
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import graphql_rpc as _gqr
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import file_upload as _fu
+except ImportError:
+    pass
+
+try:
+    from websecure.crawler import WebCrawler
+except ImportError:
+    WebCrawler = None
 _logger = _logging.getLogger(__name__)
 _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
@@ -45,8 +87,8 @@ def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
     _rmod = None
     if _iul.find_spec('websecure.core.reporting') is not None:
         _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('core.reporting') is not None:
-        _rmod = importlib.import_module('core.reporting')
+    elif _iul.find_spec('websecure.core.reporting') is not None:
+        _rmod = importlib.import_module('websecure.core.reporting')
     if _rmod is not None and hasattr(_rmod, 'add_result'):
         _rmod.add_result(
             type="phase_error",
@@ -149,8 +191,8 @@ def phase_offensive(ctx: dict):
 
 
 _reporting_mod = None
-if _iul.find_spec("core.reporting") is not None:
-    _reporting_mod = importlib.import_module("core.reporting")
+if _iul.find_spec("websecure.core.reporting") is not None:
+    _reporting_mod = importlib.import_module("websecure.core.reporting")
 elif _iul.find_spec("reporting") is not None:
     _reporting_mod = importlib.import_module("reporting")
 
@@ -194,9 +236,9 @@ def get_results() -> dict:
     """
     mod = _reporting_mod
     if mod is None:
-        if _iul.find_spec("core.reporting") is not None:
+        if _iul.find_spec("websecure.core.reporting") is not None:
             import importlib as _im
-            mod = _im.import_module("core.reporting")
+            mod = _im.import_module("websecure.core.reporting")
         elif _iul.find_spec("reporting") is not None:
             import importlib as _im
             mod = _im.import_module("reporting")
@@ -216,7 +258,7 @@ def _opt_import(module: str, attr: Optional[str] = None):
         if '.' in module:
             fulls.append(module)
         else:
-            fulls.extend((f'websecure.core.{module}', f'core.{module}', module))
+            fulls.extend((f'websecure.core.{module}', module))
     mod = _ws_maybe_import_any(*fulls) if fulls else None
     if not mod:
         return None
@@ -329,31 +371,31 @@ def _runner_discovery(ctx) -> None:
             return
     except Exception:
         pass
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_discovery_extended") or not callable(getattr(fm, "run_discovery_extended")):
         add_result("meta", {"stage": "discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_discovery_extended(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_fuzz_and_param_discovery") or not callable(getattr(fm, "run_fuzz_and_param_discovery")):
         add_result("meta", {"stage": "fuzz_param_discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_fuzz_and_param_discovery(ctx)
 
 def _runner_oast_verification(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_oast_verification") or not callable(getattr(fm, "run_oast_verification")):
         add_result("meta", {"stage": "oast", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_oast_verification(ctx)
 
 def _runner_reporting_and_integration(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_reporting_and_integration") or not callable(getattr(fm, "run_reporting_and_integration")):
         add_result("meta", {"stage": "reporting", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_reporting_and_integration(ctx)
 
 def _runner_authorization_matrix(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_authorization_matrix") or not callable(getattr(fm, "run_authorization_matrix")):
         add_result("meta", {"stage": "authorization", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_authorization_matrix(ctx)
@@ -361,7 +403,7 @@ def _runner_authorization_matrix(ctx) -> None:
 
 
 def _runner_business_logic_races(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm or not hasattr(fm, "run_business_logic_races") or not callable(getattr(fm, "run_business_logic_races")):
         add_result("meta", {"stage": "races", "status": "skipped:no-function"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
@@ -922,7 +964,7 @@ def plan_visible(plan: Dict) -> Dict:
     return out
 
 def _runner_verify_and_score(ctx) -> None:
-    fm = _opt_import("core.flow_runner") or _opt_import("flow_runner")
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
     if not fm:
         add_result("meta", {"stage": "verify_and_score", "status": "skipped:no-flow-runner"})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')

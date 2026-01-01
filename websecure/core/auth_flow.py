@@ -69,10 +69,10 @@ def _import_optional(module: str, names: Iterable[str]) -> List[Optional[Any]]:
     return out
 
 read_captcha_config, solve_image_captcha_png_bytes, solve_recaptcha_v2_token = _import_optional(
-    "core.analysis", ["read_captcha_config", "solve_image_captcha_png_bytes", "solve_recaptcha_v2_token"]
+    "websecure.core.analysis", ["read_captcha_config", "solve_image_captcha_png_bytes", "solve_recaptcha_v2_token"]
 )
 read_2fa_config, get_otp_provider = _import_optional(
-    "core.auth", ["read_2fa_config", "create_twofactor_provider"]
+    "websecure.core.auth", ["read_2fa_config", "create_twofactor_provider"]
 )
 
 # -----------------------------------------------------------------------------
@@ -213,7 +213,7 @@ def _extract_csrf_regex(html_text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 def extract_csrf(html_text: str) -> Optional[str]:
-    ext, = _import_optional("core.analysis", ["extract_csrf"])
+    ext, = _import_optional("websecure.core.analysis", ["extract_csrf"])
     if callable(ext):
         v = ext(html_text)  # type: ignore[misc]
         if v:

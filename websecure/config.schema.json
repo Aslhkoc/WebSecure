@@ -454,6 +454,37 @@
           "type": "boolean"
         }
       }
+    },
+    "proxy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string"
+        },
+        "tor_control": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "control_port": {
+              "type": "integer"
+            },
+            "password": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rotate_every_n_requests": {
+              "type": "integer"
+            }
+          }
+        }
+      }
     }
   }
 }

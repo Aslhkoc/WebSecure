@@ -239,7 +239,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence ,Dict
 from urllib.parse import urlparse as _urlparse
-from websecure.core.reporting import add_result, counters_add_bytes, counters_inc, note_auth_outcome
 from websecure.core.utils import (
     allowed_http_methods,
     build_raw_http_request,
@@ -719,7 +718,20 @@ class _RequestsDriver:
 
         pool_conns = int(http_cfg.get("pool_connections", 10))
         pool_max = int(http_cfg.get("pool_maxsize", 10))
-        adapter = HTTPAdapter(max_retries=0, pool_connections=pool_conns, pool_maxsize=pool_max)
+        
+        # Determine if we should use WAF Bypass Adapter
+        # Default to True for now as requested "strength", or check config
+        use_waf_bypass = True 
+        
+        try:
+            from websecure.core.waf_bypass import WAFBypassAdapter
+        except ImportError:
+            WAFBypassAdapter = None
+            
+        if use_waf_bypass and WAFBypassAdapter:
+             adapter = WAFBypassAdapter(max_retries=0, pool_connections=pool_conns, pool_maxsize=pool_max)
+        else:
+             adapter = HTTPAdapter(max_retries=0, pool_connections=pool_conns, pool_maxsize=pool_max)
 
         self.s = hardened_session({})
         self.s.mount("http://", adapter)
@@ -729,6 +741,14 @@ class _RequestsDriver:
         self._default_headers = {}
         if isinstance(ua, str) and ua.strip():
             self._default_headers["User-Agent"] = ua.strip()
+        
+        # If no strict UA set in config, prepopulate with a random one
+        if "User-Agent" not in self._default_headers:
+             try:
+                 from websecure.core.waf_bypass import get_random_user_agent
+                 self._default_headers["User-Agent"] = get_random_user_agent()
+             except ImportError:
+                 pass
 
         # pacing/anti-blocking (policy ile beslenecek)
         self._rps: float = 0.0
@@ -759,6 +779,11 @@ class _RequestsDriver:
         else:
             ms = max(200, self._extra_delay_ms * 2)
         self._extra_delay_ms = min(ms, 2500)
+        # Attempt Tor Rotation on Block
+        try:
+             rotate_tor_identity()
+        except:
+             pass
 
     def request_once(self, method: str, url: str, **kw) -> requests.Response:
         kw.pop("verify", None)
@@ -767,6 +792,20 @@ class _RequestsDriver:
         for k, v in self._default_headers.items():
             headers.setdefault(k, v)
         kw["headers"] = headers
+
+        # Load Global Config to check Proxy
+        from websecure.core.payloads import _load_cfg 
+        cfg = _load_cfg().get("proxy", {})
+        if cfg.get("enabled") and cfg.get("url"):
+            kw["proxies"] = {
+                "http": cfg["url"],
+                "https": cfg["url"]
+            }
+            # Auto-rotate periodically
+            if cfg.get("tor_control", {}).get("enabled"):
+                 limit = int(cfg["tor_control"].get("rotate_every_n_requests", 50))
+                 if limit > 0 and random.randint(1, limit) == 1:
+                     rotate_tor_identity()
 
         pol = hpm_current_policy()
         self._rps = float(pol.get("rps", self._rps))

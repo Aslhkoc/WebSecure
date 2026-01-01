@@ -316,21 +316,56 @@ def _insert_comments_sql(s: str) -> str:
 def _url_encode_chunks(s: str) -> str:
     return "".join(c if c.isalnum() else f"%{ord(c):02X}" for c in s)
 
+def _double_url_encode(s: str) -> str:
+    # Encode once, then encode the % signs
+    base = "".join(c if c.isalnum() else f"%{ord(c):02X}" for c in s)
+    return base.replace("%", "%25")
+
+def _sql_hex_encode(s: str) -> str:
+    # Convert string literals 'text' to 0x74657874 if possible
+    # Detects quoted strings and converts them
+    def _hex_repl(m):
+        content = m.group(1)
+        return "0x" + content.encode("utf-8").hex()
+    return re.sub(r"'([^']{2,})'", _hex_repl, s)
+
+def _whitespace_bypass(s: str) -> str:
+    # Replace spaces with tabs, newlines, or comments
+    replacements = ["%09", "%0A", "%0D", "/**/", "+"]
+    return s.replace(" ", random.choice(replacements))
+
 def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> List[str]:
     if not payload: return []
     if not cfg or not cfg.get("enabled", False): return [payload]
     
     strategies = set((cfg.get("strategies") or []))
+    # Eğer strateji listesi boşsa varsayılanları doldur (aggressive mod için)
+    if not strategies:
+        strategies = {"encode", "caseflip", "comments", "double_encode"}
+        
     variants = [payload]
     
     if "encode" in strategies:
         variants.append(_url_encode_chunks(payload))
-    if "caseflip" in strategies and category == "sqli":
-        variants.append(_flip_case_sql(payload))
-    if "comments" in strategies and category == "sqli":
-        variants.append(_insert_comments_sql(payload))
     
-    return list(dict.fromkeys(variants))[:int(cfg.get("max_variants_per_payload", 5))]
+    if "double_encode" in strategies:
+        variants.append(_double_url_encode(payload))
+
+    if category == "sqli":
+        if "caseflip" in strategies:
+            variants.append(_flip_case_sql(payload))
+        if "comments" in strategies:
+            variants.append(_insert_comments_sql(payload))
+        if "sql_hex" in strategies:
+            variants.append(_sql_hex_encode(payload))
+        if "whitespace" in strategies:
+            variants.append(_whitespace_bypass(payload))
+            
+    if category == "xss" and "html_entity" in strategies:
+         # Basic HTML entity encoding
+         variants.append("".join(f"&#x{ord(c):x};" for c in payload))
+
+    return list(dict.fromkeys(variants))[:int(cfg.get("max_variants_per_payload", 10))]
 
 def mutate_payloads(category: str, payloads: Iterable[str], cfg: Dict[str, Any] | None) -> List[str]:
     out = []

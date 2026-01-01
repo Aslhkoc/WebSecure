@@ -24,7 +24,7 @@ import inspect
 from websecure.core.reporting import add_result
 from websecure.core.fuzzer import verify_oast_findings, verify_findings_and_score
 from websecure.core.reporting import add_result, get_results, flush, _phase_rec
-from websecure.fuzzing.verifier import verify_findings  # kept for downstream use
+
 import time, importlib
 from typing import Callable, List, Tuple, Dict, Any
 from .http import set_phase
@@ -51,8 +51,8 @@ def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
     _rmod = None
     if _iul.find_spec('websecure.core.reporting') is not None:
         _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('core.reporting') is not None:
-        _rmod = importlib.import_module('core.reporting')
+    elif _iul.find_spec('websecure.core.reporting') is not None:
+        _rmod = importlib.import_module('websecure.core.reporting')
     if _rmod is not None and hasattr(_rmod, 'add_result'):
         _rmod.add_result(
             type="phase_error",
@@ -79,6 +79,14 @@ def _ws_import_any(*names: str):
         try:
             if _ws_imp_util.find_spec(n) is not None:
                 return importlib.import_module(n)
+        except (AttributeError, ValueError):
+            # Fallback for shadowed module names or invalid paths
+            try:
+                if "." not in n:
+                   return importlib.import_module(n)
+            except:
+                pass
+            continue
         except _BOUNDARY_EXC as e:
             _logger.error('phase error [flow]', exc_info=True)
             _report_phase_error('flow', 'flow_runner.py', e)
@@ -388,8 +396,8 @@ def _degrade_scan_mode(ctx) -> None:
 _param_mod = None
 if _ws_spec('websecure.core.fuzzer') is not None:
     _param_mod = importlib.import_module('websecure.core.fuzzer')
-elif _ws_spec('core.fuzzer') is not None:
-    _param_mod = importlib.import_module('core.fuzzer')
+elif _ws_spec('websecure.core.fuzzer') is not None:
+    _param_mod = importlib.import_module('websecure.core.fuzzer')
 
 discover_params_from_crawl = getattr(_param_mod, 'discover_params_from_crawl', None) if _param_mod else None
 fuzz_endpoint = getattr(_param_mod, 'fuzz_endpoint', None) if _param_mod else None
@@ -399,8 +407,8 @@ guess_additional_params = getattr(_param_mod, 'guess_additional_params', None) i
 _phases_mod = None
 if _ws_spec('websecure.core.phases') is not None:
     _phases_mod = importlib.import_module('websecure.core.phases')
-elif _ws_spec('phases') is not None:
-    _phases_mod = importlib.import_module('phases')
+elif _ws_spec('websecure.core.phases') is not None:
+    _phases_mod = importlib.import_module('websecure.core.phases')
 build_plan = getattr(_phases_mod, 'build_plan', None) if _phases_mod else None
 
 

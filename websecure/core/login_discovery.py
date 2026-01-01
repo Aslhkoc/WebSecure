@@ -15,8 +15,8 @@ else:
     BeautifulSoup = None
 
 
-if find_spec("core.reporting") is not None:
-    add_result = getattr(import_module("core.reporting"), "add_result")
+if find_spec("websecure.core.reporting") is not None:
+    add_result = getattr(import_module("websecure.core.reporting"), "add_result")
 else:
     def add_result(*a: Any, **k: Any) -> None:
         return None
@@ -24,8 +24,8 @@ else:
 # --- 2.3: Güvenli regex köprüsü ---
 _SRX_SEARCH: Optional[Callable[..., Any]] = None
 _srx = None
-if find_spec("core.safe_regex") is not None:
-    _srx = import_module("core.safe_regex")
+if find_spec("websecure.core.safe_regex") is not None:
+    _srx = import_module("websecure.core.safe_regex")
     _cand = getattr(_srx, "search", None)
     if callable(_cand):
         _SRX_SEARCH = _cand
@@ -670,8 +670,8 @@ def fetch_sitemap_urls(
 # === PATCH: WebSecure Upgrade (auto-applied) @ 2025-09-07T16:43:08.489221 ===
 
 # Ek: Config destekli keşif ve HEAD preflight
-if find_spec("core.reporting") is not None:
-    _add_result_patch = getattr(import_module("core.reporting"), "add_result")  # type: ignore[assignment]
+if find_spec("websecure.core.reporting") is not None:
+    _add_result_patch = getattr(import_module("websecure.core.reporting"), "add_result")  # type: ignore[assignment]
 else:
     def _add_result_patch(*a: Any, **k: Any) -> None:  # type: ignore[no-redef]
         return None

@@ -469,8 +469,8 @@
     }
   },
   "crawl": {
-    "max_depth": 5,
-    "max_pages": 2000,
+    "max_depth": 10,
+    "max_pages": 5000,
     "timeout_http": 12,
     "fingerprint_head_count": 25,
     "use_browser": true,
@@ -911,7 +911,10 @@
       "caseflip",
       "comments",
       "space",
-      "xsshex"
+      "xsshex",
+      "double_encode",
+      "whitespace",
+      "sql_hex"
     ],
     "pad_len": 0,
     "max_variants_per_payload": 6,
@@ -1475,9 +1478,18 @@
     "authorization": false
   },
   "wordlists": {
-    "params": "./wordlists_custom/custom/params.txt",
-    "values": "./wordlists_custom/custom/values.txt",
     "xss": "./wordlists_custom/custom/xss.txt",
     "sqli": "./wordlists_custom/custom/sqli.txt"
+  },
+  "proxy": {
+    "enabled": true,
+    "url": "socks5://127.0.0.1:9050",
+    "tor_control": {
+      "enabled": true,
+      "control_port": 9151,
+      "password": null,
+      "rotate_every_n_requests": 50
+    }
   }
 }
+```
