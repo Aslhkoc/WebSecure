@@ -19,6 +19,13 @@ from urllib.parse import urlparse, urlsplit, urljoin
 from importlib.util import find_spec
 from importlib import import_module
 
+try:
+    from cryptography import x509
+    from cryptography.hazmat.backends import default_backend
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
+
 import requests
 from websecure.core.http import hardened_session, verify_for_phase, classify_access_block
 from websecure.core.reporting import add_result
@@ -255,6 +262,45 @@ class CertificateReport:
     fingerprint_sha256: t.Optional[str] = None
     self_signed: t.Optional[bool] = None
 
+def _extract_cert_details(der_data: bytes) -> dict:
+    """Parses DER data using cryptography library to extract detailed info."""
+    if not _HAS_CRYPTO or not der_data:
+        return {}
+    
+    try:
+        cert = x509.load_der_x509_certificate(der_data, default_backend())
+        
+        # Subject
+        def _get_name(name, oid):
+            # helper to get common name or organization
+            att = name.get_attributes_for_oid(oid)
+            return att[0].value if att else None
+        
+        sub_cn = _get_name(cert.subject, x509.NameOID.COMMON_NAME)
+        iss_cn = _get_name(cert.issuer, x509.NameOID.COMMON_NAME)
+        iss_o = _get_name(cert.issuer, x509.NameOID.ORGANIZATION_NAME)
+        
+        # Dates
+        nb = cert.not_valid_before_utc if hasattr(cert, 'not_valid_before_utc') else cert.not_valid_before
+        na = cert.not_valid_after_utc if hasattr(cert, 'not_valid_after_utc') else cert.not_valid_after
+        
+        # Serial & Fingerprint
+        serial = str(cert.serial_number)
+        fp = cert.fingerprint(hashlib.sha256()).hex()
+        
+        return {
+            "subject_CN": sub_cn,
+            "issuer_CN": iss_cn,
+            "issuer_O": iss_o,
+            "not_before": nb.isoformat(),
+            "not_after": na.isoformat(),
+            "serial": serial,
+            "fingerprint": fp
+        }
+    except Exception as e:
+        _logger.warning(f"Cert parsing error: {e}")
+        return {}
+
 def _normalize_host(url: str) -> t.Tuple[str, int, str]:
     if "://" not in url: url = "https://" + url
     p = urlparse(url)
@@ -318,30 +364,62 @@ class PySSLCertChecker:
         host, port, scheme = _normalize_host(url)
         problems = []
         
+        ctx = pyssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = pyssl.CERT_NONE 
+        
+        der = None
+        ver = None
+        alpn = None
+        
         try:
-             # Just Connect
-             ctx = pyssl.create_default_context()
-             ctx.check_hostname = False
-             ctx.verify_mode = pyssl.CERT_NONE 
              with socket.create_connection((host, port), timeout=timeout) as s:
                  with ctx.wrap_socket(s, server_hostname=host) as ss:
                      der = ss.getpeercert(binary_form=True)
                      ver = ss.version()
                      alpn = ss.selected_alpn_protocol()
-                     
-             # If we got DER, we can hash it. Parsing it requires crypto libraries usually, 
-             # but we can try to re-connect with CERT_REQUIRED and ignore errors to get the parsed dict?
-             
         except Exception as e:
             return CertificateReport(host, port, scheme, None, None, None, "", "", 0, [], [str(e)], False)
 
-        # Re-connect to get dict if possible (works if cert is somewhat valid or we ignore errors?)
-        # For this consolidated version, let's trust the previous implementation logic but simplified.
-        # The previous implementation used getpeercert() inside a try/finally blocks.
+        # Extract details
+        details = _extract_cert_details(der) if der else {}
         
+        # Determine strict validity
+        valid = False
+        try:
+             # Separate verify check
+            requests.get(url, timeout=timeout)
+            valid = True
+        except:
+            valid = False
+            
+        nb = details.get("not_before", "")
+        na = details.get("not_after", "")
+        
+        # Calculate days remaining if possible
+        days = 0
+        if na:
+             try:
+                 dt_na = datetime.fromisoformat(na).replace(tzinfo=None)
+                 delta = dt_na - datetime.utcnow()
+                 days = delta.days
+             except: pass
+
         return CertificateReport(
-            host, port, scheme, "Unknown", "Unknown", None, "", "", 0, [], [], True,
-            tls_version="TLS1.3", fingerprint_sha256=hashlib.sha256(der).hexdigest() if der else None
+            host=host, port=port, scheme=scheme,
+            subject_CN=details.get("subject_CN"),
+            issuer_CN=details.get("issuer_CN"),
+            issuer_O=details.get("issuer_O"),
+            not_before=nb,
+            not_after=na,
+            days_remaining=days,
+            san=[], # Simplified for now, or could extract from crypto too
+            problems=problems,
+            valid=valid,
+            tls_version=ver,
+            alpn=alpn,
+            fingerprint_sha256=details.get("fingerprint"),
+            self_signed=not valid # Approximation
         )
 
 # ============================================================================
@@ -383,7 +461,17 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
         "problems": problems,
         "hsts": hsts_on,
         "tls_version": rep.tls_version,
-        "fingerprint": rep.fingerprint_sha256
+        "valid": rep.valid and not problems,
+        "problems": problems,
+        "hsts": hsts_on,
+        "tls_version": rep.tls_version,
+        "fingerprint": rep.fingerprint_sha256,
+        "subject_CN": rep.subject_CN,
+        "issuer_CN": rep.issuer_CN,
+        "issuer_O": rep.issuer_O,
+        "not_before": rep.not_before,
+        "not_after": rep.not_after,
+        "days_remaining": rep.days_remaining
     }
 
 def scan_tls(url: str, *, results=None, session=None, config=None, debug=False) -> t.Dict[str, t.Any]:

@@ -35,7 +35,11 @@ class BaseScanner:
             self.results[bucket] = []
         self.results[bucket].append(safe_entry)
         
-        # 4. Log
+        # 4. Central Report & Alert (The Hook)
+        from ..core.reporting import add_result
+        add_result(bucket, safe_entry)
+
+        # 5. Log
         sev = safe_entry.get("severity", "Info")
         msg = safe_entry.get("status") or safe_entry.get("issue")
         self.logger.info(f"[{sev.upper()}] {bucket}: {msg}")

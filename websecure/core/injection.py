@@ -1,5 +1,5 @@
 from __future__ import annotations
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, urlparse, urlencode, parse_qsl, urlunparse, quote_plus, quote
 from websecure.core.http import hardened_session
 import os
 import logging
@@ -10,29 +10,25 @@ import string
 import base64
 import json
 import socket
+import ssl
 import time as _time
 from pathlib import Path
-import os, re
-import ssl as pyssl
 from functools import lru_cache
 from contextlib import suppress
 from dataclasses import dataclass
 from html import unescape as html_unescape
 from typing import Tuple, Optional, Dict, List, Any
-from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse, urlsplit, quote_plus
 from importlib.util import find_spec as _find_spec
 from websecure.core.analysis import mutate_payload, build_waf_headers, get_waf_cfg
-from urllib.parse import quote
-import os, random, re, logging
-from functools import lru_cache
+
 
 # Harici payload sağlayıcı (SecLists + PayloadsAllTheThings + wordlists_custom)
 # --- Payload sağlayıcı (çekirdek varsa onu kullan, yoksa dosya tabanlı fallback) ---
 if _find_spec("websecure.core.payloads") is not None:
-    from websecure.core.payloads import load_external_payloads  # type: ignore
-
-# ... (aradaki kodlar değişmeyecek ama tek replacement içinde yapmak zor olabilir, ayrı çarklar kullanalım)
+    from websecure.core.payloads import load_external_payloads, get_builtin_payloads  # type: ignore
 else:
+    def get_builtin_payloads(category: str) -> list[str]: return []
+
     # Dosya tabanlı payload sağlayıcı (SecLists / PayloadsAllTheThings)
     _CAT_PATTERNS: dict[str, list[str]] = {
         "sqli": [r"sqli", r"sql[-_ ]?injection", r"generic[-_ ]?sqli"],
@@ -367,7 +363,13 @@ class SQLiCheck(BaseCheck):
                 vulns += 1
 
         # ---- Deterministik payload çalıştırma (saklama yok) ----
+        # 1. Polyglots ekle
+        polyglots = get_builtin_payloads("polyglot")
+        if polyglots:
+            _SQLI_PAYLOADS["polyglot"] = polyglots
+
         for ptype, plist in _SQLI_PAYLOADS.items():
+
             logging.info(f"[SQLi] Test türü: {ptype}")
             for key in target_params:
                 waf_cfg = get_waf_cfg()
@@ -491,6 +493,27 @@ def _xss_payloads(marker: str) -> List[str]:
 
     return out
 
+def _xss_payloads_extended(marker: str) -> List[str]:
+    """Basic + Advanced + Polyglots for XSS"""
+    base = _xss_payloads(marker)
+    adv = get_builtin_payloads("xss_advanced")
+    pol = get_builtin_payloads("polyglot")
+    
+    # Marker inject into advanced payloads if possible, simplistic replace
+    final_adv = []
+    for p in adv:
+        if "alert(1)" in p:
+             final_adv.append(p.replace("alert(1)", f"alert('{marker}')"))
+        else:
+             final_adv.append(p)
+             
+    return _dedup_list(base + final_adv + pol)
+
+def _dedup_list(seq):
+    seen = set()
+    return [x for x in seq if not (x in seen or seen.add(x))]
+
+
 def _dom_sink_probe_js(marker: str) -> str:
     return f"""
     (function(){{
@@ -539,7 +562,8 @@ class XSSCheck(BaseCheck):
             target_params = list(form_data.keys())
 
         marker = f"WSXSS_{random.randint(10**5, 10**6-1)}"
-        payloads = _xss_payloads(marker)
+        payloads = _xss_payloads_extended(marker)
+
         waf_cfg = get_waf_cfg()
         payloads = [v for p in payloads for v in mutate_payload('xss', p, waf_cfg)]
         vulns = 0
@@ -797,7 +821,70 @@ class LFITraversalCheck(BaseCheck):
         self.set_summary(bucket, vulns)
         return vulns
 
+        return vulns
+
 # ---------------
+# Exploit Injection Check
+# ---------------
+class ExploitCheck(BaseCheck):
+    name = "exploit_injection"
+
+    def run(self, url: str, method: str = "GET", form_data: Optional[Dict] = None) -> int:
+        bucket = f"{self.name}_{method.lower()}"
+        self.results[bucket] = []
+        vulns = 0
+        
+        # Sadece known dangerous payloadları dener (Log4J, SSTI, ShellShock)
+        payloads = get_builtin_payloads("exploit")
+        if not payloads:
+            return 0
+            
+        m = (method or "").upper()
+        parsed = urlparse(url or "")
+        qp = parse_qsl(parsed.query, keep_blank_values=True)
+        
+        if m == "GET":
+            targets = [k for k, _ in qp]
+            if not targets: targets = ["q"] # fallback
+        else:
+            targets = list(form_data.keys()) if form_data else []
+
+        waf_cfg = get_waf_cfg()
+        # Mutate payloads (obfuscation, encoding)
+        final_payloads = []
+        for p in payloads:
+            final_payloads.extend(mutate_payload("exploit", p, waf_cfg))
+        # Add a few raw ones just in case mutation breaks logic
+        final_payloads = list(dict.fromkeys(payloads + final_payloads))
+
+        for key in targets:
+            for p in final_payloads:
+                # OAST token injection (simple substitution)
+                # Burasi komplex olabilir, simdilik raw atiyoruz
+                # Payload icinde {{HOST}} varsa oast ile degistirilebilir ama su an basit tutalim
+                
+                if m == "GET":
+                     test_url = _inject_into_query(url, key, p)
+                     code, dt, text, headers = _measure(self.session, "GET", test_url)
+                else:
+                     data = (form_data or {}).copy()
+                     data[key] = p
+                     code, dt, text, headers = _measure(self.session, "POST", url, data)
+                
+                # Basit imza kontrolü (SSTI matematik sonucu vb)
+                # 7*7 = 49
+                if "49" in (text or "") and ("{{7*7}}" in p or "${7*7}" in p):
+                     self.add(bucket, {"param": key, "payload": p, "type": "SSTI", "severity": "Yüksek", "details": "Template injection aritmetik sonuc dondu (49)"})
+                     vulns += 1
+                
+                # ShellShock
+                if "root:x:0:0" in (text or "") and "ShellShock" in p: # payload logic check
+                     self.add(bucket, {"param": key, "payload": p, "type": "RCE", "severity": "Kritik", "details": "/etc/passwd okundu (ShellShock)"})
+                     vulns += 1
+                     
+        self.set_summary(bucket, vulns)
+        return vulns
+
 # Open Redirect
 # ---------------
 
@@ -1374,6 +1461,10 @@ def check_ssrf_advanced(url: str, results: Dict, session, method: str = "GET",
 def check_file_upload_active(results: Dict, session, driver=None, debug: bool = False) -> int:
     return FileUploadActiveCheck(session, results, debug).run(results, driver)
 
+def check_exploit_injection(url: str, results: Dict, session, method: str = "GET",
+                            form_data: Optional[Dict] = None, debug: bool = False) -> int:
+    return ExploitCheck(session, results, debug).run(url, method, form_data)
+
 # -------------------------
 # Brute-force / Rate-limit (login formu varsa)
 # -------------------------
@@ -1467,6 +1558,7 @@ def run_injection_checks(get_url: str, url: str, results: Dict, session, driver=
     total += check_cors_misconfig_active(get_url, results, session, debug)
     total += check_host_header_injection(get_url, results, session, debug)
     total += check_ssti(get_url, results, session, "GET", None, debug)
+    total += check_exploit_injection(get_url, results, session, "GET", None, debug)
 
     total += check_request_smuggling(get_url, results, debug)
     total += check_graphql_introspection(get_url, results, session, debug)
@@ -1480,6 +1572,7 @@ def run_injection_checks(get_url: str, url: str, results: Dict, session, driver=
         total += check_open_redirect(get_url, results, session, "POST", form_data, debug)
         total += check_ssti(get_url, results, session, "POST", form_data, debug)
         total += check_ssrf_advanced(get_url, results, session, "POST", form_data, debug)
+        total += check_exploit_injection(get_url, results, session, "POST", form_data, debug)
 
     forms = results.get("detected_forms") or []
     for fm in forms[:3]:
@@ -1505,8 +1598,9 @@ import re
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-# === reporting entegrasyonu (saklama yok) ===
-if _find_spec("core.reporting") is not None:
+# Opsiyonel raporlama entegrasyonu (circular import kaçınmak için dinamik)
+if _find_spec("websecure.core.reporting") is not None:
+    pass  # İleride burada hook tanımlanabilir
     from websecure.core.reporting import add_result as _core_add_result, redact_sensitive as _core_redact  # type: ignore
 else:
     _core_add_result = None  # type: ignore
@@ -1517,7 +1611,7 @@ else:
 _LAST_MEASURE: Dict[str, Any] = {"timing_ms": None, "headers": None, "text": None}
 
 # --- Config yükle (saklama yok) ---
-if _find_spec("core.utils") is not None:
+if _find_spec("websecure.core.utils") is not None:
     from websecure.core.utils import load_config as _load_config  # type: ignore
     _CFG = _load_config()
     if not isinstance(_CFG, dict):

@@ -203,122 +203,24 @@ async def _run_phase_with_policy(name: str, base_est: int, phase: 'PhaseFn', ctx
         })
         return
 
-        def _should_extend(name: str, attempt: int, timeout_sec: int, cfg: 'RunnerConfig', ctx: 'ScanContext') -> bool:
-            # DIP: confirm_cb varsa karar oradan gelir; patlarsa da sorumluluk callback'te (susturma yok)
-            cb = getattr(cfg, "confirm_cb", None)
-            if callable(cb):
-                return bool(cb(name, attempt, timeout_sec, ctx))
+async def run_plan(plan: 'Plan', ctx: 'ScanContext', cfg: 'Dict'):
+    """
+    Planı sıralı ve politikaya bağlı timeout yönetimiyle çalıştırır.
+    Hata saklama yok: faz içi hatalar 'meta: error' olarak rapora yazılır ve faz biter;
+    run_plan try/except kullanmaz, böylece kontrol akışı sade ve deterministiktir.
+    """
+    # Plan G hook: profil ayarı (rapor metriklerine göre)
+    _ = adjust_scan_mode(get_bucket_results(), cfg)
 
-            decision = getattr(cfg, "on_timeout", None)
-            if decision == "ask" and getattr(cfg, "interactive", False):
-                # Sadece TTY varsa sor; aksi halde uzatma yok
-                import sys
-                if hasattr(sys, "stdin") and sys.stdin is not None and sys.stdin.isatty():
-                    ans = (input(
-                        f"[?] '{name}' zaman aşımına uğradı. Süreyi uzatalım mı? (E/h): ").strip().lower() or "")
-                    return not ans.startswith("h")
-                return False
+    cfg_local = _cfg_from_ctx(ctx)
+    for (name, base_est, phase) in plan:
+        if _is_cancelled(ctx):
+            add_result("meta", {"stage": "phase", "name": name, "status": "cancelled"})
+            _report_flush() # sonuç kovalarını/phase izini kayda geç
+            return
+        # Fazın kendi içinde timeout/hata durumları rapora işlenir;
+        await _run_phase_with_policy(name, base_est, phase, ctx, cfg_local)
 
-            return decision in ("extend", "retry")
-
-        async def _run_phase_with_policy(name: str, base_est: int, phase: 'PhaseFn', ctx: 'ScanContext',
-                                         cfg: 'RunnerConfig') -> None:
-            est = _dynamic_estimate(name, base_est, ctx)
-            attempts = 0
-
-            # progress: start
-            progress_cb = getattr(cfg, "progress_cb", None)
-            if callable(progress_cb):
-                progress_cb("start", name, {"estimate_sec": est})
-
-            t_phase_start = time.time()
-
-            while True:
-                # kritik/iptal kontrolü
-                if _is_cancelled(ctx):
-                    add_result("meta", {"stage": "phase", "name": name, "status": "cancelled"})
-                    return
-
-                log_info(f"\n[i] Aşama: {name}  (~{max(1, est // 60)} dk)")
-
-                task = asyncio.create_task(phase(ctx))
-                done, pending = await asyncio.wait({task}, timeout=est)
-
-                # Zaman aşımı
-                if pending:
-                    for t in pending:
-                        t.cancel()
-
-                    log_warn(f"Aşama '{name}' tahmini sürede bitmedi (timeout={est}s).")
-
-                    max_retries = int(getattr(cfg, "max_retries", 0))
-                    if attempts >= max_retries or not _should_extend(name, attempts + 1, est, cfg, ctx):
-                        # progress: skipped
-                        if callable(progress_cb):
-                            progress_cb("skipped", name, {"attempts": attempts, "reason": "timeout"})
-                        add_result("meta", {
-                            "stage": "phase",
-                            "name": name,
-                            "status": "skipped_timeout",
-                            "duration_sec": round(time.time() - t_phase_start, 2)
-                        })
-                        return
-
-                    # yeniden dene
-                    attempts += 1
-                    extend_factor = float(getattr(cfg, "extend_factor", 1.25))
-                    max_timeout = int(getattr(cfg, "max_timeout_sec", est))
-                    est = min(max_timeout, int(est * max(1.1, extend_factor)))
-                    log_info(f"Tekrar denenecek: '{name}' (yeni timeout={est}s).")
-                    # Not: Coroutine resume edilemez; faz fonksiyonu idempotent olmalı.
-                    continue
-
-                # Tamamlandı: sonucu değerlendir
-                finished = next(iter(done))
-                exc = finished.exception()
-                if exc is not None:
-                    # Hata: saklamıyoruz; rapora yazıp fazı sonlandırıyoruz (plan diğer fazlara devam edebilir)
-                    if callable(progress_cb):
-                        progress_cb("error", name, {"error": str(exc)})
-                    add_result("meta", {
-                        "stage": "phase",
-                        "name": name,
-                        "status": "error",
-                        "error": str(exc),
-                        "duration_sec": round(time.time() - t_phase_start, 2)
-                    })
-                    return
-
-                # Başarılı
-                if callable(progress_cb):
-                    progress_cb("done", name, {"attempts": attempts})
-
-                add_result("meta", {
-                    "stage": "phase",
-                    "name": name,
-                    "status": "done",
-                    "duration_sec": round(time.time() - t_phase_start, 2)
-                })
-                return
-
-        # --------------------------- Ana Koşucu ---------------------------
-        async def run_plan(plan: 'Plan', ctx: 'ScanContext', cfg: 'Dict'):
-            """
-            Planı sıralı ve politikaya bağlı timeout yönetimiyle çalıştırır.
-            Hata saklama yok: faz içi hatalar 'meta: error' olarak rapora yazılır ve faz biter;
-            run_plan try/except kullanmaz, böylece kontrol akışı sade ve deterministiktir.
-            """
-            # Plan G hook: profil ayarı (rapor metriklerine göre)
-            _ = adjust_scan_mode(get_bucket_results(), cfg)
-
-            cfg_local = _cfg_from_ctx(ctx)
-            for (name, base_est, phase) in plan:
-                if _is_cancelled(ctx):
-                    add_result("meta", {"stage": "phase", "name": name, "status": "cancelled"})
-                    flush()  # sonuç kovalarını/phase izini kayda geç
-                    return
-                # Fazın kendi içinde timeout/hata durumları rapora işlenir;
-                await _run_phase_with_policy(name, base_est, phase, ctx, cfg_local)
 
 
 # === PATCH: WebSecure Upgrade (auto-applied) @ 2025-09-07T16:53:43.705200 ===

@@ -631,51 +631,30 @@ def _runner_scanners_file_upload(ctx) -> None:
 
 def _runner_jwt(ctx) -> None:
     mod = _opt_import("scanners.jwt")
-    if not mod:
-        add_result("offensive", {"type": "JWT", "severity": "Bilgi", "reason": "Modül bulunamadı."})
+    if not mod or not hasattr(mod, "JWTScanner"):
+        add_result("offensive", {"type": "JWT", "severity": "Bilgi", "reason": "Modül/Sınıf bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
+
     base_url = getattr(ctx, "url", "")
     sess = getattr(ctx, "session", None)
-    timeout = float(_get(getattr(ctx, "config", {}) or {}, "timeouts.jwt", 8.0))
-    endpoints = (_get(getattr(ctx, "config", {}) or {}, "jwt.endpoints", None)
-                 or _get(getattr(ctx, "config", {}) or {}, "discovery.jwt", None)
-                 or ["/api/me", "/me"])
-    secrets = (_get(getattr(ctx, "config", {}) or {}, "jwt.weak_secrets", None)
-               or _get(getattr(ctx, "config", {}) or {}, "offensive.jwt_attacks.wordlist", None))
+    debug = bool(getattr(ctx, "debug", False))
 
-    if hasattr(mod, "probe_alg_none") and callable(getattr(mod, "probe_alg_none")):
-        for r in mod.probe_alg_none(sess, base_url, endpoints, timeout):
-            add_result("offensive", {
-                "type": "JWT alg=none",
-                "severity": getattr(r, "severity", "Bilgi"),
-                "url": getattr(r, "url", base_url),
-                "reason": getattr(r, "detail", None),
-                "proof": redact_sensitive(getattr(r, "proof", {}))
-            })
+    try:
+        scanner = mod.JWTScanner(session=sess, debug=debug)
+        vulns = scanner.run(base_url)
 
-    if hasattr(mod, "probe_hs256_wordlist") and callable(getattr(mod, "probe_hs256_wordlist")):
-        wl = secrets or getattr(mod, "DEFAULT_WEAK_SECRETS", [])
-        for r in mod.probe_hs256_wordlist(sess, base_url, endpoints, wl, timeout, stop_on_first=True):
-            add_result("offensive", {
-                "type": "JWT HS256 zayıf sırrı",
-                "severity": getattr(r, "severity", "Bilgi"),
-                "url": getattr(r, "url", base_url),
-                "reason": getattr(r, "detail", None),
-                "proof": redact_sensitive(getattr(r, "proof", {}))
-            })
-
-    if hasattr(mod, "probe_rs_to_hs_confusion") and callable(getattr(mod, "probe_rs_to_hs_confusion")):
-        jwks_extra = _get(getattr(ctx, "config", {}) or {}, "jwt.jwks_paths", [])
-        for r in mod.probe_rs_to_hs_confusion(sess, base_url, endpoints, timeout, jwks_extra, stop_on_first=True):
-            add_result("offensive", {
-                "type": "JWT RS→HS alg confusion",
-                "severity": getattr(r, "severity", "Bilgi"),
-                "url": getattr(r, "url", base_url),
-                "reason": getattr(r, "detail", None),
-                "proof": redact_sensitive(getattr(r, "proof", {}))
-            })
+        # Merge results
+        for bucket, findings in scanner.results.items():
+             if bucket.endswith("_summary"): 
+                 continue
+             if isinstance(findings, list):
+                 for item in findings:
+                     add_result("jwt", item)
+        
+        add_result("meta", {"stage": "jwt", "vulns": vulns})
+    except Exception as e:
+        add_result("errors", {"stage": "jwt", "error": str(e)})
 
 def _runner_scanners_ws_fuzz(ctx) -> None:
     """
@@ -826,6 +805,81 @@ def _runner_graphql(ctx) -> None:
     if errors:
         add_result("errors", {"type": "graphql_probes", "errors": errors})
 
+def _runner_passive_recon(ctx) -> None:
+    mod = _opt_import("scanners.passive_recon")
+    if not mod:
+        add_result("discovery", {"type": "Passive Recon", "severity": "Info", "reason": "Module not found"})
+        return
+
+    base_url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+
+    # 1. Content Discovery (Robots, Sitemap, Common Files)
+    if hasattr(mod, "ContentDiscoveryScanner"):
+        cds = mod.ContentDiscoveryScanner(sess)
+        findings = cds.scan(base_url)
+        for f in findings:
+            add_result("discovery", f)
+
+    # 2. Passive JS Analysis
+    if hasattr(mod, "PassiveJSScanner"):
+        pjs = mod.PassiveJSScanner(sess)
+        # Get endpoints from discovery results
+        endpoints = results.get("endpoints", [])
+        # Also include base_url
+        if base_url not in endpoints:
+            endpoints.append(base_url)
+        
+        # Filter for likely JS files or pages that might contain JS
+        # For simplicity, we scan explicitly .js files found
+        js_urls = [u for u in endpoints if u.split('?')[0].endswith(".js")]
+        
+        if js_urls:
+            js_findings = pjs.scan(js_urls)
+            for f in js_findings:
+                add_result("offensive", f) # JS secrets are offensive/vulnerability findings
+
+def _runner_owasp_nuclei(ctx) -> None:
+    mod = _opt_import("scanners.owasp")
+    if not mod:
+         add_result("offensive", {"type": "OWASP", "severity": "Info", "reason": "Module not found"})
+         return
+    run_func = getattr(mod, "run_owasp_and_nuclei", None)
+    if not callable(run_func):
+         add_result("offensive", {"type": "OWASP", "severity": "Info", "reason": "run function not found"})
+         return
+
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+    session = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    cfg = getattr(ctx, "config", {}) or {}
+    debug = bool(getattr(ctx, "debug", False))
+    auth_ctx = getattr(ctx, "auth_ctx", None)
+    
+    # Run
+    run_func(url, results, session, config=cfg, debug=debug, auth_ctx=auth_ctx)
+    add_result("meta", {"stage": "owasp_nuclei", "status": "completed"})
+
+
+
+def _runner_rate_limit(ctx) -> None:
+    mod = _opt_import("scanners.rate_limit")
+    if not mod:
+        add_result("offensive", {"type": "Rate Limit", "severity": "Bilgi", "reason": "Modül bulunamadı."})
+        return
+    
+    # Initialize scanner
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
+    sess = getattr(ctx, "session", None)
+    
+    if hasattr(mod, "RateLimitScanner"):
+        scanner = mod.RateLimitScanner(sess, debug=bool(getattr(ctx, "debug", False)))
+        scanner.run(base_url)
+    elif hasattr(mod, "run"):
+        # Functional variant
+        mod.run(sess, base_url, getattr(ctx, "results", {}))
+
 # ----------------------------- Plan oluşturucu -----------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -837,69 +891,109 @@ def _offensive_phases(ctx) -> List[Phase]:
     mode = str(getattr(ctx, "mode", getattr(getattr(ctx, "config", {}), "mode", "")).upper())
     if mode in ("AGGRESSIVE","DEEP"):
         base_enabled = True
-    def _flag(key: str, default: bool = False) -> bool:
-        # Fazlar yalnızca offensive.enabled=true ise değerlendirilir
-        return base_enabled and bool(_get(off, f"{key}.enabled", default))
+    # [Smart Tactics] "Avcı" Modu ve Derinlemesine Analiz
+    detected_techs = getattr(ctx, "technologies", []) or []
+    
+    def _flag(key: str, default: bool = False, tech_trigger: str = None) -> bool:
+        """
+        Phase etkinleştirme mantığı:
+        1. Config'de AÇIK ise -> True
+        2. Config'de KAPALI ise -> False (Kullanıcı explicit olarak kapattıysa saygı duy)
+        3. Config'de BELİRSİZ ise:
+           a. İlgili teknoloji tespit edildiyse -> TRUE (Smart Activation)
+           b. Profil Aggressive/Deep ise -> TRUE
+           c. Varsayılan (default) -> ...
+        """
+        
+        # 1. Config Check (Explicit)
+        user_val = _get(off, f"{key}.enabled")
+        if user_val is False:
+             return False # Kullanıcı ısrarla kapatmış
+        if user_val is True:
+             return True # Kullanıcı ısrarla açmış
+             
+        # 2. Smart Tech Trigger
+        if tech_trigger and tech_trigger in detected_techs:
+             print(f"[Smart Tactics] '{key}' modülü, '{tech_trigger}' algoritması tespit edildiği için OTOMATİK etkinleştirildi.")
+             return True
+             
+        # 3. Profile/Default Fallback
+        return base_enabled and default
 
     phases: List[Phase] = [
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
+        Phase(id="passive_recon", title="Pasif Keşif & JS Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive", "js"]),
         Phase(id="fuzz_param_discovery", title="Parametre Keşfi & Fuzz", enabled=True, runner=lambda c: _safe(c, lambda: _runner_fuzz_and_param_discovery(c), "fuzz_param_discovery"), tags=["fuzz","inputs"]),
         Phase(
             id="scanners.ssrf_xxe",
             title="SSRF/XXE",
-            enabled=_flag("scanners.ssrf_xxe"),
+            enabled=_flag("scanners.ssrf_xxe", default=True), # Deep profilde varsayılan açık olsun
             runner=lambda c: _safe(c, lambda: _runner_scanners_ssrf_xxe(c), "scanners.ssrf_xxe"),
             tags=["active", "oast"],
         ),
         Phase(
             id="scanners.request_smuggling",
             title="HTTP Request Smuggling",
-            enabled=_flag("scanners.request_smuggling", True),
+            enabled=_flag("scanners.request_smuggling", default=True),
             runner=lambda c: _safe(c, lambda: _runner_scanners_request_smuggling(c), "scanners.request_smuggling"),
             tags=["active", "http"],
         ),
         Phase(
             id="mass_assignment",
             title="Mass Assignment",
-            enabled=_flag("mass_assignment", True),
+            enabled=_flag("mass_assignment", default=True, tech_trigger="rest_api"),
             runner=lambda c: _safe(c, lambda: _runner_mass_assignment(c), "mass_assignment"),
             tags=["api", "json"],
         ),
         Phase(
             id="nosqli",
             title="NoSQL Injection",
-            enabled=_flag("nosqli"),
+            enabled=_flag("nosqli", default=True, tech_trigger="rest_api"), # API varsa NoSQL riski yüksek
             runner=lambda c: _safe(c, lambda: _runner_nosqli(c), "nosqli"),
             tags=["api", "query"],
         ),
         Phase(
             id="scanners.file_upload",
             title="File Upload Abuse",
-            enabled=_flag("scanners.file_upload"),
+            enabled=_flag("scanners.file_upload", default=True),
             runner=lambda c: _safe(c, lambda: _runner_scanners_file_upload(c), "scanners.file_upload"),
             tags=["upload", "ct"],
         ),
         Phase(
             id="jwt",
             title="JWT Manipülasyonları",
-            enabled=_flag("jwt", True),
+            enabled=_flag("jwt", default=True, tech_trigger="rest_api"),
             runner=lambda c: _safe(c, lambda: _runner_jwt(c), "jwt"),
             tags=["auth", "token"],
         ),
         Phase(
             id="scanners.ws_fuzz",
             title="WebSocket Fuzz",
-            enabled=_flag("scanners.ws_fuzz", True),
+            enabled=_flag("scanners.ws_fuzz", default=True),
             runner=lambda c: _safe(c, lambda: _runner_scanners_ws_fuzz(c), "scanners.ws_fuzz"),
             tags=["ws", "realtime"],
         ),
-        Phase(id="races", title="Race/Concurrency", enabled=_flag("races", True), runner=lambda c: _safe(c, lambda: _runner_business_logic_races(c), "races"), tags=["race","concurrency"]),
+        Phase(id="races", title="Race/Concurrency", enabled=_flag("races", default=True), runner=lambda c: _safe(c, lambda: _runner_business_logic_races(c), "races"), tags=["race","concurrency"]),
         Phase(
             id="scanners.graphql_attacks",
             title="GraphQL Saldırı Seti",
-            enabled=_flag("graphql_attacks", True),
+            enabled=_flag("graphql_attacks", default=True, tech_trigger="graphql"),
             runner=lambda c: _safe(c, lambda: _runner_graphql(c), "scanners.graphql_attacks"),
             tags=["graphql", "api"],
+        ),
+        Phase(
+            id="scanners.rate_limit",
+            title="Rate Limit & Throttling",
+            enabled=_flag("rate_limit", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_rate_limit(c), "scanners.rate_limit"),
+            tags=["infra", "dos"],
+        ),
+        Phase(
+            id="owasp_and_nuclei",
+            title="OWASP & Nuclei",
+            enabled=_flag("owasp_nuclei", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_owasp_nuclei(c), "owasp_and_nuclei"),
+            tags=["active", "signatures"],
         ),
         Phase(id="verify_and_score", title="Doğrulama & Skorlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_verify_and_score(c), "verify_and_score"), tags=["verify","score"]),
         Phase(id="reporting", title="Raporlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_reporting_and_integration(c), "reporting"), tags=["report"])
@@ -1007,6 +1101,29 @@ def run_discovery(ctx):
         except Exception as e:
             add_result("errors", {"stage": "discovery_fallback", "error": str(e)})
 
+    # --- Smart Tactics Analysis ---
+    if isinstance(results, dict):
+        techs = set()
+        endpoints = results.get("endpoints", []) or []
+        
+        # GraphQL Detection
+        if any("graphql" in u or "gql" in u for u in endpoints):
+            techs.add("graphql")
+        
+        # API Detection (REST/JSON)
+        if any("/api/" in u for u in endpoints) or any(u.endswith(".json") for u in endpoints):
+            techs.add("rest_api")
+        
+        # CMS / Framework
+        if any("wp-content" in u or "wp-json" in u for u in endpoints):
+            techs.add("wordpress")
+            
+        # Store in context for build_plan
+        ctx.technologies = list(techs)
+        if techs:
+             add_result("meta", {"stage": "smart_analysis", "detected_technologies": list(techs)})
+             print(f"[Smart Tactics] Algılanan Teknolojiler: {', '.join(techs)}")
+
     eps = len((results.get("endpoints") or [])) if isinstance(results, dict) else 0
     add_result("phase_event", {"phase": "discovery", "checked": eps})
     return _mk_result("discovery", "ok", {"endpoints": eps})
@@ -1035,7 +1152,9 @@ def run_portscan(ctx):
 def run_tls(ctx):
     """TLS taraması: scan_tls_quick(url|[url])"""
     from websecure.scanners.tls import scan_tls_quick as _scan_tls_quick
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return _mk_result("tls", "skipped:no-url")
     _scan_tls_quick(url)
     return _mk_result("tls", "ok")
 
@@ -1044,9 +1163,11 @@ def run_security_headers(ctx):
     """Güvenlik başlıkları: scan(session, endpoints, results, debug=False, config=None)"""
     from websecure.scanners.headers import scan as _scan_headers
     session = getattr(ctx, "session", None)
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return _mk_result("security_headers", "skipped:no-url")
     results = getattr(ctx, "results", None) or {}
-    endpoints = [url] if url else []
+    endpoints = [url]
     _scan_headers(session, endpoints, results, debug=False, config=getattr(ctx, "config", None))
     return _mk_result("security_headers", "ok")
 
@@ -1067,27 +1188,31 @@ def run_offensive(ctx):
         add_result("offensive", {"type": "discovery_feed", "count": 0, "note": "checked_none"})
 
     # Consolidated Offensive Phase
-    # Note: We now assume scanners are more autonomous or we use valid logic
     from websecure.scanners.jwt import JWTScanner
     from websecure.scanners.graphql import GraphQLScanner
     from websecure.scanners.ssrf_xxe import SSRFScanner
-    # Other legacy scanners (_ma, _nq etc.) left as is if they exist, or removed if deleted.
-    # Assuming _ws_fuzz etc are still there.
     
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return _mk_result("offensive", "skipped:no-url")
+
     # Run JWT
-    jwt_s = JWTScanner(ctx.session, ctx.base_url)
-    jwt_s.run(ctx.base_url) 
+    jwt_s = JWTScanner(ctx.session, getattr(ctx, "results", None))
+    jwt_s.run(url) 
     metrics["jwt"] = 1
 
     # Run GraphQL
-    # Try discovery on base_url
-    gql_s = GraphQLScanner(ctx.session)
-    gql_s.run(ctx.base_url)
+    gql_s = GraphQLScanner(ctx.session, getattr(ctx, "results", None))
+    gql_s.run(url)
     metrics["graphql"] = 1
 
     # Run SSRF
-    ssrf_s = SSRFScanner(ctx.session)
-    ssrf_s.run(ctx.base_url)
+    # SSRFScanner expects endpoints in init and run() takes no args
+    ssrf_s = SSRFScanner(ctx.session, [url])
+    # Manually inject results dict because SSRFScanner creates its own if not passed (and it doesn't take it in init)
+    if getattr(ctx, "results", None) is not None:
+        ssrf_s.results = ctx.results
+    ssrf_s.run()
     metrics["ssrf"] = 1
 
     return _mk_result("offensive", "ok", metrics)

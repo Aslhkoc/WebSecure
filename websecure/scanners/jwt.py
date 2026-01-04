@@ -3,6 +3,9 @@ import json
 import base64
 import logging
 import re
+import os
+import hmac
+import hashlib
 from typing import Dict, List, Optional
 from .base import BaseScanner
 
@@ -66,6 +69,9 @@ class JWTScanner(BaseScanner):
                 self.add(bucket, {"type": "JWT Null Signature", "severity": "Critical", "details": "Accepted null signature"})
                 vulns += 1
 
+            # HS256 Brute Force
+            vulns += self._attack_hs256_brute(header, payload, token, bucket)
+
         except Exception as e:
             logger.debug(f"JWT Scan Error: {e}")
         return vulns
@@ -82,6 +88,38 @@ class JWTScanner(BaseScanner):
         # Keep alg but remove signature bytes
         token = f"{self._b64e(json.dumps(header))}.{self._b64e(json.dumps(payload))}."
         return self._verify_access(url, token)
+
+    def _attack_hs256_brute(self, header: Dict, payload: Dict, token_str: str, bucket: str) -> int:
+        if header.get('alg', '').upper() != 'HS256':
+            return 0
+        
+        candidates = []
+        # Try standard locations
+        paths = ["wordlists/jwt_secrets.txt", "wordlists_custom/jwt_secrets.txt"]
+        for p in paths:
+             if os.path.exists(p):
+                 try:
+                     with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                         candidates.extend(line.strip() for line in f if line.strip())
+                 except: pass
+        if not candidates:
+             candidates = ["secret", "123456", "password", "jwt", "test"]
+
+        parts = token_str.split('.')
+        msg = f"{parts[0]}.{parts[1]}".encode()
+        original_sig = parts[2]
+        
+        for secret in candidates:
+            # Calculate signature
+            sig = base64.urlsafe_b64encode(hmac.new(secret.encode(), msg, hashlib.sha256).digest()).decode().rstrip("=")
+            if sig == original_sig:
+                 self.add(bucket, {
+                     "type": "JWT Weak Secret", 
+                     "severity": "Critical", 
+                     "details": f"HS256 secret cracked: '{secret}'"
+                 })
+                 return 1
+        return 0
 
     def _verify_access(self, url: str, token: str) -> bool:
         try:

@@ -335,6 +335,11 @@ class ScanContext:
         if self.results is None:
             self.results = {}
 
+    @property
+    def endpoints(self):
+        return self.results.get("endpoints", [])
+
+
 
 # ------------------------- Raporlama köprüleri -------------------------
 def _report(bucket: str, item: Dict[str, Any]) -> None:

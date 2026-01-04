@@ -11,6 +11,8 @@ from collections import defaultdict
 import os, json, html
 from typing import Any, Dict, List
 from websecure.core.ci_gate import should_fail_ci
+from websecure.core.alerts import AlertManager
+
 
 # [AUTO-CLEANUP] removed duplicate def '_ensure_dir' defined at lines 14-15
 
@@ -327,6 +329,68 @@ def add_result(bucket: str, item: Any) -> None:
             _buckets[bucket] = []
         _buckets[bucket].append(safe_it)
 
+        # --- Audio Alert Logic ---
+        # Check severity (supports English and Turkish normalized severities)
+        sev = str(safe_it.get("severity") or "").lower()
+        if any(s in sev for s in ["critical", "kritik"]):
+            AlertManager.play_critical()
+        elif any(s in sev for s in ["high", "yüksek", "yuksek"]):
+            AlertManager.play_high()
+        if any(s in sev for s in ["low", "düşük", "dusuk"]):
+            AlertManager.play_low()
+
+        # --- Console Visual Alert ---
+        _console_alert(bucket, safe_it)
+
+
+def _console_alert(bucket: str, item: Dict[str, Any]) -> None:
+    """Print a real-time 'Kill Cam' style alert to the terminal."""
+    sev = str(item.get("severity") or "Info").lower()
+    
+    # Only alert on Medium or higher (avoid noise)
+    important = ["critical", "kritik", "high", "yüksek", "yuksek", "medium", "orta"]
+    if not any(s in sev for s in important):
+        return
+
+    # Colors (ANSI)
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    
+    color = YELLOW
+    if "critical" in sev or "kritik" in sev:
+        color = RED
+    elif "high" in sev or "yüksek" in sev:
+        color = RED
+    elif "medium" in sev:
+        color = YELLOW
+        
+    icon = "[!]"
+    if "critical" in sev: icon = "[⚡]"
+    elif "high" in sev: icon = "[🔥]"
+    elif "medium" in sev: icon = "[⚠️]"
+
+    title = item.get("type") or item.get("title") or "Vulnerability"
+    url = item.get("url") or item.get("target") or "N/A"
+    payload = item.get("payload") or "N/A"
+    
+    # Forensic Data
+    evidence = item.get("evidence")
+    if isinstance(evidence, dict):
+        # Extract response snippet if available
+        # logic to extract specific evidence if needed
+        pass
+
+    print(f"\n{color}{BOLD}{icon} {title.upper()} DETECTED!{RESET}")
+    print(f"{color} ├─ Target:  {url}{RESET}")
+    print(f"{color} ├─ Payload: {payload}{RESET}")
+    print(f"{color} └─ Severity: {sev.upper()}{RESET}\n")
+
+
+
 
 def get_results() -> Dict[str, List[Dict[str, Any]]]:
     with _lock:
@@ -544,11 +608,11 @@ def _short_poc(s: str) -> str:
 
 def _norm_sev_tr(s: str | None) -> str:
     s = (s or "Bilgi").strip().lower()
-    if s in ("kritik",): return "Kritik"
-    if s in ("yüksek", "high", "severe"): return "Yüksek"
-    if s in ("orta", "medium"): return "Orta"
-    if s in ("düşük", "low"): return "Düşük"
-    return "Bilgi"
+    if s in ("kritik", "critical", "crit"): return "🔴 KRİTİK"
+    if s in ("yüksek", "high", "severe"): return "🟠 YÜKSEK"
+    if s in ("orta", "medium", "med"): return "🟡 ORTA"
+    if s in ("düşük", "low"): return "🔵 DÜŞÜK"
+    return "⚪ BİLGİ"
 
 
 def _sev_rank(s: str | None) -> int:
@@ -723,10 +787,54 @@ def _render_ports(results: Dict) -> str:
     return "\n".join(out)
 
 
+def _render_ssl_table(results: Dict) -> str:
+    """Renders SSL/TLS certificate details if available."""
+    tls = results.get("tls") or {}
+    cert = tls.get("certificate") or {}
+    if not cert:
+        return ""
+
+    out = []
+    out.append("## SSL/TLS Yapılandırma Detayları")
+    out.append("")
+    # Main table
+    out.append("| Özellik | Değer |")
+    out.append("|-|-|")
+    
+    valid_icon = "✅ Geçerli" if cert.get("valid") else "❌ Geçersiz"
+    out.append(f"| Durum | {valid_icon} |")
+    
+    # Common Name & Issues
+    out.append(f"| Subject CN | `{cert.get('subject_CN') or 'Unknown'}` |")
+    out.append(f"| Issuer CN | `{cert.get('issuer_CN') or 'Unknown'}` |")
+    out.append(f"| Issuer Org | `{cert.get('issuer_O') or '-'}` |")
+    
+    # Dates
+    out.append(f"| Başlangıç (Not Before) | `{cert.get('not_before') or '-'}` |")
+    out.append(f"| Bitiş (Not After) | `{cert.get('not_after') or '-'}` |")
+    
+    days = cert.get("days_remaining")
+    days_str = f"{days} gün" if isinstance(days, int) else "-"
+    out.append(f"| Kalan Süre | {days_str} |")
+    
+    # Technical
+    out.append(f"| TLS Sürümü | `{cert.get('tls_version') or '-'}` |")
+    out.append(f"| Parmak İzi (SHA256) | `{cert.get('fingerprint') or '-'}` |")
+    
+    # Problems if any
+    probs = cert.get("problems") or []
+    if probs:
+        out.append(f"| **Problemler** | {'<br>'.join(probs)} |")
+        
+    out.append("")
+    return "\n".join(out)
+
+
 def render_markdown_report(results: Dict) -> str:
     # Hazırlık
     items_raw = _coerce_final(results)
     items = _dedupe_findings(items_raw)
+    proofs = _collect_http_proofs(results)  # Collect proofs for associating responses
     items.sort(key=lambda i: (
     -_sev_rank(i.get("severity")), -(i.get("score") or 0), str(i.get("type") or ""), str(i.get("url") or "")))
 
@@ -900,6 +1008,12 @@ def render_markdown_report(results: Dict) -> str:
         lines.append("")
         lines.append(ports_md)
 
+    # SSL/TLS Table
+    ssl_md = _render_ssl_table(results)
+    if ssl_md:
+         lines.append("")
+         lines.append(ssl_md)
+
     # Risk Matrisi
     lines.append("")
     lines.append(_render_risk_matrix(items))
@@ -949,6 +1063,36 @@ def render_markdown_report(results: Dict) -> str:
             lines.append(f"| Benzer Paramlar | `{esc_md(json.dumps(it['similar_params'], ensure_ascii=False))}` |")
         if (it.get("evidence") or {}).get("callback_type"):
             lines.append(f"| Callback | `{esc_md(it['evidence']['callback_type'])}` |")
+            
+        # --- FORENSIC EVIDENCE (New Standard) ---
+        ev = it.get("evidence")
+        if isinstance(ev, dict):
+            lines.append("")
+            lines.append("**Forensic Evidence (Kill Cam)**")
+            lines.append("<details open><summary>Request & Response Details</summary>")
+            lines.append("")
+            
+            # Request
+            req_url = ev.get("request_url") or ev.get("url") or it.get("url")
+            req_body = ev.get("request_body")
+            lines.append(f"**Target:** `{req_url}`")
+            if req_body:
+                 lines.append("**Request Body:**")
+                 lines.append("```json")
+                 lines.append(str(req_body))
+                 lines.append("```")
+            
+            # Response
+            code = ev.get("response_status")
+            snippet = ev.get("response_snippet")
+            if code or snippet:
+                lines.append(f"**Response** (Status: {code or 'Unknown'})")
+                if snippet:
+                    lines.append("```http")
+                    lines.append(str(snippet))
+                    lines.append("```")
+            lines.append("</details>")
+            lines.append("")
 
         poc_block = ((it.get("poc") or it.get("payload") or it.get("evidence") or "")).strip()
         if poc_block:
@@ -997,6 +1141,33 @@ def render_markdown_report(results: Dict) -> str:
             lines.append("```bash")
             lines.append(curl_cmd)
             lines.append("```")
+
+        # --- NEW: Server Response Data ---
+        best_proof = _pick_best_proof(it, proofs)
+        if best_proof:
+            resp_head = str(best_proof.get("response_head") or "").strip()
+            # Try getting body from different possible fields
+            resp_body = str(best_proof.get("response_body") or best_proof.get("response") or "").strip()
+            
+            if resp_head or resp_body:
+                lines.append("")
+                lines.append("**Sunucu Cevabı (Snapshot)**")
+                lines.append("<details>")
+                lines.append("<summary>Cevabı Göster (Headers & Body)</summary>")
+                lines.append("")
+                if resp_head:
+                    lines.append("**Headers**")
+                    lines.append("```http")
+                    lines.append(resp_head)
+                    lines.append("```")
+                if resp_body:
+                    lines.append("**Body (Preview)**")
+                    lines.append("```html")
+                    lines.append(resp_body[:4096] + ("..." if len(resp_body) > 4096 else ""))
+                    lines.append("```")
+                lines.append("</details>")
+
+            
             # Repro Steps (genel)
             lines.append("")
             lines.append("**Yeniden Üretim Adımları**")

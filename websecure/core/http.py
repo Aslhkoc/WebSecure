@@ -187,11 +187,30 @@ def _on_429(headers: Dict[str, str]) -> None:
     new_rps = max(_HTTP_POLICY["rate_limit"]["min_rps"], int(max(1, rps * factor)))
     _CURRENT_RPS.set(new_rps)
     ra = _parse_retry_after(headers) if _HTTP_POLICY["rate_limit"]["respect_retry_after"] else None
-    if ra is not None and ra > 0:
-        print(f"[HTTP] 429 detected → backoff RPS {rps}→{new_rps}; sleeping {ra:.1f}s")
-        time.sleep(ra)
-    else:
-        print(f"[HTTP] 429 detected → backoff RPS {rps}→{new_rps}")
+    
+    wait_time = ra if (ra is not None and ra > 0) else 5.0
+    print(f"[HTTP] Backoff triggered -> RPS {rps}→{new_rps}; sleeping {wait_time:.1f}s")
+    time.sleep(wait_time)
+
+def _try_rotate_identity(session_obj) -> bool:
+    """
+    Attempts to rotate Tor identity and updates the session proxies.
+    Returns True if rotation signal sent successfully.
+    """
+    try:
+        from websecure.core.tor_manager import rotate_tor_identity, get_tor_proxy
+        if rotate_tor_identity():
+            # Refresh proxy usage in session just in case
+            proxy = get_tor_proxy()
+            if proxy:
+                session_obj.proxies.update(proxy)
+            return True
+    except ImportError:
+        # Fallback if module missing
+        pass
+    except Exception as e:
+        print(f"[Autopilot] Rotation failed: {e}")
+    return False
 
 def _maybe_recover_from_backoff() -> None:
     global _LAST_CANARY_TS
@@ -209,26 +228,75 @@ def _maybe_recover_from_backoff() -> None:
         print(f"[HTTP] canary → RPS {rps}→{_CURRENT_RPS.get()} (phase={ACTIVE_PHASE.get()})")
 
 def _smart_request(self, method, url, **kwargs):
-    phase = ACTIVE_PHASE.get()
-    hdrs = dict(kwargs.get("headers", {}) or {})
-    identity_headers = _choose_identity_for_phase(phase)
-    for k, v in identity_headers.items():
-        if k not in hdrs:
-            hdrs[k] = v
-    method_u = str(method).upper()
-    post_ratio_ok = kwargs.pop("_post_ratio_ok", False)
-    if not _respect_idempotent_first(phase, method_u, post_ratio_ok):
-        raise RuntimeError(f"Non-idempotent method blocked by policy in phase '{phase}': {method_u}")
-    kwargs["headers"] = hdrs
-    _sleep_for_rps()
-    resp = super(type(self), self).request(method, url, **kwargs)
-    if resp.status_code == 429:
-        _on_429(dict(resp.headers))
-    else:
-        rem = _observe_rate_headers(dict(resp.headers))
-        if rem is not None and rem > 0:
-            _maybe_recover_from_backoff()
-    return resp
+        phase = ACTIVE_PHASE.get()
+        # Initial identity setup
+        hdrs = dict(kwargs.get("headers", {}) or {})
+        identity_headers = _choose_identity_for_phase(phase)
+        for k, v in identity_headers.items():
+            if k not in hdrs:
+                hdrs[k] = v
+        
+        # Policy checks
+        method_u = str(method).upper()
+        post_ratio_ok = kwargs.pop("_post_ratio_ok", False)
+        if not _respect_idempotent_first(phase, method_u, post_ratio_ok):
+            raise RuntimeError(f"Non-idempotent method blocked by policy in phase '{phase}': {method_u}")
+        
+        kwargs["headers"] = hdrs
+        
+        # --- IMMORTAL LOOP: Auto-Heal & Retry ---
+        max_retries = 3  # How many times to rotate IP before giving up on THIS specific URL
+        attempt = 0
+        
+        while attempt <= max_retries:
+            attempt += 1
+            _sleep_for_rps()
+            
+            try:
+                resp = super(type(self), self).request(method, url, **kwargs)
+                status = resp.status_code
+                
+                # Check for BAN / Rate Limit
+                if status in (403, 429):
+                    print(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries+1}...")
+                    
+                    # If it's a hard ban (403) or severe limit (429), try to ROTATE Identity
+                    if attempt <= max_retries:
+                         # Trigger rotation logic
+                         rotated = _try_rotate_identity(self)
+                         if rotated:
+                             print("[Autopilot] Identity rotated successfully. Retrying request...")
+                             # Update current request headers with new identity if needed
+                             new_ident = _choose_identity_for_phase(phase) # Re-roll user agent etc.
+                             kwargs["headers"].update(new_ident)
+                             continue # Retry loop
+                         else:
+                             # Rotation failed (maybe no Tor), perform standard backoff
+                             _on_429(dict(resp.headers))
+                             # Retry once more after backoff?
+                             continue
+                    
+                    # If we ran out of attempts, just return the blocked response
+                    return resp
+
+                # Success or Normal Error (404, 500 etc)
+                # Check for rate limit recovery headers
+                rem = _observe_rate_headers(dict(resp.headers))
+                if rem is not None and rem > 0:
+                    _maybe_recover_from_backoff()
+                    
+                return resp
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                # Connection died? Likely Tor rotating or network blip.
+                print(f"[Autopilot] Connection lost ({str(e)}). Retrying...")
+                if attempt <= max_retries:
+                    time.sleep(2) # Brief pause
+                    continue
+                raise e # Give up
+        
+        return resp # Should not be reached logic-wise but safe fallback
+
 import contextvars
 import json
 import logging
@@ -954,6 +1022,15 @@ class HttpClient:
 
         # Sürücü seçimi
         driver = str(http_cfg.get("driver", "requests")).strip().lower()
+        
+        # WAF Mode: Force HTTPX if available (HTTP/2 Bypass)
+        waf_enabled = self.cfg.get("waf", {}).get("enabled", False)
+        if waf_enabled and _HTTPX_AVAILABLE:
+            if driver != "httpx":
+                 # Log only if we are actually switching
+                 pass 
+            driver = "httpx"
+
         if driver == "httpx" and not _HTTPX_AVAILABLE:
             driver = "requests"
         self.driver_name = driver

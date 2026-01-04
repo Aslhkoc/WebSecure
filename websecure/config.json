@@ -16,7 +16,7 @@
   "target": "https://target.local",
   "base_url": "https://target.local",
   "mode": "normal",
-  "timeout": 15,
+  "timeout": 45,
   "tls_verify": true,
   "user_agent": "WebSecScanner/1.2 ",
   "tls": {
@@ -178,7 +178,7 @@
   "http": {
     "insecure_skip_verify": false,
     "retries": 5,
-    "timeout_seconds": 20,
+    "timeout_seconds": 45,
     "retry_allowed_methods": [
       "HEAD",
       "GET",
@@ -469,9 +469,9 @@
     }
   },
   "crawl": {
-    "max_depth": 10,
-    "max_pages": 5000,
-    "timeout_http": 12,
+    "max_depth": 15,
+    "max_pages": 15000,
+    "timeout_http": 30,
     "fingerprint_head_count": 25,
     "use_browser": true,
     "allow_paths": [],
@@ -595,6 +595,38 @@
     },
     "workers": 200
   },
+  "scanners": {
+    "nosqli": {
+      "endpoints": [
+        "https://juice-shop.herokuapp.com/rest/products/search?q=1",
+        "https://juice-shop.herokuapp.com/api/Users",
+        "https://juice-shop.herokuapp.com/rest/user/login"
+      ],
+      "params": [
+        "q",
+        "email",
+        "password",
+        "id"
+      ]
+    },
+    "ssrf_xxe": {
+      "scan_endpoints": [
+        "https://juice-shop.herokuapp.com/ftp/package.json.bak%2500.md",
+        "https://juice-shop.herokuapp.com/profile/image/url"
+      ]
+    },
+    "sqli": {
+      "enabled": true
+    },
+    "xss": {
+      "enabled": true
+    },
+    "mass_assignment": {
+      "endpoints": [
+        "https://juice-shop.herokuapp.com/api/Users"
+      ]
+    }
+  },
   "authenticated": {
     "session_ttl_seconds": 3600,
     "endpoint_workers": 6,
@@ -623,9 +655,9 @@
     "verify_tls": true
   },
   "fuzz": {
-    "per_param": 4,
-    "max_total": 150,
-    "rate_ms": 100,
+    "per_param": 50,
+    "max_total": 2500,
+    "rate_ms": 150,
     "stop_on_high": false,
     "extra_words": [
       "redirect_uri",
@@ -1119,15 +1151,15 @@
     "extra_args": []
   },
   "crawler": {
-    "max_pages": 200,
-    "timeout_ms": 20000,
+    "max_pages": 1000,
+    "timeout_ms": 30000,
     "record_dir": "./records",
     "browser": {
-      "headless": true
+      "headless": false
     },
-    "headless": true,
-    "max_per_template": 3,
-    "max_depth": 3,
+    "headless": false,
+    "max_per_template": 10,
+    "max_depth": 8,
     "deny_regex": [
       "/(bolum|episode)/\\d+",
       "/(dizi|series|show|tv)/[^/]+/(sezon|season|s\\d+)/(bolum|episode|e\\d+)",
@@ -1140,13 +1172,14 @@
   },
   "ffuf": {
     "wordlist": "./wordlists/raft-small-words.txt",
-    "bin": "ffuf",
+    "bin": "./tools/ffuf/ffuf.exe",
     "wordlists": [
       "./wordlists/dirs.txt",
       "./wordlists/files.txt"
     ]
   },
   "feroxbuster": {
+    "bin": "./tools/feroxbuster/feroxbuster.exe",
     "wordlist": "./wordlists/raft-small-words.txt"
   },
   "verify_tls": true,
@@ -1322,14 +1355,14 @@
       "profile": "chrome_120",
       "mode": "curl",
       "bin_map": {
-        "chrome_120": "curl_chrome120",
-        "chrome_121": "curl_chrome121",
-        "chrome_122": "curl_chrome122",
-        "chrome_123": "curl_chrome123",
-        "chrome_124": "curl_chrome124",
-        "firefox_115": "curl_ff115",
-        "firefox_120": "curl_ff120",
-        "firefox_128": "curl_ff128"
+        "chrome_120": "./tools/curl/bin/curl.exe",
+        "chrome_121": "./tools/curl/bin/curl.exe",
+        "chrome_122": "./tools/curl/bin/curl.exe",
+        "chrome_123": "./tools/curl/bin/curl.exe",
+        "chrome_124": "./tools/curl/bin/curl.exe",
+        "firefox_115": "./tools/curl/bin/curl.exe",
+        "firefox_120": "./tools/curl/bin/curl.exe",
+        "firefox_128": "./tools/curl/bin/curl.exe"
       }
     },
     "headers": {
@@ -1339,11 +1372,11 @@
   },
   "traffic": {
     "rate_limit": {
-      "host_rps": 6,
-      "jitter_ms_min": 120,
-      "jitter_ms_max": 400,
-      "burst": 8,
-      "keepalive_pool": 6
+      "host_rps": 20,
+      "jitter_ms_min": 50,
+      "jitter_ms_max": 200,
+      "burst": 30,
+      "keepalive_pool": 20
     }
   },
   "remote_workers": {
@@ -1355,15 +1388,15 @@
   },
   "anti_blocking": {
     "http": {
-      "rps": 1.5,
+      "rps": 10.0,
       "jitter_ms": [
-        120,
-        300
+        50,
+        150
       ],
-      "max_extra_delay_ms": 1200,
-      "backoff_factor": 2.5,
+      "max_extra_delay_ms": 500,
+      "backoff_factor": 1.5,
       "idempotent_only_unauth": true,
-      "burst": 4,
+      "burst": 20,
       "respect_retry_after": true,
       "suppress_non_idempotent_at_start": true
     },
@@ -1464,19 +1497,6 @@
       9200
     ]
   },
-  "scanners": {
-    "xss": true,
-    "sqli": true,
-    "jwt": true,
-    "nosqli": true,
-    "graphql": true,
-    "request_smuggling": false,
-    "mass_assignment": true,
-    "ssrf_xxe": true,
-    "headers": true,
-    "tls": true,
-    "authorization": false
-  },
   "wordlists": {
     "xss": "./wordlists_custom/custom/xss.txt",
     "sqli": "./wordlists_custom/custom/sqli.txt"
@@ -1492,4 +1512,3 @@
     }
   }
 }
-```

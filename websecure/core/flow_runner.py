@@ -77,9 +77,15 @@ def _ws_import_any(*names: str):
         if not isinstance(n, str) or not n.strip():
             continue
         try:
-            if _ws_imp_util.find_spec(n) is not None:
+            # Fix: find_spec can raise AttributeError if parent is not a package
+            try:
+                spec = _ws_imp_util.find_spec(n)
+            except (AttributeError, ImportError, ValueError):
+                spec = None
+                
+            if spec is not None:
                 return importlib.import_module(n)
-        except (AttributeError, ValueError):
+        except (AttributeError, ValueError, ImportError):
             # Fallback for shadowed module names or invalid paths
             try:
                 if "." not in n:
@@ -493,7 +499,12 @@ def run_blind_param_fuzz_extended(ctx, *, event_cb: Optional[Callable[[str, Dict
     emit('phase.start', {'name': 'blind_param_fuzz'})
 
     import requests as _rq
-    r0 = getattr(ctx, 'session', _rq.Session()).get(getattr(ctx, 'url', ''), timeout=20)
+    url = getattr(ctx, 'url', None) or getattr(ctx, 'base_url', None)
+    if not url:
+        add_result('meta', {'stage': 'blind_param_fuzz', 'status': 'skipped:no-url'})
+        return
+
+    r0 = getattr(ctx, 'session', _rq.Session()).get(url, timeout=20)
     baseline = {'len': len(r0.text or ''), 'time_samples': [r0.elapsed.total_seconds() * 1000], 'body': r0.text}
 
     cfg = getattr(ctx, 'config', {}) or {}
@@ -655,6 +666,34 @@ def run_discovery_extended(ctx, *, event_cb: Optional[Callable[[str, Dict[str, A
          ctx.results.update(res)
 
     add_result('discovery', {'endpoints': len(res.get('endpoints') or []), 'map': res.get('crawl_map')})
+
+    # --- FFUF Integration ---
+    ff_cfg = (cfg.get('discovery') or {}).get('ffuf') or {}
+    if ff_cfg.get('enabled'):
+        try:
+            from websecure.integrations.ffuf import FFUFWrapper
+            fw = FFUFWrapper(ff_cfg.get('binary_path', 'ffuf'))
+            wl_map = ff_cfg.get('wordlists') or {}
+            # Prioritize dirs, then files
+            wlist = wl_map.get('dirs') or wl_map.get('files')
+            if wlist and fw.is_available():
+                ff_res = fw.run_scan(
+                    url=url,
+                    wordlist=wlist,
+                    extensions=ff_cfg.get('extensions'),
+                    threads=int(ff_cfg.get('threads', 40))
+                )
+                if ff_res:
+                    if isinstance(ctx, dict):
+                        ctx.setdefault('results', {}).setdefault('ffuf', []).extend(ff_res)
+                    else:
+                        if not hasattr(ctx, 'results') or not isinstance(ctx.results, dict):
+                            setattr(ctx, 'results', {})
+                        ctx.results.setdefault('ffuf', []).extend(ff_res)
+                    add_result('ffuf', {'findings': len(ff_res)})
+        except Exception as e:
+             add_result('ffuf', {'error': str(e)})
+    # ------------------------
     emit('phase.end', {'name': 'discovery', 'endpoints': len(res.get('endpoints') or [])})
 
 
@@ -787,6 +826,56 @@ def run_ssrf_xxe_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]],
         add_result('ssrf_xxe_summary', summ)
 
     add_result('meta', {'stage': 'ssrf_xxe', 'tested': len(endpoints)})
+
+
+def run_nosqli_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:
+    scan = _opt_import('websecure.scanners.nosqli', 'run')
+    if not callable(scan):
+        # Fallback to local import if package path differs
+        scan = _opt_import('scanners.nosqli', 'run')
+
+    if not callable(scan):
+        add_result('meta', {'stage': 'nosqli', 'status': 'skipped:no-module'})
+        return
+
+    # 1. Get Discovered URLs
+    discovered = (getattr(ctx, 'results', {}) or {}).get('discovery', {}) or {}
+    urls = set(discovered.get('all') or [])
+
+    # 2. Get Config Manual Endpoints
+    cfg = getattr(ctx, 'config', {}) or {}
+    manual_eps = (cfg.get('scanners') or {}).get('nosqli', {}).get('endpoints') or []
+    if isinstance(manual_eps, list):
+        urls.update(manual_eps)
+    
+    # 3. Filter/Validate
+    final_urls = [u for u in urls if isinstance(u, str) and u.startswith('http')]
+
+    if not final_urls:
+        add_result('meta', {'stage': 'nosqli', 'status': 'skipped:no-urls'})
+        return
+
+    results: List[Dict[str, Any]] = []
+    session = getattr(ctx, 'session', None)
+    debug = bool(getattr(ctx, 'debug', False))
+
+    logging.info(f"[NoSQLi] Scanning {len(final_urls)} endpoints...")
+    
+    # 4. Iterate and Scan
+    for u in final_urls:
+         # nosqli.run returns a list of findings for that URL
+         try:
+             findings = scan(u, session=session, debug=debug)
+             if findings:
+                 results.extend(findings)
+         except Exception as e:
+             logging.debug(f"[NoSQLi] Error scanning {u}: {e}")
+
+    # 5. Report
+    for item in results:
+        add_result('nosqli', item)
+
+    add_result('meta', {'stage': 'nosqli', 'tested': len(final_urls)})
 
 
 def run_graphql_rpc_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:

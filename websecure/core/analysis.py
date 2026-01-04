@@ -334,6 +334,42 @@ def _whitespace_bypass(s: str) -> str:
     replacements = ["%09", "%0A", "%0D", "/**/", "+"]
     return s.replace(" ", random.choice(replacements))
 
+def _nullbyte_bypass(s: str) -> str:
+    # Inject null byte before payload to confuse WAF parsers (e.g. ModSecurity old versions)
+    return "%00" + s
+
+def _unicode_bypass(s: str) -> str:
+    # Replace some characters with unicode lookalikes
+    # e.g. < -> \uff1c (Fullwidth Less-Than Sign)
+    # Simple map for demonstration
+    mapping = {
+        "<": "\uff1c",
+        ">": "\uff1e",
+        "'": "\u02b9",
+        '"': "\u02ba"
+    }
+    return "".join(mapping.get(c, c) for c in s)
+
+def _cmd_obfuscate(s: str) -> str:
+    # Basic command obfuscation for Linux/Unix
+    # cat /etc/passwd -> c'at' /e'tc'/p'asswd'
+    def _quote_char(m):
+        c = m.group(0)
+        return f"'{c}'" if random.random() < 0.3 else c
+    
+    # Don't quote special shell chars heavily
+    specials = "|&; $`\\\"'"
+    out = ""
+    for char in s:
+        if char in specials:
+             out += char
+        elif char.isalnum():
+             out += f"'{char}'" if random.random() < 0.2 else char
+        else:
+             out += char
+    return out.replace("''", "")
+
+
 def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> List[str]:
     if not payload: return []
     if not cfg or not cfg.get("enabled", False): return [payload]
@@ -341,7 +377,7 @@ def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> L
     strategies = set((cfg.get("strategies") or []))
     # Eğer strateji listesi boşsa varsayılanları doldur (aggressive mod için)
     if not strategies:
-        strategies = {"encode", "caseflip", "comments", "double_encode"}
+        strategies = {"encode", "caseflip", "comments", "double_encode", "nullbyte", "unicode", "cmd_quote"}
         
     variants = [payload]
     
@@ -360,6 +396,16 @@ def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> L
             variants.append(_sql_hex_encode(payload))
         if "whitespace" in strategies:
             variants.append(_whitespace_bypass(payload))
+        if "nullbyte" in strategies:
+            variants.append(_nullbyte_bypass(payload))
+        if "unicode" in strategies:
+            variants.append(_unicode_bypass(payload))
+    
+    if category in ("rce", "exploit", "cmdi"):
+        if "cmd_quote" in strategies:
+            variants.append(_cmd_obfuscate(payload))
+        if "nullbyte" in strategies:
+             variants.append(_nullbyte_bypass(payload))
             
     if category == "xss" and "html_entity" in strategies:
          # Basic HTML entity encoding

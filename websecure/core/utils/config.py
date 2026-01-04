@@ -53,8 +53,27 @@ def validate_and_normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def ensure_wordlists(cfg: Dict[str, Any]) -> Dict[str, Any]:
     wl = cfg.setdefault("wordlists", {})
-    if "base_dir" not in wl:
-        wl["base_dir"] = "wordlists"
+    base = wl.get("base_dir", "wordlists")
+    
+    p = Path(base)
+    if not p.exists():
+        # Fallback: check one level up if we are in core
+        p_up = Path("..") / base
+        if p_up.exists():
+             p = p_up
+             
+    if p.exists():
+        print(f"[Wordlists] Klasör doğrulandı: {p.absolute()}")
+        # Check for common files
+        common = p / "common.txt"
+        if common.exists():
+            count = sum(1 for _ in open(common, "r", encoding="utf-8", errors="ignore"))
+            print(f"            -> common.txt yüklendi ({count} satır)")
+        else:
+            print(f"            [!] common.txt eksik!")
+    else:
+        print(f"[Wordlists] UYARI: Wordlist klasörü ({base}) bulunamadı!")
+        
     return cfg
 
 def verify_for_phase(phase: str) -> bool:

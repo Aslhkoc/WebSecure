@@ -10,6 +10,7 @@ from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urlsplit
 from .base import BaseScanner
 from websecure.core.reporting import add_result
 from websecure.core.utils import random_string, ttl_cache_get, ttl_cache_set
+from websecure.core.payloads import load_external_payloads
 
 # =============================================================================
 #  Configurations
@@ -231,6 +232,14 @@ class SSRFXXEScanner(BaseScanner):
         candidates.extend((lp, "local-scheme") for lp in _local_scheme_payloads(
             o.enable_local_schemes, o.enable_dict_scheme, o.enable_tftp_scheme
         ))
+
+        # Custom Wordlists
+        try:
+            _cp = load_external_payloads('ssrf')
+            if _cp:
+                candidates.extend((x.strip(), "custom-wordlist") for x in _cp if x.strip())
+        except Exception:
+            pass
 
         def process_query_injection(url, param, payload, tag):
             nonlocal suspect_count
