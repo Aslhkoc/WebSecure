@@ -93,9 +93,8 @@ def _apply_marker(payloads: list[str], marker: str | None) -> list[str]:
 
 # Helper to find package root dynamically
 def _get_package_root() -> Path:
-    # payloads.py is in websecure/core/, so root is two levels up -> websecure/
-    # If we want to point to websecure/wordlists, we go up one level from core -> websecure
-    return Path(__file__).resolve().parent.parent
+    # payloads.py is in websecure/core/, so root is three levels up -> WebSecure (Project Root)
+    return Path(__file__).resolve().parent.parent.parent
 
 _PKG_ROOT = _get_package_root()
 

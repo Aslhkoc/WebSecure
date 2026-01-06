@@ -146,18 +146,44 @@ def phase_discovery(ctx: dict):
         add_result("discovery", {"severity":"warning","message":f"Discovery failed: {e}","url":target})
 
 def phase_portscan(ctx: dict):
-    if not (ctx.get("config",{}).get("portscan",{}).get("enabled", True)):
-        add_result("portscan", {"severity":"note","message":"portscan disabled"})
+    # UPDATED: Using Nmap with config
+    nmap_cfg = ctx.get("config",{}).get("nmap", {}) or {}
+    if not nmap_cfg.get("enabled", True):
+        add_result("portscan", {"severity":"note","message":"nmap disabled"})
         return
-    from websecure.core.utils.ports import tcp_connect_scan
+        
+    from websecure.integrations.nmap import NmapWrapper
     host = ctx.get("host") or ""
-    ports = ctx.get("config",{}).get("portscan",{}).get("ports") or [80,443,8080,8443]
-    results = tcp_connect_scan(host, ports)
-    for p, is_open in results.items():
-        if is_open:
-            add_result("open_port", {"severity":"info","message":f"Open port: {p}","port":p})
-    if not any(results.values()):
-        add_result("portscan", {"severity":"note","message":"No open ports from list."})
+    if not host:
+        return
+
+    nmap = NmapWrapper()
+    if not nmap.is_available():
+        add_result("portscan", {"severity":"warning","message":"Nmap binary not found."})
+        return
+
+    # Config arguments
+    ports_cfg = nmap_cfg.get("ports", [])
+    ports_arg = "-F"
+    if ports_cfg:
+        ports_arg = "-p" + ",".join(map(str, ports_cfg))
+    
+    extra_args = nmap_cfg.get("arguments", [])
+
+    res = nmap.scan(host, ports=ports_arg, extra_args=extra_args)
+    
+    for item in res:
+        p = item.get("port")
+        if p:
+             add_result("open_port", {
+                 "severity":"info",
+                 "message":f"Open port: {p} ({item.get('service','?')})",
+                 "port":p,
+                 "service": item.get("service")
+             })
+
+    if not res:
+        add_result("portscan", {"severity":"note","message":"No open ports found (Nmap)."})
 
 def phase_tls(ctx: dict):
     # Optional: if scanners.tls exists, call it; otherwise noop
@@ -400,6 +426,14 @@ def _runner_authorization_matrix(ctx) -> None:
         add_result("meta", {"stage": "authorization", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
     fm.run_authorization_matrix(ctx)
 
+def _runner_feroxbuster(ctx):
+    _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")(ctx)
+    return _mk_result("feroxbuster", "finished", {})
+
+def _runner_sqlmap(ctx):
+    _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")(ctx)
+    return _mk_result("sqlmap", "finished", {})
+
 
 
 def _runner_business_logic_races(ctx) -> None:
@@ -408,6 +442,13 @@ def _runner_business_logic_races(ctx) -> None:
         add_result("meta", {"stage": "races", "status": "skipped:no-function"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
     fm.run_business_logic_races(ctx)
+
+def _runner_ffuf(ctx) -> None:
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
+    if not fm or not hasattr(fm, "run_ffuf_scan") or not callable(getattr(fm, "run_ffuf_scan")):
+         add_result("meta", {"stage": "ffuf", "status": "skipped:no-flow-runner"})
+         return
+    fm.run_ffuf_scan(ctx)
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -880,6 +921,39 @@ def _runner_rate_limit(ctx) -> None:
         # Functional variant
         mod.run(sess, base_url, getattr(ctx, "results", {}))
 
+def _runner_scanners_graphql(ctx) -> None:
+    mod = _opt_import("scanners.graphql")
+    if not mod or not hasattr(mod, "GraphQLScanner"):
+        return
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
+    sess = getattr(ctx, "session", None)
+    scanner = mod.GraphQLScanner(sess, debug=bool(getattr(ctx, "debug", False)))
+    # It updates ctx.results internally if it inherits keys
+    # But checks return.
+    res = scanner.run(base_url)
+    _merge_results(ctx, res)
+
+def _runner_scanners_ws_fuzz(ctx) -> None:
+    mod = _opt_import("scanners.ws_fuzz")
+    if not mod or not hasattr(mod, "run"):
+        return
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
+    sess = getattr(ctx, "session", None)
+    # run(url, session, debug, auth_ctx) -> List[Dict]
+    findings = mod.run(base_url, session=sess, debug=bool(getattr(ctx, "debug", False)), auth_ctx=getattr(ctx, "auth_ctx", None))
+    if findings:
+        for f in findings:
+            add_result("ws_fuzz", f)
+
+def _runner_scanners_tls(ctx) -> None:
+    # Use scanners.tls if available
+    mod = _opt_import("scanners.tls")
+    if not mod or not hasattr(mod, "scan_tls"):
+        return
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
+    # scanners.tls.scan_tls(url, results=...)
+    mod.scan_tls(base_url, results=getattr(ctx, "results", {}))
+
 # ----------------------------- Plan oluşturucu -----------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -923,6 +997,8 @@ def _offensive_phases(ctx) -> List[Phase]:
     phases: List[Phase] = [
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif & JS Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive", "js"]),
+        Phase(id="ffuf", title="FFUF Content Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content"]),
+        Phase(id="feroxbuster", title="Feroxbuster Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
         Phase(id="fuzz_param_discovery", title="Parametre Keşfi & Fuzz", enabled=True, runner=lambda c: _safe(c, lambda: _runner_fuzz_and_param_discovery(c), "fuzz_param_discovery"), tags=["fuzz","inputs"]),
         Phase(
             id="scanners.ssrf_xxe",
@@ -957,7 +1033,35 @@ def _offensive_phases(ctx) -> List[Phase]:
             title="File Upload Abuse",
             enabled=_flag("scanners.file_upload", default=True),
             runner=lambda c: _safe(c, lambda: _runner_scanners_file_upload(c), "scanners.file_upload"),
-            tags=["upload", "ct"],
+            tags=["active", "upload"],
+        ),
+        Phase(
+            id="scanners.graphql",
+            title="GraphQL Scanner",
+            enabled=_flag("scanners.graphql", default=True, tech_trigger="graphql"),
+            runner=lambda c: _safe(c, lambda: _runner_scanners_graphql(c), "scanners.graphql"),
+            tags=["active", "graphql"],
+        ),
+        Phase(
+            id="scanners.ws_fuzz",
+            title="WebSocket Fuzzer",
+            enabled=_flag("scanners.ws_fuzz", default=True, tech_trigger="websocket"),
+            runner=lambda c: _safe(c, lambda: _runner_scanners_ws_fuzz(c), "scanners.ws_fuzz"),
+            tags=["active", "websocket"],
+        ),
+        Phase(
+            id="scanners.tls",
+            title="TLS/SSL Analysis",
+            enabled=_flag("scanners.tls", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_scanners_tls(c), "scanners.tls"),
+            tags=["ssl", "config"],
+        ),
+        Phase(
+            id="sqlmap",
+            title="SQLMap Scan",
+            enabled=_flag("sqlmap", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_sqlmap(c), "sqlmap"),
+            tags=["sqli", "active"],
         ),
         Phase(
             id="jwt",
@@ -1130,21 +1234,55 @@ def run_discovery(ctx):
 
 
 def run_portscan(ctx):
-    """Port taraması: Native scanner geri getirildi."""
-    from websecure.core.utils.ports import scan_ports
+    """Port taraması: Nmap entegrasyonu (Native scanner silindi)."""
+    from websecure.integrations.nmap import NmapWrapper
     
     url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
     results = getattr(ctx, "results", None) or {}
-    cfg = getattr(ctx, "config", {}) or {}
     debug = bool(getattr(ctx, "debug", False))
     
     if not url:
         return _mk_result("portscan", "failed", {"error": "no_url"})
         
     try:
-        # Use simple TCP connect scan
-        open_ports = scan_ports(url, results, detailed=False, debug=debug)
-        return _mk_result("portscan", "ok", {"scanned": "common", "open": len(open_ports)})
+        # Host adını ayıkla
+        if "://" in url:
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or url
+        else:
+            host = url.split(":")[0]
+
+        nmap = NmapWrapper()
+        if not nmap.is_available():
+            add_result("errors", {"stage": "portscan", "error": "Nmap binary not found. Please install Nmap."})
+            return _mk_result("portscan", "failed", {"error": "nmap_missing"})
+
+        # Hızlı tarama
+        scan_res = nmap.scan(host, ports="-F")
+        
+        # Sonuçları işle
+        port_records = []
+        open_ports = []
+        for item in scan_res:
+             p = item.get("port")
+             if p:
+                 open_ports.append(p)
+                 port_records.append({
+                     "host": item.get("ip") or host,
+                     "port": p,
+                     "proto": item.get("protocol", "tcp"),
+                     "state": "open",
+                     "service": item.get("service", "unknown"),
+                     "product": item.get("product", ""),
+                     "version": item.get("version", "")
+                 })
+                 
+        # Merkezi sonuçlara ekle (reporting uyumluluğu için)
+        results["port_scan"] = port_records 
+        results["nmap"] = port_records      
+        results["open_ports"] = open_ports
+        
+        return _mk_result("portscan", "ok", {"scanned": "Nmap Fast", "open": len(open_ports)})
     except Exception as e:
         return _mk_result("portscan", "failed", {"error": str(e)})
 

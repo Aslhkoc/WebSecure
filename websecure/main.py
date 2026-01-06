@@ -1,4 +1,15 @@
 from __future__ import annotations
+import sys
+import pathlib
+import os
+
+# [CRITICAL] Path patching MUST happen before local imports
+# This ensures running from 'websecure/' subdirectory works in PyCharm/CLI
+_p = pathlib.Path(__file__).resolve()
+_pkg_root = str(_p.parent.parent)
+if _pkg_root not in sys.path:
+    sys.path.insert(0, _pkg_root)
+
 from websecure.core.http import verify_for_phase
 from websecure.core.utils import current_identity
 import inspect
@@ -12,7 +23,7 @@ from websecure.core.bl_concurrency import run_race_conditions
 from websecure.core.flow_runner import run_nosqli_scan, run_ssrf_xxe_scan
 import re as _re_urlnorm
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
-import os, sys, argparse, json, time, socket, ssl
+import argparse, json, time, socket, ssl
 
 def _opt_import(mod, func):
     try:
@@ -31,39 +42,182 @@ import logging as _logging
 import sys as _sys, pathlib as _pathlib
 from urllib.parse import urlparse, urljoin, urldefrag
 from time import sleep
-import importlib.util
 import asyncio
 import shutil
 import subprocess
-from urllib.parse import urlparse
 import importlib.util as _ilu_patch
-import sys
-import time
 import os as _ab_os
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
-import argparse
 from websecure.core.utils import ensure_wordlists as _ensure_wl
 from concurrent.futures import ThreadPoolExecutor
 import time as _t
-_p = _pathlib.Path(__file__).resolve()
-_pkg_root = str(_p.parent.parent)
-if _pkg_root not in _sys.path:
-    _sys.path.insert(0, _pkg_root)
-del _sys, _pathlib, _p, _pkg_root
-
 import sys as _ws_sys_path_guard, os as _ws_os_path_guard
+import sys as _sys, os as _os  # restored legacy aliases
 _ws_pkg_dir = _ws_os_path_guard.path.dirname(_ws_os_path_guard.path.abspath(__file__))
-_ws_parent_dir = _ws_os_path_guard.path.dirname(_ws_pkg_dir)
-if _ws_parent_dir not in _ws_sys_path_guard.path:
-    _ws_sys_path_guard.path.insert(0, _ws_parent_dir)
-del _ws_pkg_dir, _ws_parent_dir, _ws_sys_path_guard, _ws_os_path_guard
 
-import sys as _sys, os as _os  # restored legacy aliases for path guard
 _logger = _logging.getLogger(__name__)
+
 _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
+
+# [WS3-ANCHOR] New Module Imports
+try:
+    from websecure.core import chain_reactor
+    from websecure.scanners import csrf, rate_limit, mass_assignment, ws_fuzz
+except ImportError:
+    chain_reactor = None
+    csrf = None
+    rate_limit = None
+    mass_assignment = None
+    ws_fuzz = None
+    _logger.warning("[Main] Failed to import one or more extra scanner modules.")
+
+
+
+
+try:
+    from websecure.scanners import request_smuggling, jwt, nosqli
+except ImportError:
+    request_smuggling = None
+    jwt = None
+    nosqli = None
+    _logger.warning("[Main] Failed to import request_smuggling, jwt, or nosqli.")
+
+
+# [WS3] Offensive Scanner Wrappers (Bridge)
+def offensive_request_smuggling(url, session, **kwargs):
+    if request_smuggling:
+        try:
+            request_smuggling.run(url, session=session)
+        except Exception as e:
+            _logger.error(f"Request Smuggling failed: {e}")
+
+def offensive_mass_assignment(url, session, **kwargs):
+    if mass_assignment:
+        try:
+            res = mass_assignment.run(url, session=session)
+            if res and isinstance(res, list):
+                if callable(globals().get("add_result")):
+                    for r in res:
+                         add_result("mass_assignment", r)
+        except Exception as e:
+            _logger.error(f"Mass Assignment failed: {e}")
+
+def offensive_jwt(url, session, **kwargs):
+    if jwt:
+        try:
+            jwt.run(url, session=session)
+        except Exception as e:
+            _logger.error(f"JWT Scan failed: {e}")
+
+def offensive_nosqli(url, session, **kwargs):
+    if nosqli:
+        try:
+            nosqli.run(url, session=session)
+        except Exception as e:
+            _logger.error(f"NoSQLi Scan failed: {e}")
+
+def offensive_ws_fuzz(url, session, **kwargs):
+    if ws_fuzz:
+        try:
+            res = ws_fuzz.run(url, session=session)
+            if res and isinstance(res, list):
+                if callable(globals().get("add_result")):
+                    for r in res:
+                        add_result("ws_fuzz", r)
+        except Exception as e:
+            _logger.error(f"WS Fuzz failed: {e}")
+
+
+
+def scan_ports_or_distributed(url, results, cfg, detailed=False, debug=False, protocol="tcp"):
+    # REPLACED: Legacy Python scanner removed. Now using dedicated Nmap integration per user request.
+    from websecure.integrations.nmap import NmapWrapper
+    from urllib.parse import urlparse
+    import logging
+
+    try:
+        if "://" in url:
+            parsed = urlparse(url)
+            host = parsed.hostname or url
+        else:
+            host = url.split(":")[0]
+
+        nmap = NmapWrapper()
+        if not nmap.is_available():
+            logging.error("Nmap binary not found but is REQUIRED. Port scan failed.")
+            results["port_scan_summary"] = {"error": "Nmap binary missing"}
+            return []
+
+        # Config overrides
+        nmap_cfg = cfg.get("nmap", {}) or {}
+        
+        # Determine Ports
+        # If detailed (profile=deep/aggressive), prefer FULL scan (-p-) unless specific list provided? 
+        # Actually usually 'details' implies scan everything. 
+        # But if config says "ports: [80, 443]", user might want ONLY those.
+        # Let's stick to: If detailed -> -p- (standard deep scan behavior). If not -> config ports or -F.
+        
+        ports_arg = "-F"
+        if detailed:
+            ports_arg = "-p-"
+        else:
+            c_ports = nmap_cfg.get("ports", [])
+            if c_ports:
+                ports_arg = "-p" + ",".join(map(str, c_ports))
+        
+        # Extra args from config
+        c_args = nmap_cfg.get("arguments", []) or []
+        extra = []
+        if detailed:
+            extra.append("-sV") # Version detection
+        
+        # Append config args (e.g. -T4, -Pn etc)
+        if c_args:
+            # Avoid duplicates if possible, or just append. Nmap usually takes last or all.
+            for a in c_args:
+                if a not in extra:
+                    extra.append(a)
+
+        scan_res = nmap.scan(host, ports=ports_arg, extra_args=extra)
+
+        # Map Nmap results to WebSecure format
+        open_ports = []
+        port_records = []
+        
+        for item in scan_res:
+             p = item.get("port")
+             if p:
+                 open_ports.append(p)
+                 port_records.append({
+                     "host": item.get("ip") or host,
+                     "port": p,
+                     "proto": item.get("protocol", "tcp"),
+                     "state": "open",
+                     "service": item.get("service", "unknown"),
+                     "product": item.get("product", ""),
+                     "version": item.get("version", "")
+                 })
+
+        # Populate results for reporting (maintaining compatibility with existing keys)
+        results["port_scan"] = port_records 
+        results["nmap"] = port_records      
+        results["open_ports"] = open_ports
+        
+        results["port_scan_summary"] = {
+            "scanned": "Nmap Full" if detailed else "Nmap Fast",
+            "open": len(open_ports),
+            "details": port_records
+        }
+        
+        return open_ports
+
+    except Exception as e:
+        logging.error(f"Nmap Scan Failed: {e}")
+        return []
+
 
 _BOUNDARY_EXC = tuple([
     (_req_mod.exceptions.RequestException if (_req_mod and hasattr(_req_mod, "exceptions")) else Exception),
@@ -333,85 +487,85 @@ if callable(_discover_func):
     discover_dynamic_endpoints = _discover_func  # dış API korunur
     DISCOVER_DYNAMIC_ENDPOINTS_SOURCE = _mod.__name__
 else:
-    DISCOVER_DYNAMIC_ENDPOINTS_SOURCE = "unavailable"
+    DISCOVER_DYNAMIC_ENDPOINTS_SOURCE = "fallback"
 
+    # Basit, sağlam ve bağımsız dinamik keşif (Selenium tabanlı)
+    # Not: try/except yok; hata yakalama Future.exception() ile üst katmanda yapılır.
+    def discover_dynamic_endpoints(start_url: str,
+                                   headless: bool = True,
+                                   timeout_ms: int = 15000,
+                                   max_pages: int = 200,
+                                   record_dir: str | None = None,
+                                   prefer: str = "selenium",
+                                   return_artifacts: bool = True) -> tuple[list[str], dict]:
 
-# Basit, sağlam ve bağımsız dinamik keşif (Selenium tabanlı)
-# Not: try/except yok; hata yakalama Future.exception() ile üst katmanda yapılır.
-def discover_dynamic_endpoints(start_url: str,
-                               headless: bool = True,
-                               timeout_ms: int = 15000,
-                               max_pages: int = 200,
-                               record_dir: str | None = None,
-                               prefer: str = "selenium",
-                               return_artifacts: bool = True) -> tuple[list[str], dict]:
+        # İç iş: browser işi (istisna atmadan bırakılır, Future.exception ile gözlemlenir)
+        def _job() -> tuple[list[str], dict]:
+            # WebDriver ayağa kaldır
+            from websecure.core.utils import setup_webdriver  # mevcut modülden kullan
+            
+            # [Fix] Respect headless parameter passed from caller (which comes from config)
+            drv = setup_webdriver(headless=headless)
+            if drv is None:
+                return ([], {"reason": "webdriver_unavailable"} if return_artifacts else {})
+            # Zaman aşımı ve başlangıç parametreleri
+            pl_timeout = max(1, int(timeout_ms / 1000))
+            if hasattr(drv, "set_page_load_timeout"):
+                drv.set_page_load_timeout(pl_timeout)
+            parsed = urlparse(start_url)
+            origin = (parsed.scheme, parsed.netloc)
+            q: list[str] = [start_url]
+            seen: set[str] = set()
+            found: list[str] = []
+            steps = 0
+            while q and len(seen) < int(max_pages):
+                u = q.pop(0)
+                if u in seen:
+                    continue
+                seen.add(u)
+                try:
+                    drv.get(u)
+                    # Bağlantıları DOM'dan topla
+                    hrefs = drv.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
+                    if isinstance(hrefs, list):
+                        for h in hrefs:
+                            if not isinstance(h, str):
+                                continue
+                            p = urlparse(h)
+                            if (p.scheme, p.netloc) != origin:
+                                continue
+                            h2, _ = urldefrag(h)
+                            if h2 not in found:
+                                found.append(h2)
+                            if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
+                                q.append(h2)
+                except Exception:
+                    pass
+                steps += 1
+                if steps % 5 == 0:
+                    sleep(0.05)  
+            # Kapat
+            if hasattr(drv, "quit"):
+                drv.quit()
+            art = {"visited": len(seen), "found": len(found), "source": "selenium_fallback"} if return_artifacts else {}
+            return (found, art)
 
-    # İç iş: browser işi (istisna atmadan bırakılır, Future.exception ile gözlemlenir)
-    def _job() -> tuple[list[str], dict]:
-        # WebDriver ayağa kaldır
-        from websecure.core.utils import setup_webdriver  # mevcut modülden kullan
-        drv = setup_webdriver()
-        if drv is None:
-            return ([], {"reason": "webdriver_unavailable"} if return_artifacts else {})
-        # Zaman aşımı ve başlangıç parametreleri
-        pl_timeout = max(1, int(timeout_ms / 1000))
-        if hasattr(drv, "set_page_load_timeout"):
-            drv.set_page_load_timeout(pl_timeout)
-        parsed = urlparse(start_url)
-        origin = (parsed.scheme, parsed.netloc)
-        q: list[str] = [start_url]
-        seen: set[str] = set()
-        found: list[str] = []
-        steps = 0
-        while q and len(seen) < int(max_pages):
-            u = q.pop(0)
-            if u in seen:
-                continue
-            seen.add(u)
-            drv.get(u)
-            # Bağlantıları DOM'dan topla
-            hrefs = drv.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
-            if isinstance(hrefs, list):
-                for h in hrefs:
-                    if not isinstance(h, str):
-                        continue
-                    p = urlparse(h)
-                    if (p.scheme, p.netloc) != origin:
-                        continue
-                    h2, _ = urldefrag(h)
-                    if h2 not in found:
-                        found.append(h2)
-                    if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
-                        q.append(h2)
-            steps += 1
-            if steps % 5 == 0:
-                sleep(0.05)  # küçük nefes molası
-        # Kapat
-        if hasattr(drv, "quit"):
-            drv.quit()
-        art = {"visited": len(seen), "found": len(found), "source": "selenium_fallback"} if return_artifacts else {}
-        return (found, art)
-
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(_job)
-        # 2x page_load_timeout + tavan
-        hard_timeout = max(5, int((timeout_ms / 1000) * 2 + 10))
-        # exception propagasyonunu engelle: sonucu ancak exception yoksa al
-        # Burada future.exception hiç try/except kullanmadan kontrol sağlar
-        end = None
-        t0 = __import__("time").time()
-        res: tuple[list[str], dict] | None = None
-        while end is None and (__import__("time").time() - t0) < hard_timeout:
-            exc = fut.exception(timeout=0.1)
-            if exc is None and fut.done():
-                res = fut.result()
-                end = True
-            elif exc is not None:
-                # başarısızlık: sessizce boş dön
-                end = True
-        if res is None:
-            return ([], {"reason": "timeout"} if return_artifacts else {})
-        return res
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_job)
+            hard_timeout = max(5, int((timeout_ms / 1000) * 2 + 10))
+            end = None
+            t0 = __import__("time").time()
+            res: tuple[list[str], dict] | None = None
+            while end is None and (__import__("time").time() - t0) < hard_timeout:
+                exc = fut.exception(timeout=0.1)
+                if exc is None and fut.done():
+                    res = fut.result()
+                    end = True
+                elif exc is not None:
+                    end = True
+            if res is None:
+                return ([], {"reason": "timeout"} if return_artifacts else {})
+            return res
 
 
 
@@ -682,6 +836,9 @@ else:
             "problems": ["tls_module_missing"],
         }
 
+    # [WS3] Fallback check_ssl_certificate is defined here
+    pass
+
 # --- Raporlama / sonuç kovaları ---
 import importlib, importlib.util as _iul
 
@@ -716,11 +873,11 @@ if _reporting_mod is None:
         return None
 
 
-    # Debug konfigürasyonu
-    if args.debug:
-        cfg['debug'] = True
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.info("[CLI] Debug modu aktifleştirildi.")
+    # Debug konfigürasyonu - fixed: moved to main or removed as it relies on unparsed args
+    # if args.debug:
+    #    cfg['debug'] = True
+    #    _logging.getLogger().setLevel(_logging.DEBUG)
+    #    _logging.info("[CLI] Debug modu aktifleştirildi.")
     def configure_logging(*_a, **_k):
         return None
 
@@ -807,7 +964,7 @@ if crawl_website is None:
 # --- Güvenlik başlıkları ---
 # [WS12_RULE] scanner modül adı ≡ dosya adı (headers.py)
 from websecure.scanners.headers import get_security_headers as scan_security_headers
-from websecure.core.utils.ports import scan_ports
+from websecure.scanners.headers import get_security_headers as scan_security_headers
 
 
 # --- GraphQL ---
@@ -1976,6 +2133,10 @@ def _normalize_webdriver_cfg(cfg: dict) -> dict:
     if headless is None and isinstance(((c.get("crawler") or {}).get("browser") or {}), dict):
         headless = _to_bool((c.get("crawler") or {}).get("browser", {}).get("headless"), None)
 
+    # [FEATURE] Allow CLI override for visibility
+    if "--visible" in sys.argv:
+        headless = False
+
     if headless is None:
         headless = False  # varsayılan: görünür tarayıcı
 
@@ -1997,16 +2158,20 @@ def main():
     print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
 
     print(r"""
-     __          __  _     _____
-     \ \        / / | |   / ____|
-      \ \  /\  / /__| |__| (___   ___  ___ _   _ _ __ ___
-       \ \/  \/ / _ \ '_ \\___ \ / _ \/ __| | | | '__/ _ \
-        \  /\  /  __/ |_) |___) |  __/ (__| |_| | | |  __/
-         \/  \/ \___|_.__/_____/ \___|\___|\__,_|_|  \___|
+  ______  ______  __  __   _____  ______   _____ 
+ |___  / |  ____||  \/  | / ____||  ____| / ____|
+O====|_______________________________________________________>  1   1 0
+  / /__  | |____ | |  | | ____) || |____ | |____               0 0 1 1
+ /_____| |______||_|  |_||_____/ |______| \_____|               011 0 0
+                                                               0 1 1
+                                                                1 0
+                                                                 1
     """)
-    print("")
+    print("\n   [ SYSTEM SECURE | ZEMSEC PROTOCOL INITIATED | BINARY FLOW STABLE ]\n")
     print("[!] UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
     print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
+    # [FEATURE] Wizard Tip
+    print("    💡 İPUCU: Kolay kurulum için 'python main.py --wizard' komutunu kullanın!")
     print("")
     cfg = load_config()
 
@@ -2047,6 +2212,20 @@ def main():
     # Ancak --help veya versiyon sorgusunda çalışmasın diye basit bir kontrol eklenebilir ama
     # argparse henüz parse edilmediği için sys.argv kontrolü gerekebilir.
     is_dry_run_pre = "--dry-run" in sys.argv
+    is_wizard = "--wizard" in sys.argv
+
+    if is_wizard:
+        # Import dynamically to avoid overhead if not used
+        try:
+           from websecure.core.wizard import run_wizard
+           should_run = run_wizard()
+           if not should_run:
+               sys.exit(0)
+           # If user said YES to run immediately, reload config and proceed
+           cfg = load_config() 
+        except ImportError:
+            print("[!] Wizard module not found.")
+            sys.exit(1)
     is_batch_pre = "--batch" in sys.argv
     if "--help" not in sys.argv and "-h" not in sys.argv and not is_dry_run_pre and not is_batch_pre:
         tool_choices = tm.ask_user_interactive()
@@ -2065,6 +2244,39 @@ def main():
     # InsecureRequestWarning sustur
     silence_insecure_request_warnings()
 
+    # --- Tor Integration ---
+    # Check if active profile config has Tor settings
+    # _resolved_profile is populated above
+    _prof = cfg.get("_resolved_profile") or {}
+    _tor_interval = _prof.get("tor_rotation_interval")
+    _tor_port = _prof.get("tor_control_port")
+    
+    # If proxy is a socks proxy pointing to local tor (9050, 9150), also might want to enable
+    # But explicit config is safer.
+    
+    _tc = None
+    if _tor_interval and _tor_port:
+         try:
+             from websecure.core.tor_manager import TorController
+             print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
+             _tc = TorController(control_port=int(_tor_port))
+             # Initial renew
+             if _tc.renew_identity():
+                 pass 
+             else:
+                 print("[!] UYARI: Tor Control Port'a bağlanılamadı. IP rotasyonu çalışmayabilir.")
+                 
+             _tc.start_rotation_loop(interval_seconds=int(_tor_interval))
+         except ImportError:
+             pass
+         except Exception as e:
+             print(f"[!] Tor hatası: {e}")
+             
+    # Cleanup trigger
+    import atexit
+    if _tc:
+        atexit.register(_tc.stop)
+
     # CLI argümanları
     parser = argparse.ArgumentParser(description="WebSecure hedef seçimi")
     parser.add_argument("--waf", action="store_true", help="WAF bypass modunu etkinleştir")
@@ -2080,7 +2292,20 @@ def main():
     parser.add_argument("--batch", action="store_true", help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
     parser.add_argument("--profile", help="Tarama profili (stealth, normal, aggressive, deep)")
     parser.add_argument("--debug", action="store_true", help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
+    parser.add_argument("--visible", action="store_true", help="Canlı tarayıcı görünümünü aç (Live View)")
     args = parser.parse_args()
+
+    # VISIBLE MODE: Force all headless settings to False if requested
+    if args.visible:
+        print("[*] Live View (Visible Browser) Modu Etkinleştirildi.")
+        cfg.setdefault("crawler", {})["headless"] = False
+        cfg.setdefault("crawl", {})["headless"] = False
+        # Ensure deep overrides for consistency
+        if "webdriver" not in cfg: cfg["webdriver"] = {}
+        cfg["webdriver"]["headless"] = False
+        if "settings" not in cfg: cfg["settings"] = {}
+        if "webdriver" not in cfg["settings"]: cfg["settings"]["webdriver"] = {}
+        cfg["settings"]["webdriver"]["headless"] = False
 
     off = (cfg.setdefault('offensive', {}) if isinstance(cfg, dict) else {})
     if args.attack or args.attack_unsafe or (off.get('enabled') is True):
@@ -2742,7 +2967,8 @@ def main():
                 if all_gql_eps:
                     print("[•] GraphQL RPC testleri…")
                     t = mark("graphql")
-                    if callable(globals().get("graphql_scan")):
+                    _gql_func = globals().get("graphql_scan")
+                    if callable(_gql_func):
                         base_kw = dict(
                             session=session,
                             endpoints=all_gql_eps[:10],
@@ -2752,11 +2978,11 @@ def main():
                             verify=bool(cfg.get('tls_verify', True)),
                             timeout=int((cfg.get('graphql') or {}).get('timeout', 20)),
                         )
-                        fkw = _kw_filter(graphql_scan, **base_kw)
+                        fkw = _kw_filter(_gql_func, **base_kw)
 
-                        ok_gql, err_or_none = _safe_call(graphql_scan, **fkw,
+                        ok_gql, err_or_none = _safe_call(_gql_func, **fkw,
                                                          call_timeout=900.0) if fkw else _safe_call(
-                            graphql_scan, session, all_gql_eps[:10], results, call_timeout=900.0
+                            _gql_func, session, all_gql_eps[:10], results, call_timeout=900.0
                         )
                         if not ok_gql and callable(globals().get("add_result")):
                             add_result("errors", {"stage": "graphql", "error": str(err_or_none)})
@@ -2768,13 +2994,14 @@ def main():
                     if bool(gql_cfg.get("deep", True)):
                         print("[•] GraphQL derin saldırı testleri…")
                         t = mark("graphql_deep")
-                        if callable(globals().get("graphql_attack_scan")):
+                        _gql_att_func = globals().get("graphql_attack_scan")
+                        if callable(_gql_att_func):
                             deep_kw = dict(session=session, endpoints=all_gql_eps[:10], results=results, debug=debug,
                                            config=cfg)
-                            fkw = _kw_filter(graphql_attack_scan, **deep_kw)
-                            ok_gqa, err_or_none = _safe_call(graphql_attack_scan, **fkw,
+                            fkw = _kw_filter(_gql_att_func, **deep_kw)
+                            ok_gqa, err_or_none = _safe_call(_gql_att_func, **fkw,
                                                              call_timeout=900.0) if fkw else _safe_call(
-                                graphql_attack_scan, session, all_gql_eps[:10], results, call_timeout=900.0
+                                _gql_att_func, session, all_gql_eps[:10], results, call_timeout=900.0
                             )
                             if not ok_gqa and callable(globals().get("add_result")):
                                 add_result("errors", {"stage": "graphql_deep", "error": str(err_or_none)})
@@ -2999,6 +3226,32 @@ def main():
             print("[•] XSS taraması (Reflected)…")
             _safe_call(_run_xss, ctx.url, session=session, debug=debug)
 
+
+        # 5. Rate Limit (Orphaned Fix)
+        if rate_limit and (cfg.get("scanners") or {}).get("rate_limit"):
+             print("[•] Rate Limit taraması…")
+             try:
+                 rl_scanner = rate_limit.RateLimitScanner(session, results, debug=debug)
+                 rl_scanner.run(ctx.url)
+             except Exception as e:
+                 _logger.error(f"RateLimit failed: {e}")
+
+        # 6. CSRF (New Module)
+        if csrf and (cfg.get("scanners") or {}).get("csrf"):
+             print("[•] CSRF taraması…")
+             try:
+                 csrf.run_scan(ctx.url, session, results)
+             except Exception as e:
+                 _logger.error(f"CSRF failed: {e}")
+
+        # 7. Chain Reactor (Correlation)
+        if chain_reactor and isinstance(results, dict):
+             print("[•] Zincirleme Analizi (Chain Reactor)…")
+             try:
+                 chain_reactor.analyze_chains(results)
+             except Exception as e:
+                 _logger.error(f"Chain Reactor failed: {e}")
+
         # Authorization / IDOR benzerlik kontrolleri (opsiyonel, bastırmasız)
         auth_cfg = (cfg.get("authorization") or {}) if isinstance(cfg, dict) else {}
         if RoleContext and bool(auth_cfg.get("enabled", False)) and callable(
@@ -3126,11 +3379,5 @@ if __name__ == "__main__":
 
 
 
-    _spec = _iul.find_spec('websecure.core.reporting')
-    if _spec is not None:
-        _r = importlib.import_module('websecure.core.reporting')
-        _cfg = globals().get('config') or {}
-        _ctx = globals().get('ctx') or {}
-        if callable(getattr(_r, 'finalize_reports', None)):
-            _r.finalize_reports(_ctx if isinstance(_ctx, dict) else {}, _cfg if isinstance(_cfg, dict) else {})
+
 

@@ -651,6 +651,7 @@ def run_discovery_extended(ctx, *, event_cb: Optional[Callable[[str, Dict[str, A
     if c_conf.get('max_depth') is not None: crawler_cfg.max_depth = int(c_conf['max_depth'])
     if c_conf.get('max_pages') is not None: crawler_cfg.max_pages = int(c_conf['max_pages'])
     if c_conf.get('ignore_robots') is not None: crawler_cfg.ignore_robots = bool(c_conf['ignore_robots'])
+    if c_conf.get('headless') is not None: crawler_cfg.headless = bool(c_conf['headless'])
     
     crawler = WebCrawler(session, url, config=crawler_cfg, debug=bool(getattr(ctx, 'debug', False)))
     res = crawler.start()
@@ -700,7 +701,7 @@ def run_discovery_extended(ctx, *, event_cb: Optional[Callable[[str, Dict[str, A
 def run_authorization_matrix(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:
     """Çoklu rol/oturum havuzu ile Authorization taraması; IDOR denemeleri dahil."""
     # Import authorization primitives
-    _auth_mod = _opt_import('scanners.authorization', None)
+    _auth_mod = _opt_import('scanners.auth', None)
     if _auth_mod is None:
         add_result('meta', {'stage': 'authorization', 'status': 'skipped:no-module'})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -879,7 +880,7 @@ def run_nosqli_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]], N
 
 
 def run_graphql_rpc_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:
-    scan = _opt_import('scanners.graphql_rpc', 'scan')
+    scan = _opt_import('scanners.graphql', 'scan')
     if not callable(scan):
         add_result('meta', {'stage': 'graphql_rpc', 'status': 'skipped:no-module'})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -889,13 +890,13 @@ def run_graphql_rpc_scan(ctx, *, event_cb: Optional[Callable[[str, Dict[str, Any
     results: Dict[str, Any] = {}
     if gql:
         scan(getattr(ctx, 'session', None), gql, results, debug=bool(getattr(ctx, 'debug', False)))
-        for item in results.get('graphql_rpc', []) or []:
-            add_result('graphql_rpc', item)
+        for item in results.get('graphql', []) or []:
+            add_result('graphql', item)
 
     # Introspection kapalıysa fallback denemeleri işlendiğini ayrıca not düş
-    summ = results.get('graphql_rpc_summary') or {}
+    summ = results.get('graphql_summary') or {}
     if isinstance(summ, dict) and not bool(summ.get('introspection_anonymous', False)):
-        add_result('graphql_rpc', {
+        add_result('graphql', {
             'endpoint': (gql[0] if isinstance(gql, list) and gql else ''),
             'issue': 'Introspection kapalı — fallback testleri uygulandı',
             'severity': 'Bilgi',
@@ -1672,3 +1673,148 @@ def run_forms_probe_phase(ctx, *, event_cb=None):
     tries = _run_forms(ctx, limit_per_host=30, debug=bool(getattr(ctx,'debug', False)))
     add_result("phase", {"name":"forms_probe", "attempts": tries})
     return tries
+
+# ================================================================
+# FAZ: FFUF (Content Discovery)
+# ================================================================
+def run_ffuf_scan(ctx, *, event_cb: None = None) -> None:
+    from websecure.integrations.ffuf import FFUFWrapper
+    from pathlib import Path
+
+    # 1. Config Check
+    cfg = getattr(ctx, 'config', {}) or {}
+    
+    # Check if FFUF is active (default True if binary exists, per user request)
+    ffuf = FFUFWrapper()
+    if not ffuf.is_available():
+        add_result('meta', {'stage': 'ffuf', 'status': 'skipped:binary-missing'})
+        return
+
+    url = getattr(ctx, 'url', None) or cfg.get('base_url')
+    if not url:
+        return
+
+    add_result('meta', {'stage': 'ffuf', 'status': 'starting'})
+    
+    # Wordlist path - try to find a default one if not provided
+    wordlist = cfg.get('wordlist')
+    if not wordlist:
+        # Fallback to a common paths
+        candidates = [
+            "c:/Users/Acer/PycharmProjects/WebSecure/websecure/wordlists/seclists/Discovery/Web-Content/common.txt",
+            "./wordlists/seclists/Discovery/Web-Content/common.txt",
+            "./wordlists/common.txt"
+        ]
+        for c in candidates:
+             if Path(c).exists():
+                 wordlist = c
+                 break
+    
+    if not wordlist:
+        add_result('meta', {'stage': 'ffuf', 'status': 'skipped:no-wordlist'})
+        return
+
+    # Run Scan
+    try:
+        results = ffuf.run_scan(url, wordlist=wordlist, threads=40)
+        for r in results:
+            add_result('content_discovery', {
+                'tool': 'ffuf',
+                'url': r.get('url'),
+                'status': r.get('status'),
+                'length': r.get('length'),
+                'words': r.get('words')
+            })
+        add_result('meta', {'stage': 'ffuf', 'findings': len(results)})
+    except Exception as e:
+        _logger.error(f"FFUF scan error: {e}")
+        add_result('errors', {'stage': 'ffuf', 'error': str(e)})
+
+
+# ================================================================
+# FAZ: Feroxbuster (Content Discovery)
+# ================================================================
+def run_feroxbuster_scan(ctx, *, event_cb: None = None) -> None:
+    from websecure.integrations.feroxbuster import FeroxbusterWrapper
+    cfg = getattr(ctx, 'config', {}) or {}
+    
+    # Check config
+    fb_cfg = cfg.get("feroxbuster", {})
+    if not fb_cfg.get("enabled", True): # Enable by default if sections missing/unspecified for now? User asked for it.
+         return
+         
+    url = getattr(ctx, 'url', None)
+    if not url: return
+
+    fb = FeroxbusterWrapper()
+    if not fb.is_available():
+        # Only warn if enabled
+        add_result("feroxbuster", {"error": "Binary not found"})
+        return
+        
+    wlist = fb_cfg.get("wordlist") 
+    
+    _logger.info("Starting Feroxbuster scan...")
+    try:
+        res = fb.scan(
+            url, 
+            wordlist=wlist, 
+            threads=fb_cfg.get("threads", 50), 
+            depth=fb_cfg.get("depth", 1), 
+            extra_args=fb_cfg.get("extra_args")
+        )
+        for r in res:
+             add_result("content_discovery", {
+                 "tool": "feroxbuster",
+                 "url": r.get('url'),
+                 "status": r.get('status'),
+                 "length": r.get('length'),
+                 "details": r
+             })
+        if res:
+            add_result('meta', {'stage': 'feroxbuster', 'findings': len(res)})
+            
+    except Exception as e:
+        _logger.error(f"Feroxbuster scan failed: {e}")
+
+
+# ================================================================
+# FAZ: SQLMap (SQL Injection)
+# ================================================================
+def run_sqlmap_scan(ctx, *, event_cb: None = None) -> None:
+    from websecure.integrations.sqlmap import SQLMapWrapper
+    cfg = getattr(ctx, 'config', {}) or {}
+    
+    sm_cfg = cfg.get("sqlmap", {}) # Needs explicit enable in config? Or assume true?
+    # User said "sqlmap i aktif hale getir". I will assume enabled unless explicitly false.
+    if not sm_cfg.get("enabled", True):
+         return
+         
+    url = getattr(ctx, 'url', None)
+    if not url: return
+    
+    sm = SQLMapWrapper()
+    if not sm.is_available():
+         add_result("sqlmap", {"error": "Binary not found"})
+         return
+
+    _logger.info("Starting SQLMap scan...")
+    try:
+        res = sm.scan(
+            url, 
+            risk=sm_cfg.get("risk", 1), 
+            level=sm_cfg.get("level", 1), 
+            extra_args=sm_cfg.get("extra_args")
+        )
+        
+        for r in res:
+             # Add to main injection report bucket
+             add_result("sql_injection", {
+                 "tool": "sqlmap",
+                 "details": r.get("raw_finding"),
+                 "severity": "High",
+                 "confidence": "Certain"
+             })
+             
+    except Exception as e:
+        _logger.error(f"SQLMap scan failed: {e}")

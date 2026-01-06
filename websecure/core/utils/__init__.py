@@ -4,6 +4,7 @@ from .text import *
 from .system import *
 from .config import *
 from .cache import *
+# from .ports import *  # REMOVED: Legacy port scanner deleted.
 
 # Legacy aliases if needed
 import sys

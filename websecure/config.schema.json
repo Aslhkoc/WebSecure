@@ -223,7 +223,7 @@
       "type": "object",
       "additionalProperties": true
     },
-    "portscan": {
+    "nmap": {
       "type": "object",
       "additionalProperties": true
     },

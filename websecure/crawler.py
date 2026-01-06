@@ -8,6 +8,7 @@ import hashlib
 import threading
 import contextlib
 import tempfile
+import shutil
 import warnings as _bs4_warnings
 import importlib.util as _iu
 from pathlib import Path
@@ -279,6 +280,7 @@ class CrawlerConfig:
     browser_timeout_ms: int = 15000
     browser_record_dir: Optional[str] = None
     browser_prefer: str = "playwright"  # "playwright" | "uc"
+    headless: bool = True
 
     # Persistence
     record_dir: str | None = None
@@ -535,7 +537,7 @@ class WebCrawler:
         if self.debug: print("[Crawler] Starting browser-based discovery...")
         d_eps, d_arts = discover_dynamic_endpoints(
             start_url=self.root, 
-            headless=True,
+            headless=self.cfg.headless,
             timeout_ms=self.cfg.browser_timeout_ms,
             max_pages=self.cfg.browser_max_pages,
             prefer=self.cfg.browser_prefer
@@ -742,6 +744,7 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 driver_path = str(local_driver)
                 logger.info(f"[UC] Using local driver: {driver_path}")
             
+            logger.info(f"[UC] Starting browser... Headless={headless}")
             driver = uc.Chrome(options=options, driver_executable_path=driver_path) if driver_path else uc.Chrome(options=options)
             driver.set_page_load_timeout(timeout_ms/1000)
             
@@ -751,6 +754,7 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 if target in visited: continue
                 visited.add(target)
                 try:
+                    logger.info(f"[UC] Navigating to: {target}")
                     driver.get(target)
                     time.sleep(1)
                     
@@ -797,9 +801,38 @@ def discover_dynamic_endpoints(
     record_dir: Optional[str] = None,
     prefer: str = "playwright",
     return_artifacts: bool = True,
-) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    strategies = [_PlaywrightStrategy(), _UCStrategy()] if prefer == "playwright" else [_UCStrategy(), _PlaywrightStrategy()]
-    for strat in strategies:
-        eps, art = strat.discover(start_url, headless, timeout_ms, max_pages, record_dir, return_artifacts)
-        if eps: return eps, art
-    return [], {}
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any] | None]:
+    
+    # Determine strategy
+    # 1. If prefer is UC and UC is available -> UC
+    # 2. If prefer is Playwright (default) -> Playwright
+    # 3. Fallback to the other if one fails/missing? For now, sticky.
+    
+    logger.info(f"[Browser] Discover starting. Prefer={prefer}, Headless={headless}")
+    results = []
+    artifacts = {}
+
+    # UC Check
+    has_uc = _iu.find_spec("undetected_chromedriver") is not None
+    
+    strategy = None
+    if prefer == "uc":
+        if has_uc:
+            strategy = _UCStrategy()
+        else:
+            logger.warning("[Browser] 'uc' preferred but not installed. Falling back to Playwright.")
+            strategy = _PlaywrightStrategy()
+    else:
+        # Default to Playwright
+        strategy = _PlaywrightStrategy()
+        
+    if strategy:
+        try:
+            logger.info(f"[Browser] Using strategy: {type(strategy).__name__}")
+            eps, arts = strategy.discover(start_url, headless, timeout_ms, max_pages)
+            if eps: results.extend(eps)
+            if arts: artifacts.update(arts)
+        except Exception as e:
+            logger.error(f"[Browser] Strategy execution failed: {e}", exc_info=True)
+            
+    return results, artifacts

@@ -418,9 +418,16 @@ def check_security_logging(url: str, results: Dict, session, debug: bool = False
     _summary(results, bucket, 0)
 
 def check_csrf(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a05_csrf"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
+    """
+    Delegates to the dedicated CSRF scanner module if available.
+    """
+    try:
+        from websecure.scanners import csrf
+        csrf.run_scan(url, session, results, debug=debug)
+    except ImportError:
+        bucket = "a05_csrf"
+        _ensure_bucket(results, bucket)
+        _summary(results, bucket, 0)
 
 def check_insecure_deserialization(url: str, results: Dict, session, debug: bool = False):
     bucket = "a08_insecure_deserialization"

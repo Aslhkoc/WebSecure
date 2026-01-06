@@ -2,7 +2,51 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional, Any
 
+
+import subprocess
+import shutil
+import tempfile
+import os
+
 logger = logging.getLogger(__name__)
+
+class NmapWrapper:
+    """
+    Wrapper for Nmap binary.
+    """
+    def __init__(self, binary_path: str = "nmap"):
+        self.binary = binary_path
+
+    def is_available(self) -> bool:
+        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+
+    def scan(self, target: str, ports: str = "-F", extra_args: List[str] = None) -> List[Dict[str, Any]]:
+        if not self.is_available():
+            logger.warning("Nmap binary not found.")
+            return []
+            
+        fd, temp_output = tempfile.mkstemp(suffix=".xml")
+        os.close(fd)
+        
+        try:
+            cmd = [self.binary, target, "-oX", temp_output, ports]
+            if extra_args:
+                cmd.extend(extra_args)
+                
+            logger.info(f"Starting Nmap scan on {target}...")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            
+            return NmapParser.parse_xml(temp_output)
+            
+        except Exception as e:
+            logger.error(f"Nmap execution error: {e}")
+            return []
+        finally:
+            if os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except: pass
+
 
 class NmapParser:
     """

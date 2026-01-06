@@ -42,7 +42,7 @@ class BaseScanner:
         # 5. Log
         sev = safe_entry.get("severity", "Info")
         msg = safe_entry.get("status") or safe_entry.get("issue")
-        self.logger.info(f"[{sev.upper()}] {bucket}: {msg}")
+        self.logger.debug(f"[{sev.upper()}] {bucket}: {msg}")
 
     def set_summary(self, bucket: str, count: int) -> None:
         self.results[f"{bucket}_summary"] = {"vulnerabilities": count}

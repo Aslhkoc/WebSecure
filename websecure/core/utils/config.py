@@ -63,14 +63,8 @@ def ensure_wordlists(cfg: Dict[str, Any]) -> Dict[str, Any]:
              p = p_up
              
     if p.exists():
-        print(f"[Wordlists] Klasör doğrulandı: {p.absolute()}")
         # Check for common files
         common = p / "common.txt"
-        if common.exists():
-            count = sum(1 for _ in open(common, "r", encoding="utf-8", errors="ignore"))
-            print(f"            -> common.txt yüklendi ({count} satır)")
-        else:
-            print(f"            [!] common.txt eksik!")
     else:
         print(f"[Wordlists] UYARI: Wordlist klasörü ({base}) bulunamadı!")
         

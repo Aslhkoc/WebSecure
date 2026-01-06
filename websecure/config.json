@@ -13,6 +13,9 @@
       "Patched at 2025-09-22T16:07:57.825074Z — auth.strict_required otomatik gevşetildi (geçici), profile=aggressive uyumlandı; env yerleştirme için __guidance__ eklendi."
     ]
   },
+  "settings": {
+    "scan_profile": "safe_full"
+  },
   "target": "https://target.local",
   "base_url": "https://target.local",
   "mode": "normal",
@@ -53,7 +56,7 @@
     },
     "crawl": {
       "use_browser": true,
-      "headless": true
+      "headless": false
     },
     "cipher_prefs": "modern",
     "sni": true,
@@ -341,11 +344,41 @@
         "min_req": 40,
         "up_when_block_rate_below": 0.005,
         "down_when_block_rate_above": 0.03
+      },
+      "smart": {
+        "rps": 5,
+        "concurrency": 5,
+        "modules": [
+          "*"
+        ],
+        "politeness_ms": 1200,
+        "backoff_factor": 2.5,
+        "http": {
+          "user_agent_rotation": true,
+          "randomize_headers": true
+        },
+        "robots_respect": true,
+        "description": "Slow, comprehensive scan designed to evade WAFs and avoid IP blocking."
+      },
+      "safe_full": {
+        "rps": 3,
+        "concurrency": 2,
+        "modules": [
+          "*"
+        ],
+        "politeness_ms": 2000,
+        "backoff_factor": 3.0,
+        "http": {
+          "user_agent_rotation": true,
+          "randomize_headers": true
+        },
+        "robots_respect": true,
+        "description": "Maximum security scan. Very slow, uses all tools, extreme WAF evasion."
       }
     }
   },
   "report": {
-    "path": "reports/last_report"
+    "path": "output/latest_report"
   },
   "reporting": {
     "output_dir": "output",
@@ -597,11 +630,7 @@
   },
   "scanners": {
     "nosqli": {
-      "endpoints": [
-        "https://juice-shop.herokuapp.com/rest/products/search?q=1",
-        "https://juice-shop.herokuapp.com/api/Users",
-        "https://juice-shop.herokuapp.com/rest/user/login"
-      ],
+      "endpoints": [],
       "params": [
         "q",
         "email",
@@ -610,10 +639,7 @@
       ]
     },
     "ssrf_xxe": {
-      "scan_endpoints": [
-        "https://juice-shop.herokuapp.com/ftp/package.json.bak%2500.md",
-        "https://juice-shop.herokuapp.com/profile/image/url"
-      ]
+      "scan_endpoints": []
     },
     "sqli": {
       "enabled": true
@@ -622,9 +648,7 @@
       "enabled": true
     },
     "mass_assignment": {
-      "endpoints": [
-        "https://juice-shop.herokuapp.com/api/Users"
-      ]
+      "endpoints": []
     }
   },
   "authenticated": {
@@ -1093,23 +1117,40 @@
     "dom_xss": {
       "enabled": true
     },
-    "oast": {
-      "enabled": true
+    "crawl": {
+      "max_depth": 3,
+      "max_pages": 500,
+      "headless": false
     },
-    "ssrf_xxe": {
-      "enabled": true
-    },
-    "jwt": {
-      "enabled": true
-    },
-    "scanners": {
-      "ws_fuzz": {
-        "enabled": true
-      }
+    "crawler": {
+      "headless": false,
+      "browser_max_pages": 50,
+      "browser_timeout_ms": 15000,
+      "browser_prefer": "playwright"
     },
     "profile": "deep",
     "graphql_attacks": {
       "enabled": true
+    },
+    "scanners": {
+      "graphql": {
+        "enabled": true
+      },
+      "ws_fuzz": {
+        "enabled": true
+      },
+      "tls": {
+        "enabled": true
+      },
+      "file_upload": {
+        "enabled": true
+      },
+      "ssrf_xxe": {
+        "enabled": true
+      },
+      "request_smuggling": {
+        "enabled": true
+      }
     }
   },
   "regex": {
@@ -1169,18 +1210,6 @@
       "\\.(mp4|m3u8|ts|avi|mkv|webm)(\\?|$)",
       "\\?(page|p|offset|start)=\\d{2,}"
     ]
-  },
-  "ffuf": {
-    "wordlist": "./wordlists/raft-small-words.txt",
-    "bin": "./tools/ffuf/ffuf.exe",
-    "wordlists": [
-      "./wordlists/dirs.txt",
-      "./wordlists/files.txt"
-    ]
-  },
-  "feroxbuster": {
-    "bin": "./tools/feroxbuster/feroxbuster.exe",
-    "wordlist": "./wordlists/raft-small-words.txt"
   },
   "verify_tls": true,
   "jwt": {
@@ -1430,10 +1459,6 @@
       "ciphers": "DEFAULT",
       "fail_on_self_signed": true
     },
-    "port_scan": {
-      "rps": 60,
-      "timeout_seconds": 2.0
-    },
     "policies": {
       "on_429": "slowdown",
       "on_403": "rotate_identity"
@@ -1469,32 +1494,36 @@
     "echo_endpoint": "/ssrf/echo"
   },
   "output_dir": "output",
-  "portscan": {
+  "nmap": {
     "enabled": true,
     "ports": [
       80,
       443,
-      4444,
-      24,
-      23,
-      143,
-      161,
-      53,
-      115,
-      139,
-      3389,
-      514,
-      8080,
-      8443,
       22,
       21,
-      25,
-      110,
-      143,
+      8080,
+      8443,
       3306,
       5432,
-      6379,
-      9200
+      3389
+    ],
+    "arguments": [
+      "-sV",
+      "-T4"
+    ]
+  },
+  "feroxbuster": {
+    "enabled": true,
+    "threads": 50,
+    "depth": 1,
+    "wordlist": "./wordlists/common.txt"
+  },
+  "sqlmap": {
+    "enabled": true,
+    "risk": 1,
+    "level": 1,
+    "extra_args": [
+      "--batch"
     ]
   },
   "wordlists": {
