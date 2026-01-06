@@ -1469,39 +1469,28 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         _write(report_path, md)
         written["md"] = report_path
 
-    # HTML (convert MD when possible; safe fallback otherwise)
+    # HTML (modern dashboard)
     if "html" in fmts:
         import importlib.util as _iul
-        if md is None:
-            mdtxt = render_markdown_report(results)
-        else:
-            mdtxt = md
-        if _iul.find_spec("markdown") is not None:
-            import markdown as _md
-            html_body = _md.markdown(mdtxt, extensions=["tables", "fenced_code"])
-        else:
-            # Minimal <pre> fallback
-            html_body = "<pre>" + (mdtxt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) + "</pre>"
-        html = """<!doctype html><html><head><meta charset='utf-8'><title>WebSec Raporu</title>
-<style>
-:root{--bg:#0e1117;--card:#161b22;--text:#e6edf3;--muted:#a0aab8;--accent:#2f81f7;--b:#2d333b;}
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;background:var(--bg);color:var(--text);line-height:1.5}
-h1,h2,h3{color:var(--text);border-bottom:1px solid var(--b);padding-bottom:4px;margin-top:24px}
-h1{font-size:28px} h2{font-size:22px} h3{font-size:18px}
-table{border-collapse:collapse;width:100%;background:var(--card);margin:12px 0;border:1px solid var(--b)}
-th,td{border:1px solid var(--b);padding:8px;vertical-align:top}
-thead th{background:#0f1623}
-tbody tr:nth-child(even){background:#0d1420}
-code, pre{background:#0b1220;border:1px solid var(--b);border-radius:6px;color:#dde6f7}
-pre{white-space:pre-wrap;padding:10px}
-.chart-row{display:flex;gap:12px;align-items:stretch;margin:12px 0}
-.chart-row .chart{flex:1;background:var(--card);border:1px solid var(--b);border-radius:10px;padding:8px}
-.chart-row img{display:block;width:100%;height:auto;border-radius:6px;border:1px solid var(--b)}
-.chart-row figcaption{margin-top:6px;color:var(--muted);font-size:13px;text-align:center}
-.small{font-size:12px;color:var(--muted)}
-</style>
-</head><body>""" + html_body + "</body></html>"
+        try:
+            # Try importing the new dashboard renderer
+            from websecure.core.html_dashboard import render_html_dashboard
+            html = render_html_dashboard(results)
+        except ImportError:
+            # Fallback to legacy markdown conversion if module missing
+            if md is None:
+                mdtxt = render_markdown_report(results)
+            else:
+                mdtxt = md
+            
+            if _iul.find_spec("markdown") is not None:
+                import markdown as _md
+                html_body = _md.markdown(mdtxt, extensions=["tables", "fenced_code"])
+            else:
+                html_body = "<pre>" + (mdtxt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")) + "</pre>"
+            
+            html = """<!doctype html><html><head><meta charset='utf-8'><title>WebSec Legacy Report</title><body>""" + html_body + "</body></html>"
+
         html_path = os.path.join(out_dir, "report.html")
         _write(html_path, html)
         written["html"] = html_path

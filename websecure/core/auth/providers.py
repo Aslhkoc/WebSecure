@@ -33,8 +33,14 @@ def read_2fa_config(config: Dict[str, Any] | None) -> TwoFAConfig:
     sec = (config or {}).get("settings", {}).get("security", {}) if config else {}
     c = sec.get("two_factor", {}) if isinstance(sec, dict) else {}
     
+    # Fallback/Priority: check config['auth']['two_factor'] (matches config.json)
+    if not c and config and "auth" in config:
+        auth_conf = config.get("auth", {})
+        if isinstance(auth_conf, dict):
+            c = auth_conf.get("two_factor", {}) or {}
+    
     return TwoFAConfig(
-        method=c.get("method", os.getenv("OTP_METHOD", "none")),
+        method=c.get("method") or c.get("provider") or os.getenv("OTP_METHOD", "none"),
         totp_secret=c.get("totp_secret") or os.getenv("TOTP_SECRET"),
         imap_host=c.get("imap_host") or os.getenv("IMAP_HOST"),
         imap_port=int(c.get("imap_port", os.getenv("IMAP_PORT", 993))),
