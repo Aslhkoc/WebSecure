@@ -16,6 +16,7 @@ from .http import hardened_session
 from .reporting import add_result
 import socket, ssl, json, importlib, importlib.util as _iul
 import logging as _logging
+import time as _t
 # Safe imports for optional scanners
 _rs = _ma = _jwt = _nq = _ws = _sx = _gqa = _gqr = _fu = None
 
@@ -49,15 +50,12 @@ try:
 except ImportError:
     pass
 
+
 try:
-    from websecure.scanners import graphql_attacks as _gqa
+    from websecure.scanners import graphql as _gql
 except ImportError:
     pass
 
-try:
-    from websecure.scanners import graphql_rpc as _gqr
-except ImportError:
-    pass
 
 try:
     from websecure.scanners import file_upload as _fu
@@ -144,6 +142,18 @@ def phase_discovery(ctx: dict):
         _logger.error('phase error [phases]', exc_info=True)
         _report_phase_error('phases', 'phases.py', e)
         add_result("discovery", {"severity":"warning","message":f"Discovery failed: {e}","url":target})
+    
+    # [WS3] External Discovery Tools
+    try:
+        # FFUF
+        if _get(ctx.get("config",{}), "offensive.ffuf.enabled", True):
+             _runner_ffuf(ctx)
+        
+        # Feroxbuster
+        if _get(ctx.get("config",{}), "offensive.feroxbuster.enabled", True):
+             _runner_feroxbuster(ctx)
+    except Exception as e:
+        _logger.warning(f"External discovery tool failed: {e}")
 
 def phase_portscan(ctx: dict):
     # UPDATED: Using Nmap with config
@@ -205,8 +215,15 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.mass_assignment",
         "websecure.scanners.jwt",
         "websecure.scanners.ws_fuzz",
-        "websecure.scanners.graphql_attacks",
-        "websecure.scanners.graphql_rpc",
+        "websecure.scanners.ws_fuzz",
+        "websecure.scanners.graphql",
+        "websecure.scanners.rate_limit",
+        "websecure.scanners.csrf",
+        "websecure.scanners.owasp",
+        "websecure.scanners.passive_recon",
+        "websecure.scanners.session_hunter",
+        "websecure.scanners.sqli",
+        "websecure.scanners.xss",
     ]
     hit = 0
     for m in mods:
@@ -214,6 +231,12 @@ def phase_offensive(ctx: dict):
             hit += 1
     if not hit:
         add_result("offensive", {"severity":"note","message":"no offensive modules found"})
+    
+    # [WS3] External Tools Execution (Sqlmap)
+    try:
+        if (cfg.get("offensive", {}).get("sqlmap", {}).get("enabled", True)):
+            _runner_sqlmap(ctx)
+    except: pass
 
 
 _reporting_mod = None
@@ -449,6 +472,13 @@ def _runner_ffuf(ctx) -> None:
          add_result("meta", {"stage": "ffuf", "status": "skipped:no-flow-runner"})
          return
     fm.run_ffuf_scan(ctx)
+
+def _runner_xss(ctx) -> None:
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
+    if not fm or not hasattr(fm, "run_xss_scan") or not callable(getattr(fm, "run_xss_scan")):
+         add_result("meta", {"stage": "xss", "status": "skipped:no-flow-runner"})
+         return
+    fm.run_xss_scan(ctx)
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -956,6 +986,31 @@ def _runner_scanners_tls(ctx) -> None:
 
 # ----------------------------- Plan oluşturucu -----------------------------
 
+
+# ----------------------------- CSRF Runner (NEW) -----------------------------
+def _runner_csrf(ctx) -> None:
+    mod = _opt_import("scanners.csrf")
+    if not mod:
+        add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "Module not found"})
+        return
+    
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+    session = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    debug = bool(getattr(ctx, "debug", False))
+    
+    # Run scan
+    if hasattr(mod, "run_scan"):
+        # run_scan internally adds findings or info notes
+        mod.run_scan(url, session, results, debug=debug)
+    elif hasattr(mod, "run"):
+         mod.run(url, session=session, results=results, debug=debug)
+    else:
+        add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "run_scan/run not found"})
+
+
+# ----------------------------- Plan Builder End ---------------------------
+
 def _offensive_phases(ctx) -> List[Phase]:
     cfg = getattr(ctx, "config", {}) or {}
     off = cfg.get("offensive", {}) if isinstance(cfg, dict) else {}
@@ -998,6 +1053,9 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif & JS Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive", "js"]),
         Phase(id="ffuf", title="FFUF Content Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content"]),
+        Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
+        Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
+        Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
         Phase(id="feroxbuster", title="Feroxbuster Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
         Phase(id="fuzz_param_discovery", title="Parametre Keşfi & Fuzz", enabled=True, runner=lambda c: _safe(c, lambda: _runner_fuzz_and_param_discovery(c), "fuzz_param_discovery"), tags=["fuzz","inputs"]),
         Phase(
@@ -1069,13 +1127,6 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("jwt", default=True, tech_trigger="rest_api"),
             runner=lambda c: _safe(c, lambda: _runner_jwt(c), "jwt"),
             tags=["auth", "token"],
-        ),
-        Phase(
-            id="scanners.ws_fuzz",
-            title="WebSocket Fuzz",
-            enabled=_flag("scanners.ws_fuzz", default=True),
-            runner=lambda c: _safe(c, lambda: _runner_scanners_ws_fuzz(c), "scanners.ws_fuzz"),
-            tags=["ws", "realtime"],
         ),
         Phase(id="races", title="Race/Concurrency", enabled=_flag("races", default=True), runner=lambda c: _safe(c, lambda: _runner_business_logic_races(c), "races"), tags=["race","concurrency"]),
         Phase(
@@ -1393,3 +1444,50 @@ def run_tls_basic(ctx, *, event_cb=None):
     )
     add_result("tls_checked", {"base_url": base_url})
     return results.get("tls", {})
+
+def run_plan_if_needed(ctx: dict):
+    """
+    Executes the unified scan plan if not already executed.
+    Orchestrates discovery, portscan, tls, offensive phases based on config.
+    """
+    # Simple guard: if we have significant results, maybe we already ran? 
+    # But for now, we just enforce running the plan constructed by build_plan.
+    
+    plan = build_plan(ctx)
+    if not plan:
+        add_result("meta", {"stage": "plan", "status": "empty_plan"})
+        return
+
+    _logger.info(f"[Phases] Executing plan with {len(plan)} steps.")
+    
+    results = _ensure_results_bucket(ctx)
+    # Mark start
+    results.setdefault("meta", {})["scan_start"] = _t.time()
+
+    for item in plan:
+        pid = item.get("id")
+        runner = item.get("runner")
+        enabled = item.get("enabled", False)
+        
+        if enabled and callable(runner):
+            if item.get("visible", True):
+                print(f"[•] Faz: {item.get('title', pid)}")
+            
+            # Run safely
+            start_t = _t.time()
+            try:
+                runner(ctx)
+            except Exception as e:
+                _logger.error(f"Phase {pid} failed: {e}", exc_info=True)
+                add_result("errors", {"phase": pid, "error": str(e)})
+            finally:
+                dur = _t.time() - start_t
+                _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
+                if _d:
+                    print(f"    -> {pid} finished in {dur:.2f}s")
+        else:
+            _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
+            if _d:
+                _logger.debug(f"Skipping phase {pid} (enabled={enabled})")
+
+    results["meta"]["scan_end"] = _t.time()

@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from importlib.util import find_spec
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Pattern
 from urllib.parse import urljoin, urlparse
+from datetime import datetime, timezone
 
 import requests
 
@@ -629,8 +630,19 @@ def run_auth_flow(
     if not authenticated and wds.run():
         authenticated = True
 
-    add_result = _import_attr("core.reporting", "add_result")
+    add_result = _import_attr("websecure.core.reporting", "add_result")
     if callable(add_result):
+        # [WS3] Record Session Data for Report
+        session_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user": (cfg.get("auth") or {}).get("username") or "unknown",
+            "authenticated": bool(authenticated),
+            "cookies": session.cookies.get_dict(),
+            "headers": dict(session.headers),
+            "driver_cookies": driver.get_cookies() if (driver and _has_selenium and hasattr(driver, "get_cookies")) else []
+        }
+        add_result("sessions", session_data)
+
         add_result("meta", {"stage": "auth", "authenticated": bool(authenticated)})
 
         emit("auth.final", {"authenticated": bool(authenticated)})

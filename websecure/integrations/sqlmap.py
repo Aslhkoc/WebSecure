@@ -2,7 +2,7 @@ import requests
 import time
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +103,25 @@ class SQLMapWrapper:
         Parsing results from stdout/csv is implemented basically.
         """
         if not self.is_available():
-            logger.warning("SQLMap binary not found.")
-            return []
+            # Try to find if not in path
+            import os
+            from pathlib import Path
+            root = Path(__file__).resolve().parent.parent.parent
+            possible = [
+                str(root / "tools" / "sqlmap" / "sqlmap.py"),
+                str(root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py"),
+                str(root / "tools" / "sqlmap" / "sqlmap.exe")
+            ]
+            found = False
+            for p in possible:
+                if os.path.exists(p):
+                    self.binary = p
+                    found = True
+                    break
+            
+            if not found:
+                logger.warning("SQLMap binary not found.")
+                return []
 
         import tempfile
         import csv
@@ -119,15 +136,20 @@ class SQLMapWrapper:
         out_dir = tempfile.mkdtemp()
         
         try:
-            cmd = [
-                self.binary, 
+            if self.binary.endswith(".py"):
+                import sys
+                cmd = [sys.executable, self.binary]
+            else:
+                cmd = [self.binary]
+
+            cmd.extend([
                 "-u", target, 
                 "--batch", 
                 "--risk", str(risk), 
                 "--level", str(level),
                 "--output-dir", out_dir,
                 "--disable-coloring"
-            ]
+            ])
             if extra_args:
                 cmd.extend(extra_args)
             
@@ -154,8 +176,32 @@ class SQLMapWrapper:
                         for line in f:
                             # Simple heuristic: look for "Parameter: ... ("
                             # Or "Type: " 
-                            if "Type: " in line or "Title: " in line:
-                                results.append({"raw_finding": line.strip()})
+                            # Simple heuristic: look for "Parameter: ... ("
+                            # Or "Type: " 
+                            if "Type: " in line:
+                                current_finding = {"raw_finding": line.strip(), "evidence": {}}
+                                results.append(current_finding)
+                            
+                            # [WS3] Data Extraction Logic
+                            # Capture Banner, Tables, Users if they appear in logs
+                            if "banner: " in line.lower():
+                                banner = line.split(":", 1)[1].strip()
+                                for r in results: r.setdefault("evidence", {})["database_banner"] = banner
+                            
+                            if "database management system users" in line.lower():
+                                # subsequent lines might have users, simplified for now
+                                for r in results: r.setdefault("evidence", {})["extracted_data_type"] = "users"
+
+                            if "available databases" in line.lower():
+                                for r in results: r.setdefault("evidence", {})["extracted_data_type"] = "dbs"
+
+                            if "retrieved:" in line.lower():
+                                # Catch generic data dumps
+                                dumped = line.split("retrieved:", 1)[1].strip()
+                                for r in results: 
+                                    ev = r.setdefault("evidence", {})
+                                    ev.setdefault("dumped_data", []).append(dumped)
+                            
             return results
 
         except Exception as e:

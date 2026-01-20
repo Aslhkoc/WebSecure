@@ -99,9 +99,40 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
                 # which is done in owasp.py. But here we can re-verify if needed.
                 pass 
 
-    # 2. Analyze Forms
+    # 2. Analyze Forms & API Endpoints
     # ----------------
+    # [WS3] Enhanced: Look for crawler metadata first (Playwright forms)
+    crawled_forms = results.get("forms_meta", [])
+    
+    # Merge regex-found forms with crawled forms
     forms = _get_forms(r.text or "")
+    if crawled_forms:
+        # Simple normalization to match structure
+        for cf in crawled_forms:
+            forms.append({
+                "action": cf.get("action") or "",
+                "method": (cf.get("method") or "GET").upper(),
+                "inputs": cf.get("inputs", []),
+                "raw": f"Crawled Form: {cf.get('action')}"
+            })
+
+    # [WS3] SPA/API Logic: If no forms found, check if we have API endpoints from Discovery
+    if not forms and results.get("endpoints"):
+        api_eps = [u for u in results.get("endpoints") if any(m in u for m in ("/api/", "/v1/", "/graphql"))]
+        if api_eps:
+             add_result(bucket, {
+                "type": "API CSRF Check",
+                "severity": "Info", 
+                "reason": f"Found {len(api_eps)} API endpoints. Manual verifying of Anti-CSRF headers (X-CSRF-Token, etc.) required.",
+                "evidence": {"endpoints": api_eps[:5]}
+             })
+             # Note: Fully automated API CSRF check requires traffic analysis (knowing payload)
+             # Here we assume Info/Manual review for APIs unless specific headers are missing in responses (Passive)
+
+    if not forms and not results.get("endpoints"):
+        add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "No forms or API endpoints found to scan."})
+        return
+
     for form in forms:
         method = form.get("method", "GET")
         action = form.get("action", "")
@@ -126,6 +157,16 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
                 "reason": "Sensitive action form without anti-CSRF token",
                 "evidence": {"form_snippet": form.get("raw")}
             })
+            
+    # [WS3] Generic Header Check on Base URL (SPA)
+    # Some SPAs send CSRF tokens in headers (X-XSRF-TOKEN). If the site sets a cookie XSRF-TOKEN, it must match header.
+    if session.cookies:
+        xsrf_cookie = next((c for c in session.cookies if "xsrf" in c.name.lower() or "csrf" in c.name.lower()), None)
+        if xsrf_cookie:
+            # Check if we can find a matching header logic in JS files? Too deep.
+            # Just Info note.
+            pass
+
 
     # 3. Login CSRF Check
     # -------------------
@@ -145,6 +186,9 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
                     "reason": "Login form missing anti-CSRF token"
                 })
 
-def run_scan(url: str, session, results: Dict[str, Any], debug: bool = False):
+def run_scan(url: str, session, results: Dict[str, Any], debug: bool = False, **kwargs):
     """EntryPoint for the CSRF scanner."""
     check_csrf_protection(url, session, results, debug)
+
+run = run_scan
+

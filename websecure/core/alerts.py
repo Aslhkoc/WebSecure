@@ -35,53 +35,46 @@ class AlertManager:
 
     @staticmethod
     def play_critical():
-        """
-        Critical: High pitched triple beep (Alarm).
-        """
+        """Critical: Police Siren Effect (Whoop-Whoop)."""
         def run():
-            # 2500Hz x 3
-            AlertManager._play_pattern([(2500, 150), (2500, 150), (2500, 150)])
+            if winsound:
+                for _ in range(3):
+                    for f in range(1000, 2500, 100):
+                        winsound.Beep(f, 30)
+                    for f in range(2500, 1000, -100):
+                        winsound.Beep(f, 30)
+        
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
     def play_high():
-        """
-        High: Two urgent beeps.
-        """
+        """High: Machine Gun / Rapid Fire."""
         def run():
-            # 1500Hz x 2
-            AlertManager._play_pattern([(1500, 250), (1500, 250)])
+             AlertManager._play_pattern([(1500, 50), (0, 50), (1500, 50), (0, 50), (1500, 50), (0, 50), (1500, 50)])
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
     def play_medium():
-        """
-        Medium: Two moderate beeps.
-        """
+        """Medium: Descending 'Uh-oh'."""
         def run():
-            # 800Hz x 2
-            AlertManager._play_pattern([(800, 200), (800, 200)])
+            AlertManager._play_pattern([(1000, 400), (600, 600)])
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
     def play_low():
-        """
-        Low: Single low notification beep.
-        """
+        """Low: Sonar Ping."""
         def run():
-            # 400Hz x 1
-            AlertManager._play_pattern([(400, 150)])
+            AlertManager._play_pattern([(2000, 50)])
         threading.Thread(target=run, daemon=True).start()
 
 
     @staticmethod
     def play_success():
-        """
-        Success chime: Ascending Major Triad (C5 - E5 - G5)
-        """
+        """Success: Level Up!"""
         def run():
-            # C5 (523), E5 (659), G5 (784)
-            AlertManager._play_pattern([(523, 150), (659, 150), (784, 300)])
+            # C, E, G, C(high)
+            pat = [(523, 100), (659, 100), (783, 100), (1046, 400)]
+            AlertManager._play_pattern(pat)
         
         threading.Thread(target=run, daemon=True).start()
 

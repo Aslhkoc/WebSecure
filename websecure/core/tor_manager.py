@@ -74,3 +74,34 @@ class TorController:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=1.0)
+
+# ============================================================================
+# Compatibility / Global Helpers (Merged from tor_control.py)
+# ============================================================================
+
+_global_tor: Optional[TorController] = None
+
+def init_tor_control(cfg: dict = None):
+    """
+    Initializes the global Tor controller.
+    """
+    global _global_tor
+    if not cfg: 
+        return
+    
+    enabled = cfg.get("enabled", False)
+    if not enabled:
+        return
+
+    control_port = int(cfg.get("control_port", 9051))
+    password = cfg.get("password", None)
+    
+    _global_tor = TorController(control_port=control_port, password=password)
+    # Optional: Start rotation if configured in cfg? For now just init.
+
+def rotate_tor_identity() -> bool:
+    """Helper to rotate identity if global controller is init."""
+    global _global_tor
+    if _global_tor:
+        return _global_tor.renew_identity()
+    return False

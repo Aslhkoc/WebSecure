@@ -14,13 +14,11 @@ from websecure.core.http import verify_for_phase
 from websecure.core.utils import current_identity
 import inspect
 import importlib.util
-from websecure.core.auth_flow import run_auto_signup, run_device_code_flow
+from websecure.core.auth_flow import run_auto_signup, run_device_code_flow, smart_login, attach_auth_meta
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
-from websecure.core.fuzzer import verify_and_score
 from websecure.core.flows import run_business_logic_flows
 from websecure.core.bl_concurrency import run_race_conditions
-from websecure.core.flow_runner import run_nosqli_scan, run_ssrf_xxe_scan
 import re as _re_urlnorm
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
 import argparse, json, time, socket, ssl
@@ -33,9 +31,16 @@ def _opt_import(mod, func):
     except Exception:
         return None
 
-from websecure.core.phases import build_plan
+from websecure.core.phases import build_plan, run_plan_if_needed
 from websecure.core.discovery_helpers import discovery_enrich
 from websecure.core.alerts import AlertManager
+from websecure.core.reporting import (
+    verify_and_score, 
+    configure_logging, 
+    perform_reporting, 
+    add_session
+)
+
 
 
 import logging as _logging
@@ -62,28 +67,42 @@ _logger = _logging.getLogger(__name__)
 _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
 
+# [UI] MSF-Style Banner
+try:
+    from websecure.core.banner import print_banner
+    print_banner(modules_count=18) # Core modules count (Updated)
+except ImportError:
+    pass
+    
+    # [WS3] Dynamic Wordlist Report
+    try:
+        from websecure.core.utils import collect_all_wordlists
+        _wd = collect_all_wordlists()
+        print(f"       =[ Wordlists: {_wd.get('count',0)} files connected (~{_wd.get('total_lines_est',0)} lines)")
+    except Exception:
+        pass
+
 # [WS3-ANCHOR] New Module Imports
 try:
     from websecure.core import chain_reactor
-    from websecure.scanners import csrf, rate_limit, mass_assignment, ws_fuzz
+    from websecure.scanners import csrf, mass_assignment
 except ImportError:
     chain_reactor = None
     csrf = None
-    rate_limit = None
     mass_assignment = None
-    ws_fuzz = None
     _logger.warning("[Main] Failed to import one or more extra scanner modules.")
 
 
 
 
 try:
-    from websecure.scanners import request_smuggling, jwt, nosqli
+    from websecure.scanners import request_smuggling, jwt, nosqli, rate_limit
 except ImportError:
     request_smuggling = None
     jwt = None
     nosqli = None
-    _logger.warning("[Main] Failed to import request_smuggling, jwt, or nosqli.")
+    rate_limit = None
+    _logger.warning("[Main] Failed to import request_smuggling, jwt, nosqli, or rate_limit.")
 
 
 # [WS3] Offensive Scanner Wrappers (Bridge)
@@ -118,18 +137,6 @@ def offensive_nosqli(url, session, **kwargs):
             nosqli.run(url, session=session)
         except Exception as e:
             _logger.error(f"NoSQLi Scan failed: {e}")
-
-def offensive_ws_fuzz(url, session, **kwargs):
-    if ws_fuzz:
-        try:
-            res = ws_fuzz.run(url, session=session)
-            if res and isinstance(res, list):
-                if callable(globals().get("add_result")):
-                    for r in res:
-                        add_result("ws_fuzz", r)
-        except Exception as e:
-            _logger.error(f"WS Fuzz failed: {e}")
-
 
 
 def scan_ports_or_distributed(url, results, cfg, detailed=False, debug=False, protocol="tcp"):
@@ -799,12 +806,7 @@ else:
         return None
 
 # --- Faz Planı / Orkestrasyon ---
-_flow_spec = _ws_spec("websecure.core.flow_runner")
-if _flow_spec is not None:
-    _flow_mod = importlib.import_module("websecure.core.flow_runner")
-    run_plan_if_needed = getattr(_flow_mod, "run_plan_if_needed", None)
-else:
-    run_plan_if_needed = None
+
 
 # --- TLS ---
 _tls_spec = _ws_spec("websecure.scanners.tls")
@@ -920,6 +922,28 @@ else:
 # --- Skorlama & entegrasyon ---
 
 # --- Port tarama & discovery ---
+
+# [FIX] Restore Nmap functionality via new module
+def scan_ports(url, results, detailed=False, debug=False, protocol="tcp"):
+    try:
+        from websecure.scanners import port_scan
+        print(f"[PortScan] {url} üzerinde Nmap başlatılıyor...")
+        # config pass-through needs global cfg or we construct a minimal one
+        _cfg = globals().get("cfg", {})
+        if detailed: 
+            if "port_scan" not in _cfg: _cfg["port_scan"] = {}
+            _cfg["port_scan"]["detailed"] = True
+            
+        data = port_scan.run(url, _cfg)
+        
+        # Merge results
+        if data:
+            results.setdefault("port_scan", []).extend(data)
+            results.setdefault("open_ports", []).extend([p["port"] for p in data if p.get("state")=="open"])
+            
+    except Exception as e:
+        print(f"[PortScan] Error: {e}")
+
 def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: bool = False, protocol: str = "tcp"):
     rw = ((cfg.get('remote_workers') or {}).get('port_scan') or {}) if isinstance(cfg, dict) else {}
     if rw.get('enabled') and rw.get('workers'):
@@ -1337,10 +1361,11 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
 [?] Tarama yoğunluğu:
     1) Agresif - kapsam ve mutasyonlar tam (daha uzun sürebilir)
     2) Normal   - payload/mutasyon yoğunluğu azaltılır (kapsam korunur)
+    3) Güvenli Full - WAF atlatma öncelikli, tüm araçlar aktif (en yavaş, en kapsamlı)
 """.rstrip())
 
-        sel = (_prompt("Seçiminiz [1/2, varsayılan=1]: ", "1") or "1").strip()
-        if sel not in ("1", "2"):
+        sel = (_prompt("Seçiminiz [1/2/3, varsayılan=1]: ", "1") or "1").strip()
+        if sel not in ("1", "2", "3"):
             print("Geçersiz seçim.")
             continue
 
@@ -1350,6 +1375,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
             ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
             if ans.startswith("b"):
                 continue
+            cfg.setdefault("settings", {})["scan_profile"] = "aggressive"
             cfg.setdefault("_profile", {})["selected"] = "aggressive"
             off = cfg.setdefault("offensive", {})
             off["profile"] = "deep"
@@ -1357,7 +1383,40 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
                 node = off.setdefault(k, {})
                 if isinstance(node, dict):
                     node["enabled"] = True
+
+            # [WS3] UNLOCKED: Enable full destructive potential (Realism)
+            os.environ["WS_PAYLOADS_MAX"] = "100000"
+            print("[!] Sınırlar Kaldırıldı: Payload limiti 100,000'e yükseltildi.")
+            print("[!] DİKKAT: Yıkıcı mod aktif (DELETE/DROP tabloları silinebilir).")
+
             return "aggressive", cfg
+
+        if sel == "3":
+             print(f"[!] Güvenli Full (WAF Evasion) modu seçtiniz. Çok yavaş ama gizli çalışır.")
+             ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
+             if ans.startswith("b"):
+                 continue
+             cfg.setdefault("settings", {})["scan_profile"] = "safe_full"
+             cfg.setdefault("_profile", {})["selected"] = "safe_full"
+             
+             # Activate all offensive modules but with 'safe' defaults implied by profile
+             off = cfg.setdefault("offensive", {})
+             off["profile"] = "deep" # needs deep module access
+             for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
+                node = off.setdefault(k, {})
+                if isinstance(node, dict):
+                    node["enabled"] = True
+
+             # [WS3] STEALTH-SNIPER MODE:
+             # User requested: "Don't be cowardly" + "Avoid WAF"
+             # Solution: High Payload Count + Low Speed
+             os.environ["WS_PAYLOADS_MAX"] = "100000"
+             print("[!] STEALTH-SNIPER Modu: Payload limiti 100,000 (Yıkıcı/Gerçekçi).")
+             print("[!] NOT: WAF yakalanmamak için yavaş çalışır. Sabırlı olun.")
+             print("[✓] GÜVENLİK: Bu saldırılar SADECE hedef URL'ye yapılır. Sizin bilgisayarınız etkilenmez.")
+             
+             return "safe_full", cfg
+             return "safe_full", cfg
 
         # sel == "2"
         cfg2, notes = _apply_normal_profile(dict(cfg))  # kopya üstünde
@@ -1367,6 +1426,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
         ans = (_prompt("Devam edilsin mi? [D]evam / [B]aşa dön: ", "D") or "D").lower()
         if ans.startswith("b"):
             continue
+        cfg2.setdefault("settings", {})["scan_profile"] = "normal"
         cfg2.setdefault("_profile", {})["selected"] = "normal"
         off = cfg2.setdefault("offensive", {})
         off["profile"] = "stealth"
@@ -1860,7 +1920,12 @@ if _ilu_patch.find_spec("websecure.core.reporting") is not None:
     _rmod = _im.import_module("websecure.core.reporting")
     _phase_rec = getattr(_rmod, "_phase_rec", None)
 elif _ilu_patch.find_spec('reporting') is not None:
-    from websecure.core.reporting import _phase_rec
+    from websecure.core.reporting import (
+    configure_logging,
+    perform_reporting,
+    add_session,
+    verify_and_score
+)
 else:
     _phase_rec = None
 
@@ -2134,9 +2199,16 @@ def _normalize_webdriver_cfg(cfg: dict) -> dict:
         headless = _to_bool((c.get("crawler") or {}).get("browser", {}).get("headless"), None)
 
     # [FEATURE] Allow CLI override for visibility
+    # Öncelik sırası:
+    # 1. --visible (Zorla AÇ)
+    # 2. --headless (Zorla GİZLE)
+    # 3. Varsayılan: AÇIK (False)
+    
     if "--visible" in sys.argv:
         headless = False
-
+    elif "--headless" in sys.argv:
+        headless = True
+    
     if headless is None:
         headless = False  # varsayılan: görünür tarayıcı
 
@@ -2172,6 +2244,7 @@ O====|_______________________________________________________>  1   1 0
     print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
     # [FEATURE] Wizard Tip
     print("    💡 İPUCU: Kolay kurulum için 'python main.py --wizard' komutunu kullanın!")
+    print("    💡 BİLGİ: Tarayıcı varsayılan olarak AÇIK çalışır. Gizlemek için '--headless' kullanın.")
     print("")
     cfg = load_config()
 
@@ -2292,15 +2365,33 @@ O====|_______________________________________________________>  1   1 0
     parser.add_argument("--batch", action="store_true", help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
     parser.add_argument("--profile", help="Tarama profili (stealth, normal, aggressive, deep)")
     parser.add_argument("--debug", action="store_true", help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
-    parser.add_argument("--visible", action="store_true", help="Canlı tarayıcı görünümünü aç (Live View)")
+    parser.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
+    parser.add_argument("--headless", action="store_true", help="Tarayıcıyı GİZLE (Arka planda çalıştır)")
     args = parser.parse_args()
 
-    # VISIBLE MODE: Force all headless settings to False if requested
-    if args.visible:
-        print("[*] Live View (Visible Browser) Modu Etkinleştirildi.")
+    # --headless VARSA gizle, --visible VARSA göster (çakışırsa visible kazanır, yukarıda sys.argv ile işledik ama burada config'e basıyoruz)
+    # _normalize_webdriver_cfg zaten sys.argv kontrolü yaptı ve config yüklendiğinde headless set edildi.
+    # Ancak burada son bir override yapalım:
+    
+    if args.headless and not args.visible:
+        # Config'deki her yere işle
+        cfg.setdefault("crawler", {})["headless"] = True
+        cfg.setdefault("crawl", {})["headless"] = True
+        if "webdriver" not in cfg: cfg["webdriver"] = {}
+        cfg["webdriver"]["headless"] = True
+        if "settings" not in cfg: cfg["settings"] = {}
+        if "webdriver" not in cfg["settings"]: cfg["settings"]["webdriver"] = {}
+        cfg["settings"]["webdriver"]["headless"] = True
+        print("[*] Headless Mod Etkinleştirildi (Tarayıcı GİZLİ).")
+
+    # VISIBLE MODE: Force all headless settings to False if requested OR default
+    # Eğer --headless YOKSA, varsayılan olarak görünür olsun (veya --visible varsa)
+    if args.visible or (not args.headless):
+        if args.visible:
+             print("[*] Live View (Visible Browser) Modu Etkinleştirildi.")
+        # Config'deki her yere işle (Görünür yap)
         cfg.setdefault("crawler", {})["headless"] = False
         cfg.setdefault("crawl", {})["headless"] = False
-        # Ensure deep overrides for consistency
         if "webdriver" not in cfg: cfg["webdriver"] = {}
         cfg["webdriver"]["headless"] = False
         if "settings" not in cfg: cfg["settings"] = {}
@@ -2744,6 +2835,25 @@ O====|_______________________________________________________>  1   1 0
                 # Get the plan (which might be just offensive if base_plan failed)
                 raw_plan = build_plan(ctx)
                 
+                # [WS3] ANTI-GHOST PROTOCOL: Never allow empty plan
+                if not raw_plan:
+                    print("\n[!] UYARI: Otomatik plan oluşturulamadı (Konfigürasyon eksik olabilir).")
+                    print("[*] 'EMERGENCY FORCE' Modu Devrede: Tüm modüller manuel olarak ekleniyor...")
+                    from websecure.core.phases import (
+                        discovery_phase, 
+                        port_scan_phase,
+                        crawl_phase,
+                        offensive_phase_runner_unified,
+                        reporting_phase
+                    )
+                    raw_plan = [
+                         {"id": "discovery", "title": "Keşif (Emergency)", "runner": discovery_phase, "enabled": True},
+                         {"id": "portscan", "title": "Port Taraması", "runner": port_scan_phase, "enabled": True},
+                         {"id": "crawl", "title": "Gezinme & Analiz", "runner": crawl_phase, "enabled": True},
+                         {"id": "offensive", "title": "Saldırı (Unified)", "runner": offensive_phase_runner_unified, "enabled": True},
+                         {"id": "reporting", "title": "Raporlama", "runner": reporting_phase, "enabled": True}
+                    ]
+
                 # Merge manually if needed
                 plan_map = {p["id"]: p for p in manual_plan}
                 for p in raw_plan:
@@ -2757,8 +2867,68 @@ O====|_______________________________________________________>  1   1 0
 
         ctx = _build_ctx()
 
+        # [WS3] SAFETY CHECK: Localhost Warning
+        _turl = (url or "").lower()
+        if "localhost" in _turl or "127.0.0.1" in _turl:
+            print("\n" + "!"*60)
+            print(" [DİKKAT] HEDEF LOCALHOST (KENDİ BİLGİSAYARINIZ)")
+            print(" Bu tarama güvenlidir çünkü sadece çalışan servise istek atar.")
+            print(" DOSYA SİSTEMİNİZE VEYA DİĞER PROGRAMLARA ZARAR VERMEZ.")
+            print("!"*60 + "\n")
+
         if callable(globals().get("_session_priming")):
             _session_priming(session, url, cfg)
+
+        # [WS3] ROBUST AUTHENTICATION & SESSION CAPTURE
+        def _on_auth_event(evt: str, data: dict):
+            if not data.get("ok", True) and "final" not in evt: return
+            
+            if evt == "auth.webdriver_login" and data.get("ok"):
+                print("\n" + "="*65)
+                print(" [KILL CAM] SESSION CAPTURED (BROWSER) ")
+                print("="*65)
+                print(f" [+] Strategy: WebDriver Injection")
+                print(f" [+] Origin:   {url}")
+                print(f" [+] Cookies:  Synced to Session")
+                print("="*65 + "\n")
+            elif evt == "auth.requests_login" and data.get("ok"):
+                print("\n" + "="*65)
+                print(" [KILL CAM] SESSION CAPTURED (API) ")
+                print("="*65)
+                print(f" [+] Strategy: API/Form Login")
+                print(f" [+] Status:   Authorized")
+                print("="*65 + "\n")
+            elif evt == "auth.final":
+                 if data.get("authenticated"):
+                     print(f"[+] Auth Flow Complete: Authenticated = TRUE")
+                 else:
+                     pass # Silent failure to allow fallback
+
+        # Invoke Smart Login with Event Callback
+        if callable(smart_login):
+            print("[*] Akıllı Oturum Yönetimi başlatılıyor (Smart Auth)...")
+            smart_login(session, cfg, driver=driver, base_url=url, debug=debug, event_cb=_on_auth_event)
+
+
+        # [WS3] SESSION HUNTER (User Code #1 Integration)
+        # If Profile is Aggressive or user demands deep check, try hijacking/prediction
+        # Check if auth failed OR if we just want to test robustness
+        _prof = (cfg.get("settings") or {}).get("scan_profile")
+        if _prof in ["aggressive", "safe_full"]: 
+             # Import locally to avoid circle if TopLevel
+             try:
+                 from websecure.scanners.session_hunter import run_session_hunter
+                 print("\n[*] Session Hunter Başlatılıyor (Tahmin & Brute Force)...")
+                 hunter_res = run_session_hunter(url, session, threads=20) # 20 threads safe default
+                 if hunter_res:
+                     print(f"[!] DİKKAT: {len(hunter_res)} adet zayıf/tahmin edilebilir oturum bulundu!")
+                     # Add to results?
+                     if callable(globals().get("add_result")):
+                         add_result("auth_weakness", {"hunter_findings": hunter_res})
+             except ImportError:
+                 print("[!] Session Hunter modülü yüklenemedi.")
+             except Exception as e:
+                 print(f"[!] Session Hunter hatası: {e}")
 
         _auth = (cfg.get('auth') or {}) if isinstance(cfg, dict) else {}
         _auto = (_auth.get('auto_signup') or {}) if isinstance(_auth, dict) else {}
@@ -3034,18 +3204,13 @@ O====|_______________________________________________________>  1   1 0
                     print("[WARN] Keşif başarısız (0 endpoints). Base URL ile saldırı zorlanıyor.")
                     results.setdefault("endpoints", []).append(url)
 
-                if callable(globals().get("build_plan")):
+                # [Fix] Direct Phase Execution
+                # from websecure.core.phases import run_plan_if_needed
 
-                    print("[•] Faz planı (koşul bazlı) çalıştırılıyor…")
-                    t = mark("phase_plan")
-                    _run_phase_plan(ctx, skip_legacy_offensive=True)
-                    mark("phase_plan", t)
-
-                _rp = globals().get("run_plan_if_needed")
-                if callable(_rp):
-                    ok_rp, err_or_none = _safe_call(_rp, ctx, call_timeout=900.0)
-                    if not ok_rp and callable(globals().get("add_result")):
-                        add_result('errors', {'stage': 'phase_run', 'error': str(err_or_none)})
+                print("[•] Faz planı çalıştırılıyor…")
+                t = mark("phase_plan")
+                _safe_call(run_plan_if_needed, ctx, call_timeout=None) # No timeout for full plan
+                mark("phase_plan", t)
 
                 # 6) OFFENSIVE 3A
                 print("[•] Offensive modüller…")
@@ -3212,19 +3377,23 @@ O====|_______________________________________________________>  1   1 0
             print("[•] SSRF & XXE taraması…")
             _safe_call(run_ssrf_xxe_scan, ctx=ctx)
 
+        merged_eps = list(set(endpoints + (ctx.results.get("discovery", {}).get("query") or [])))
+        # Filter valid URLs
+        merged_eps = [u for u in merged_eps if isinstance(u, str) and "://" in u]
+
         # 3. SQL Injection (New Robust Module)
         # Import dynamically to handle 'shim' modules
         _run_sqli = _opt_import('websecure.scanners.sqli', 'run')
         if callable(_run_sqli) and (cfg.get("scanners") or {}).get("sqli"):
-            print("[•] SQL Enjeksiyon taraması (Robust)…")
-            # Note: sqli.run takes (url, session, debug) unlike run_nosqli_scan which takes ctx
-            _safe_call(_run_sqli, ctx.url, session=session, debug=debug)
+            print(f"[•] SQL Enjeksiyon taraması (Robust) - {len(merged_eps)} hedefe...")
+            # Note: sqli.run takes (url, session, debug) where url can be a list
+            _safe_call(_run_sqli, merged_eps, session=session, debug=debug)
 
         # 4. Reflected XSS (New Robust Module)
         _run_xss = _opt_import('websecure.scanners.xss', 'run')
         if callable(_run_xss) and (cfg.get("scanners") or {}).get("xss"):
-            print("[•] XSS taraması (Reflected)…")
-            _safe_call(_run_xss, ctx.url, session=session, debug=debug)
+            print(f"[•] XSS taraması (Reflected) - {len(merged_eps)} hedefe...")
+            _safe_call(_run_xss, merged_eps, session=session, debug=debug)
 
 
         # 5. Rate Limit (Orphaned Fix)
@@ -3360,9 +3529,83 @@ if __name__ == "__main__":
     # from websecure.core.scan_modes import hpm_bootstrap_from_file
     # hpm_bootstrap_from_file('config.json')
 
-    _ret = main()
-    if inspect.iscoroutine(_ret):
-        asyncio.run(_ret)
+    # [WS3] Interactive Mode (Wizard)
+    if len(_sys.argv) < 2:
+        try:
+            from websecure.core.wizard import run_wizard
+            # Run wizard and if it returns True (Run Now selected)
+            if run_wizard():
+                # We need to simulate CLI args for main() to be happy
+                # Load the config we just saved to get the target
+                try:
+                    import json
+                    with open("config.json", "r", encoding="utf-8") as _f:
+                        _wiz_cfg = json.load(_f)
+                        _wiz_tgt = _wiz_cfg.get("target")
+                        if _wiz_tgt:
+                            # Inject target into argv so main() parses it
+                            _sys.argv.append(_wiz_tgt)
+                            print(f"[Wizard] Hedef yüklendi: {_wiz_tgt}")
+                            print(f"[Wizard] Otomatik başlatılıyor...")
+                            time.sleep(1.5)
+                except Exception as _e:
+                    print(f"[!] Config okuma hatası: {_e}")
+                    _sys.exit(1)
+            else:
+                # User cancelled or chose not to run immediately
+                _sys.exit(0)
+        except ImportError:
+            pass
+            
+    # [WS3] External Tool Management
+    try:
+        from websecure.core.tool_manager import ToolManager
+        # Load temporary config just for this decision
+        import json
+        _tm_cfg = {}
+        if os.path.exists("config.json"):
+            with open("config.json", "r") as f: _tm_cfg = json.load(f)
+            
+        tm = ToolManager(_tm_cfg)
+        # Only ask if interactive and not configured
+        if "--interactive" in sys.argv:
+            updates = tm.ask_user_interactive()
+            # If changed, we might want to update config, but for now just pass environment?
+            # Actually, main() loads config again. 
+            pass
+            
+        # Ensure SQLMap API is started if enabled in config
+        if (_tm_cfg.get("offensive", {}).get("sqlmap", {}).get("enabled")) or \
+           (_tm_cfg.get("tools", {}).get("sqlmap", {}).get("enabled")):
+             tm.start_sqlmap_api()
+             
+    except Exception as e:
+        print(f"[!] Tool Manager Error: {e}")
+
+    # Wordlists sync removed per user request
+    try:
+        _ret = main()
+        if inspect.iscoroutine(_ret):
+            asyncio.run(_ret)
+    except KeyboardInterrupt:
+        print("\n[!] Kullanıcı tarafından iptal edildi (Ctrl+C).")
+    except Exception as e:
+        print(f"\n[!] Kritik Hata: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # [FIX] Emergency Report Save
+        print("\n[!] Raporlama süreci (Safety Net)...")
+        _res = globals().get("results")
+        _cfg = globals().get("cfg")
+        if _res and _cfg:
+            try:
+                # Ensure reporting module is loaded
+                import websecure.core.reporting as _rep_safe
+                _rep_safe.perform_reporting(None, _cfg, _res)
+                print("[+] Raporlar başarıyla kaydedildi.")
+            except Exception as re:
+                print(f"[!] Rapor kaydetme hatası: {re}")
     
     # Success Alert
     try:

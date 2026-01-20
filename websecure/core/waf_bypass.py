@@ -85,18 +85,27 @@ class WAFBypassAdapter(HTTPAdapter):
             if k not in request.headers:
                 request.headers[k] = v
 
+        # [NIGHTMARE] Extra Bypass Headers (Cloudflare, IIS, etc.)
+        request.headers["X-Rewrite-URL"] = request.path_url
+        request.headers["X-Original-URL"] = request.path_url
+        request.headers["X-Forwarded-Scheme"] = "https"
+        request.headers["X-Forwarded-Proto"] = "https"
+
         # 3. Path Obfuscation
         if random.random() < 0.2: 
             try:
                 parsed = urlparse(request.url)
                 path = parsed.path
                 if path and path.startswith("/"):
-                    tactic = random.choice(["double_slash", "current_dir"])
+                    tactic = random.choice(["double_slash", "current_dir", "semicolon"])
                     new_path = path
                     if tactic == "double_slash":
-                        new_path = "/" + path
+                        new_path = "/" + path.lstrip("/")
                     elif tactic == "current_dir":
-                        new_path = "/." + path
+                        new_path = "/./" + path.lstrip("/")
+                    elif tactic == "semicolon":
+                        # /admin -> /admin;.css
+                        new_path = path + ";.css"
                     
                     request.url = urlunparse((
                         parsed.scheme, parsed.netloc, new_path,
@@ -118,6 +127,13 @@ class WAFBypassAdapter(HTTPAdapter):
             request.headers["DNT"] = "1"
         if "Upgrade-Insecure-Requests" not in request.headers:
             request.headers["Upgrade-Insecure-Requests"] = "1"
+            
+        # 6. [NIGHTMARE] HPP (HTTP Parameter Pollution) Injection
+        # Appends a dummy parameter to confuse WAFs
+        if random.random() < 0.15:
+            sep = "&" if "?" in request.url else "?"
+            junk_param = f"utm_debug={random.randint(1000,9999)}"
+            request.url += sep + junk_param
 
         return super().send(request, **kwargs)
 
@@ -132,7 +148,10 @@ class WAFBypassSession(requests.Session):
         self.mount("https://", WAFBypassAdapter())
         self.mount("http://", WAFBypassAdapter())
         self.headers.update({
-            "User-Agent": get_random_user_agent()
+            "User-Agent": get_random_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive"
         })
 
     def request(self, method, url, *args, **kwargs):

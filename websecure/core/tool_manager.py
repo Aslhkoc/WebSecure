@@ -19,6 +19,18 @@ class ToolManager:
         self.project_root = Path(__file__).resolve().parent.parent.parent
         self.tools_dir = self.project_root / "tools"
         self.sqlmap_process = None
+        self.sqlmap_client = None
+
+    def get_sqlmap_client(self):
+        """Lazy loader for SQLMapClient"""
+        if self.sqlmap_client: return self.sqlmap_client
+        try:
+            from websecure.integrations.sqlmap import SQLMapClient
+            self.sqlmap_client = SQLMapClient()
+        except ImportError:
+            pass
+        return self.sqlmap_client
+
 
     def ask_user_interactive(self) -> Dict[str, bool]:
         """
@@ -107,8 +119,15 @@ class ToolManager:
                 time.sleep(1)
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     if s.connect_ex(('127.0.0.1', 8775)) == 0:
-                        print("✅ SQLMap API (API Mode) Başarıyla Çalıştı: http://127.0.0.1:8775")
-                        return True
+                        # Extra Check: Use Client
+                         cli = self.get_sqlmap_client()
+                         if cli and cli.is_alive():
+                             print("✅ SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
+                         else:
+                             print("✅ SQLMap API Portu Açık (Servis Yanıt Veriyor)")
+                         
+                         print("   (Program bu servisi otomatik kullanacaktır.)")
+                         return True
             
             print("❌ SQLMap API başlatılamadı (Timeout).")
             return False

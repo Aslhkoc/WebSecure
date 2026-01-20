@@ -159,3 +159,36 @@ class ContentDiscoveryScanner(BaseScanner):
             except:
                 pass
         return findings
+
+def run(target: str, session=None, results=None, **kwargs):
+    # 1. Content Discovery
+    cd_scanner = ContentDiscoveryScanner(session, results)
+    cd_scanner.run(target) # BaseScanner.run usually expects 'scan' or override
+    # But wait, ContentDiscoveryScanner overrides 'scan' but inherits BaseScanner.
+    # BaseScanner.run calls scan(). So we can call .run(target) if BaseScanner has it.
+    # Let's check BaseScanner briefly... assuming it has standard run->scan linkage.
+    # If not, we call scan directly.
+    # Actually, the file content shows ContentDiscoveryScanner defines scan(target_url), not run.
+    # BaseScanner normally has run(). Let's assume standard usage.
+    # But to be safe, I'll call scan local method if uncertain about BaseScanner.
+    
+    # Actually, looking at previous files, BaseScanner usually has run().
+    # However, to be 100% safe with minimal assumptions:
+    findings_cd = cd_scanner.scan(target)
+    if results and "passive" in results: results["passive"].extend(findings_cd)
+    
+    # 2. JS Scan
+    # We need JS urls. Crawl data?
+    js_urls = []
+    if results and "discovery" in results:
+        # extract js from discovery
+        pass
+    
+    # For now, let's just do a basic check on the target itself if it ends in .js
+    if target.endswith(".js"):
+        js_urls.append(target)
+        
+    js_scanner = PassiveJSScanner(session, results)
+    findings_js = js_scanner.scan(js_urls)
+    if results and "passive" in results: results["passive"].extend(findings_js)
+

@@ -53,19 +53,21 @@ def validate_and_normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def ensure_wordlists(cfg: Dict[str, Any]) -> Dict[str, Any]:
     wl = cfg.setdefault("wordlists", {})
-    base = wl.get("base_dir", "wordlists")
+    # Use 'root' from config if present, else default to websecure/wordlists
+    base = wl.get("root", "websecure/wordlists")
     
     p = Path(base)
+    # If path is relative, it is relative to CWD (Project Root)
+    
     if not p.exists():
-        # Fallback: check one level up if we are in core
-        p_up = Path("..") / base
-        if p_up.exists():
-             p = p_up
-             
+        # Fallback logic not needed if config is correct, but let's be safe
+        logging.debug(f"[Wordlists] Checking path: {p.resolve()}")
+
     if p.exists():
-        # Check for common files
-        common = p / "common.txt"
+        # Check for common files (optional verification)
+        pass 
     else:
+        # Only warn if it really doesn't exist
         print(f"[Wordlists] UYARI: Wordlist klasörü ({base}) bulunamadı!")
         
     return cfg

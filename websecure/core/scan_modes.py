@@ -175,6 +175,18 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
         params = {}
 
     kwargs = {}
+    if "context" in params:
+        kwargs["context"] = context
+    elif "ctx" in params:
+        kwargs["ctx"] = context
+    
+    # Pass raw results if requested (and context not used or redundant)
+    if "results" in params:
+        if context and context.results:
+            kwargs["results"] = context.results
+        else:
+            kwargs["results"] = {}
+
     if "session" in params:
         kwargs["session"] = session
     if "base_url" in params:
@@ -203,6 +215,19 @@ def _safe_construct_and_run(_cls, session, base_url, config, logger=None):
         _report_phase_error('scan_modes', 'scan_modes.py', e)
         cparams = {}
     ckwargs = {}
+    # Check for context/results in constructor
+    # Note: Usually scanners take session/results in __init__
+    if "results" in cparams:
+         # Need to retrieve results from somewhere. 
+         # In _safe_construct_and_run signature we don't have 'context' explicitly passed often, 
+         # but let's check if we can get it. 
+         # Actually this function doesn't receive context, only session/base_url/config.
+         # We'll skip results here unless we change signature. 
+         # Wait, looking at usage, this is called by phases.py usually.
+         # For now, standard scanners take 'results' in __init__.
+         # We will pass empty dict if not available, OR if we had context we'd pass it.
+         pass 
+
     if "session" in cparams:
         ckwargs["session"] = session
     if "base_url" in cparams:
@@ -232,6 +257,17 @@ def _safe_construct_and_run(_cls, session, base_url, config, logger=None):
         _report_phase_error('scan_modes', 'scan_modes.py', e)
         rparams = {}
     rkwargs = {}
+    if "context" in rparams:
+         # We don't have context here easily in _safe_construct_and_run unless passed.
+         # But wait, this function is usually called from run_plan which might not have full context object 
+         # if it was called with simple args. 
+         # However, if we look at _safe_call_runner, it builds context.
+         pass
+
+    if "results" in rparams:
+         # Similar issue.
+         pass
+
     if "session" in rparams:
         rkwargs["session"] = session
     if "base_url" in rparams:

@@ -25,7 +25,15 @@ _BROWSER_UA = (
 )
 
 # ========================== HTTP Session ==========================
-class _TimeoutHTTPAdapter(HTTPAdapter):
+# WAF Bypass Logic (Ghost Integration)
+try:
+    from websecure.core.waf_bypass import WAFBypassAdapter
+    _HAS_WAF_BYPASS = True
+except ImportError:
+    WAFBypassAdapter = HTTPAdapter
+    _HAS_WAF_BYPASS = False
+
+class _TimeoutHTTPAdapter(WAFBypassAdapter):
     def __init__(self, *args, **kwargs):
         self.timeout = kwargs.pop("timeout", 20)
         super().__init__(*args, **kwargs)

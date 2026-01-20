@@ -1,12 +1,23 @@
-from .infrastructure import get_security_headers as _real_scan
+"""
+websecure.scanners.headers
+--------------------------
+Legacy stub.
+This functionality has been moved to websecure.scanners.infrastructure.
+This file remains to support dynamic imports from config 'modules': ['headers'].
+"""
 
-def scan(session, endpoints, results, debug=False, config=None):
-    """
-    Shim for backward compatibility with phases.py
-    """
-    targets = [endpoints] if isinstance(endpoints, str) else (endpoints or [])
-    for url in targets:
-        _real_scan(url, results, session=session, debug=debug)
+from .infrastructure import get_security_headers, analyze_response_headers, HeaderScanner
 
-def get_security_headers(*args, **kwargs):
-    return _real_scan(*args, **kwargs)
+def scan(target: str, session=None, **kwargs):
+    """
+    Adapter for the main scanner engine.
+    The engine expects a 'scan' or 'run' function.
+    """
+    results = {}
+    # Call the consolidated function
+    # Note: 'get_security_headers' signature is (url, results, session, debug, ...)
+    get_security_headers(target, results, session=session, debug=kwargs.get("debug", False))
+    return results.get("security_headers", [])
+
+def run(target: str, session=None, **kwargs):
+    return scan(target, session, **kwargs)

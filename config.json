@@ -14,283 +14,24 @@
     ]
   },
   "settings": {
-    "scan_profile": "safe_full"
-  },
-  "target": "https://target.local",
-  "base_url": "https://target.local",
-  "mode": "normal",
-  "timeout": 45,
-  "tls_verify": true,
-  "user_agent": "WebSecScanner/1.2 ",
-  "tls": {
-    "fail_on_self_signed": true,
-    "min_version": "TLS1.3",
-    "alpn": [
-      "h2",
-      "http/1.1"
-    ],
-    "webdriver": {
-      "driver_path": "./drivers/chromedriver.exe",
-      "binary": null,
-      "headless": false,
-      "remote_url": null
-    },
-    "content_discovery": {
-      "enabled": true,
-      "tool": "ffuf",
-      "binary": "C:/tools/ffuf/ffuf.exe",
-      "timeout": 30,
-      "threads": 50
-    },
-    "scanners": {
-      "authorization": true,
-      "file_upload": true,
-      "ssrf_xxe": true,
-      "graphql_rpc": true,
-      "rate_limit": true
-    },
-    "fuzz": {
-      "blind_param_fuzz": true,
-      "max_total": 1000,
-      "per_param": 25
-    },
-    "crawl": {
-      "use_browser": true,
-      "headless": false
-    },
-    "cipher_prefs": "modern",
-    "sni": true,
-    "expect_sts": true,
-    "check_ocsp": true,
-    "keylog_file": null,
-    "ja3_fingerprint": "",
-    "session_resumption": true,
-    "grease": true,
-    "soft_fail": true,
-    "soft_allowlist": [
-      "/robots.txt",
-      "/sitemap.xml",
-      "/sitemap_index.xml"
-    ],
-    "verify": true
-  },
-  "auth": {
-    "headers": {},
-    "api_key_header": "",
-    "api_key": "",
-    "http_endpoint": "",
-    "bearer": "",
-    "cookies": {},
-    "csrf": {
-      "enabled": true,
-      "param": "_csrf",
-      "header": "X-CSRF-Token",
-      "auto_extract": true
-    },
-    "two_factor": {
-      "enabled": false,
-      "provider": "totp",
-      "token_env": "WS_2FA_TOKEN",
-      "window": 1
-    },
-    "enabled": true,
-    "strict_required": false,
-    "login_url": "",
-    "username_field": "username",
-    "password_field": "password",
-    "creds": {
-      "username": "",
-      "password": ""
-    },
-    "probe_paths": [
-      "/profile",
-      "/account",
-      "/me"
-    ],
-    "__guidance__": {
-      "note": "Kimlikli taramayı zorunlu kılmak için strict_required=true yapın ve aşağıdaki yöntemlerden birini gerçek değerlerle doldurun.",
-      "options": {
-        "bearer": "auth.bearer = 'YOUR_TOKEN'  # 'Bearer ' prefix otomatik eklenir",
-        "api_key": {
-          "api_key_header": "X-API-Key",
-          "api_key": "YOUR_API_KEY"
-        },
-        "cookie": {
-          "sessionid": "YOUR_SESSION_COOKIE"
-        },
-        "form_login": {
-          "login_url": "https://target.local/login",
-          "username_field": "username",
-          "password_field": "password",
-          "creds": {
-            "username": "user@example.com",
-            "password": "S3cr3t!"
-          },
-          "success_contains": "/account",
-          "auth_check_url": "https://target.local/account"
-        }
-      }
-    },
-    "cookie": {},
-    "credential_less": {
-      "enabled": true,
-      "session_priming": true,
-      "safe_methods_only": true
-    },
-    "auto_signup": {
-      "enabled": false,
-      "signup_url": "",
-      "verify_email": true,
-      "email_field": "email",
-      "password_field": "password",
-      "username_field": "username",
-      "mailbox": {
-        "provider": "mailhog",
-        "base_url": "http://127.0.0.1:8025",
-        "search": "@example.com",
-        "type": "mailhog",
-        "imap": {
-          "host": "",
-          "port": 993,
-          "ssl": true,
-          "user": "",
-          "password": ""
-        }
-      },
-      "form_fields": {
-        "email": "email",
-        "password": "password",
-        "password2": "confirm_password"
-      }
-    },
-    "assisted": {
-      "enabled": false,
-      "device_code_endpoint": "",
-      "token_endpoint": "",
-      "client_id": "",
-      "scope": "openid profile email",
-      "audience": "",
-      "device_code": {
-        "device_url": "",
-        "token_url": "",
-        "client_id": "",
-        "scope": "openid profile email"
-      }
-    }
-  },
-  "http": {
-    "insecure_skip_verify": false,
-    "retries": 5,
-    "timeout_seconds": 45,
-    "retry_allowed_methods": [
-      "HEAD",
-      "GET",
-      "OPTIONS",
-      "POST",
-      "PUT",
-      "DELETE",
-      "PATCH"
-    ],
-    "backoff_factor": 0.3,
-    "status_forcelist": [
-      429,
-      500,
-      502,
-      503,
-      504
-    ],
-    "pool_maxsize": 20,
-    "backoff_jitter_range": [
-      0.8,
-      1.2
-    ],
-    "http2": true,
-    "max_redirects": 8,
-    "default_headers": {
-      "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    },
-    "proxies": {},
-    "dns": {
-      "resolve_ipv6": true,
-      "custom_resolvers": []
-    },
-    "user_agent": "WebSecScanner/1.2 ",
-    "identity_pools": {
-      "user_agents": [
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
-      ],
-      "accept_language": [
-        "de-DE,de;q=0.9,en;q=0.7,tr-TR;q=0.6",
-        "en-US,en;q=0.9,tr-TR;q=0.6",
-        "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
-      ],
-      "accept": [
-        "text/html,application/json;q=0.9,*/*;q=0.8",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      ]
-    },
-    "phase_profiles": {
-      "discovery": {
-        "initial_rps": 2,
-        "max_rps": 4,
-        "header_profile": "balanced"
-      },
-      "mapping": {
-        "initial_rps": 3,
-        "max_rps": 6,
-        "header_profile": "balanced"
-      },
-      "offensive": {
-        "initial_rps": 1,
-        "max_rps": 3,
-        "header_profile": "tempered"
-      }
-    },
-    "rate_limit": {
-      "min_rps": 1,
-      "backoff_multiplier": 0.5,
-      "recover_step": 1,
-      "canary_interval_seconds": 15,
-      "respect_retry_after": true
-    },
-    "idempotent_first": {
-      "enabled": true,
-      "early_phases": [
-        "discovery",
-        "mapping"
-      ],
-      "allow_post_threshold": 0.2
-    },
-    "connect_timeout": 5,
-    "read_timeout": 15,
-    "max_retries": 1,
-    "retry_on_status": [
-      502,
-      503,
-      504
-    ],
-    "retry_on_connect": true,
-    "retry_on_read": true,
-    "tls_verify": true
-  },
-  "settings": {
     "logging": {
       "level": "DEBUG",
       "json": false,
-      "file": null,
+      "file": "scan_pro.log",
       "redact_sensitive": true
     },
-    "scan_profile": "aggressive",
+    "scan_profile": "safe_full",
+    "wordlists": {
+      "root": "./websecure/wordlists",
+      "custom": "./websecure/wordlists_custom/custom",
+      "seclists": "./websecure/wordlists/seclists",
+      "payloadsallthethings": "./websecure/wordlists/PayloadsAllTheThings",
+      "defaults": [
+        "./websecure/wordlists/common.txt",
+        "./websecure/wordlists/dirs.txt",
+        "./websecure/wordlists/files.txt"
+      ]
+    },
     "proxy_pool": [],
     "profiles": {
       "stealth": {
@@ -361,19 +102,36 @@
         "description": "Slow, comprehensive scan designed to evade WAFs and avoid IP blocking."
       },
       "safe_full": {
-        "rps": 3,
-        "concurrency": 2,
+        "rps": 20,
+        "concurrency": 15,
         "modules": [
           "*"
         ],
-        "politeness_ms": 2000,
-        "backoff_factor": 3.0,
+        "politeness_ms": 500,
+        "backoff_factor": 1.5,
+        "heavy_modules": true,
         "http": {
           "user_agent_rotation": true,
           "randomize_headers": true
         },
         "robots_respect": true,
-        "description": "Maximum security scan. Very slow, uses all tools, extreme WAF evasion."
+        "description": "High-performance security scan. Full toolset, parallel execution, robust WAF evasion."
+      },
+      "nightmare": {
+        "rps": 100,
+        "concurrency": 200,
+        "modules": [
+          "*"
+        ],
+        "politeness_ms": 0,
+        "backoff_factor": 0.5,
+        "http": {
+          "user_agent_rotation": true,
+          "randomize_headers": true,
+          "safe_methods_only": false
+        },
+        "robots_respect": false,
+        "description": "UNLEASH HELL: Extreme speed, max concurrency, full crawling, no limits."
       }
     }
   },
@@ -512,11 +270,12 @@
     "record_dir": "records",
     "respect_robots": false,
     "browser": {
-      "headless": true,
+      "headless": false,
       "max_concurrency": 4,
-      "wait_after_load_ms": 500,
+      "wait_after_load_ms": 2000,
       "dom_snapshot": true,
-      "script_instrumentation": true
+      "script_instrumentation": true,
+      "random_user_agent": true
     },
     "downloads": {
       "max_content_length_bytes": 2500000,
@@ -577,8 +336,8 @@
     "ffuf": {
       "bin": "ffuf",
       "wordlists": [
-        "./wordlists/dirs.txt",
-        "./wordlists/files.txt"
+        "./websecure/wordlists/dirs.txt",
+        "./websecure/wordlists/files.txt"
       ],
       "timeout": 10,
       "threads": 50,
@@ -605,7 +364,8 @@
   },
   "port_scan": {
     "enabled": true,
-    "detailed": false,
+    "detailed": true,
+    "arguments": "-T2 -sS -Pn",
     "protocols": [
       "tcp",
       "udp"
@@ -730,7 +490,7 @@
     ],
     "learning": {
       "enabled": true,
-      "learned_words_file": "./wordlists_custom/custom/learned.txt"
+      "learned_words_file": "./websecure/wordlists_custom/custom/learned.txt"
     }
   },
   "file_upload": {
@@ -900,13 +660,13 @@
     "dedup": true,
     "max_per_category": 2000,
     "seclists": {
-      "root": "./wordlists/seclists"
+      "root": "./websecure/wordlists/seclists"
     },
     "pattt": {
-      "root": "./wordlists/PayloadsAllTheThings"
+      "root": "./websecure/wordlists/PayloadsAllTheThings"
     },
     "custom": {
-      "root": "./payloads"
+      "root": "./websecure/wordlists_custom/custom"
     },
     "mutators": {
       "urlencode": true,

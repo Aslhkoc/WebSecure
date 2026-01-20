@@ -31,6 +31,17 @@ FUZZ_QUERIES = [
     {"query": "mutation M($x:ID!){ updateUser(id:$x, name:\"A\"){ id }}", "variables": {"x": "not-an-id"}},
     {"query": "query Q{ nonExistingField }"},
 ]
+
+# Load external payloads
+try:
+    from websecure.core.payloads import load_external_payloads
+    _ext = load_external_payloads("graphql")
+    if _ext:
+        for p in _ext:
+            if isinstance(p, str) and "{" in p: # Basic validation
+                 FUZZ_QUERIES.append({"query": p.strip()})
+except ImportError:
+    pass
 COMMON_GRAPHQL_PATHS = ["/graphql", "/api/graphql", "/graph", "/gql", "/api/gql", "/v1/graphql", "/v2/graphql"]
 
 # --- Client ---
@@ -167,15 +178,37 @@ class GraphQLScanner(BaseScanner):
 
     def _discover_endpoints(self, base: str) -> List[str]:
         found = []
-        if "graphql" in base:
+        if "graphql" in base or "gql" in base:
             return [base]
         
-        for p in COMMON_GRAPHQL_PATHS:
+        # [WS3] Enhanced Probing: GET & POST
+        common_paths = [
+            "/graphql", "/api/graphql", "/v1/graphql", "/graphql/console", "/graphiql",
+            "/v1/api/graphql", "/api/v1/graphql", "/gql"
+        ]
+        
+        for p in common_paths:
             target = base.rstrip("/") + p
             try:
+                # 1. GET with introspection query
                 r = self.session.get(target, params={"query": "{__typename}"}, timeout=5)
-                if r.status_code == 200 and "data" in r.text:
+                if r.status_code == 200 and ("data" in r.text or "errors" in r.text):
+                    found.append(target)
+                    continue
+                
+                # 2. POST with empty query or typename
+                r_post = self.session.post(target, json={"query": "{__typename}"}, timeout=5)
+                if r_post.status_code == 200 and ("data" in r_post.text or "errors" in r.text):
+                    found.append(target)
+                elif r_post.status_code == 400 and "graphql" in r_post.text.lower():
+                    # If it says "Bad Request: GraphQL query missing", it's an endpoint!
                     found.append(target)
             except:
                 pass
-        return found
+        return list(set(found))
+
+
+def run(target: str, session=None, **kwargs):
+    scanner = GraphQLScanner(session)
+    scanner.run(target)
+

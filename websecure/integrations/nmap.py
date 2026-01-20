@@ -16,9 +16,29 @@ class NmapWrapper:
     """
     def __init__(self, binary_path: str = "nmap"):
         self.binary = binary_path
+        self._find_binary()
+
+    def _find_binary(self):
+        import os
+        from pathlib import Path
+        if shutil.which(self.binary):
+            return
+            
+        # Common locations & Tools folder
+        possible = [
+            r"C:\Program Files (x86)\Nmap\nmap.exe",
+            r"C:\Program Files\Nmap\nmap.exe",
+            str(Path(__file__).resolve().parent.parent.parent / "tools" / "Nmap" / "nmap.exe"),
+            str(Path(__file__).resolve().parent.parent.parent / "tools" / "nmap" / "nmap.exe"),
+        ]
+        for p in possible:
+            if os.path.exists(p):
+                self.binary = p
+                break
 
     def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+        if shutil.which(self.binary): return True
+        return os.path.exists(self.binary)
 
     def scan(self, target: str, ports: str = "-F", extra_args: List[str] = None) -> List[Dict[str, Any]]:
         if not self.is_available():
@@ -34,6 +54,8 @@ class NmapWrapper:
                 cmd.extend(extra_args)
                 
             logger.info(f"Starting Nmap scan on {target}...")
+            print(f"[Nmap] {target} üzerinde tarama başlatılıyor (Ports: {ports})...")
+            # If detailed, allow stderr to show errors? No, stick to DEVNULL for cleanliness unless debug.
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             
             return NmapParser.parse_xml(temp_output)

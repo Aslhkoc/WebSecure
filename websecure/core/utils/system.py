@@ -25,6 +25,11 @@ def setup_logging(level: str = "INFO", log_file: str = None):
         handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
         
     logging.basicConfig(level=level, format=fmt, handlers=handlers)
+    
+    # [FIX] Suppress noisy third-party libraries
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("selenium").setLevel(logging.WARNING)
 
 # ========================== WebDriver ==========================
 def setup_webdriver(headless: bool = True, proxy: str = None):

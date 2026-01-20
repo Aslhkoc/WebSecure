@@ -19,10 +19,28 @@ class FFUFWrapper:
         self._check_binary()
 
     def _check_binary(self):
-        if not shutil.which(self.binary):
-            logger.warning(f"FFUF binary not found at '{self.binary}'. Fuzzing will be disabled.")
+        if shutil.which(self.binary):
+            return
+            
+        import os
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent.parent
+        possible = [
+            str(root / "tools" / "ffuf" / "ffuf.exe"),
+            str(root / "tools" / "ffuf.exe")
+        ]
+        for p in possible:
+             if os.path.exists(p):
+                 self.binary = p
+                 return
+
+        logger.warning(f"FFUF binary not found at '{self.binary}'. Fuzzing will be disabled.")
 
     def is_available(self) -> bool:
+        # Check if the binary is directly executable or if it's a .py script that needs python
+        if self.binary.endswith(".py"):
+            import sys
+            return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
         return shutil.which(self.binary) is not None
 
     def run_scan(self, 
@@ -53,15 +71,21 @@ class FFUFWrapper:
         os.close(fd) # Close handle immediately
 
         try:
-            cmd = [
-                self.binary,
+            cmd = []
+            if self.binary.endswith(".py"):
+                import sys
+                cmd = [sys.executable, self.binary]
+            else:
+                cmd = [self.binary]
+
+            cmd.extend([
                 "-u", url,
                 "-w", wordlist,
                 "-o", temp_output,
                 "-of", "json",
                 "-t", str(threads),
                 "-mc", "200,204,301,302,307,401,403" # Interesting codes
-            ]
+            ])
             
             if extensions:
                 cmd.extend(["-e", extensions])

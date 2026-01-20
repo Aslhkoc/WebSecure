@@ -43,6 +43,10 @@ if _iu.find_spec("tldextract") is not None:
 else:
     _tld_extract = None
 
+try:
+    from websecure.core.input_analyzer import analyze_form_inputs
+except ImportError:
+    analyze_form_inputs = None
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +142,10 @@ def _same_host(a: str, b: str) -> bool:
     return bool(an) and an == bn
 
 def _strip_fragment(u: str) -> str:
-    s = (u or "")
-    i = s.find("#")
-    return s if i < 0 else s[:i]
+    # [SPA FIX] Do not strip fragments. 
+    # Modern apps use fragments for routing (e.g. /#/login).
+    # We must treat them as distinct URLs.
+    return u
 
 # ============================================================================
 # LRU CACHE & FETCHER
@@ -281,6 +286,7 @@ class CrawlerConfig:
     browser_record_dir: Optional[str] = None
     browser_prefer: str = "playwright"  # "playwright" | "uc"
     headless: bool = True
+    proxy_url: Optional[str] = None
 
     # Persistence
     record_dir: str | None = None
@@ -516,22 +522,108 @@ class WebCrawler:
         self.results["endpoints"].add(url)
         content_type = (resp.headers.get("Content-Type") or "").lower()
         
-        # JS Keys
+        # JS Keys & Endpoints (Smart System 100x)
         if "javascript" in content_type or url.endswith(".js"):
+            # 1. Secrets
             keys = harvest_js_keys(self.sess, None, [url])
             if keys:
                 self.results["secrets"].extend(keys)
+            
+            # 2. Endpoints Mining (Regex)
+            # Look for strings starting with / or http inside quotes
+            # Regex: (['"])(/(?:api|v[0-9]|auth|user|admin)[^'"]*)['"]
+            try:
+                patterns = [
+                    r'["\'](/[a-zA-Z0-9_\-/]+)["\']',  # Generic paths
+                    r'["\'](https?://[^"\']+)["\']',     # Absolute URLs
+                ]
+                text = resp.text
+                for pat in patterns:
+                    for m in re.finditer(pat, text):
+                        candidate = m.group(1)
+                        if len(candidate) > 2 and len(candidate) < 150:
+                            # Filter junk
+                            if not any(c in candidate for c in " \t\n\r"):
+                                full_cand = urljoin(url, candidate)
+                                self.results["endpoints"].add(full_cand)
+                                # Log discovery
+                                if self.debug: print(f"[JS-Miner] Found endpoint in JS: {candidate}")
+            except Exception:
+                pass
                 
-        # Forms
-        if BeautifulSoup and "html" in content_type:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            forms = soup.find_all("form")
-            if forms:
-                self.results["forms_meta"].append({
-                    "url": url,
-                    "count": len(forms),
-                    "forms": [{"action": f.get("action"), "method": f.get("method")} for f in forms]
-                })
+            # Forms
+            if BeautifulSoup and "html" in content_type:
+                try:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    forms = soup.find_all("form")
+                    if forms:
+                        forms_data = []
+                        for f in forms:
+                            # Extract inputs
+                            inputs = []
+                            for tag in f.find_all(["input", "textarea", "select"]):
+                                if tag.get("name"):
+                                    inputs.append({
+                                        "name": tag.get("name"),
+                                        "type": tag.get("type", "text"),
+                                        "value": tag.get("value", "")
+                                    })
+                            
+                            forms_data.append({
+                                "action": f.get("action"),
+                                "method": f.get("method"),
+                                "inputs": inputs
+                            })
+
+
+
+                        # Flatten slightly for simple consumption
+                        self.results["forms_meta"].append({
+                            "url": url,
+                            "count": len(forms),
+                            "forms": forms_data
+                        })
+                        
+                        # [DEBUG] Visible confirmation of discovered forms
+                        if len(forms) > 0:
+                            print(f"       +[Form Detected] {url} ({len(forms)} forms, {len([i for f in forms_data for i in f['inputs']])} inputs)")
+
+                        # [SMART ANALYZER] Analyze form inputs
+                        if analyze_form_inputs:
+                             # Flatten for efficiency
+
+                             all_inputs = [i for f in forms_data for i in f["inputs"]]
+                             if all_inputs:
+                                 analysis = analyze_form_inputs(all_inputs)
+                                 if "param_contexts" not in self.results:
+                                     self.results["param_contexts"] = {}
+                                 self.results["param_contexts"].update(analysis)
+                except Exception:
+                    pass
+
+                except Exception:
+                    pass
+
+
+            # [SPA FIX] Detect loose inputs (Angular/React often lack dict-forms)
+            inputs = soup.find_all("input")
+            if inputs:
+                 self.results["param_candidates"].update(
+                      [i.get("name") or i.get("id") or "" for i in inputs]
+                 )
+                 # Count these as detected surface
+                 self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
+
+        # [API FIX] Parse JSON keys as potential parameters
+        if "json" in content_type:
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    self.results["param_candidates"].update(data.keys())
+                elif isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                    self.results["param_candidates"].update(data[0].keys())
+            except Exception:
+                pass
 
     def _run_browser_discovery(self):
         if self.debug: print("[Crawler] Starting browser-based discovery...")
@@ -540,7 +632,8 @@ class WebCrawler:
             headless=self.cfg.headless,
             timeout_ms=self.cfg.browser_timeout_ms,
             max_pages=self.cfg.browser_max_pages,
-            prefer=self.cfg.browser_prefer
+            prefer=self.cfg.browser_prefer,
+            proxy=self.cfg.proxy_url
         )
         for ep in d_eps:
              u = ep.get("url")
@@ -660,11 +753,11 @@ def make_queue_governor(start_url: str):
     return _allow
 
 class _BrowserDiscoveryStrategy:
-    def discover(self, start_url: str, headless: bool, timeout_ms: int, max_pages: int, record_dir: Optional[str] = None, return_artifacts: bool = False):
+    def discover(self, start_url: str, headless: bool, timeout_ms: int, max_pages: int, record_dir: Optional[str] = None, return_artifacts: bool = False, proxy: Optional[str] = None):
         raise NotImplementedError
 
 class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
-    def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False):
+    def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False, proxy=None):
         endpoints = []
         artifacts = {}
         try:
@@ -679,7 +772,9 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
 
             with sync_playwright() as p:
                 logger.info("[Playwright] Launching browser...")
-                browser = p.chromium.launch(headless=headless, args=['--disable-webgl', '--disable-extensions'])
+                l_args = ['--disable-webgl', '--disable-extensions']
+                p_cfg = {"server": proxy} if proxy else None
+                browser = p.chromium.launch(headless=headless, args=l_args, proxy=p_cfg)
                 ctx = browser.new_context(ignore_https_errors=True)
                 page = ctx.new_page()
                 
@@ -691,13 +786,28 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                 page.on("request", on_request)
                 
                 _enqueue(start_url)
+                
+                # [FIX]: Immediate navigation for visual feedback
+                if len(queue) > 0:
+                    try:
+                        logger.info(f"[Playwright] Initial navigation to {start_url}")
+                        page.goto(start_url, timeout=timeout_ms)
+                    except Exception as e:
+                        logger.warning(f"Initial nav failed: {e}")
+
                 while queue and len(visited) < max_pages:
                     target = queue.pop(0)
                     if target in visited: continue
                     visited.add(target)
                     try:
                         page.goto(target, timeout=timeout_ms)
-                        page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        # [SPA IMPROVEMENT] Wait for network idle (essential for Juice Shop)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                            time.sleep(3) # Explicit fallback for heavy SPAs
+                        except Exception:
+                            time.sleep(5) # Hard wait if state fails
+                            page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
                         
                         # Collect links
                         for a in page.query_selector_all("a[href]"):
@@ -715,7 +825,7 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
         return endpoints, (artifacts if return_artifacts else None)
 
 class _UCStrategy(_BrowserDiscoveryStrategy):
-    def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False):
+    def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False, proxy=None):
         endpoints = []
         if _iu.find_spec("undetected_chromedriver") is None:
             logger.warning("[UC] undetected_chromedriver module not found.")
@@ -735,6 +845,8 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
             # Use temp profile to avoid locking main profile
             tmp_profile = tempfile.mkdtemp(prefix="ws_uc_profile_")
             options.add_argument(f"--user-data-dir={tmp_profile}")
+            if proxy:
+                options.add_argument(f'--proxy-server={proxy}')
 
             # Check for local driver
             driver_path = None
@@ -756,6 +868,33 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 try:
                     logger.info(f"[UC] Navigating to: {target}")
                     driver.get(target)
+                    
+                    # [WS3] XSS Kill-Cam: Capture Alerts
+                    # Selenium handles alerts by blocking, we need to check explicitly
+                    try:
+                        from selenium.webdriver.common.alert import Alert
+                        from selenium.common.exceptions import NoAlertPresentException
+                        try:
+                            alert = driver.switch_to.alert
+                            text = alert.text
+                            logger.critical(f"XSS ALERT DETECTED: {text}")
+                            # Record evidence
+                            from websecure.core.reporting import add_result
+                            add_result("xss", {
+                                "url": target,
+                                "type": "Reflected XSS (Verified)",
+                                "severity": "Critical",
+                                "evidence": {
+                                    "alert_text": text,
+                                    "mechanism": "browser_dialog"
+                                }
+                            })
+                            alert.accept()
+                        except NoAlertPresentException:
+                            pass
+                    except Exception as e:
+                        pass
+                        
                     time.sleep(1)
                     
                     # Capture nav 
@@ -801,6 +940,7 @@ def discover_dynamic_endpoints(
     record_dir: Optional[str] = None,
     prefer: str = "playwright",
     return_artifacts: bool = True,
+    proxy: str | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any] | None]:
     
     # Determine strategy
@@ -828,8 +968,8 @@ def discover_dynamic_endpoints(
         
     if strategy:
         try:
-            logger.info(f"[Browser] Using strategy: {type(strategy).__name__}")
-            eps, arts = strategy.discover(start_url, headless, timeout_ms, max_pages)
+            logger.info(f"[Browser] Using strategy: {type(strategy).__name__} Proxy={proxy}")
+            eps, arts = strategy.discover(start_url, headless, timeout_ms, max_pages, proxy=proxy)
             if eps: results.extend(eps)
             if arts: artifacts.update(arts)
         except Exception as e:

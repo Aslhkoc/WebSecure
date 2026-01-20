@@ -104,7 +104,10 @@ _DEFAULTS = {
         "git": "https://github.com/danielmiessler/SecLists.git",
         "xss": ["**/Fuzzing/XSS/*.txt", "**/Fuzzing/XSS/*/*.txt", "**/Fuzzing/xss.txt", "**/*xss*.txt"],
         "sqli": ["**/Fuzzing/SQLi/*.txt", "**/*sqli*.txt", "**/*sql-injection*.txt"],
+        "nosqli": ["**/Fuzzing/NoSQL/*.txt", "**/*nosql*.txt"],
         "rce": ["**/Fuzzing/Command Injection/*.txt", "**/*cmdi*.txt", "**/*command*injection*.txt", "**/*rce*.txt"],
+        "jwt_secrets": ["**/Passwords/jwt_secrets.txt", "**/Passwords/Common-Credentials/10k-most-common.txt", "**/*jwt*.txt"],
+        "graphql": ["**/Discovery/Web-Content/graphql*.txt", "**/*graphql*.txt"],
     },
     "pattt": {
         "root": _PKG_ROOT / "wordlists/PayloadsAllTheThings",
@@ -129,9 +132,29 @@ def _provider_roots(cfg_section: dict) -> dict:
         for a,b in alias_map.items():
             if a in cfg_section and b not in cfg_section:
                 cfg_section[b] = cfg_section[a]
+    
+    # [FIX] Force correct relative paths from project root if absolute path check fails
+    project_root = _PKG_ROOT 
+    
     for prov in ["seclists", "pattt", "wordlists_custom"]:
         sec = cfg_section.get(prov, {}) if isinstance(cfg_section, dict) else {}
-        root = Path(sec.get("root") or _DEFAULTS[prov]["root"])
+        
+        # Determine path
+        configured_path = sec.get("root")
+        default_path = _DEFAULTS[prov]["root"]
+        
+        root = Path(configured_path if configured_path else default_path)
+        
+        # If relative, anchor to project root
+        if not root.is_absolute():
+            root = project_root / root
+            
+        # Robust fallback for wordlists_custom if it doesn't exist at default location
+        if prov == "wordlists_custom" and not root.exists():
+             alt = project_root / "wordlists_custom" / "custom"
+             if alt.exists():
+                 root = alt
+
         out[prov] = {
             "root": root,
             "git": sec.get("git", _DEFAULTS[prov]["git"]),
@@ -152,16 +175,21 @@ def _run(cmd: str, cwd: Path | None = None, timeout: int = 120) -> tuple[int, st
     if cwd is not None and not cwd.exists():
         raise FileNotFoundError(f"cwd yok: {cwd}")
     # check=False ile returncode döner; hatalar (örn. komut bulunamadı) istisna olarak yükselir
-    proc = subprocess.run(
-        shlex.split(cmd),
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return proc.returncode, out
+    try:
+        proc = subprocess.run(
+            shlex.split(cmd),
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, f"Timeout expired after {timeout}s"
+    except Exception as e:
+        return 1, str(e)
 
 def sync_wordlists(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """
@@ -177,11 +205,17 @@ def sync_wordlists(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
         url = sec.get("git")
         root.parent.mkdir(parents=True, exist_ok=True)
         if root.exists() and _is_git_repo(root):
-            code, out = _run("git pull --ff-only", cwd=root)
+            try:
+                code, out = _run("git pull --ff-only", cwd=root, timeout=60)
+            except:
+                code, out = 1, "Skipped pull due to timeout/error"
             report[name] = {"action": "pull", "code": code, "out": (out or "")[-2000:]}
-        elif (not root.exists()) and url:
-            code, out = _run(f"git clone --depth=1 {url} {str(root)}", cwd=root.parent)
-            report[name] = {"action": "clone", "code": code, "out": (out or "")[-2000:]}
+        elif (not root.exists() or not any(root.iterdir() if root.exists() else [])) and url:
+            # USER REQUEST: DISABLE AUTO-CLONE
+            # print(f"[*] Cloning {name} from {url} (this may take a while)...")
+            # code, out = _run(f"git clone --depth=1 {url} {str(root)}", cwd=root.parent, timeout=300)
+            print(f"[!] Warning: Wordlist directory {root} missing/empty. Skipping download per user request.")
+            report[name] = {"action": "skipped", "code": 0, "out": "Download disabled"}
         else:
             report[name] = {"action": "skip", "reason": "no git url or already present"}
     return report
@@ -275,7 +309,10 @@ def _provider_roots(cfg_section: dict) -> dict:
             "git": sec.get("git", _DEFAULTS[prov]["git"]),
             "xss": sec.get("xss") or _DEFAULTS[prov]["xss"],
             "sqli": sec.get("sqli") or _DEFAULTS[prov]["sqli"],
+            "nosqli": sec.get("nosqli") or _DEFAULTS[prov].get("nosqli"),
             "rce": sec.get("rce") or _DEFAULTS[prov]["rce"],
+            "jwt_secrets": sec.get("jwt_secrets") or _DEFAULTS[prov].get("jwt_secrets"),
+            "graphql": sec.get("graphql") or _DEFAULTS[prov].get("graphql"),
         }
     return out
 

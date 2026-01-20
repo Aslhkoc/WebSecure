@@ -94,14 +94,15 @@ class JWTScanner(BaseScanner):
             return 0
         
         candidates = []
-        # Try standard locations
-        paths = ["wordlists/jwt_secrets.txt", "wordlists_custom/jwt_secrets.txt"]
-        for p in paths:
-             if os.path.exists(p):
-                 try:
-                     with open(p, 'r', encoding='utf-8', errors='ignore') as f:
-                         candidates.extend(line.strip() for line in f if line.strip())
-                 except: pass
+        # Try robust loader
+        try:
+            from websecure.core.payloads import load_external_payloads
+            ext = load_external_payloads("jwt_secrets")
+            if ext:
+                candidates.extend(ext)
+        except ImportError:
+            pass
+            
         if not candidates:
              candidates = ["secret", "123456", "password", "jwt", "test"]
 
@@ -138,3 +139,11 @@ class JWTScanner(BaseScanner):
 
     def _b64d(self, s: str) -> str:
         return base64.urlsafe_b64decode(s + '=' * (4 - len(s) % 4)).decode()
+
+def run(url: str, session=None, debug: bool = False, **kwargs) -> int:
+    """Module-level adapter for generic runners."""
+    scanner = JWTScanner(session=session, debug=debug)
+    # Generic runners might pass results dict, use it if provided
+    if "results" in kwargs and isinstance(kwargs["results"], dict):
+        scanner.results = kwargs["results"]
+    return scanner.run(url)
