@@ -33,8 +33,8 @@ class SQLInjectionScanner(BaseScanner):
         "Sybase": (r"(?i)Sybase message", r"Sybase.*Server message", r"SybSQLException"),
     }
 
-    def __init__(self, session, debug=False):
-        super().__init__(session, debug)
+    def __init__(self, session=None, results=None, debug=False):
+        super().__init__(session, results, debug)
         self.payloads = self._load_payloads()
 
     def _load_payloads(self):
@@ -198,6 +198,6 @@ class SQLInjectionScanner(BaseScanner):
 
 
 # Bridge function for dynamic loading
-def run(url, session=None, debug=False, **kwargs):
-    scanner = SQLInjectionScanner(session, debug)
+def run(url, session=None, results=None, debug=False, **kwargs):
+    scanner = SQLInjectionScanner(session, results, debug)
     scanner.run(url)
