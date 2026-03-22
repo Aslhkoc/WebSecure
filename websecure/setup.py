@@ -26,10 +26,20 @@ if __name__ == "__main__":
             "lxml>=5.2.2",
             "tldextract>=5.1.2",
             "cryptography>=42.0.0",
+            "jinja2>=3.1.0",
+            "cvss>=3.2",
         ],
         extras_require={
             "js": ["playwright>=1.46.0"],
             "selenium": ["selenium>=4.23.1", "webdriver-manager>=4.0.2"],
             "speed": ["python-Levenshtein>=0.25.0"],
+            "pdf": ["weasyprint>=61.0"],
+            "bypass": ["tls-client>=1.0.1", "cloudscraper>=1.2.71"],
+            "full": [
+                "playwright>=1.46.0",
+                "weasyprint>=61.0",
+                "tls-client>=1.0.1",
+                "cloudscraper>=1.2.71",
+            ],
         },
     )

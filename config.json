@@ -611,7 +611,7 @@
     "api_url": "",
     "api_key": "",
     "http_endpoint": "",
-    "poll_interval": 10,
+    "poll_interval": 5.0,
     "timeout": 120,
     "enable_dns": true,
     "enable_http": true,
@@ -635,7 +635,8 @@
     "channels": [
       "dns",
       "http"
-    ]
+    ],
+    "interact_base": "https://interact.sh"
   },
   "graphql": {
     "endpoints": [],
@@ -757,7 +758,10 @@
         "Akamai",
         "Incapsula"
       ]
-    }
+    },
+    "interact_base": "https://interact.sh",
+    "auto_bypass": true,
+    "probe_on_start": true
   },
   "business_logic": {
     "enabled": true,
@@ -1308,5 +1312,19 @@
       "password": null,
       "rotate_every_n_requests": 50
     }
+  },
+  "pdf": {
+    "enabled": true,
+    "output_dir": "./reports",
+    "template": "report.html.j2",
+    "include_html": true
+  },
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "max_pages": 50,
+    "timeout_ms": 15000,
+    "wait_after_load_ms": 1500,
+    "escalate_threshold": 5
   }
 }
