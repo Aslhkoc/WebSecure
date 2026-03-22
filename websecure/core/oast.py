@@ -397,3 +397,110 @@ def run_oast_on_target(
 # Helper exports for injection
 def _inject_query_param(url, k, v):
     return replace_query_param(url, k, v)
+
+
+# ============================================================================
+# PERSISTENT OAST POLLING THREAD
+# ============================================================================
+import threading as _threading
+
+class OASTPollerThread:
+    """
+    Background thread that polls OAST server during active scans.
+    When a callback arrives, it marks the corresponding finding as verified.
+    """
+
+    def __init__(self, client, poll_interval: float = 5.0):
+        self._client = client
+        self._poll_interval = poll_interval
+        self._stop_event = _threading.Event()
+        self._thread: Optional[_threading.Thread] = None
+        self._token_map: Dict[str, dict] = {}  # token -> finding dict ref
+        self._lock = _threading.Lock()
+        self._callbacks_received: List[dict] = []
+
+    def register_token(self, token: str, finding_ref: dict) -> None:
+        """Register an injection token to a finding dict for later correlation."""
+        with self._lock:
+            self._token_map[token] = finding_ref
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = _threading.Thread(target=self._poll_loop, daemon=True, name="OASTPoller")
+        self._thread.start()
+        _logger.info("[OAST] Polling thread started")
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+        _logger.info(f"[OAST] Polling thread stopped. Total callbacks: {len(self._callbacks_received)}")
+
+    def get_verified_count(self) -> int:
+        return len(self._callbacks_received)
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._do_poll()
+            except Exception as e:
+                _logger.debug(f"[OAST] Poll error: {e}")
+            self._stop_event.wait(self._poll_interval)
+
+    def _do_poll(self) -> None:
+        try:
+            if hasattr(self._client, 'poll') and callable(self._client.poll):
+                events = self._client.poll()
+                if events:
+                    self._process_events(events)
+        except Exception as e:
+            _logger.debug(f"[OAST] Client poll failed: {e}")
+
+    def _process_events(self, events) -> None:
+        with self._lock:
+            for event in (events if isinstance(events, list) else [events]):
+                ev_str = str(event)
+                self._callbacks_received.append(event)
+                for token, finding in self._token_map.items():
+                    if token in ev_str:
+                        finding["verified"] = True
+                        finding["oast_callback"] = ev_str[:200]
+                        finding["confidence"] = "high"
+                        finding["verification_method"] = "oast_dns_http_callback"
+                        _logger.info(f"[OAST] Verified finding via callback: token={token[:12]}")
+
+
+# Global singleton - started/stopped by flow_runner
+_GLOBAL_OAST_POLLER: Optional[OASTPollerThread] = None
+
+
+def start_global_oast_poller(cfg: dict = None) -> Optional[OASTPollerThread]:
+    """Start the global OAST polling thread. Call at scan start."""
+    global _GLOBAL_OAST_POLLER
+    cfg = cfg or {}
+    oast_cfg = cfg.get("oast", {})
+    interact_base = oast_cfg.get("interact_base", "https://interact.sh")
+    poll_interval = float(oast_cfg.get("poll_interval", 5.0))
+    try:
+        client = InteractshClient(server=interact_base)
+        _GLOBAL_OAST_POLLER = OASTPollerThread(client, poll_interval=poll_interval)
+        _GLOBAL_OAST_POLLER.start()
+        return _GLOBAL_OAST_POLLER
+    except Exception as e:
+        _logger.warning(f"[OAST] Could not start poller: {e}")
+        return None
+
+
+def stop_global_oast_poller() -> None:
+    """Stop the global OAST polling thread. Call at scan end."""
+    global _GLOBAL_OAST_POLLER
+    if _GLOBAL_OAST_POLLER:
+        _GLOBAL_OAST_POLLER.stop()
+        _GLOBAL_OAST_POLLER = None
+
+
+def get_oast_poller() -> Optional[OASTPollerThread]:
+    """Get the current global OAST poller."""
+    return _GLOBAL_OAST_POLLER
