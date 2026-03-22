@@ -119,7 +119,14 @@ class XSSScanner(BaseScanner):
             except Exception:
                 pass
 
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    def _inject_param(self, url: str, param_name: str, value: str) -> str:
+        """Injects *value* into *param_name* in the URL query string."""
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        params[param_name] = value
+        new_query = urlencode(params)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
+                           parsed.params, new_query, parsed.fragment))
 
     def scan_forms(self, forms: List[Dict]):
         """

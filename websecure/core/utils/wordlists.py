@@ -13,10 +13,11 @@ def collect_all_wordlists(base_dirs: List[str] = None) -> Dict[str, object]:
         Dict: {"all": [path1, path2...], "count": int, "total_lines_est": int}
     """
     if base_dirs is None:
-        # [FIX] User requested hardcoded/anchored paths
+        # Resolve paths relative to this file so the project is portable
+        _here = pathlib.Path(__file__).resolve().parent.parent.parent  # websecure/
         base_dirs = [
-            "C:/Users/Acer/PycharmProjects/WebSecure/websecure/wordlists",
-            "C:/Users/Acer/PycharmProjects/WebSecure/websecure/wordlists_custom"
+            str(_here / "wordlists"),
+            str(_here / "wordlists_custom"),
         ]
 
     found_files = []
