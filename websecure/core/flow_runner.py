@@ -489,18 +489,42 @@ def run_ffuf_scan(ctx) -> None:
             return
 
         _logger.info(f"Launching FFUF scan with MERGED wordlist...")
-        
+
         custom_args = []
         # [Check 5] Proxy
         proxy = _resolve_proxy(ctx)
         if proxy:
             custom_args.extend(["-x", proxy])
-            
-        # Run scan with the merged file
+
+        # --- Directory/path discovery ---
         findings = wrapper.run_scan(url, wordlist=merged_wl_path, custom_args=custom_args)
-        
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
+
+        # --- File extension discovery (backup, config, env files) ---
+        sensitive_exts = ".php,.asp,.aspx,.jsp,.html,.bak,.env,.config,.xml,.json,.txt,.zip,.sql,.log,.old,.backup,.db,.key,.pem"
+        _logger.info("[FFUF] Starting file extension scan...")
+        ext_findings = wrapper.run_scan(
+            url,
+            wordlist=merged_wl_path,
+            extensions=sensitive_exts,
+            custom_args=custom_args,
+        )
+        try:
+            from websecure.scanners.js_analyzer import classify_discovered_file
+            for f in ext_findings:
+                f_url = f.get("url", "")
+                f_status = f.get("status", 200)
+                classified = classify_discovered_file(f_url, f_status)
+                if classified:
+                    add_result("files_discovered", classified)
+                    if classified.get("severity") in ("Critical", "High"):
+                        add_result("offensive", classified)
+                else:
+                    add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+        except ImportError:
+            for f in ext_findings:
+                add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
             
     finally:
         # Cleanup
@@ -560,6 +584,41 @@ def run_feroxbuster_scan(ctx) -> None:
         if len(existing) > before_count:
              _logger.info(f"[Feroxbuster] Added {len(existing) - before_count} new endpoints to offensive context.")
         ctx.results = current_res
+
+
+def run_js_analysis(ctx) -> None:
+    """
+    Discovers and analyses JavaScript files on the target:
+    - Extracts hidden API endpoints / internal paths
+    - Detects hardcoded secrets, tokens, API keys
+    """
+    url = getattr(ctx, "base_url", None)
+    if not url:
+        return
+
+    if not _get_config(ctx, "offensive.js_analysis.enabled", True):
+        add_result("js_analysis", {"status": "skipped", "reason": "Disabled in config"})
+        return
+
+    try:
+        from websecure.scanners.js_analyzer import JSAnalyzer
+    except ImportError:
+        add_result("js_analysis", {"status": "skipped", "reason": "js_analyzer module missing"})
+        return
+
+    _logger.info("[JSAnalyzer] Starting JavaScript file analysis...")
+    results_bucket = getattr(ctx, "results", {}) or {}
+    session = getattr(ctx, "session", None)
+
+    analyzer = JSAnalyzer(session=session, results=results_bucket, debug=False)
+    findings = analyzer.run(url)
+
+    for f in findings:
+        add_result("js_analysis", f)
+        if f.get("severity") in ("High", "Critical"):
+            add_result("offensive", f)
+
+    _logger.info(f"[JSAnalyzer] Done. {len(findings)} finding(s) recorded.")
 
 
 def run_reporting_and_integration(ctx) -> None:

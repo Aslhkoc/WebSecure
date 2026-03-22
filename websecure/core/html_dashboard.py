@@ -34,7 +34,7 @@ def render_html_dashboard(results: dict) -> str:
         "headers", "rate_limit", "request_smuggling", "session_hunter",
         "mass_assignment", "ws_fuzz", "infrastructure",
         "sqlmap", "feroxbuster", "ffuf", "discovery", "passive",
-        "portscan", "tls_findings",
+        "portscan", "tls_findings", "js_analysis", "files_discovered",
     ]
     
     _id_counter = 1
@@ -121,6 +121,88 @@ def render_html_dashboard(results: dict) -> str:
                 </div>
                 '''
         charts_html += '</div>'
+
+    # --- JS Analysis Data Prep ---
+    js_files_html = ""
+    js_items = results.get("js_analysis") or []
+    if isinstance(js_items, list) and js_items:
+        js_files = [f for f in js_items if isinstance(f, dict) and f.get("type") == "JS File Discovered"]
+        js_endpoints = [f for f in js_items if isinstance(f, dict) and f.get("type") == "JS Endpoint Discovered"]
+        js_secrets = [f for f in js_items if isinstance(f, dict) and "Secret" in (f.get("type") or "")]
+
+        rows_files = "".join(
+            f"<tr><td class='url'><a href='{_escape(f.get('url',''))}' target='_blank' style='color:var(--accent)'>{_escape(f.get('url',''))}</a></td>"
+            f"<td>{_escape(f.get('detail',''))}</td></tr>"
+            for f in js_files
+        )
+        rows_endpoints = "".join(
+            f"<tr><td style='font-family:monospace; color:var(--sev-low)'>{_escape(f.get('parameter',''))}</td>"
+            f"<td class='url' style='font-size:0.85rem'>{_escape(f.get('url',''))}</td></tr>"
+            for f in js_endpoints[:50]  # cap at 50 for readability
+        )
+        rows_secrets = "".join(
+            f"<tr>"
+            f"<td><span class='tag High'>High</span></td>"
+            f"<td><strong>{_escape(f.get('type',''))}</strong></td>"
+            f"<td class='url'>{_escape(f.get('url',''))}</td>"
+            f"<td style='font-family:monospace; font-size:0.85rem; color:var(--sev-high)'>{_escape(f.get('detail',''))}</td>"
+            f"</tr>"
+            for f in js_secrets
+        )
+
+        secret_warning = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>⚠️ {len(js_secrets)} hardcoded secret(s) detected in JavaScript files!</div>" if js_secrets else ""
+
+        js_files_html = f"""
+        <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-top:0;">📜 JavaScript File Analysis</h3>
+            {secret_warning}
+            <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem;">
+                <div class="stat-card" style="padding:1rem; text-align:center;">
+                    <span class="stat-value" style="font-size:1.5rem; color:var(--accent)">{len(js_files)}</span>
+                    <span class="stat-label">JS Files Found</span>
+                </div>
+                <div class="stat-card" style="padding:1rem; text-align:center;">
+                    <span class="stat-value" style="font-size:1.5rem; color:var(--sev-low)">{len(js_endpoints)}</span>
+                    <span class="stat-label">Endpoints Extracted</span>
+                </div>
+                <div class="stat-card" style="padding:1rem; text-align:center;">
+                    <span class="stat-value" style="font-size:1.5rem; color:var(--sev-high)">{len(js_secrets)}</span>
+                    <span class="stat-label">Secrets Detected</span>
+                </div>
+            </div>
+            {"<h4>JS Files</h4><div class='table-container'><table><thead><tr><th>URL</th><th>Info</th></tr></thead><tbody>" + rows_files + "</tbody></table></div>" if rows_files else ""}
+            {"<h4 style='margin-top:1rem;'>Hidden Endpoints / API Paths</h4><div class='table-container'><table><thead><tr><th>Path</th><th>Found In</th></tr></thead><tbody>" + rows_endpoints + "</tbody></table></div>" if rows_endpoints else ""}
+            {"<h4 style='margin-top:1rem; color:var(--sev-high);'>⚠️ Hardcoded Secrets</h4><div class='table-container'><table><thead><tr><th>Severity</th><th>Type</th><th>File</th><th>Detail</th></tr></thead><tbody>" + rows_secrets + "</tbody></table></div>" if rows_secrets else ""}
+        </div>
+        """
+
+    # --- Discovered Files Data Prep ---
+    files_html = ""
+    file_items = results.get("files_discovered") or []
+    if isinstance(file_items, list) and file_items:
+        sensitive_files = [f for f in file_items if isinstance(f, dict) and f.get("severity") not in ("Info", None, "")]
+        all_file_rows = "".join(
+            f"<tr>"
+            f"<td><span class='tag {_escape(f.get('severity','Info'))}'>{_escape(f.get('severity','Info'))}</span></td>"
+            f"<td class='url'><a href='{_escape(f.get('url',''))}' target='_blank' style='color:var(--accent)'>{_escape(f.get('url',''))}</a></td>"
+            f"<td style='font-size:0.85rem'>{_escape(f.get('type') or f.get('detail',''))}</td>"
+            f"</tr>"
+            for f in file_items if isinstance(f, dict) and f.get("url")
+        )
+        if all_file_rows:
+            sen_warn = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>⚠️ {len(sensitive_files)} sensitive file(s) exposed!</div>" if sensitive_files else ""
+            files_html = f"""
+            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                <h3 style="margin-top:0;">📁 Discovered Files ({len(file_items)} total, {len(sensitive_files)} sensitive)</h3>
+                {sen_warn}
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Severity</th><th>URL</th><th>Type / Detail</th></tr></thead>
+                        <tbody>{all_file_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+            """
 
     # Serialize findings for JS
     findings_json = json.dumps(findings, default=str).replace("<", "\\u003c").replace(">", "\\u003e")

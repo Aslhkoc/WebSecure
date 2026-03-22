@@ -479,6 +479,13 @@ def _runner_feroxbuster(ctx):
     _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")(ctx)
     return _mk_result("feroxbuster", "finished", {})
 
+def _runner_js_analysis(ctx) -> None:
+    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
+    if not fm or not hasattr(fm, "run_js_analysis") or not callable(getattr(fm, "run_js_analysis")):
+        add_result("js_analysis", {"status": "skipped", "reason": "flow_runner missing run_js_analysis"})
+        return
+    fm.run_js_analysis(ctx)
+
 def _runner_sqlmap(ctx):
     _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")(ctx)
     return _mk_result("sqlmap", "finished", {})
@@ -1090,9 +1097,10 @@ def _offensive_phases(ctx) -> List[Phase]:
 
     phases: List[Phase] = [
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
-        Phase(id="passive_recon", title="Pasif Keşif & JS Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive", "js"]),
-        Phase(id="ffuf", title="FFUF Content Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content"]),
-        Phase(id="feroxbuster", title="Feroxbuster Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
+        Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
+        Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
+        Phase(id="ffuf", title="FFUF Content & File Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content","files"]),
+        Phase(id="feroxbuster", title="Feroxbuster Recursive Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
         Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
         Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
         Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
