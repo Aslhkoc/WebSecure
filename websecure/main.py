@@ -68,19 +68,19 @@ _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is 
 requests = _req_mod  # alias; may be None
 
 # [UI] MSF-Style Banner
-try:
-    from websecure.core.banner import print_banner
-    print_banner(modules_count=18) # Core modules count (Updated)
-except ImportError:
-    pass
+# try:
+#     from websecure.core.banner import print_banner
+#     print_banner(modules_count=18) # Core modules count (Updated)
+# except ImportError:
+#     pass
     
     # [WS3] Dynamic Wordlist Report
-    try:
-        from websecure.core.utils import collect_all_wordlists
-        _wd = collect_all_wordlists()
-        print(f"       =[ Wordlists: {_wd.get('count',0)} files connected (~{_wd.get('total_lines_est',0)} lines)")
-    except Exception:
-        pass
+try:
+    from websecure.core.utils import collect_all_wordlists
+    _wd = collect_all_wordlists()
+    print(f"       =[ Wordlists: {_wd.get('count',0)} files connected (~{_wd.get('total_lines_est',0)} lines)")
+except Exception:
+    pass
 
 # [WS3-ANCHOR] New Module Imports
 try:
@@ -605,6 +605,7 @@ if _ws_spec("websecure.core.utils") is not None:
         current_identity,
         apply_detected_scheme,
         load_config,
+        apply_active_profile,
         run_content_discovery,
         setup_logging,
         setup_webdriver,
@@ -1388,6 +1389,10 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
             os.environ["WS_PAYLOADS_MAX"] = "100000"
             print("[!] Sınırlar Kaldırıldı: Payload limiti 100,000'e yükseltildi.")
             print("[!] DİKKAT: Yıkıcı mod aktif (DELETE/DROP tabloları silinebilir).")
+            
+            # [FIX] Apply profile settings
+            cfg = apply_active_profile(cfg)
+            print(f"[DEBUG] Active Config Profile: {cfg.get('settings', {}).get('scan_profile')} (Applied: True)")
 
             return "aggressive", cfg
 
@@ -1398,6 +1403,12 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
                  continue
              cfg.setdefault("settings", {})["scan_profile"] = "safe_full"
              cfg.setdefault("_profile", {})["selected"] = "safe_full"
+             
+             # [FIX] Apply profile settings immediately (RPS, concurrency etc.)
+             cfg = apply_active_profile(cfg)
+             print(f"[DEBUG] Active Config Profile: {cfg.get('settings', {}).get('scan_profile')} (Applied: True)")
+             
+             return "safe_full", cfg
              
              # Activate all offensive modules but with 'safe' defaults implied by profile
              off = cfg.setdefault("offensive", {})
@@ -1500,10 +1511,21 @@ def _choose_mode_from_config(config: dict | None) -> str:
     prof = (str(prof).strip().lower() if prof is not None else "")
     if prof in ("detailed", "detaylı", "detayli"):
         return ScanMode.DETAILED
-    if prof == "deep":
+    if prof == "deep" or prof == "aggressive":
+        return ScanMode.DEEP
+    if prof in ("stealth", "safe", "guvenli"):
+        # [WS3] User Request: Safe = Deep Scan + Stealth/WAF Evasion
+        # Not shallow.
+        if isinstance(config, dict):
+             config.setdefault("waf", {})["enabled"] = True
+             # Lower threads presumably handled by profile config loading, 
+             # but we mandate DEEP mode to ensure we check for vulnerabilities.
         return ScanMode.DEEP
 
-    return ScanMode.NORMAL
+    # [WS3] Default to DEEP/AGGRESSIVE for better findings on modern apps
+    # The user complained about shallow scans.
+    return ScanMode.DEEP
+
     m = (config.get("mode") or "").strip().lower()
     if m in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.AUTHENTICATED, ScanMode.DEEP):
         return m
@@ -2327,28 +2349,31 @@ O====|_______________________________________________________>  1   1 0
     # If proxy is a socks proxy pointing to local tor (9050, 9150), also might want to enable
     # But explicit config is safer.
     
-    _tc = None
+    # [FIX] Tor Global Initialization (Acil Durum Onarımı)
+    # Bu, tüm modüllerin (özellikle http.py) tek bir Tor kontrolcüsüne erişmesini sağlar.
     if _tor_interval and _tor_port:
          try:
-             from websecure.core.tor_manager import TorController
              print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
-             _tc = TorController(control_port=int(_tor_port))
-             # Initial renew
-             if _tc.renew_identity():
-                 pass 
+             from websecure.core.tor_manager import init_tor_control, start_auto_rotation, rotate_tor_identity
+             
+             # Global kontrolcüyü başlat
+             init_tor_control({"enabled": True, "control_port": int(_tor_port)})
+             
+             # İlk yenileme denemesi
+             if rotate_tor_identity():
+                 pass # Sessiz başarılı
              else:
-                 print("[!] UYARI: Tor Control Port'a bağlanılamadı. IP rotasyonu çalışmayabilir.")
+                 print("[!] UYARI: Tor Control Port'a bağlanılamadı. (Tor çalışıyor mu?)")
                  
-             _tc.start_rotation_loop(interval_seconds=int(_tor_interval))
+             # Otomatik döngüyü başlat
+             start_auto_rotation(interval=int(_tor_interval))
+             
          except ImportError:
              pass
          except Exception as e:
              print(f"[!] Tor hatası: {e}")
              
-    # Cleanup trigger
-    import atexit
-    if _tc:
-        atexit.register(_tc.stop)
+    # Cleanup (Daemon threadler otomatik kapanır, manuel stop gerekmez)
 
     # CLI argümanları
     parser = argparse.ArgumentParser(description="WebSecure hedef seçimi")
@@ -2682,8 +2707,8 @@ O====|_______________________________________________________>  1   1 0
     if not args.dry_run and not args.batch and not args.profile:
         profile, cfg = _offer_scan_profile_and_confirm(cfg)
     else:
-        # Öncelik: CLI --profile > Config > Varsayılan Stealth
-        profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "stealth"
+        # Öncelik: CLI --profile > Config > Varsayılan Deep
+        profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "deep"
         # Profil ayarlarına göre config güncelle (normalde _offer... fonksiyonu bunu yapar)
         # Burada basitçe profili set ediyoruz, detaylı config ayarı için _apply_profile benzeri bir mantık gerekebilir
         # Ancak mevcut yapıda profili settings'e yazmak yeterli olabilir, runner bunu okuyup karar veriyorsa.
@@ -2809,6 +2834,13 @@ O====|_______________________________________________________>  1   1 0
                 def endpoints(self):
                     return self.results.get("endpoints", [])
 
+                def get(self, key, default=None):
+                    if hasattr(self, key):
+                        return getattr(self, key)
+                    if isinstance(self.config, dict):
+                        return self.config.get(key, default)
+                    return default
+
 
             ctx = _Ctx()
             ctx.url, ctx.scheme, ctx.config, ctx.driver = url, scheme, cfg, driver
@@ -2825,11 +2857,13 @@ O====|_______________________________________________________>  1   1 0
                 {"id": "crawl", "title": "Gezinme (Crawl)", "enabled": True, "visible": True},
             ]
             
-            # Try to populate base_plan if ctx supports it
-            try:
-                ctx.base_plan = manual_plan
-            except Exception:
-                pass
+            # [WS3] INJECT FIX: Do NOT set base_plan manually. 
+            # phases.py provides a complete default plan with functioning runners.
+            # Setting manual_plan without runners caused Discovery to be skipped.
+            # try:
+            #     ctx.base_plan = manual_plan
+            # except Exception:
+            #     pass
 
             if callable(build_plan):
                 # Get the plan (which might be just offensive if base_plan failed)
@@ -3129,189 +3163,203 @@ O====|_______________________________________________________>  1   1 0
                             add_result("errors", {"stage": "ssrf_xxe", "error": "module_missing"})
                     mark("ssrf_xxe", t)
 
-                gql_eps = [u for u in endpoints if isinstance(u, str) and ("/graphql" in u.lower())]
-                gql_cfg = (cfg.get("graphql") or {})
-                cfg_eps = list(gql_cfg.get("endpoints") or [])
-                all_gql_eps = list(dict.fromkeys((gql_eps or []) + cfg_eps))
+        gql_eps = [u for u in endpoints if isinstance(u, str) and ("/graphql" in u.lower())]
+        gql_cfg = (cfg.get("graphql") or {})
+        cfg_eps = list(gql_cfg.get("endpoints") or [])
+        all_gql_eps = list(dict.fromkeys((gql_eps or []) + cfg_eps))
 
-                if all_gql_eps:
-                    print("[•] GraphQL RPC testleri…")
-                    t = mark("graphql")
-                    _gql_func = globals().get("graphql_scan")
-                    if callable(_gql_func):
-                        base_kw = dict(
-                            session=session,
-                            endpoints=all_gql_eps[:10],
-                            results=results,
-                            debug=debug,
-                            base_url=url,
-                            verify=bool(cfg.get('tls_verify', True)),
-                            timeout=int((cfg.get('graphql') or {}).get('timeout', 20)),
-                        )
-                        fkw = _kw_filter(_gql_func, **base_kw)
+        if all_gql_eps:
+            print("[•] GraphQL RPC testleri…")
+            t = mark("graphql")
+            _gql_func = globals().get("graphql_scan")
+            if callable(_gql_func):
+                base_kw = dict(
+                    session=session,
+                    endpoints=all_gql_eps[:10],
+                    results=results,
+                    debug=debug,
+                    base_url=url,
+                    verify=bool(cfg.get('tls_verify', True)),
+                    timeout=int((cfg.get('graphql') or {}).get('timeout', 20)),
+                )
+                fkw = _kw_filter(_gql_func, **base_kw)
 
-                        ok_gql, err_or_none = _safe_call(_gql_func, **fkw,
-                                                         call_timeout=900.0) if fkw else _safe_call(
-                            _gql_func, session, all_gql_eps[:10], results, call_timeout=900.0
-                        )
-                        if not ok_gql and callable(globals().get("add_result")):
-                            add_result("errors", {"stage": "graphql", "error": str(err_or_none)})
-                    else:
-                        if callable(globals().get("add_result")):
-                            add_result("errors", {"stage": "graphql", "error": "module_missing"})
-                    mark("graphql", t)
+                ok_gql, err_or_none = _safe_call(_gql_func, **fkw,
+                                                 call_timeout=900.0) if fkw else _safe_call(
+                    _gql_func, session, all_gql_eps[:10], results, call_timeout=900.0
+                )
+                if not ok_gql and callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "graphql", "error": str(err_or_none)})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "graphql", "error": "module_missing"})
+            mark("graphql", t)
 
-                    if bool(gql_cfg.get("deep", True)):
-                        print("[•] GraphQL derin saldırı testleri…")
-                        t = mark("graphql_deep")
-                        _gql_att_func = globals().get("graphql_attack_scan")
-                        if callable(_gql_att_func):
-                            deep_kw = dict(session=session, endpoints=all_gql_eps[:10], results=results, debug=debug,
-                                           config=cfg)
-                            fkw = _kw_filter(_gql_att_func, **deep_kw)
-                            ok_gqa, err_or_none = _safe_call(_gql_att_func, **fkw,
-                                                             call_timeout=900.0) if fkw else _safe_call(
-                                _gql_att_func, session, all_gql_eps[:10], results, call_timeout=900.0
-                            )
-                            if not ok_gqa and callable(globals().get("add_result")):
-                                add_result("errors", {"stage": "graphql_deep", "error": str(err_or_none)})
-                        else:
-                            if callable(globals().get("add_result")):
-                                add_result("errors", {"stage": "graphql_deep", "error": "module_missing"})
-                        mark("graphql_deep", t)
-
-                upload_eps = []
-                for fm in results.get("forms_meta", []):
-                    if any(inp.get("type") == "file" for inp in (fm.get("inputs") or [])):
-                        upload_eps.append(fm.get("action") or fm.get("page"))
-                upload_eps = list(dict.fromkeys([u for u in upload_eps if u]))
-                # File-Upload
-                if upload_eps and callable(globals().get("file_upload_scan")):
-                    print("[•] Dosya yükleme testleri…")
-                    t = mark("file_upload")
-                    ok_fu, err_or_none = _safe_call(
-                        file_upload_scan,
-                        session, upload_eps[:15], results,
-                        debug=debug, base_url=url,
-                        call_timeout=900.0
+            if bool(gql_cfg.get("deep", True)):
+                print("[•] GraphQL derin saldırı testleri…")
+                t = mark("graphql_deep")
+                _gql_att_func = globals().get("graphql_attack_scan")
+                if callable(_gql_att_func):
+                    deep_kw = dict(session=session, endpoints=all_gql_eps[:10], results=results, debug=debug,
+                                   config=cfg)
+                    fkw = _kw_filter(_gql_att_func, **deep_kw)
+                    ok_gqa, err_or_none = _safe_call(_gql_att_func, **fkw,
+                                                     call_timeout=900.0) if fkw else _safe_call(
+                        _gql_att_func, session, all_gql_eps[:10], results, call_timeout=900.0
                     )
-                    if not ok_fu and callable(globals().get("add_result")):
-                        add_result("errors", {"stage": "file_upload", "error": str(err_or_none)})
-                    mark("file_upload", t)
-
-                # [Fix] Fallback: If no endpoints found, force base URL to ensure offensive phase runs
-                if not results.get("endpoints"):
-                    print("[WARN] Keşif başarısız (0 endpoints). Base URL ile saldırı zorlanıyor.")
-                    results.setdefault("endpoints", []).append(url)
-
-                # [Fix] Direct Phase Execution
-                # from websecure.core.phases import run_plan_if_needed
-
-                print("[•] Faz planı çalıştırılıyor…")
-                t = mark("phase_plan")
-                _safe_call(run_plan_if_needed, ctx, call_timeout=None) # No timeout for full plan
-                mark("phase_plan", t)
-
-                # 6) OFFENSIVE 3A
-                print("[•] Offensive modüller…")
-                if results.get("_skip_legacy_offensive"):
-                    print("    [i] Faz planı etkin: legacy offensive bloğu atlanıyor.")
+                    if not ok_gqa and callable(globals().get("add_result")):
+                        add_result("errors", {"stage": "graphql_deep", "error": str(err_or_none)})
                 else:
-                    def _profile_allows(key: str) -> bool:
-                        fn = globals().get("_off_profile_allows")
-                        return bool(fn(cfg, key)) if callable(fn) else True
+                    if callable(globals().get("add_result")):
+                        add_result("errors", {"stage": "graphql_deep", "error": "module_missing"})
+                mark("graphql_deep", t)
 
-                    def _run_offensive(fn, **kw):
-                        if not callable(fn):
-                            return
-                        fkw = _kw_filter(fn, **kw) if callable(globals().get("_kw_filter")) else kw
-                        ok_off, err_or_none = _safe_call(fn, **fkw, call_timeout=900.0)
-                        if not ok_off and callable(globals().get("add_result")):
-                            add_result("errors",
-                                       {"stage": "offensive", "error": str(err_or_none),
-                                        "fn": getattr(fn, "__name__", "unknown")})
+        upload_eps = []
+        for fm in results.get("forms_meta", []):
+            if any(inp.get("type") == "file" for inp in (fm.get("inputs") or [])):
+                upload_eps.append(fm.get("action") or fm.get("page"))
+        upload_eps = list(dict.fromkeys([u for u in upload_eps if u]))
+        # File-Upload
+        if upload_eps and callable(globals().get("file_upload_scan")):
+            print("[•] Dosya yükleme testleri…")
+            t = mark("file_upload")
+            ok_fu, err_or_none = _safe_call(
+                file_upload_scan,
+                session, upload_eps[:15], results,
+                debug=debug, base_url=url,
+                call_timeout=900.0
+            )
+            if not ok_fu and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "file_upload", "error": str(err_or_none)})
+            mark("file_upload", t)
 
-                    t = mark("offensive")
-                    off_root = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
-                    if bool(off_root.get("enabled", False)):
-                        # Request Smuggling
-                        if _off_enabled(cfg, "request_smuggling") and _profile_allows("request_smuggling"):
-                            _run_offensive(offensive_request_smuggling, url=url, session=session, debug=debug,
-                                           auth_ctx=auth_ctx)
+        # [Fix] Fallback: If no endpoints found, force base URL to ensure offensive phase runs
+        if not results.get("endpoints"):
+            print("[WARN] Keşif başarısız (0 endpoints). Base URL ile saldırı zorlanıyor.")
+            results.setdefault("endpoints", []).append(url)
 
-                        # Mass Assignment
-                        if _off_enabled(cfg, "mass_assignment") and _profile_allows("mass_assignment"):
-                            fields = ((off_root.get("mass_assignment") or {}).get("fields"))
-                            _run_offensive(offensive_mass_assignment, url=url, session=session, debug=debug,
-                                           fields=fields,
-                                           auth_ctx=auth_ctx)
+        # Construct Context for flow_runner compatibility
+        class Context:
+            pass
+        ctx = Context()
+        ctx.config = cfg
+        ctx.session = session
+        ctx.results = (locals().get("results") or {}) # Capture local results
+        # Sync results from discovery
+        if "discovery" not in ctx.results and "discovered" in locals():
+             ctx.results["discovery"] = locals().get("discovered")
+        ctx.debug = debug
+        ctx.target = url  # Use 'url' variable which represents the verified target
+        ctx.url = url
 
-                        # JWT
-                        if _off_enabled(cfg, "jwt_attacks") and _profile_allows("jwt_attacks"):
-                            _run_offensive(offensive_jwt, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+        # [Fix] Direct Phase Execution
+        # from websecure.core.phases import run_plan_if_needed
 
-                        # NoSQLi
-                        if _off_enabled(cfg, "nosql_injection") and _profile_allows("nosql_injection"):
-                            _run_offensive(offensive_nosqli, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+        print("[•] Faz planı çalıştırılıyor…")
+        t = mark("phase_plan")
+        _safe_call(run_plan_if_needed, ctx, call_timeout=None) # No timeout for full plan
+        mark("phase_plan", t)
 
-                        # WebSocket Fuzz
-                        if _off_enabled(cfg, "websocket_fuzz") and _profile_allows("websocket_fuzz"):
-                            _run_offensive(offensive_ws_fuzz, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
+        # 6) OFFENSIVE 3A
+        print("[•] Offensive modüller…")
+        if results.get("_skip_legacy_offensive"):
+            print("    [i] Faz planı etkin: legacy offensive bloğu atlanıyor.")
+        else:
+            def _profile_allows(key: str) -> bool:
+                fn = globals().get("_off_profile_allows")
+                return bool(fn(cfg, key)) if callable(fn) else True
 
-                    mark("offensive", t)
+            def _run_offensive(fn, **kw):
+                if not callable(fn):
+                    return
+                fkw = _kw_filter(fn, **kw) if callable(globals().get("_kw_filter")) else kw
+                ok_off, err_or_none = _safe_call(fn, **fkw, call_timeout=900.0)
+                if not ok_off and callable(globals().get("add_result")):
+                    add_result("errors",
+                               {"stage": "offensive", "error": str(err_or_none),
+                                "fn": getattr(fn, "__name__", "unknown")})
 
-                print("[•] Skorlama/Doğrulama (MD)…")
-                t = mark("reporting")
-                buckets = get_bucket_results()
+            t = mark("offensive")
+            off_root = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
+            if bool(off_root.get("enabled", False)):
+                # Request Smuggling
+                if _off_enabled(cfg, "request_smuggling") and _profile_allows("request_smuggling"):
+                    _run_offensive(offensive_request_smuggling, url=url, session=session, debug=debug,
+                                   auth_ctx=auth_ctx)
 
-                all_findings = []
-                for _k, _lst in (buckets or {}).items():
-                    if isinstance(_lst, list):
-                        for _it in _lst:
-                            if isinstance(_it, dict):
-                                all_findings.append(_it)
+                # Mass Assignment
+                if _off_enabled(cfg, "mass_assignment") and _profile_allows("mass_assignment"):
+                    fields = ((off_root.get("mass_assignment") or {}).get("fields"))
+                    _run_offensive(offensive_mass_assignment, url=url, session=session, debug=debug,
+                                   fields=fields,
+                                   auth_ctx=auth_ctx)
 
-                oast_events = []
-                for _it in all_findings:
-                    evs = _it.get("events")
-                    if isinstance(evs, list):
-                        for _ev in evs:
-                            if isinstance(_ev, dict):
-                                oast_events.append(_ev)
+                # JWT
+                if _off_enabled(cfg, "jwt_attacks") and _profile_allows("jwt_attacks"):
+                    _run_offensive(offensive_jwt, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
 
-                final = verify_and_score(all_findings, oast_events)
+                # NoSQLi
+                if _off_enabled(cfg, "nosql_injection") and _profile_allows("nosql_injection"):
+                    _run_offensive(offensive_nosqli, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
 
-                report_payload = dict(results)
-                report_payload.update(get_bucket_results())
-                report_payload.update(buckets)
-                report_payload.update({
-                    "meta": {
-                        "target": url,
-                        "mode": mode,
-                        "detailed": detailed,
-                    },
-                    "final": final,
-                    "phase_timings": results.get("phase_timings", {}),
-                    "crawl_summary": results.get("crawl_summary"),
-                    "security_headers_summary": results.get("security_headers_summary"),
-                    "port_scan_summary": results.get("port_scan_summary"),
-                    "discovery_summary": results.get("discovery_summary"),
-                    # --- TLS Özet Tablosu 2.5 ---
-                    "tls_summary": results.get("tls_summary", []),
-                })
+                # WebSocket Fuzz
+                if _off_enabled(cfg, "websocket_fuzz") and _profile_allows("websocket_fuzz"):
+                    _run_offensive(offensive_ws_fuzz, url=url, session=session, debug=debug, auth_ctx=auth_ctx)
 
-                out = perform_reporting(session, cfg, report_payload)
-                written = (out or {}).get("written", {})
-                ok = written.get("md") or written.get("json")
+            mark("offensive", t)
 
-                if driver is not None:
-                    getattr(driver, 'quit', lambda: None)()
-                s = session
-                if s is not None:
-                    getattr(s, 'close', lambda: None)()
-                print("\n[i] Tamamlandı.")
-                print(
-                    f"[i] Üretilen dosyalar: {json.dumps(written, ensure_ascii=False)}")  # yazılan dosyalar ve webhook sonucunu içerir
+        print("[•] Skorlama/Doğrulama (MD)…")
+        t = mark("reporting")
+        buckets = get_bucket_results()
+
+        all_findings = []
+        for _k, _lst in (buckets or {}).items():
+            if isinstance(_lst, list):
+                for _it in _lst:
+                    if isinstance(_it, dict):
+                        all_findings.append(_it)
+
+        oast_events = []
+        for _it in all_findings:
+            evs = _it.get("events")
+            if isinstance(evs, list):
+                for _ev in evs:
+                    if isinstance(_ev, dict):
+                        oast_events.append(_ev)
+
+        final = verify_and_score(all_findings, oast_events)
+
+        report_payload = dict(results)
+        report_payload.update(get_bucket_results())
+        report_payload.update(buckets)
+        report_payload.update({
+            "meta": {
+                "target": url,
+                "mode": mode,
+                "detailed": detailed,
+            },
+            "final": final,
+            "phase_timings": results.get("phase_timings", {}),
+            "crawl_summary": results.get("crawl_summary"),
+            "security_headers_summary": results.get("security_headers_summary"),
+            "port_scan_summary": results.get("port_scan_summary"),
+            "discovery_summary": results.get("discovery_summary"),
+            # --- TLS Özet Tablosu 2.5 ---
+            "tls_summary": results.get("tls_summary", []),
+        })
+
+        out = perform_reporting(session, cfg, report_payload)
+        written = (out or {}).get("written", {})
+        ok = written.get("md") or written.get("json")
+
+        if driver is not None:
+            getattr(driver, 'quit', lambda: None)()
+        s = session
+        if s is not None:
+            getattr(s, 'close', lambda: None)()
+        print("\n[i] Tamamlandı.")
+        print(
+            f"[i] Üretilen dosyalar: {json.dumps(written, ensure_ascii=False)}")  # yazılan dosyalar ve webhook sonucunu içerir
 
         print("fuzzing başlıyor…")
         t = mark("fuzzing")
@@ -3353,19 +3401,7 @@ O====|_______________________________________________________>  1   1 0
         mark("fuzzing", t_fz)
 
         # --- Offensive Scans (NoSQLi, SSRF, etc.) ---
-        # Construct Context for flow_runner compatibility
-        class Context:
-            pass
-        ctx = Context()
-        ctx.config = cfg
-        ctx.session = session
-        ctx.results = (locals().get("results") or {}) # Capture local results
-        # Sync results from discovery
-        if "discovery" not in ctx.results and "discovered" in locals():
-             ctx.results["discovery"] = locals().get("discovered")
-        ctx.debug = debug
-        ctx.target = url  # Use 'url' variable which represents the verified target
-        ctx.url = url
+
 
         # 1. NoSQL Injection
         if callable(globals().get("run_nosqli_scan")) and (cfg.get("scanners") or {}).get("nosqli"):

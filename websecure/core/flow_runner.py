@@ -36,8 +36,21 @@ try:
 except ImportError:
     run_owasp_and_nuclei = None
 
+# [WS3] Robust Local Scanners (Always Available)
+try:
+    from websecure.scanners.xss import run as run_local_xss
+except ImportError:
+    run_local_xss = None
+
+try:
+    from websecure.scanners.sqli import run as run_local_sqli
+except ImportError:
+    run_local_sqli = None
+
 _logger = logging.getLogger(__name__)
 
+
+def _get_config(ctx, key: str, default: Any = None) -> Any:
 
 def _get_config(ctx, key: str, default: Any = None) -> Any:
     cfg = getattr(ctx, "config", {}) or {}
@@ -110,10 +123,50 @@ def run_discovery_extended(ctx) -> None:
     if isinstance(res, dict):
         current_res = getattr(ctx, "results", {}) or {}
         # Merge carefully
-        if "endpoints" in res:
-            existing = set(current_res.get("endpoints", []))
-            existing.update(res["endpoints"])
-            current_res["endpoints"] = list(existing)
+        found_endpoints = res.get("endpoints", [])
+        
+        # [WS3] Fallback: If no endpoints found, use base URL to ensure offensive scanners have a target.
+        if not found_endpoints and url:
+             _logger.info("Discovery yielded no endpoints. Forcing base URL as target for offensive phases.")
+             found_endpoints = [url]
+        
+        # [WS3] Enhanced Form Parsing (User Logic Integration)
+        # Force a fetch of base URL to parse dynamic inputs/forms if not done
+        try:
+             from websecure.core.form_parser import extract_all_forms
+             t_html = ""
+             # Try to get HTML from crawler results if available, else fetch
+             if isinstance(res, dict) and res.get("html"):
+                  t_html = res.get("html")
+             elif ctx.session:
+                  # Quick fetch
+                  try:
+                       rr = ctx.session.get(url, timeout=10)
+                       t_html = rr.text
+                  except: pass
+             
+             if t_html:
+                  new_forms = extract_all_forms(t_html, url)
+                  # Merge into results['forms_meta']
+                  existing_forms = current_res.get("forms_meta", [])
+                  # Convert to list if it's a dict (old format?) usually list of pages
+                  # We'll append a "virtual page" for these forms
+                  if new_forms:
+                        _logger.info(f"[FormParser] Extracted {len(new_forms)} forms (including dynamic script inputs).")
+                        # Add as a generic page entry
+                        existing_forms.append({
+                             "url": url,
+                             "forms": new_forms
+                        })
+                        current_res["forms_meta"] = existing_forms
+        except ImportError:
+             _logger.warning("Could not import form_parser.")
+        except Exception as e:
+             _logger.error(f"Form parsing failed: {e}")
+
+        existing = set(current_res.get("endpoints", []))
+        existing.update(found_endpoints)
+        current_res["endpoints"] = list(existing)
         
         # Merge other keys
         for k, v in res.items():
@@ -123,6 +176,34 @@ def run_discovery_extended(ctx) -> None:
         ctx.results = current_res
         
     add_result("meta", {"stage": "discovery_extended", "count": len(getattr(ctx, "results", {}).get("endpoints", []))})
+
+
+def _prioritize_urls(urls: List[str]) -> List[str]:
+    """
+    Sorts URLs by 'interest' level for offensive scanning.
+    High Priority: Login, Admin, Payment, Parameters
+    Low Priority: Deep nesting, Static-looking, Logout
+    """
+    if not urls: return []
+    
+    def _score(u: str) -> int:
+        s = 0
+        ul = u.lower()
+        if "?" in ul: s += 20
+        if any(k in ul for k in ("login", "signin", "auth", "admin", "account", "register", "signup")): s += 50
+        if any(k in ul for k in ("pay", "checkout", "cart", "buy", "order")): s += 40
+        if "password" in ul or "reset" in ul: s += 30
+        
+        # Penalize deep nesting (often irrelevant content)
+        s -= (ul.count("/") * 2)
+        
+        # Avoid destructive/logout
+        if "logout" in ul or "signout" in ul: s -= 500
+        
+        return s
+        
+    return sorted(list(set(urls)), key=_score, reverse=True)
+
 
 
 def run_sqlmap_scan(ctx) -> None:
@@ -186,7 +267,10 @@ def run_sqlmap_scan(ctx) -> None:
         pass
 
     # [FIX] Iterate over ALL discovered endpoints, not just base URL
-    endpoints = getattr(ctx, "results", {}).get("endpoints", [])
+    raw_endpoints = getattr(ctx, "results", {}).get("endpoints", [])
+    # [WS3] Priority Sort: Attack Login/Payment/Param-heavy first!
+    endpoints = _prioritize_urls(raw_endpoints)
+    
     if not endpoints:
         endpoints = [url]
     
@@ -246,16 +330,46 @@ def run_sqlmap_scan(ctx) -> None:
     else:
         add_result("sqlmap", {"status": "finished", "findings": 0})
 
+    # [WS3] Python-based SQLi (Robust Fallback/Companion)
+    if run_local_sqli:
+        _logger.info("[SQLi] Running internal robust SQLi scanner (Python)...")
+        # Ensure discovered params are passed via results if needed, but scanner reads forms_meta itself
+        run_local_sqli(
+            endpoints,
+            getattr(ctx, "session", None),
+            results=getattr(ctx, "results", {}), 
+            debug=bool(getattr(ctx, "debug", False))
+        )
+
+
 def run_xss_scan(ctx) -> None:
     """
     [Check 2] XSS Payload/Exploit trials.
-    Since local xss.py is removed, we use OWASP/Nuclei integration or Dalfox via Wrapper.
-    Currently maps to Nuclei XSS templates via owasp module if available.
+    [WS3] UPDATED: Uses Robust Local XSS Scanner (xss.py) + Nuclei/OWASP as secondary.
     """
-    _logger.info("Launching XSS/Vulnerability Scan (Nuclei/OWASP)...")
+    _logger.info("Launching XSS Scan...")
+    
+    # 1. Local Python Scanner (Robust)
+    if run_local_xss:
+        _logger.info("[XSS] Running internal XSS scanner (Python/Canary)...")
+        _raw_eps = getattr(ctx, "results", {}).get("endpoints", [])
+        # [WS3] Smart Prioritization
+        _eps = _prioritize_urls(_raw_eps)
+        if not _eps:
+             _eps = [getattr(ctx, "base_url", "")]
+        
+        run_local_xss(
+            _eps,
+            getattr(ctx, "session", None),
+            results=getattr(ctx, "results", {}),
+            debug=bool(getattr(ctx, "debug", False))
+        )
+    else:
+        _logger.warning("[XSS] Internal scanner missing (xss.py).")
+
+    # 2. Nuclei / OWASP (Secondary)
     if run_owasp_and_nuclei:
         # Nuclei handles XSS templates
-        # [Check 6] Wordlists/Templates handling internal to module
         run_owasp_and_nuclei(
             getattr(ctx, "base_url", ""), 
             getattr(ctx, "results", {}), 
@@ -264,7 +378,9 @@ def run_xss_scan(ctx) -> None:
             debug=bool(getattr(ctx, "debug", False))
         )
     else:
-        add_result("xss", {"status": "skipped", "reason": "OWASP/Nuclei module missing"})
+        if not run_local_xss:
+             add_result("xss", {"status": "skipped", "reason": "ALL XSS modules missing"})
+
 
 def run_ffuf_scan(ctx) -> None:
     """
@@ -427,8 +543,23 @@ def run_feroxbuster_scan(ctx) -> None:
         
     findings = wrapper.scan(url, depth=depth, extra_args=extra_args)
     
+    new_eps = []
     for f in findings:
+        f_url = f.get("url")
+        if f_url:
+             new_eps.append(f_url)
         add_result("discovery", {"tool": "feroxbuster", **f})
+
+    # [WS3] FEEDBACK LOOP: Add to endpoints for offensive tools
+    if new_eps:
+        current_res = getattr(ctx, "results", {}) or {}
+        existing = set(current_res.get("endpoints", []))
+        before_count = len(existing)
+        existing.update(new_eps)
+        current_res["endpoints"] = list(existing)
+        if len(existing) > before_count:
+             _logger.info(f"[Feroxbuster] Added {len(existing) - before_count} new endpoints to offensive context.")
+        ctx.results = current_res
 
 
 def run_reporting_and_integration(ctx) -> None:
@@ -446,11 +577,95 @@ def run_oast_verification(ctx) -> None:
     add_result("meta", {"stage": "oast", "status": "not_implemented_yet"})
 
 
+
 def run_fuzz_and_param_discovery(ctx) -> None:
-    pass
+    """
+    Parametre keşfi ve fuzzing fazı.
+    Ana döngüdeki (main.py) fuzzing adımından önce, spesifik parametre analizi yapar.
+    """
+    # [WS3] Eğer scanners/param_miner.py eklenirse buraya bağlanacak.
+    # Şimdilik ana döngüye bırakıyoruz ama logluyoruz.
+    add_result("meta", {"stage": "fuzz_param_discovery", "status": "delegated_to_main_loop"})
+    _logger.info("Fuzzing ve Parametre Analizi ana döngüye (fuzzing fazı) devredildi.")
 
 def run_authorization_matrix(ctx) -> None:
-    pass
+    """
+    Yetkilendirme matrisi (IDOR/PrivEsc) testi.
+    scanners.auth modülünü kullanır.
+    """
+    mod = _opt_import("scanners.auth")
+    if not mod:
+        add_result("auth_matrix", {"status": "skipped", "reason": "Module not found"})
+        return
+
+    # run(session, base_url, users=[...]) imzasına uyum sağla
+    run_fn = getattr(mod, "run", None)
+    if not callable(run_fn):
+        add_result("auth_matrix", {"status": "skipped", "reason": "run() function missing"})
+        return
+
+    # Config'den kullanıcıları al
+    cfg = getattr(ctx, "config", {}) or {}
+    auth_cfg = cfg.get("auth", {}) or {}
+    if not auth_cfg.get("matrix_enabled", True):
+        return
+
+    users = auth_cfg.get("users", []) # [{"user": "admin", "pass": "123"}, ...]
+    
+    _logger.info("Launching Authorization Matrix Scan...")
+    
+    # Session ve URL
+    sess = getattr(ctx, "session", None) or hardened_session()
+    url = getattr(ctx, "base_url", "")
+    
+    try:
+        # Modülün run fonksiyonunu çağır
+        # Not: scanners.auth.run genelde (url, session, config) veya (url, users) bekler.
+        # İmzayı dinamik kontrol edelim.
+        kw = _filter_kwargs(run_fn, {"url": url, "base_url": url, "session": sess, "config": cfg, "users": users})
+        findings = run_fn(**kw)
+        
+        if findings:
+            for f in findings:
+                add_result("auth_matrix", f)
+        add_result("meta", {"stage": "auth_matrix", "findings": len(findings) if findings else 0})
+
+    except Exception as e:
+        _logger.error(f"Auth Matrix Error: {e}")
+        add_result("errors", {"stage": "auth_matrix", "error": str(e)})
+
 
 def run_business_logic_races(ctx) -> None:
-    pass
+    """
+    Business Logic Race Condition testlerini çalıştırır.
+    websecure.core.bl_concurrency modülünü kullanır.
+    """
+    try:
+        from websecure.core.bl_concurrency import run_race_conditions
+    except ImportError:
+        add_result("meta", {"stage": "races", "status": "skipped:missing_core_module"})
+        return
+
+    sess = getattr(ctx, "session", None) or hardened_session()
+    url = getattr(ctx, "base_url", "")
+    cfg = getattr(ctx, "config", {}) or {}
+    results_bucket = getattr(ctx, "results", {}) or {}
+    debug = bool(getattr(ctx, "debug", False))
+
+    if not _get_config(ctx, "business_logic.enabled", True):
+        return
+
+    _logger.info("Launching Business Logic Race Conditions Scan...")
+    
+    # Raporlama callback
+    def _cb(evt, data):
+        if debug:
+            _logger.debug(f"[Race] {evt}: {data}")
+
+    try:
+        stats = run_race_conditions(sess, url, cfg, results_bucket, debug=debug, event_cb=_cb)
+        _logger.info(f"Race Scan Finished: {stats}")
+    except Exception as e:
+        _logger.error(f"Race Scan Failed: {e}")
+        add_result("errors", {"stage": "races", "error": str(e)})
+

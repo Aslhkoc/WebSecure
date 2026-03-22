@@ -609,33 +609,68 @@ class HProfileManager:
 
     def _load_policies(self, cfg: Dict[str, Any]) -> Dict[str, HProfilePolicy]:
         pols: Dict[str, HProfilePolicy] = {}
+        
+        # Tam kapsamlı tarama olduğunu belirten profil adları
+        _FULL_SCOPE = {'aggressive', 'deep', 'nightmare', 'safe_full', 'smart'}
+        _ALL_CATS = ['xss', 'sqli', 'ssrf', 'xxe', 'rce', 'nosqli', 'ssti', 'open_redirect', 'prototype_pollution', 'deserialization', 'ldap', 'xpath', 'crlf']
 
         def build(name: str, node: Dict[str, Any]) -> HProfilePolicy:
-            rps = self._num(node.get('rps'), 5.0 if name == 'stealth' else (20.0 if name == 'normal' else 50.0))
-            conc = int(node.get('concurrency') or (10 if name == 'stealth' else (25 if name == 'normal' else 60)))
-            allow_cats = self._as_set(node.get('allow_categories') or (['xss', 'sqli'] if name == 'stealth' else (
-                ['xss', 'sqli', 'ssrf', 'xxe', 'rce', 'nosqli', 'ssti', 'open_redirect'] if name == 'aggressive' else [
-                    'xss', 'sqli', 'ssrf', 'ssti', 'open_redirect'])))
-            idem = self._as_bool(node.get('idempotent_only'), name == 'stealth')
-            oast = self._as_bool(node.get('oast', node.get('oast_enabled', False)), name == 'aggressive')
-            heavy = self._as_bool(node.get('heavy_modules'), name == 'aggressive')
-            robots = self._as_bool(node.get('robots_respect'), name != 'aggressive')
-            polite = int(node.get('politeness_ms') or (800 if name == 'stealth' else (300 if name == 'normal' else 0)))
+            # Profil tipini belirle
+            is_full = name in _FULL_SCOPE or '*' in (node.get('modules') or [])
+            is_stealth = name in ('stealth', 'safe_full')
+            
+            # Parametreleri çek (Config yoksa mantıklı varsayılanlar kullan)
+            # RPS: Stealth/Safe=2-5, Normal=12-20, Aggressive/Deep=50+, Nightmare=100
+            def_rps = 2.0 if is_stealth else (60.0 if name in ('aggressive', 'nightmare') else 15.0)
+            rps = self._num(node.get('rps'), def_rps)
+            
+            # Concurrency: Stealth=2-10, Normal=20, Aggressive=60+
+            def_conc = 5 if is_stealth else (60 if name in ('aggressive', 'nightmare') else 25)
+            conc = int(node.get('concurrency') or def_conc)
+            
+            # Kategoriler: Full profiller için hepsi, aksi halde kısıtlı
+            if node.get('allow_categories'):
+                allow_cats = self._as_set(node.get('allow_categories'))
+            else:
+                allow_cats = set(_ALL_CATS) if is_full else {'xss', 'sqli', 'ssrf', 'ssti', 'open_redirect'}
+                
+            idem = self._as_bool(node.get('idempotent_only'), is_stealth and name != 'safe_full') # Safe full runs everything
+            
+            # OAST: Aggressive/Safe_full/Deep needs it
+            oast = self._as_bool(node.get('oast', node.get('oast_enabled', False)), is_full)
+            
+            # Heavy: Aggressive/Safe_full
+            heavy = self._as_bool(node.get('heavy_modules'), is_full)
+            
+            # Robots: Stealth/Normal respects, Aggressive/Nightmare ignores
+            # Safe_full usually respects? Let's say respect for safe_full unless disabled manually
+            def_robots = True
+            if name in ('aggressive', 'nightmare'): def_robots = False
+            robots = self._as_bool(node.get('robots_respect'), def_robots)
+            
+            # Politeness
+            def_polite = 1500 if name == 'safe_full' else (800 if name == 'stealth' else (0 if name in ('aggressive', 'nightmare') else 300))
+            polite = int(node.get('politeness_ms') or def_polite)
+            
             obs = int(node.get('obs_seconds') or 60)
             min_req = int(node.get('min_req') or 40)
-            up_below = self._num(node.get('up_when_block_rate_below'), 0.01 if name == 'stealth' else 0.005)
-            down_above = self._num(node.get('down_when_block_rate_above'), 0.05 if name == 'aggressive' else 0.03)
+            
+            # Adaptive Blocking Thresholds
+            up_below = self._num(node.get('up_when_block_rate_below'), 0.01 if is_stealth else 0.005)
+            down_above = self._num(node.get('down_when_block_rate_above'), 0.05 if name in ('aggressive', 'nightmare') else 0.03)
+            
             return HProfilePolicy(name, rps, conc, allow_cats, idem, oast, heavy, robots, polite, obs, min_req,
                                   up_below, down_above)
 
-        # Varsayılan üçlü
-        base = {
-            'stealth': cfg.get('stealth') or {},
-            'normal': cfg.get('normal') or {},
-            'aggressive': cfg.get('aggressive') or (cfg.get('deep') or {}),
-        }
-        for k, node in base.items():
-            pols[k] = build(k, node if isinstance(node, dict) else {})
+        # Tüm tanımlı profilleri yükle
+        for k, node in cfg.items():
+            if isinstance(node, dict):
+                pols[k] = build(k, node)
+                
+        # Eğer 'normal' profil yoksa backup oluştur
+        if 'normal' not in pols:
+            pols['normal'] = build('normal', {})
+            
         return pols
 
     # Timeline

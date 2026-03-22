@@ -225,8 +225,17 @@ def run_robust(url, session=None, debug=False, auth_ctx=None):
             
             # Using session request but 'requests' library normalizes headers heavily. 
             # We strictly need to see if the server accepts ambiguous headers.
-            pass
-        except:
+            resp = session.post(url, headers=h, data="x=1", timeout=5)
+            
+            if resp.status_code >= 200 and resp.status_code < 400:
+                 results.append({
+                    "type": "Request Smuggling (Header Obfuscation)",
+                    "severity": "Low", 
+                    "url": url,
+                    "payload": str(h),
+                    "evidence": f"Server accepted malformed header {h} with status {resp.status_code}"
+                })
+        except Exception:
             pass
             
     # For now, we will leave the module as a "Advanced Warning" stub or implemented basic logic 

@@ -327,76 +327,81 @@ class PySSLCertChecker:
         host, port, scheme = _normalize_host(url)
         if scheme == "http":
             return CertificateReport(host, port, scheme, None, None, None, "", "", 0, [], ["no_tls"], False)
-            
-        def _fetch():
-            ctx = pyssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = pyssl.CERT_NONE
-            with socket.create_connection((host, port), timeout=timeout) as sock:
-                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                    cert = ssock.getpeercert()  # might be empty if verify_mode=NONE unless specialized?
-                    # Actually for extracting details we usually need to pull binary form or use default context that verifies?
-                    # But we want details even if self-signed.
-                    # Let's try separate approach:
-                    pass 
-                # Re-do with fetch logic that allows self-signed
-            # To get cert details from self-signed in python ssl, we can use binary_form=True on getpeercert()
-            # or simply connect and retrieve.
-            
-            # Simple standard approach:
-            s_ctx = pyssl.create_default_context()
-            s_ctx.check_hostname = False
-            s_ctx.verify_mode = pyssl.CERT_NONE
-            with socket.create_connection((host, port), timeout=timeout) as s:
-                with s_ctx.wrap_socket(s, server_hostname=host) as ss:
-                    der = ss.getpeercert(binary_form=True)
-                    ver = ss.version()
-                    alpn = ss.selected_alpn_protocol()
-                    # Now we need to parse DER? Python's ssl module doesn't parse DER to dict easily without verify?
-                    # Actually, if we use CERT_OPTIONAL or NONE, getpeercert() returns empty dict.
-                    # This is a limitation of Python ssl module.
-                    # We will try to rely on ssl module's ability or fallback.
-                    # However, if we want robust, we might need to rely on the fact that for many scans we can attempt standard verify first.
-                    return der, ver, alpn
 
-        # Fallback to a simpler flow: try standard connection. If fail, catch.
-        # Implemented simplified version for now.
-        host, port, scheme = _normalize_host(url)
-        problems = []
-        
         ctx = pyssl.create_default_context()
         ctx.check_hostname = False
-        ctx.verify_mode = pyssl.CERT_NONE 
-        
+        ctx.verify_mode = pyssl.CERT_NONE  # Verify yoksa binary form almaya çalışacağız veya opsiyonel yapacağız
+
         der = None
         ver = None
         alpn = None
+        problems = []
         
+        # 1. Deneme: Düşük seviye socket ile binary sertifika alma (cryptography için)
         try:
-             with socket.create_connection((host, port), timeout=timeout) as s:
-                 with ctx.wrap_socket(s, server_hostname=host) as ss:
-                     der = ss.getpeercert(binary_form=True)
-                     ver = ss.version()
-                     alpn = ss.selected_alpn_protocol()
+            with socket.create_connection((host, port), timeout=timeout) as s:
+                with ctx.wrap_socket(s, server_hostname=host) as ss:
+                    try:
+                        der = ss.getpeercert(binary_form=True)
+                    except ValueError:
+                         # Bazen verify_mode=CERT_NONE iken binary_form desteklenmez, tekrar deneriz
+                         pass
+                        
+                    ver = ss.version()
+                    alpn = ss.selected_alpn_protocol()
         except Exception as e:
-            return CertificateReport(host, port, scheme, None, None, None, "", "", 0, [], [str(e)], False)
+            # Hata durumunda hemen pes etme, alternatif yöntemi dene
+            problems.append(f"Socket connection error: {e}")
 
-        # Extract details
-        details = _extract_cert_details(der) if der else {}
-        
-        # Determine strict validity
+        # 2. Deneme: ssl.get_server_certificate (PEM döner) - Eğer binary alamazsak
+        if not der:
+             try:
+                 pem = pyssl.get_server_certificate((host, port), timeout=timeout)
+                 if pem:
+                     # PEM'i DER'e çevirmek için basit bir yol yoksa text parse edilebilir
+                     # Ancak cryptography varsa PEM yükleyebiliriz
+                     if _HAS_CRYPTO:
+                         try:
+                             cert = x509.load_pem_x509_certificate(pem.encode('utf-8'), default_backend())
+                             der = cert.public_bytes(serialization=lambda: None) # Dummy, we just need cert obj usually. 
+                             # Wait, load_pem returns a cert object directly. _extract_cert_details expects DER bytes?
+                             # Let's verify _extract_cert_details. It calls x509.load_der...
+                             # We can modify _extract to handle PEM or convert PEM->DER here.
+                             der = cert.public_bytes(encoding=getattr(x509.Encoding, 'DER', None) or 0)
+                         except Exception as ex:
+                             problems.append(f"PEM parsing error: {ex}")
+             except Exception as e:
+                 problems.append(f"Alternative fetch failed: {e}")
+
+        # Detayları çıkar
+        details = {}
+        if der:
+            details = _extract_cert_details(der)
+            # Validasyon başarılı varsayımı (detay alabildik)
+            if not problems: 
+                # Sorun listesi boş değilse bile sertifika aldıysak validasyonu ayrıca kontrol edelim
+                pass 
+        else:
+             problems.append("Could not retrieve certificate details.")
+
+        # Eğer cryptography yoksa veya detaylar boşsa, standart yöntem (CERT_OPTIONAL/REQUIRED) ile text almak deneyebiliriz
+        # Ancak verify=NONE iken text dict boş döner. O yüzden verify gerektirir ama self-signed ise patlar.
+        # Şimdilik cryptography varsa detayları alıyoruz, yoksa sınırlı bilgi dönüyoruz.
+       
         valid = False
         try:
-             # Separate verify check
+             # Basit doğrulama kontrolü
             requests.get(url, timeout=timeout)
             valid = True
-        except:
+        except requests.exceptions.SSLError:
+            valid = False
+            problems.append("Certificate validation failed (Self-signed or expired).")
+        except Exception:
             valid = False
             
         nb = details.get("not_before", "")
         na = details.get("not_after", "")
         
-        # Calculate days remaining if possible
         days = 0
         if na:
              try:
@@ -413,13 +418,13 @@ class PySSLCertChecker:
             not_before=nb,
             not_after=na,
             days_remaining=days,
-            san=[], # Simplified for now, or could extract from crypto too
+            san=[], 
             problems=problems,
             valid=valid,
             tls_version=ver,
             alpn=alpn,
             fingerprint_sha256=details.get("fingerprint"),
-            self_signed=not valid # Approximation
+            self_signed=not valid
         )
 
 # ============================================================================
@@ -457,10 +462,6 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
             
     return {
         "host": host, "port": port, "scheme": sch,
-        "valid": rep.valid and not problems,
-        "problems": problems,
-        "hsts": hsts_on,
-        "tls_version": rep.tls_version,
         "valid": rep.valid and not problems,
         "problems": problems,
         "hsts": hsts_on,

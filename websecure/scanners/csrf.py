@@ -132,6 +132,9 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
     if not forms and not results.get("endpoints"):
         add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "No forms or API endpoints found to scan."})
         return
+    else:
+        # [WS3] Visibility patch: Report that we ARE scanning.
+        add_result(bucket, {"type": "CSRF Scan", "severity": "Info", "reason": f"Scanning {len(forms)} forms and {len(results.get('endpoints', []))} endpoints for CSRF."})
 
     for form in forms:
         method = form.get("method", "GET")

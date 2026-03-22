@@ -105,3 +105,11 @@ def rotate_tor_identity() -> bool:
     if _global_tor:
         return _global_tor.renew_identity()
     return False
+
+def start_auto_rotation(interval: int = 120):
+    """Starts the auto-rotation loop on the global Tor controller."""
+    global _global_tor
+    if _global_tor:
+        _global_tor.start_rotation_loop(interval)
+        return True
+    return False

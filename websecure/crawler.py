@@ -431,12 +431,22 @@ class WebCrawler:
                     queued.add(s)
                     queue.append((s, 0))
         
+        # [WS3] Smart Governor (Anti-Infinite Loop)
+        # Prevents getting stuck on /product/1, /product/2 ...
+        governor = make_queue_governor(self.root)
+
         while queue:
             if pages_crawled >= self.cfg.max_pages:
                 break
             
             url, depth = queue.popleft()
             if url in seen: continue
+            
+            # [WS3] Smart Limit Check
+            if not governor(url):
+                if self.debug: logger.debug(f"[Governor] Skipped repetitive/limited URL: {url}")
+                continue
+
             seen.add(url)
             
             # Policy Check
@@ -548,9 +558,10 @@ class WebCrawler:
                                 self.results["endpoints"].add(full_cand)
                                 # Log discovery
                                 if self.debug: print(f"[JS-Miner] Found endpoint in JS: {candidate}")
-            except Exception:
-                pass
-                
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"[JS-Miner] Regex error on {url}: {e}")
+
             # Forms
             if BeautifulSoup and "html" in content_type:
                 try:
@@ -598,21 +609,49 @@ class WebCrawler:
                                  if "param_contexts" not in self.results:
                                      self.results["param_contexts"] = {}
                                  self.results["param_contexts"].update(analysis)
-                except Exception:
-                    pass
-
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.debug:
+                        logger.debug(f"Form parsing error on {url}: {e}")
 
 
             # [SPA FIX] Detect loose inputs (Angular/React often lack dict-forms)
-            inputs = soup.find_all("input")
-            if inputs:
-                 self.results["param_candidates"].update(
-                      [i.get("name") or i.get("id") or "" for i in inputs]
-                 )
-                 # Count these as detected surface
-                 self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
+            if BeautifulSoup:
+                try:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    inputs = soup.find_all("input")
+                    if inputs:
+                         # Collect loose inputs into a 'synthetic' form context
+                         loose_inputs = []
+                         for i in inputs:
+                             name = i.get("name") or i.get("id")
+                             if name:
+                                 loose_inputs.append({
+                                     "name": name,
+                                     "type": i.get("type", "text"),
+                                     "value": i.get("value", "")
+                                 })
+                         
+                         if loose_inputs:
+                             # Add names to param_candidates for query fuzzing
+                             self.results["param_candidates"].update(
+                                  [i["name"] for i in loose_inputs]
+                             )
+                             # CRITICAL: Create a synthetic form so XSS/SQLi scanners see these inputs!
+                             # We assume 'POST' to the same URL as a safe default for testing.
+                             self.results["forms_meta"].append({
+                                "url": url,
+                                "method": "POST",
+                                "action": url, # assume self-post for loose inputs
+                                "inputs": loose_inputs,
+                                "synthetic": True 
+                             })
+                             
+                             # Count these as detected surface
+                             self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
+                             print(f"       +[Loose/SPA Inputs] {url} ({len(loose_inputs)} inputs detected & queued for attack)")
+                except Exception as e:
+                    if self.debug:
+                        logger.debug(f"SPA input parsing error on {url}: {e}")
 
         # [API FIX] Parse JSON keys as potential parameters
         if "json" in content_type:
@@ -622,8 +661,9 @@ class WebCrawler:
                     self.results["param_candidates"].update(data.keys())
                 elif isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
                     self.results["param_candidates"].update(data[0].keys())
-            except Exception:
-                pass
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"JSON parsing error on {url}: {e}")
 
     def _run_browser_discovery(self):
         if self.debug: print("[Crawler] Starting browser-based discovery...")
@@ -639,6 +679,15 @@ class WebCrawler:
              u = ep.get("url")
              if u: self.results["endpoints"].add(u)
              if ep.get("src") == "ws": self.results["ws_endpoints"].add(u)
+        
+        # [SPA FIX] Ingest discovered forms
+        if d_arts and "discovered_forms" in d_arts:
+             new_forms = d_arts["discovered_forms"]
+             if new_forms:
+                 self.results["forms_meta"].extend(new_forms)
+                 total_inputs = sum(len([i for f in page["forms"] for i in f["inputs"]]) for page in new_forms)
+                 print(f"[Browser] Entegre edilen form sayısı: {len(new_forms)} (Toplam Girdi: {total_inputs})")
+
 
     def _finalize_results(self, seen_urls):
         self.results["crawl_map"]["count"] = len(seen_urls)
@@ -815,6 +864,38 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                             if href:
                                 full = urljoin(target, href)
                                 _enqueue(full)
+                        
+                        # [SPA FIX] Extract Forms from DOM
+                        try:
+                            # Execute JS to grab all forms and inputs
+                            page_forms = page.evaluate("""() => {
+                                return Array.from(document.forms).map(f => ({
+                                    action: f.action || window.location.href,
+                                    method: f.method || 'GET',
+                                    inputs: Array.from(f.elements)
+                                        .filter(e => e.name)
+                                        .map(e => ({
+                                            name: e.name,
+                                            type: e.type || 'text',
+                                            value: e.value || ''
+                                        }))
+                                }));
+                            }""")
+                            if page_forms:
+                                # Add to artifacts or a side-channel
+                                # We use a special key in artifacts to pass this back
+                                if "discovered_forms" not in artifacts:
+                                    artifacts["discovered_forms"] = []
+                                
+                                artifacts["discovered_forms"].append({
+                                    "url": target,
+                                    "count": len(page_forms),
+                                    "forms": page_forms
+                                })
+                                logger.info(f"[Playwright] Extracted {len(page_forms)} forms from {target}")
+                        except Exception as e:
+                            logger.debug(f"[Playwright] Form extraction failed on {target}: {e}")
+
                     except Exception as e:
                         logger.debug(f"[Playwright] Page error {target}: {e}")
                         pass

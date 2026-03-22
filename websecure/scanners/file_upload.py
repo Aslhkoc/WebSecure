@@ -143,7 +143,31 @@ def run(session, endpoints: List[str], results: Dict[str, Any], debug: bool = Fa
             continue
 
     if not upload_forms:
-        if debug: logger.debug("[FileUpload] No upload forms found.")
+        # [WS3] Fallback Probing
+        common_paths = ["/upload", "/upload.php", "/fileupload", "/api/upload", "/v1/upload"]
+        if debug: logger.info("[FileUpload] No forms found, probing common paths...")
+        
+        for path in common_paths:
+             try:
+                 # Probe
+                 start = endpoints[0] if endpoints else base_url or "http://example.com" # Should have base_url from run()
+                 target = urljoin(start, path)
+                 if target in checked_urls: continue
+                 
+                 checked_urls.add(target)
+                 resp = session.get(target, timeout=5)
+                 if resp.status_code == 200 and _looks_like_upload_form(resp.text):
+                      found = _parse_upload_forms(target, resp.text)
+                      if found:
+                           upload_forms.extend(found)
+                           if debug: logger.info(f"[FileUpload] Discovered hidden upload form at {target}")
+             except:
+                 pass
+
+    if not upload_forms:
+        msg = "No file upload forms discovered or probed."
+        if debug: logger.debug(msg)
+        add_result("offensive", {"type": "File Upload", "severity": "Info", "reason": msg})
         return findings
 
     # 2. Attack Upload Forms

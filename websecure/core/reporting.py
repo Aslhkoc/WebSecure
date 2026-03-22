@@ -95,7 +95,32 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
       - CI eşiği uygular ve 'ci.exit_on_violation' True ise SystemExit(1) fırlatır
     """
     rep_cfg = (cfg.get("reporting") or {}) if isinstance(cfg, dict) else {}
-    out_dir = rep_cfg.get("output_dir") or cfg.get("output_dir") or "output"
+    
+    # [Fix] Resolve raw output dir to Project Root to avoid split output/ folders
+    raw_out = rep_cfg.get("output_dir") or cfg.get("output_dir") or "output"
+    
+    # Robustly find Project Root (parent of 'websecure' package)
+    try:
+        current_file = pathlib.Path(__file__).resolve()
+        # If we are in websecure/core/reporting.py, root is 2 levels up from 'websecure'
+        # Structure: ProjectRoot/websecure/core/reporting.py
+        # Parents: [0]core, [1]websecure, [2]ProjectRoot
+        if "websecure" in current_file.parts:
+            # Find the index of 'websecure' and go one up
+            idx = len(current_file.parts) - 1 - current_file.parts[::-1].index("websecure")
+            root_dir = str(pathlib.Path(*current_file.parts[:idx]))
+        else:
+            # Fallback for weird installs
+            root_dir = os.getcwd()
+
+        if os.path.isabs(raw_out):
+            out_dir = raw_out
+        else:
+            out_dir = os.path.join(root_dir, raw_out)
+    except Exception:
+        out_dir = raw_out # Fallback to relative CWD
+
+
 
     results = {}
     if isinstance(ctx, dict):
@@ -118,11 +143,80 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
          if isinstance(results["nmap"], dict) and "open_ports" in results["nmap"]:
               results["nmap"] = results["nmap"]["open_ports"]
 
+    # [WS3] BANNER: Show exact report path to user
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        abs_p = os.path.abspath(out_dir)
+        html_p = os.path.join(abs_p, "report.html")
+        print("\n" + "#"*70)
+        print(" RAPOR OLUŞTURULUYOR / REPORT GENERATION")
+        print("#"*70)
+        print(f" [+] Dizin: {abs_p}")
+        print(f" [+] Dosya: {html_p}")
+        print("#"*70 + "\n")
+    except Exception as e:
+        print(f"[!] Rapor dizini oluşturma hatası: {e}")
+
+
     # [Fix] Ensure 'tls' key is populated from 'ssl' or certificate data
+    if "tls" not in results:
+         results["tls"] = results.get("ssl") or {}
+
+    # Ensure output dir exists
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # 1. Generate Charts
+    try:
+        charts = _generate_charts(results, out_dir)
+        results["charts"] = charts
+    except Exception as e:
+        log_warn(f"Chart generation failed: {e}")
+
+    # 2. Generate HTML Report
+    out = {"written": {}, "final_results": results}
+    try:
+        from websecure.core.html_dashboard import render_html_dashboard
+        
+        # [Fix] Force HTML generation even if config is vague
+        html_content = render_html_dashboard(results)
+        
+        # Ensure 'html' format is respected if explicitly disabled, but default to True
+        should_gen = True
+        rep_formats = rep_cfg.get("formats")
+        if isinstance(rep_formats, list) and "html" not in rep_formats:
+             should_gen = False
+             
+        if should_gen:
+            report_path = os.path.join(out_dir, "report.html")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+
+            
+        print(f"\n\033[92m[+] HTML Report Generated: {report_path}\033[0m")
+        print(f"\033[90m    (Contains detailed findings, evidence, Nmap results, SSL info)\033[0m")
+        
+        # Add to written artifacts
+        out["written"]["html"] = report_path
+    except Exception as e:
+        log_err(f"HTML Report generation failed: {e}")
+
+    # [CI/Quality Gate]
+    ci_cfg = (cfg.get("ci") or {}) if isinstance(cfg, dict) else {}
+    exit_on = bool(ci_cfg.get("exit_on_violation", False))
+    fail_on_sev = ci_cfg.get("fail_on", [])
     
-    # [WS3] Ensure sessions logic is verified
-    # sessions are typically added via add_session
-    pass
+    fail = False
+    if fail_on_sev and results:
+         try:
+            fail = should_fail_ci(cfg, results)
+         except Exception:
+            fail = False
+
+    if exit_on and fail:
+        raise SystemExit(1)
+
+    return out.get("written", out) if isinstance(out, dict) else {"output_dir": out_dir}
 
 
 def add_session(user: str, cookies: dict, headers: dict = None, origin_url: str = None) -> None:
@@ -156,40 +250,6 @@ def add_session(user: str, cookies: dict, headers: dict = None, origin_url: str 
     }
     
     add_result("sessions", entry)
-
-    if "tls" not in results:
-         results["tls"] = results.get("ssl") or {}
-
-    out = perform_reporting(session=None, cfg=cfg, results=results, logger=None)
-    
-
-    results = out.get("written") if isinstance(out, dict) and "written" in out else {}
-
-
-    results = out.get("written") if isinstance(out, dict) and "written" in out else {}
-    
-    ci_cfg = (cfg.get("ci") or {}) if isinstance(cfg, dict) else {}
-    exit_on = bool(ci_cfg.get("exit_on_violation", False))
-    fail_on_sev = ci_cfg.get("fail_on", [])
-    
-    fail = False
-    
-    # Check Quality Gate
-    if fail_on_sev and results:
-         # Statleri sonuclardan çıkar
-         # Not: perform_reporting 'metrics' veya 'summary' döndürmeli
-         # Basitçe results içindeki severitylere bak
-         # Bu kisim biraz karmasik cunku 'out' yapisi fonksiyondan fonksiyona degisebilir
-         # En temizi 'should_fail_ci' fonksiyonunu kullanmak
-         try:
-            fail = should_fail_ci(cfg, results)
-         except Exception:
-            fail = False
-
-    if exit_on and fail:
-        raise SystemExit(1)
-
-    return out.get("written", out) if isinstance(out, dict) else {"output_dir": out_dir}
 RULES_REGISTRY: dict[str, dict] = {
     'SQL Injection': {'id': 'WS-SQLI', 'cwe': ['CWE-89'], 'help': 'Parametreli sorgu ve ORM kalkanlarını kullanın.'},
     'XSS': {'id': 'WS-XSS', 'cwe': ['CWE-79'], 'help': 'Çıktı kodlama (HTML/JS/CSS) ve CSP uygulayın.'},

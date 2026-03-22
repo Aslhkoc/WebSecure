@@ -27,10 +27,35 @@ def collect_all_wordlists(base_dirs: List[str] = None) -> Dict[str, object]:
         if not p.exists():
             continue
             
-        for f in p.rglob("*.txt"):
+        # [UPDATE] Artık sadece .txt değil, uzantısız ve diğer wordlist uzantılarını da alıyoruz.
+        # İstenmeyen uzantılar (binary, script, resim vb.) filtrelenir.
+        ALLOWED_EXTENSIONS = {'.txt', '.lst', '.fuzz', '.list', '.dict', '.csv', '.json'}
+        IGNORED_EXTENSIONS = {
+            '.py', '.pyc', '.md', '.zip', '.tar', '.gz', '.png', '.jpg', '.jpeg', '.gif',
+            '.svg', '.xml', '.xsl', '.sh', '.yml', '.yaml', '.php', '.bin', '.exe', '.dll',
+            '.git', '.gitignore', '.gitattributes'
+        }
+
+        for f in p.rglob("*"):
             if f.is_file():
-                found_files.append(str(f.resolve()))
-                total_size += f.stat().st_size
+                suffix = f.suffix.lower()
+                
+                # 1. Uzantısız dosyaları kabul et (Linux wordlist'leri genelde uzantısızdır)
+                if not suffix:
+                    found_files.append(str(f.resolve()))
+                    total_size += f.stat().st_size
+                    continue
+                
+                # 2. İzin verilen uzantıları kabul et
+                if suffix in ALLOWED_EXTENSIONS:
+                    found_files.append(str(f.resolve()))
+                    total_size += f.stat().st_size
+                    continue
+
+                # 3. Geriye kalanları (bilinmeyen ama potansiyel text) analiz etmek riskli olabilir,
+                # şimdilik sadece ALLOWED veya (NOT IGNORED) mantığı denenebilir.
+                # Ancak güvenli olması için whitelist + empty extension en temizidir.
+
 
     # Basit satır tahmini (ortalama 10 byte/satır)
     estimated_lines = total_size // 10

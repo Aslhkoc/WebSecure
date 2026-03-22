@@ -120,6 +120,19 @@ class ContentDiscoveryScanner(BaseScanner):
                         details=f"Found {len(disallowed)} disallowed paths.",
                         evidence={"paths": disallowed}
                     ))
+                
+                # Check for subdomains in robots.txt
+                subs = self._extract_subdomains(resp.text, base_url)
+                if subs:
+                    print(f"[+] Alt Sistemler (Robots.txt): {', '.join(subs)}")
+                    findings.append(self.create_finding(
+                        type="Subsystems Identified (Robots)",
+                        url=robots_url,
+                        severity="Info",
+                        details=f"Found {len(subs)} subdomains in robots.txt",
+                        evidence={"subdomains": list(subs)}
+                    ))
+
         except:
             pass
         return findings
@@ -138,9 +151,44 @@ class ContentDiscoveryScanner(BaseScanner):
                     severity="Info",
                     details="Sitemap.xml is accessible."
                 ))
+                 
+                 # Check for subdomains in sitemap
+                 subs = self._extract_subdomains(resp.text, base_url)
+                 if subs:
+                    print(f"[+] Alt Sistemler (Sitemap): {', '.join(subs)}")
+                    findings.append(self.create_finding(
+                        type="Subsystems Identified (Sitemap)",
+                        url=sitemap_url,
+                        severity="Info",
+                        details=f"Found {len(subs)} subdomains in sitemap.xml",
+                        evidence={"subdomains": list(subs)}
+                    ))
         except:
             pass
         return findings
+
+    def _extract_subdomains(self, content: str, base_url: str) -> Set[str]:
+        """Extracts unique subdomains from text content that match the base domain's root."""
+        subdomains = set()
+        try:
+            parsed_base = urlparse(base_url)
+            base_domain = parsed_base.netloc
+            # Remove www. or similar prefixes to get root (simplified)
+            root_parts = base_domain.split('.')
+            if len(root_parts) > 2:
+                root_domain = ".".join(root_parts[-2:]) # e.g. example.com
+            else:
+                root_domain = base_domain
+            
+            # Find all URLs
+            urls = re.findall(r'(https?://[a-zA-Z0-9.-]+)', content)
+            for u in urls:
+                domain = urlparse(u).netloc
+                if domain and domain.endswith(root_domain) and domain != base_domain:
+                    subdomains.add(domain)
+        except:
+            pass
+        return subdomains
 
     def _probe_files(self, base_url: str) -> List[Dict]:
         findings = []

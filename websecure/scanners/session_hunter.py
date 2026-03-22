@@ -137,12 +137,20 @@ class SessionHunter:
                             return {"cookie": c_str, "type": "galaxy_pattern", "src": v}
             return None
 
+        total_checks = len(timestamps)
+        done_checks = 0
+        print(f"[*] Session Hunter: Analyzing {total_checks} timestamp seeds for prediction variants...")
+
         with ThreadPoolExecutor(max_workers=self.threads) as exe:
             futures = [exe.submit(_check, ts) for ts in timestamps]
-            for f in futures:
+            for i, f in enumerate(futures):
                 res = f.result()
+                done_checks += 1
+                if done_checks % 5 == 0:
+                    print(f"    [Trace] Prediction logic: {done_checks}/{total_checks} seeds processed...", end="\r")
                 if res:
                     found.append(res)
+        print("                                                                                ", end="\r") # Clean line
         return found
 
     def run(self) -> List[Dict[str, Any]]:

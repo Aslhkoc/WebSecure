@@ -102,20 +102,29 @@
         "description": "Slow, comprehensive scan designed to evade WAFs and avoid IP blocking."
       },
       "safe_full": {
-        "rps": 20,
-        "concurrency": 15,
+        "description": "Maximum coverage with high stealth/WAF evasion. Very slow.",
+        "rps": 2,
+        "concurrency": 2,
+        "politeness_ms": 1500,
+        "backoff_factor": 3.0,
         "modules": [
           "*"
         ],
-        "politeness_ms": 500,
-        "backoff_factor": 1.5,
-        "heavy_modules": true,
         "http": {
           "user_agent_rotation": true,
-          "randomize_headers": true
+          "randomize_headers": true,
+          "timeout": 25,
+          "retries": 5
         },
-        "robots_respect": true,
-        "description": "High-performance security scan. Full toolset, parallel execution, robust WAF evasion."
+        "crawler": {
+          "headless": true,
+          "browser_max_pages": 30,
+          "timeout_http": 20
+        },
+        "waf": {
+          "evasion_level": 3,
+          "randomize_fingerprint": true
+        }
       },
       "nightmare": {
         "rps": 100,

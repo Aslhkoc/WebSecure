@@ -294,12 +294,23 @@ def _smart_request(self, method, url, **kwargs):
                     
                 return resp
 
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
                 # Connection died? Likely Tor rotating or network blip.
-                print(f"[Autopilot] Connection lost ({str(e)}). Retrying...")
+                err_msg = str(e).lower()
+                is_timeout = "timeout" in err_msg or "timed out" in err_msg
+                
+                print(f"[Autopilot] Connection error ({e.__class__.__name__}). Retrying {attempt}/{max_retries}...")
+                
+                # If it is a heavy timeout (SOCKS/Connect), try rotating identity on the spot
+                if is_timeout and attempt < max_retries:
+                     _try_rotate_identity(self)
+                
                 if attempt <= max_retries:
-                    time.sleep(2) # Brief pause
+                    time.sleep(1.0) # Reduced brief pause
                     continue
+                
+                # If we exhausted retries, log and raise/return response
+                print(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
                 raise e # Give up
         
         return resp # Should not be reached logic-wise but safe fallback
@@ -1006,6 +1017,7 @@ class HttpClient:
 
         # Proxy havuzu
         self._proxy_pool = ProxyPool(self.cfg)
+        self._consecutive_blocks = 0 # [ACIL DURUM] Ardışık blok sayacı
 
         http_cfg: Mapping[str, Any] = self.cfg.get("http", {})  # type: ignore
 
@@ -1105,6 +1117,35 @@ class HttpClient:
                 note_auth_outcome(kind)
 
             _collect_rate_limit(resp, url)
+            
+            # [ACIL DURUM] Smart Block Detection & Panic Mode
+            # yumuşak (200 OK) blokları da yakalar (waf_challenge, captcha_block)
+            block_type = classify_access_block(status, getattr(resp, "headers", {}), getattr(resp, "text", ""))
+            
+            if block_type in ("waf_challenge", "captcha_block", "rate_limit") or status == 403:
+                self._consecutive_blocks += 1
+                if self._consecutive_blocks >= 2:
+                    # Hafif blok: Tor/Proxy rotasyonu dene
+                    try:
+                        from websecure.core.tor_manager import rotate_tor_identity
+                        rotate_tor_identity()
+                    except: pass
+                    
+                if self._consecutive_blocks >= 5:
+                    # [PANIK MODU] 5 kere üst üste bloklandık -> SİSTEM DURUYOR
+                    _logger.critical(f"[PANIC] 5 defa üst üste bloklandık ({block_type})! 120sn soğuma molası...")
+                    time.sleep(120)
+                    self._consecutive_blocks = 0 # Sıfırla ve tekrar dene
+                
+                # Bloklandıysa hemen retry logic'e düşür (status_code manipülasyonu ile)
+                # Retry policy 429/403'ü zaten kapsıyor mu? Evet.
+                # Ama 200 OK dönen Captcha için status'u 429 gibi davranmaya zorlayabiliriz
+                if block_type in ("waf_challenge", "captcha_block"):
+                    status = 429 # Retry policy'nin bunu 'retryable' görmesini sağla
+            
+            elif status < 400:
+                # Başarılı istek -> Sayacı sıfırla
+                self._consecutive_blocks = 0
 
             if attempts <= self.retry_policy.total and self._should_retry(method, status, None):
                 if self.retry_policy.respect_retry_after_header and status in (429, 503):

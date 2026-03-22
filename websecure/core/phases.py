@@ -163,7 +163,11 @@ def phase_portscan(ctx: dict):
         return
         
     from websecure.integrations.nmap import NmapWrapper
-    host = ctx.get("host") or ""
+    host = ctx.get("host")
+    if not host:
+         u = ctx.get("url") or ctx.get("target") or ""
+         if u:
+             host = _host_from_url(u)
     if not host:
         return
 
@@ -185,7 +189,7 @@ def phase_portscan(ctx: dict):
     for item in res:
         p = item.get("port")
         if p:
-             add_result("open_port", {
+             add_result("nmap", {
                  "severity":"info",
                  "message":f"Open port: {p} ({item.get('service','?')})",
                  "port":p,
@@ -215,7 +219,6 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.mass_assignment",
         "websecure.scanners.jwt",
         "websecure.scanners.ws_fuzz",
-        "websecure.scanners.ws_fuzz",
         "websecure.scanners.graphql",
         "websecure.scanners.rate_limit",
         "websecure.scanners.csrf",
@@ -224,6 +227,10 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.session_hunter",
         "websecure.scanners.sqli",
         "websecure.scanners.xss",
+        "websecure.scanners.nosqli",
+        "websecure.scanners.ssrf_xxe",
+        "websecure.scanners.file_upload",
+        "websecure.scanners.auth",
     ]
     hit = 0
     for m in mods:
@@ -802,11 +809,19 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
 def _runner_graphql(ctx) -> None:
     att_mod = _opt_import("scanners.graphql_attacks")
     rpc_mod = _opt_import("scanners.graphql_rpc")
+    
+    # [WS3] Fallback to robust scanner if 'attacks' module missing
     if not att_mod:
-        add_result("offensive", {"type": "GraphQL", "severity": "Bilgi", "reason": "Modüller bulunamadı."})
+        mod_base = _opt_import("scanners.graphql")
+        if mod_base and hasattr(mod_base, "GraphQLScanner"):
+             add_result("offensive", {"type": "GraphQL Attacks", "severity": "Note", "reason": "Attack module missing, running standard GraphQL Scanner"})
+             _runner_scanners_graphql(ctx)
+             return
+        
+        add_result("offensive", {"type": "GraphQL", "severity": "Info", "reason": "Modüller bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
+
     gql_url = _get(getattr(ctx, "config", {}) or {}, "graphql.url", None)
     if not gql_url:
         base = (getattr(ctx, "url", "") or "").rstrip("/")
@@ -817,8 +832,13 @@ def _runner_graphql(ctx) -> None:
                                        timeout=float(_get(getattr(ctx, "config", {}) or {}, "timeouts.graphql", 20.0)),
                                        verify_tls=True)
     else:
-        client = getattr(att_mod, "GraphQLClient")(getattr(ctx, "session", None),
-                                                   timeout=float(_get(getattr(ctx, "config", {}) or {}, "timeouts.graphql", 20.0)))
+        # Check if att_mod has Client, if not use base
+        client_cls = getattr(att_mod, "GraphQLClient", None)
+        if not client_cls:
+             # Try base scanner's client if available? Or fail gracefully
+             return
+        client = client_cls(getattr(ctx, "session", None),
+                            timeout=float(_get(getattr(ctx, "config", {}) or {}, "timeouts.graphql", 20.0)))
 
     probes: List[Tuple[str, Callable]] = []
     if hasattr(att_mod, "probe_persisted_query_bypass") and callable(getattr(att_mod, "probe_persisted_query_bypass")):
@@ -1053,11 +1073,10 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif & JS Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive", "js"]),
         Phase(id="ffuf", title="FFUF Content Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content"]),
+        Phase(id="feroxbuster", title="Feroxbuster Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
         Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
         Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
         Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
-        Phase(id="feroxbuster", title="Feroxbuster Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
-        Phase(id="fuzz_param_discovery", title="Parametre Keşfi & Fuzz", enabled=True, runner=lambda c: _safe(c, lambda: _runner_fuzz_and_param_discovery(c), "fuzz_param_discovery"), tags=["fuzz","inputs"]),
         Phase(
             id="scanners.ssrf_xxe",
             title="SSRF/XXE",

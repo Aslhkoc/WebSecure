@@ -13,9 +13,12 @@ def discovery_enrich(url: str, results: dict, open_ports: dict = None, detailed:
     # DNS
     dns_info = {}
     try:
-        dns_info['ip'] = socket.gethostbyname(domain)
+        ip = socket.gethostbyname(domain)
+        dns_info['ip'] = ip
+        print(f"[+] Hedef IP: \033[92m{ip}\033[0m")  # Green color for visibility
         # Could add more DNS records here if needed
     except Exception as e:
+        print(f"[-] DNS Çözümleme Hatası ({domain}): {e}")
         if debug:
             logger.debug(f"DNS resolution failed: {e}")
         

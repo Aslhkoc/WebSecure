@@ -105,7 +105,7 @@ def scan_tls(url: str, **kwargs) -> Dict[str, Any]:
     results = kwargs.get("results", {})
     
     # 1. Base Cert Analysis
-    base_info = _get_cert_details(url, **kwargs)
+    base_info = _get_cert_details(url, config=kwargs.get("config"), session=kwargs.get("session"))
     
     host = base_info.get("host")
     port = base_info.get("port", 443)

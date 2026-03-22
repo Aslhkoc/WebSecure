@@ -26,29 +26,49 @@ def render_html_dashboard(results: dict) -> str:
     
     # Flatten findings for the table
     findings = []
-    final_items = results.get("final") or []
-    if isinstance(final_items, list):
-        for idx, item in enumerate(final_items):
+    
+    # [WS3] Aggregate findings from ALL known buckets, not just 'final'
+    # Tools often write to their own buckets (sqlmap, feroxbuster, etc.)
+    all_buckets = ["final", "sqlmap", "feroxbuster", "ffuf", "discovery", "offensive", "xss", "csrf", "jwt", "graphql", "file_upload", "passive"]
+    
+    _id_counter = 1
+    
+    for bucket in all_buckets:
+        items = results.get(bucket)
+        if not items: 
+            continue
+            
+        if isinstance(items, dict):
+            items = [items] # Normalize single dict to list
+            
+        if not isinstance(items, list):
+            continue
+            
+        for item in items:
             if not isinstance(item, dict): continue
 
             # Filter out Generic items without useful info
             f_type = item.get("type") or item.get("title") or "Generic"
             f_sev = (item.get("severity") or "Info").title()
             
-            # [User Request] Do NOT filter out Generic/Low items.
-            # Instead, ensure we render their details properly in the modal.
+            # Skip if status/meta info
+            if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
+                 continue
+            if bucket == "feroxbuster" and item.get("status") in ("skipped", "finished"):
+                 continue
 
             f = {
-                "id": idx + 1,
+                "id": _id_counter,
                 "severity": f_sev,
-                "type": f_type,
-                "url": item.get("url") or "-",
+                "type": f"{f_type} ({bucket})", # Show tool source
+                "url": item.get("url") or item.get("target") or "-",
                 "method": item.get("method") or "GET",
                 "param": item.get("param") or "-",
-                "status": "Open", # Placeholder
+                "status": "Open", 
                 "detail": item
             }
             findings.append(f)
+            _id_counter += 1
 
     # Calculate Summary Stats
     stats = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
@@ -61,8 +81,14 @@ def render_html_dashboard(results: dict) -> str:
         elif sev == "Orta": stats["Medium"] += 1
         elif sev == "Düşük": stats["Low"] += 1
         elif sev == "Bilgi": stats["Info"] += 1
+        elif sev == "Critical": stats["Critical"] += 1
 
     total_issues = sum(stats.values())
+    
+    # Discovery Info (IP)
+    disc = results.get("discovery") or {}
+    dns = disc.get("dns") or {}
+    target_ip = dns.get("ip") or "N/A"
     
     # Charts logic (images)
     charts_html = ""
@@ -401,7 +427,7 @@ def render_html_dashboard(results: dict) -> str:
     <div style="display:flex; gap:10px; align-items:center;">
         <button class="btn" onclick="showSessions()">🔑 Captured Sessions ({len(sessions)})</button>
         <div class="header-meta">
-            <div>Target: <strong>{ _escape(target) }</strong></div>
+            <div>Target: <strong>{ _escape(target) }</strong> <span style="font-family:monospace; color:var(--accent)">[{_escape(target_ip)}]</span></div>
             <div>Date: { scan_date }</div>
         </div>
     </div>
@@ -604,48 +630,48 @@ def render_html_dashboard(results: dict) -> str:
         }}
             
             // 2. XSS Proof (Alerts)
-            if (ev.alert_text || ev.mechanism) {
+            if (ev.alert_text || ev.mechanism) {{
                 html += `<h4 style="color:var(--sev-critical); margin-top:10px;">📸 Verified Payload Execution</h4>`;
                 html += `<div style="background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); padding:10px; border-radius:4px;">`;
-                html += `<div><strong>Mechanism:</strong> ${escapeHtml(ev.mechanism || "Browser Event")}</div>`;
-                if(ev.alert_text) html += `<div><strong>Alert Content:</strong> <span style="font-family:monospace; background:#000; padding:2px 5px; color:#fff;">${escapeHtml(ev.alert_text)}</span></div>`;
+                html += `<div><strong>Mechanism:</strong> ${{escapeHtml(ev.mechanism || "Browser Event")}}</div>`;
+                if(ev.alert_text) html += `<div><strong>Alert Content:</strong> <span style="font-family:monospace; background:#000; padding:2px 5px; color:#fff;">${{escapeHtml(ev.alert_text)}}</span></div>`;
                 html += `</div>`;
-            }
+            }}
 
             // 3. Raw Response (File Link or Snippet)
-            if (ev.raw_response) {
+            if (ev.raw_response) {{
                  html += `<h4 style="margin-top:15px;">📜 Raw Server Response (Snapshot)</h4>`;
                  // Truncate if too long for modal
                  let raw = ev.raw_response;
                  if (raw.length > 2000) raw = raw.substring(0, 2000) + "... [truncated]";
-                 html += `<pre>${escapeHtml(raw)}</pre>`;
-            }
+                 html += `<pre>${{escapeHtml(raw)}}</pre>`;
+            }}
             
             // 4. Screenshots
-            if (ev.screenshot_path) {
+            if (ev.screenshot_path) {{
                  html += `<h4 style="margin-top:15px;">🖼️ Screen Capture</h4>`;
-                 html += `<img src="${escapeHtml(ev.screenshot_path)}" style="max-width:100%; border:1px solid #555;">`;
-            }
+                 html += `<img src="${{escapeHtml(ev.screenshot_path)}}" style="max-width:100%; border:1px solid #555;">`;
+            }}
             
             // 5. Generic KV dump for other evidence keys
             let usedKeys = ["database_banner", "extracted_data_type", "dumped_data", "alert_text", "mechanism", "raw_response", "screenshot_path"];
             let otherKeys = Object.keys(ev).filter(k => !usedKeys.includes(k));
-            if(otherKeys.length > 0) {
+            if(otherKeys.length > 0) {{
                  html += `<h4 style="margin-top:15px;">📂 Other Artifacts</h4><ul>`;
-                 otherKeys.forEach(k => {
+                 otherKeys.forEach(k => {{
                      let val = ev[k];
                      if(typeof val === 'object') val = JSON.stringify(val);
-                     html += `<li><strong>${escapeHtml(k)}:</strong> ${escapeHtml(val)}</li>`;
-                 });
+                     html += `<li><strong>${{escapeHtml(k)}}:</strong> ${{escapeHtml(val)}}</li>`;
+                 }});
                  html += `</ul>`;
-            }
+            }}
 
             html += `</div></div>`; // End of Forensic Card
-        }
+        }}
         
         document.getElementById('modalBody').innerHTML = html;
         modal.style.display = 'block';
-    }
+    }}
 
     function showSessions() {{
         const modal = document.getElementById('sessionsModal');
@@ -655,14 +681,14 @@ def render_html_dashboard(results: dict) -> str:
             body.innerHTML = "<p>No sessions captured.</p>";
         }} else {{
             let html = "";
-            sessions.forEach(s => {
-                const cookieJson = JSON.stringify(s.cookies || {});
+            sessions.forEach(s => {{
+                const cookieJson = JSON.stringify(s.cookies || {{}});
                 const exportCmd = `
 // [WebSecure] One-Click Session Hijack
-const cookies = ${cookieJson};
-for (const [k, v] of Object.entries(cookies)) {
+const cookies = ${{cookieJson}};
+for (const [k, v] of Object.entries(cookies)) {{
     document.cookie = k + '=' + v + '; path=/';
-}
+}}
 console.log('%c[+] Session Injected! Reloading...', 'color:lime; font-size:14px;');
 setTimeout(() => location.reload(), 1000);
 `.trim();
@@ -673,14 +699,14 @@ setTimeout(() => location.reload(), 1000);
 
                 html += `<div class="card" style="margin-bottom:1rem; padding:1rem; background:var(--bg-body);">`;
                 html += `<div style="display:flex; justify-content:space-between; align-items:flex-start;">`;
-                html += `<div><strong>User:</strong> ${escapeHtml(s.user)} <span class="tag ${s.verified ? 'Low' : 'Info'}">${s.verified ? 'Verified' : 'Unverified'}</span></div>`;
-                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${safeCmdAttr}" style="font-size:0.8rem; padding:4px 8px;">📋 Copy Hijack Script</button>`;
+                html += `<div><strong>User:</strong> ${{escapeHtml(s.user)}} <span class="tag ${{s.verified ? 'Low' : 'Info'}}">${{s.verified ? 'Verified' : 'Unverified'}}</span></div>`;
+                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${{safeCmdAttr}}" style="font-size:0.8rem; padding:4px 8px;">📋 Copy Hijack Script</button>`;
                 html += `</div>`;
                 
-                html += `<div><strong>Time:</strong> ${s.timestamp}</div>`;
-                html += `<h4>Cookies</h4><pre>${escapeHtml(JSON.stringify(s.cookies || {}, null, 2))}</pre>`;
+                html += `<div><strong>Time:</strong> ${{s.timestamp}}</div>`;
+                html += `<h4>Cookies</h4><pre>${{escapeHtml(JSON.stringify(s.cookies || {{}}, null, 2))}}</pre>`;
                 html += `</div>`;
-            });
+            }});
             body.innerHTML = html;
         }}
         
