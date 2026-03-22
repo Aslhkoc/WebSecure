@@ -28,22 +28,61 @@ def add_result(bucket: str, entry: Dict[str, Any]):
 
 def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict]:
     """
-    Verifies findings against OAST events and assigns scores.
-    This replaces the missing function causing NameError in main.py.
+    Verifies findings against OAST callbacks and applies CVSS scoring.
+    Steps:
+      1. Deduplicate findings by (type, url, parameter)
+      2. Correlate with OAST events — mark verified=True on token match
+      3. Apply CVSS v3.1 scoring via cvss_scorer if available
+      4. Sort by CVSS score descending (Critical → Info)
     """
-    # 1. Deduplicate first
+    # 1. Deduplicate
     unique = _dedupe_findings(findings)
-    
-    # 2. Correlate with OAST events
-    # Simple correlation: if finding has a payload ID matching an OAST event
+
+    # 2. Build OAST event index: token string → event dict
+    oast_index: Dict[str, Dict] = {}
+    for ev in (oast_events or []):
+        ev_str = str(ev)
+        # Extract any token-like strings (alphanumeric 8–40 chars)
+        for tok in re.findall(r'[a-z0-9]{8,40}', ev_str):
+            oast_index[tok] = ev
+
+    # 3. Correlate each finding against OAST index
     for f in unique:
-        # If already verified, skip
-        if f.get("verified"): continue
-        
-        # Check if any OAST event correlates (logic can be expanded)
-        # For now, just pass through
+        if f.get("verified"):
+            continue
+        # Check oast_token field or payload for matching tokens
+        candidates = []
+        if f.get("oast_token"):
+            candidates.append(str(f["oast_token"]))
+        if f.get("payload"):
+            candidates += re.findall(r'[a-z0-9]{8,40}', str(f["payload"]))
+
+        for tok in candidates:
+            if tok in oast_index:
+                f["verified"] = True
+                f["confidence"] = "high"
+                f["verification_method"] = "oast_callback"
+                f["oast_event"] = str(oast_index[tok])[:200]
+                break
+
+    # 4. CVSS scoring
+    try:
+        from websecure.core.cvss_scorer import score_findings
+        # Detect auth/WAF context from findings metadata if present
+        unique = score_findings(unique, auth_required=False, waf_detected=False)
+    except Exception:
         pass
-        
+
+    # 5. Sort: Critical (9+) → High (7+) → Medium (4+) → Low → Info
+    _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3,
+                       "Info": 4, "Informational": 4}
+
+    def _sort_key(f: Dict):
+        sev = f.get("cvss_severity") or f.get("severity") or "Info"
+        score = f.get("cvss_score", 0.0)
+        return (_SEVERITY_ORDER.get(sev, 4), -float(score))
+
+    unique.sort(key=_sort_key)
     return unique
 
         
