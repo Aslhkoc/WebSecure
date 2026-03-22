@@ -85,19 +85,19 @@ def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
     _rmod = None
     if _iul.find_spec('websecure.core.reporting') is not None:
         _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('websecure.core.reporting') is not None:
-        _rmod = importlib.import_module('websecure.core.reporting')
+    elif _iul.find_spec('reporting') is not None:
+        _rmod = importlib.import_module('reporting')
     if _rmod is not None and hasattr(_rmod, 'add_result'):
-        _rmod.add_result(
-            type="phase_error",
-            severity="error",
-            message=str(_err),
-            meta={
+        _rmod.add_result("phase_error", {
+            "type": "phase_error",
+            "severity": "error",
+            "message": str(_err),
+            "meta": {
                 "phase": _phase,
                 "where": _where,
                 "exc_type": _err.__class__.__name__,
             },
-        )
+        })
 
 
 
@@ -194,7 +194,7 @@ def phase_portscan(ctx: dict):
             version = item.get("version", "")
             add_result("nmap", {
                 "severity": "info",
-                "message": f"Open port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version}).strip()",
+                "message": f"Open port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version})".strip(),
                 "host": item.get("ip") or item.get("hostname") or host,
                 "port": p,
                 "proto": item.get("protocol", "tcp"),
@@ -262,7 +262,8 @@ def phase_offensive(ctx: dict):
     try:
         if (cfg.get("offensive", {}).get("sqlmap", {}).get("enabled", True)):
             _runner_sqlmap(ctx)
-    except: pass
+    except Exception as _e:
+        _logger.warning(f"[phases] sqlmap runner error: {_e}")
 
 
 _reporting_mod = None
@@ -476,7 +477,11 @@ def _runner_authorization_matrix(ctx) -> None:
     fm.run_authorization_matrix(ctx)
 
 def _runner_feroxbuster(ctx):
-    _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")(ctx)
+    fn = _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")
+    if callable(fn):
+        fn(ctx)
+    else:
+        add_result("meta", {"stage": "feroxbuster", "status": "skipped:not-found"})
     return _mk_result("feroxbuster", "finished", {})
 
 def _runner_js_analysis(ctx) -> None:
@@ -487,7 +492,11 @@ def _runner_js_analysis(ctx) -> None:
     fm.run_js_analysis(ctx)
 
 def _runner_sqlmap(ctx):
-    _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")(ctx)
+    fn = _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")
+    if callable(fn):
+        fn(ctx)
+    else:
+        add_result("meta", {"stage": "sqlmap", "status": "skipped:not-found"})
     return _mk_result("sqlmap", "finished", {})
 
 

@@ -496,6 +496,7 @@ def form_urlencoded(k: str, v: str) -> str:
     return urlencode({k: v})
 
 def multipart_probe(name: str, value: str, boundary: str = "----WebSecBoundaryX"):
+    head = f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
     tail = f"\r\n--{boundary}--\r\n"
     return head + value + tail
 

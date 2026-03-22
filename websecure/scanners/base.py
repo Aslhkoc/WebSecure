@@ -83,6 +83,20 @@ class BaseScanner:
             
         return payloads
 
+    def create_finding(self, type: str, url: str, severity: str = "Info",
+                       details: str = "", evidence: dict = None, **kwargs) -> dict:
+        """Create a standardised finding dict (used by scanners that don't call self.add directly)."""
+        finding = {
+            "type": type,
+            "url": url,
+            "severity": severity,
+            "detail": details,
+        }
+        if evidence:
+            finding["evidence"] = evidence
+        finding.update(kwargs)
+        return finding
+
     def run(self, target: str, **kwargs) -> Any:
         raise NotImplementedError("Scanners must implement run()")
 

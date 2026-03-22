@@ -1,15 +1,16 @@
 
 from __future__ import annotations
-from urllib.parse import urlsplit, urlunsplit
+import os
+import re
+import json
+import html
 import logging
-import os, re, json, logging, threading
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Iterable, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from pathlib import Path
 from collections import defaultdict
-import os, json, html
-from typing import Any, Dict, List
 from websecure.core.ci_gate import should_fail_ci
 from websecure.core.alerts import AlertManager
 

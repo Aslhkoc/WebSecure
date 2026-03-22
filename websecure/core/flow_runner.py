@@ -51,8 +51,6 @@ _logger = logging.getLogger(__name__)
 
 
 def _get_config(ctx, key: str, default: Any = None) -> Any:
-
-def _get_config(ctx, key: str, default: Any = None) -> Any:
     cfg = getattr(ctx, "config", {}) or {}
     if not isinstance(cfg, dict):
         return default
@@ -439,7 +437,7 @@ def run_ffuf_scan(ctx) -> None:
                 if not os.path.exists(wl_path):
                      _logger.warning("[Login-Audit] Wordlist not found, generating default...")
                      # write basic if missing (failsafe)
-                     with open(wl_path, "w") as f: f.write("admin\\n123456\\npassword\\n")
+                     with open(wl_path, "w") as f: f.write("admin\n123456\npassword\n")
                 
                 auditor = LoginAuditor(getattr(ctx, "session"), url, wl_path)
                 
