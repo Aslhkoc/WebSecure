@@ -202,6 +202,20 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
     except Exception as e:
         log_err(f"HTML Report generation failed: {e}")
 
+    # [Phase 7] PDF Report Generation
+    try:
+        rep_formats = rep_cfg.get("formats", ["html"])
+        if "pdf" in rep_formats or rep_cfg.get("pdf", {}).get("enabled", False):
+            from websecure.reporters.pdf import PDFReporter
+            pdf_path = os.path.join(out_dir, "report.pdf")
+            reporter = PDFReporter()
+            success = reporter.generate(results, cfg, pdf_path)
+            if success:
+                out["written"]["pdf"] = pdf_path
+                print(f"\n\033[92m[+] PDF Report Generated: {pdf_path}\033[0m")
+    except Exception as e:
+        log_warn(f"PDF report generation failed: {e}")
+
     # [CI/Quality Gate]
     ci_cfg = (cfg.get("ci") or {}) if isinstance(cfg, dict) else {}
     exit_on = bool(ci_cfg.get("exit_on_violation", False))

@@ -129,6 +129,32 @@ def _call_if_exists(modname: str, cand_funcs=("run","scan","main","execute"), *a
 
 
 
+def phase_waf_detect(ctx: dict):
+    """Detect WAF before offensive scanning to choose bypass strategies."""
+    try:
+        from websecure.core.waf_detector import WAFDetector
+        target = ctx.get("target") or ctx.get("url") or ""
+        if not target:
+            return
+        session = ctx.get("session") or hardened_session()
+        detector = WAFDetector()
+        profile = detector.detect(target, session=session)
+        # Store profile in ctx for other phases to use
+        if isinstance(ctx, dict):
+            ctx["waf_profile"] = profile
+        add_result("waf_detection", {
+            "vendor": profile.vendor,
+            "confidence": profile.confidence,
+            "detected": profile.detected,
+            "bypass_strategies": profile.bypass_strategies,
+            "details": profile.details,
+        })
+        if profile.detected:
+            _logger.info(f"[phases] WAF detected: {profile}")
+    except Exception as e:
+        _logger.debug(f"[phases] WAF detection skipped: {e}")
+
+
 def phase_discovery(ctx: dict):
     s = hardened_session()
     target = ctx.get("target") or ""
@@ -250,6 +276,11 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.ssrf_xxe",
         "websecure.scanners.file_upload",
         "websecure.scanners.auth",
+        # Phase 4 new scanners
+        "websecure.scanners.ssti",
+        "websecure.scanners.idor",
+        "websecure.scanners.auth_matrix",
+        "websecure.scanners.js_analyzer",
     ]
     hit = 0
     for m in mods:
@@ -1064,6 +1095,113 @@ def _runner_csrf(ctx) -> None:
         add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "run_scan/run not found"})
 
 
+# ----------------------------- Phase 4 Runner Functions ---------------------------
+
+def _runner_ssti(ctx) -> None:
+    mod = _opt_import("websecure.scanners.ssti") or _opt_import("scanners.ssti")
+    if not mod:
+        add_result("meta", {"stage": "ssti", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    endpoints = results.get("endpoints", [url]) if results else [url]
+    run_fn = getattr(mod, "run", None) or getattr(mod, "SSTIScanner", None)
+    if callable(run_fn):
+        try:
+            scanner_cls = getattr(mod, "SSTIScanner", None)
+            if scanner_cls:
+                scanner_cls(session=sess, results=results).run(url, endpoints=endpoints)
+            else:
+                run_fn(url, session=sess, results=results)
+        except Exception as e:
+            _logger.warning(f"[phases] SSTI runner error: {e}")
+
+
+def _runner_idor(ctx) -> None:
+    mod = _opt_import("websecure.scanners.idor") or _opt_import("scanners.idor")
+    if not mod:
+        add_result("meta", {"stage": "idor", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    endpoints = results.get("endpoints", [url]) if results else [url]
+    role_sessions = getattr(ctx, "role_sessions", {}) or {}
+    try:
+        scanner_cls = getattr(mod, "IDORScanner", None)
+        if scanner_cls:
+            scanner_cls(session=sess, results=results).run(url, endpoints=endpoints, role_sessions=role_sessions)
+        elif hasattr(mod, "run"):
+            mod.run(url, session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] IDOR runner error: {e}")
+
+
+def _runner_auth_matrix(ctx) -> None:
+    mod = _opt_import("websecure.scanners.auth_matrix") or _opt_import("scanners.auth_matrix")
+    if not mod:
+        add_result("meta", {"stage": "auth_matrix", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    endpoints = results.get("endpoints", [url]) if results else [url]
+    role_sessions = getattr(ctx, "role_sessions", {}) or {}
+    if not role_sessions:
+        add_result("meta", {"stage": "auth_matrix", "status": "skipped:no-role-sessions"})
+        return
+    try:
+        scanner_cls = getattr(mod, "AuthMatrixScanner", None)
+        if scanner_cls:
+            scanner_cls(session=sess, results=results, role_sessions=role_sessions).run(
+                url, endpoints=endpoints, role_sessions=role_sessions
+            )
+    except Exception as e:
+        _logger.warning(f"[phases] AuthMatrix runner error: {e}")
+
+
+def _runner_dom_xss(ctx) -> None:
+    mod = _opt_import("websecure.scanners.dom_xss") or _opt_import("scanners.dom_xss")
+    if not mod:
+        add_result("meta", {"stage": "dom_xss", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    endpoints = results.get("endpoints", [url]) if results else [url]
+    try:
+        scanner_cls = getattr(mod, "DOMXSSScanner", None)
+        if scanner_cls:
+            scanner_cls(session=sess, results=results).run(url, endpoints=endpoints)
+        elif hasattr(mod, "run"):
+            mod.run(url, session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] DOMXSSScanner runner error: {e}")
+
+
+def _runner_verify_and_score(ctx) -> None:
+    """Run verification + CVSS scoring on all accumulated findings."""
+    try:
+        from websecure.core.reporting import get_global_results, verify_and_score
+        from websecure.core.cvss_scorer import score_findings
+        g_res = get_global_results()
+        all_findings = []
+        for bucket, items in g_res.items():
+            if bucket in ("offensive", "sqlmap", "xss", "ssrf", "idor", "ssti", "auth_matrix"):
+                all_findings.extend([i for i in items if isinstance(i, dict)])
+        oast_events = g_res.get("oast_callbacks", [])
+        verified = verify_and_score(all_findings, oast_events)
+        waf_profile = getattr(ctx, "waf_profile", None)
+        waf_detected = bool(getattr(waf_profile, "detected", False)) if waf_profile else False
+        auth_required = bool(getattr(ctx, "authenticated", False))
+        scored = score_findings(verified, auth_required=auth_required, waf_detected=waf_detected)
+        add_result("scored_findings", {"findings": scored, "total": len(scored)})
+        _logger.info(f"[phases] Verified & scored {len(scored)} findings")
+    except Exception as e:
+        _logger.warning(f"[phases] verify_and_score error: {e}")
+
+
 # ----------------------------- Plan Builder End ---------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -1105,6 +1243,7 @@ def _offensive_phases(ctx) -> List[Phase]:
         return base_enabled and default
 
     phases: List[Phase] = [
+        Phase(id="waf_detect", title="WAF Tespiti", enabled=True, runner=lambda c: _safe(c, lambda: phase_waf_detect(c), "waf_detect"), tags=["waf","recon"]),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
         Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
@@ -1205,6 +1344,35 @@ def _offensive_phases(ctx) -> List[Phase]:
             runner=lambda c: _safe(c, lambda: _runner_owasp_nuclei(c), "owasp_and_nuclei"),
             tags=["active", "signatures"],
         ),
+        # Phase 4 new scanners
+        Phase(
+            id="ssti",
+            title="SSTI (Template Injection)",
+            enabled=_flag("ssti", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_ssti(c), "ssti"),
+            tags=["active", "injection", "rce"],
+        ),
+        Phase(
+            id="idor",
+            title="IDOR / Object Access Control",
+            enabled=_flag("idor", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_idor(c), "idor"),
+            tags=["active", "access_control"],
+        ),
+        Phase(
+            id="auth_matrix",
+            title="Authorization Matrix",
+            enabled=_flag("auth_matrix", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_auth_matrix(c), "auth_matrix"),
+            tags=["auth", "access_control"],
+        ),
+        Phase(
+            id="dom_xss",
+            title="DOM XSS (Browser-based)",
+            enabled=_flag("dom_xss", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_dom_xss(c), "dom_xss"),
+            tags=["xss", "browser", "dom"],
+        ),
         Phase(id="verify_and_score", title="Doğrulama & Skorlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_verify_and_score(c), "verify_and_score"), tags=["verify","score"]),
         Phase(id="reporting", title="Raporlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_reporting_and_integration(c), "reporting"), tags=["report"])
     ]
@@ -1266,21 +1434,6 @@ def plan_visible(plan: Dict) -> Dict:
                 "enabled": True
             })
     return out
-
-def _runner_verify_and_score(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm:
-        add_result("meta", {"stage": "verify_and_score", "status": "skipped:no-flow-runner"})
-        _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
-        return
-    fn = getattr(fm, "run_verify_and_score", None)
-    if not callable(fn):
-        add_result("meta", {"stage": "verify_and_score", "status": "skipped:no-function"})
-        _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
-        return
-    fn(ctx)
 
 def _mk_result(name, status, metrics=None, errors=None):
     return {
