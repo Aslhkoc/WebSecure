@@ -160,3 +160,150 @@ class WAFBypassSession(requests.Session):
             sleep_time = random.uniform(*self.jitter_range)
             time.sleep(sleep_time)
         return super().request(method, url, *args, **kwargs)
+
+
+# ============================================================================
+# BYPASS STRATEGY ENGINE
+# Applies detected WAF's recommended bypass strategies to requests
+# ============================================================================
+import urllib.parse as _urlparse
+
+class BypassStrategyEngine:
+    """
+    Applies WAF-specific bypass strategies to a requests.Session.
+    Called after WAFDetector identifies the vendor and its bypass_strategies list.
+    """
+
+    _STRATEGIES = {}
+
+    @classmethod
+    def register(cls, name):
+        def decorator(fn):
+            cls._STRATEGIES[name] = fn
+            return fn
+        return decorator
+
+    def apply(self, session: "WAFBypassSession", strategies: list) -> "WAFBypassSession":
+        """Apply all listed strategies to the session. Returns modified session."""
+        for name in strategies:
+            fn = self._STRATEGIES.get(name)
+            if fn:
+                try:
+                    fn(session)
+                except Exception as e:
+                    logger.debug(f"[BypassEngine] Strategy '{name}' error: {e}")
+        return session
+
+
+_engine = BypassStrategyEngine()
+
+
+@BypassStrategyEngine.register("chunked_encoding")
+def _s_chunked(session):
+    session.headers["Transfer-Encoding"] = "chunked"
+
+
+@BypassStrategyEngine.register("content_type_mismatch")
+def _s_ct_mismatch(session):
+    session.headers["Content-Type"] = "application/x-www-form-urlencoded; charset=ibm037"
+
+
+@BypassStrategyEngine.register("xff_internal_cidr")
+def _s_xff(session):
+    session.headers["X-Forwarded-For"] = "127.0.0.1"
+    session.headers["X-Real-IP"] = "10.0.0.1"
+
+
+@BypassStrategyEngine.register("unicode_normalization")
+def _s_unicode(session):
+    session.headers["X-Unicode-Bypass"] = "1"
+    # Actual normalization applied per-payload in mutator.py
+
+
+@BypassStrategyEngine.register("double_url_encoding")
+def _s_double_enc(session):
+    session.headers["X-Double-Encode"] = "1"
+
+
+@BypassStrategyEngine.register("case_sensitivity_bypass")
+def _s_case(session):
+    session.headers["X-Case-Bypass"] = "1"
+
+
+@BypassStrategyEngine.register("hpp_duplicate_params")
+def _s_hpp(session):
+    session.headers["X-HPP"] = "1"
+
+
+@BypassStrategyEngine.register("json_unicode_escape")
+def _s_json_esc(session):
+    session.headers["Content-Type"] = "application/json; charset=utf-8"
+
+
+@BypassStrategyEngine.register("accept_header_rotation")
+def _s_accept(session):
+    session.headers["Accept"] = random.choice([
+        "application/json",
+        "text/html,application/xhtml+xml",
+        "*/*",
+        "application/xml,text/xml",
+    ])
+
+
+@BypassStrategyEngine.register("referrer_spoofing")
+def _s_referer(session):
+    session.headers["Referer"] = "https://www.google.com/search?q=site"
+
+
+@BypassStrategyEngine.register("tls_fingerprint_chrome")
+def _s_tls(session):
+    # tls-client handles JA3 fingerprint at transport level
+    try:
+        import tls_client as _tc
+        tls_sess = _tc.Session(client_identifier="chrome_120")
+        # Copy cookies/headers from requests session
+        tls_sess.headers.update(dict(session.headers))
+        session._tls_client = tls_sess
+    except ImportError:
+        pass
+
+
+@BypassStrategyEngine.register("random_path_suffix")
+def _s_path(session):
+    session._bypass_path_suffix = f";.{random.choice(['css','js','png','gif'])}"
+
+
+@BypassStrategyEngine.register("header_injection_variants")
+def _s_header_variants(session):
+    session.headers["X-Forwarded-Host"] = "localhost"
+    session.headers["X-Host"] = "127.0.0.1"
+
+
+@BypassStrategyEngine.register("param_fragmentation")
+def _s_param_frag(session):
+    session.headers["X-Param-Frag"] = "1"
+
+
+@BypassStrategyEngine.register("cf_clearance_wait")
+def _s_cf_wait(session):
+    # Handled by cloudscraper integration
+    try:
+        import cloudscraper
+        cs = cloudscraper.create_scraper()
+        cs.headers.update(dict(session.headers))
+        session._cloudscraper = cs
+    except ImportError:
+        pass
+
+
+def build_bypass_session(waf_profile=None) -> WAFBypassSession:
+    """
+    Build a WAFBypassSession with strategies applied for the detected WAF.
+    If waf_profile is None or no WAF detected, returns a plain WAFBypassSession.
+    """
+    session = WAFBypassSession()
+    if waf_profile and getattr(waf_profile, 'detected', False):
+        strategies = waf_profile.bypass_strategies or []
+        _engine.apply(session, strategies)
+        logger.info(f"[BypassEngine] Applied {len(strategies)} strategies for {waf_profile.vendor}")
+    return session

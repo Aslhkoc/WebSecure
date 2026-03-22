@@ -22,7 +22,8 @@ except ImportError:
 try:
     import weasyprint
     _WEASYPRINT_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
+    # OSError on Windows when GTK/Pango native libraries are missing
     _WEASYPRINT_AVAILABLE = False
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"

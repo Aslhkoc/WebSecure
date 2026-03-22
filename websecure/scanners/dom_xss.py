@@ -57,6 +57,9 @@ class DOMXSSScanner(BaseScanner):
     then monitors console output and DOM changes for XSS indicators.
     """
 
+    name = "dom_xss"
+    phase = "browser"
+
     def __init__(self, session=None, results: Dict = None, debug: bool = False,
                  headless: bool = True, timeout_ms: int = 8000):
         super().__init__(session, results, debug)

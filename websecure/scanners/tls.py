@@ -161,3 +161,6 @@ def check_ssl_certificate(*args, **kwargs):
 
 def scan_tls_quick(url):
     return scan_tls(url)
+
+# Plugin registry compat alias
+run = scan_tls

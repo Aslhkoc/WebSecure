@@ -489,3 +489,6 @@ def scan_tls(url: str, *, results=None, session=None, config=None, debug=False) 
     results.setdefault("tls", {})["headers"] = h_info
     
     return {"headers": h_info, "certificate": c_info}
+
+# Plugin registry compat alias
+run = scan_tls

@@ -20,7 +20,10 @@ class SQLInjectionScanner(BaseScanner):
     - Time-based blind detection (sleep payloads)
     - WAF Evasion integration via Mutator
     """
-    
+
+    name = "sqli"
+    phase = "offensive"
+
     # Signatures for Error-Based SQLi
     ERRORS = {
         "MySQL": (r"SQL syntax.*MySQL", r"Warning.*mysql_.*", r"valid MySQL result", r"MySqlClient\."),

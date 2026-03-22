@@ -19,6 +19,9 @@ class XSSScanner(BaseScanner):
     - WAF Evasion/Polyglot support
     """
 
+    name = "xss"
+    phase = "offensive"
+
     def __init__(self, session=None, results: Dict = None, debug=False):
         super().__init__(session, results, debug)
         self.canary_prefix = "wsxss"

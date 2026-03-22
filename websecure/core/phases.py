@@ -142,15 +142,20 @@ def phase_waf_detect(ctx: dict):
         # Store profile in ctx for other phases to use
         if isinstance(ctx, dict):
             ctx["waf_profile"] = profile
+            # Build a bypass-enhanced session for subsequent offensive phases
+            try:
+                from websecure.core.waf_bypass import build_bypass_session
+                ctx["bypass_session"] = build_bypass_session(profile)
+            except Exception:
+                pass
         add_result("waf_detection", {
             "vendor": profile.vendor,
             "confidence": profile.confidence,
             "detected": profile.detected,
             "bypass_strategies": profile.bypass_strategies,
-            "details": profile.details,
         })
         if profile.detected:
-            _logger.info(f"[phases] WAF detected: {profile}")
+            _logger.info(f"[phases] WAF detected: {profile.vendor} ({profile.confidence:.0%})")
     except Exception as e:
         _logger.debug(f"[phases] WAF detection skipped: {e}")
 

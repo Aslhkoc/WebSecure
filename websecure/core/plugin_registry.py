@@ -114,7 +114,7 @@ class PluginRegistry:
             ("websecure.scanners.file_upload",      None,                   "offensive"),
             ("websecure.scanners.mass_assignment",  None,                   "offensive"),
             ("websecure.scanners.rate_limit",       "RateLimitScanner",     "offensive"),
-            ("websecure.scanners.request_smuggling","SmugglingProber",      "offensive"),
+            ("websecure.scanners.request_smuggling", None,                  "offensive"),
             ("websecure.scanners.ws_fuzz",          "WebSocketFuzzer",      "offensive"),
             ("websecure.scanners.session_hunter",   "SessionHunter",        "offensive"),
             ("websecure.scanners.auth_matrix",      "AuthMatrixScanner",    "offensive"),

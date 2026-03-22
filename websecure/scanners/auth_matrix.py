@@ -49,6 +49,9 @@ class AuthMatrixScanner(BaseScanner):
     Flags privilege escalations and missing access controls.
     """
 
+    name = "auth_matrix"
+    phase = "offensive"
+
     def __init__(self, session=None, results=None, debug=False,
                  role_sessions: Optional[Dict] = None):
         super().__init__(session, results, debug)
