@@ -14,3 +14,16 @@ logs/
 output/
 reports/
 records/
+
+# Büyük harici wordlist repoları (1.8GB+) - git clone ile al
+websecure/wordlists/seclists/
+websecure/wordlists/PayloadsAllTheThings/
+
+# Binary araçlar (araçları ayrıca kur)
+tools/
+drivers/
+
+# Hata log dosyaları
+*.txt
+!websecure/wordlists_custom/custom/*.txt
+!websecure/wordlists/*.txt

