@@ -27,9 +27,15 @@ def render_html_dashboard(results: dict) -> str:
     # Flatten findings for the table
     findings = []
     
-    # [WS3] Aggregate findings from ALL known buckets, not just 'final'
-    # Tools often write to their own buckets (sqlmap, feroxbuster, etc.)
-    all_buckets = ["final", "sqlmap", "feroxbuster", "ffuf", "discovery", "offensive", "xss", "csrf", "jwt", "graphql", "file_upload", "passive"]
+    # Aggregate findings from ALL known buckets
+    all_buckets = [
+        "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
+        "ssrf", "graphql", "file_upload", "auth", "auth_matrix",
+        "headers", "rate_limit", "request_smuggling", "session_hunter",
+        "mass_assignment", "ws_fuzz", "infrastructure",
+        "sqlmap", "feroxbuster", "ffuf", "discovery", "passive",
+        "portscan", "tls_findings",
+    ]
     
     _id_counter = 1
     
@@ -190,9 +196,41 @@ def render_html_dashboard(results: dict) -> str:
     </div>
     """
              
+    # --- Subdomain / Domain Info ---
+    subdomain_html = ""
+    subdomains = set()
+    # Collect subdomains from passive_recon findings
+    for bucket in ("passive", "discovery", "final"):
+        for item in (results.get(bucket) or []):
+            if not isinstance(item, dict): continue
+            ev = item.get("evidence") or {}
+            subs = ev.get("subdomains") or []
+            subdomains.update(subs)
+    if subdomains:
+        sub_rows = "".join(
+            f"<tr><td style='font-family:monospace; color:var(--accent)'>{_escape(s)}</td></tr>"
+            for s in sorted(subdomains)
+        )
+        subdomain_html = f"""
+        <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-top:0;">🌍 Discovered Subdomains ({len(subdomains)})</h3>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Subdomain</th></tr></thead>
+                    <tbody>{sub_rows}</tbody>
+                </table>
+            </div>
+        </div>
+        """
+
     # --- SSL Data Prep ---
     ssl_html = ""
-    tls_data = results.get("tls") or {}
+    tls_raw = results.get("tls") or {}
+    # tls may be a list (from add_result) or a single dict
+    if isinstance(tls_raw, list):
+        tls_data = next((x for x in tls_raw if isinstance(x, dict) and "certificate" in x), {})
+    else:
+        tls_data = tls_raw
     cert = tls_data.get("certificate") or {}
     if cert:
         valid_icon = "✅ Valid" if cert.get("valid") else "❌ Invalid"
@@ -464,24 +502,34 @@ def render_html_dashboard(results: dict) -> str:
 
     <!-- Network & SSL Info -->
     { ssl_html }
+    { subdomain_html }
     { ports_html }
     { traffic_html }
 
     <!-- Findings Table -->
-    <h2>Findings</h2>
+    <h2>🔍 Findings ({total_issues} total)</h2>
     <div class="controls">
-        <input type="text" id="searchInput" class="search" placeholder="Type to filter findings (URL, Type, Param)...">
+        <input type="text" id="searchInput" class="search" placeholder="Filter by URL, type, param, severity...">
+        <select id="sevFilter" onchange="applyFilters()" style="background:var(--bg-header); border:1px solid var(--border); color:var(--text-main); padding:0.5rem 1rem; border-radius:6px;">
+            <option value="">All Severities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+            <option value="Info">Info</option>
+        </select>
     </div>
 
     <div class="table-container">
         <table id="findingsTable">
             <thead>
                 <tr>
-                    <th width="80">Sev</th>
-                    <th width="200">Type</th>
-                    <th>URL</th>
-                    <th width="100">Method</th>
-                    <th width="100">Param</th>
+                    <th width="90">Severity</th>
+                    <th width="180">Type</th>
+                    <th>URL / Risk Location</th>
+                    <th width="80">Method</th>
+                    <th width="120">Parameter</th>
+                    <th width="80">Status</th>
                 </tr>
             </thead>
             <tbody id="tableBody">
@@ -525,20 +573,43 @@ def render_html_dashboard(results: dict) -> str:
     function renderTable(items) {{
         const tbody = document.getElementById('tableBody');
         tbody.innerHTML = '';
+        if (items.length === 0) {{
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">No findings match the current filter.</td></tr>';
+            return;
+        }}
         items.forEach(item => {{
             const tr = document.createElement('tr');
             tr.style.cursor = 'pointer';
             tr.onclick = () => showDetail(item.id);
-            
+            const sevClass = item.severity || 'Info';
+            // Show param inline under URL for quick risk location view
+            const paramBadge = item.param && item.param !== '-'
+                ? `<br><span style="font-size:0.78rem; color:var(--text-muted);">param: <code style="color:var(--sev-high)">${{escapeHtml(item.param)}}</code></span>`
+                : '';
             tr.innerHTML = `
-                <td><span class="tag ${{item.severity}}">${{item.severity}}</span></td>
-                <td>${{escapeHtml(item.type)}}</td>
-                <td class="url">${{escapeHtml(item.url)}}</td>
-                <td class="method">${{item.method}}</td>
-                <td>${{escapeHtml(item.param)}}</td>
+                <td><span class="tag ${{sevClass}}">${{escapeHtml(sevClass)}}</span></td>
+                <td style="font-weight:500">${{escapeHtml(item.type)}}</td>
+                <td class="url">${{escapeHtml(item.url)}}${{paramBadge}}</td>
+                <td class="method">${{escapeHtml(item.method)}}</td>
+                <td><code style="font-size:0.85rem">${{escapeHtml(item.param)}}</code></td>
+                <td><span class="tag Info">Open</span></td>
             `;
             tbody.appendChild(tr);
         }});
+    }}
+
+    function applyFilters() {{
+        const term = document.getElementById('searchInput').value.toLowerCase();
+        const sev = document.getElementById('sevFilter').value;
+        const filtered = data.filter(item => {{
+            const matchText = !term ||
+                (item.url && item.url.toLowerCase().includes(term)) ||
+                (item.type && item.type.toLowerCase().includes(term)) ||
+                (item.param && item.param.toLowerCase().includes(term));
+            const matchSev = !sev || item.severity === sev;
+            return matchText && matchSev;
+        }});
+        renderTable(filtered);
     }}
 
     function showDetail(id) {{
@@ -735,15 +806,7 @@ setTimeout(() => location.reload(), 1000);
     }}
     
     // Search logic
-    document.getElementById('searchInput').addEventListener('input', (e) => {{
-        const term = e.target.value.toLowerCase();
-        const filtered = data.filter(item => 
-            (item.url && item.url.toLowerCase().includes(term)) ||
-            (item.type && item.type.toLowerCase().includes(term)) ||
-            (item.param && item.param.toLowerCase().includes(term))
-        );
-        renderTable(filtered);
-    }});
+    document.getElementById('searchInput').addEventListener('input', applyFilters);
 
     // Init
     renderTable(data);

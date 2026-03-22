@@ -185,24 +185,43 @@ def phase_portscan(ctx: dict):
     extra_args = nmap_cfg.get("arguments", [])
 
     res = nmap.scan(host, ports=ports_arg, extra_args=extra_args)
-    
+
     for item in res:
         p = item.get("port")
         if p:
-             add_result("nmap", {
-                 "severity":"info",
-                 "message":f"Open port: {p} ({item.get('service','?')})",
-                 "port":p,
-                 "service": item.get("service")
-             })
+            svc = item.get("service", "?")
+            product = item.get("product", "")
+            version = item.get("version", "")
+            add_result("nmap", {
+                "severity": "info",
+                "message": f"Open port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version}).strip()",
+                "host": item.get("ip") or item.get("hostname") or host,
+                "port": p,
+                "proto": item.get("protocol", "tcp"),
+                "service": svc,
+                "product": product,
+                "version": version,
+                "state": "open",
+            })
 
     if not res:
-        add_result("portscan", {"severity":"note","message":"No open ports found (Nmap)."})
+        add_result("portscan", {"severity": "note", "message": "No open ports found (Nmap)."})
 
 def phase_tls(ctx: dict):
-    # Optional: if scanners.tls exists, call it; otherwise noop
-    if not _call_if_exists("websecure.scanners.tls", ("run","scan")):
-        add_result("tls", {"severity":"note","message":"tls scanner not present; skipped"})
+    url = ctx.get("url") or ctx.get("target", "")
+    try:
+        from websecure.scanners.tls import scan_tls
+        tls_result = scan_tls(url, session=ctx.get("session"), config=ctx.get("config", {}))
+        if tls_result:
+            # Store certificate details under "tls" bucket for the dashboard
+            add_result("tls", tls_result)
+            # Also push any TLS findings (weak protocols/ciphers) to "offensive"
+            for finding in tls_result.get("new_findings", []):
+                add_result("offensive", finding)
+    except ImportError:
+        add_result("tls", {"severity": "note", "message": "tls scanner not present; skipped"})
+    except Exception as e:
+        add_result("tls", {"severity": "warning", "message": f"TLS scan error: {e}"})
 
 def phase_sec_headers(ctx: dict):
     if not _call_if_exists("websecure.scanners.headers", ("run","scan")):
