@@ -939,26 +939,26 @@ else:
 
 # --- Port tarama & discovery ---
 
-# [FIX] Restore Nmap functionality via new module
 def scan_ports(url, results, detailed=False, debug=False, protocol="tcp"):
+    """NmapWrapper üzerinden port taraması. scanners/port_scan.py kaldırıldı."""
     try:
-        from websecure.scanners import port_scan
-        print(f"[PortScan] {url} üzerinde Nmap başlatılıyor...")
-        # config pass-through needs global cfg or we construct a minimal one
-        _cfg = globals().get("cfg", {})
-        if detailed: 
-            if "port_scan" not in _cfg: _cfg["port_scan"] = {}
-            _cfg["port_scan"]["detailed"] = True
-            
-        data = port_scan.run(url, _cfg)
-        
-        # Merge results
+        from websecure.integrations.nmap import NmapWrapper
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname if "://" in url else url.split(":")[0]
+        nmap = NmapWrapper()
+        if not nmap.is_available():
+            print("[PortScan] Nmap binary bulunamadı.")
+            return
+        mode = "deep" if detailed else "standard"
+        print(f"[PortScan] {host} üzerinde Nmap başlatılıyor (mod={mode})...")
+        data = nmap.scan(host, mode=mode)
         if data:
             results.setdefault("port_scan", []).extend(data)
-            results.setdefault("open_ports", []).extend([p["port"] for p in data if p.get("state")=="open"])
-            
+            results.setdefault("open_ports", []).extend(
+                [item["port"] for item in data if item.get("port")]
+            )
     except Exception as e:
-        print(f"[PortScan] Error: {e}")
+        print(f"[PortScan] Hata: {e}")
 
 def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: bool = False, protocol: str = "tcp"):
     rw = ((cfg.get('remote_workers') or {}).get('port_scan') or {}) if isinstance(cfg, dict) else {}
@@ -2290,15 +2290,7 @@ O====|_______________________________________________________>  1   1 0
 
     _ = _ensure_wl(cfg)
 
-    _ab_ps = ((cfg.get("anti_blocking") or {}).get("port_scan") or {}) if isinstance(cfg, dict) else {}
-    _ab_val = _ab_ps.get("rps")
-    _s = str(_ab_val) if _ab_val is not None else ""
-    if _s.strip() != "":
-        _tmp = _s.replace('.', '', 1)
-        if _tmp.isdigit():
-            _ab_rps = int(float(_s))
-            if _ab_rps > 0:
-                _ab_os.environ["WEBSEC_PORTSCAN_RPS"] = str(_ab_rps)
+    # port_scan anti-blocking kaldırıldı — Nmap rate control kendi içinde yönetiliyor
 
     # === Sonuç kovası (yerel ve global bağ) ===
     results: dict = {"phase_timings": {}, "sections": []}
@@ -2886,21 +2878,18 @@ O====|_______________________________________________________>  1   1 0
                 
                 # [WS3] ANTI-GHOST PROTOCOL: Never allow empty plan
                 if not raw_plan:
-                    print("\n[!] UYARI: Otomatik plan oluşturulamadı (Konfigürasyon eksik olabilir).")
-                    print("[*] 'EMERGENCY FORCE' Modu Devrede: Tüm modüller manuel olarak ekleniyor...")
+                    print("\n[!] UYARI: Otomatik plan oluşturulamadı, acil plan devreye giriyor...")
                     from websecure.core.phases import (
-                        discovery_phase, 
-                        port_scan_phase,
-                        crawl_phase,
-                        offensive_phase_runner_unified,
-                        reporting_phase
+                        phase_waf_detect,
+                        phase_discovery,
+                        phase_portscan,
+                        run_reporting_and_integration,
                     )
                     raw_plan = [
-                         {"id": "discovery", "title": "Keşif (Emergency)", "runner": discovery_phase, "enabled": True},
-                         {"id": "portscan", "title": "Port Taraması", "runner": port_scan_phase, "enabled": True},
-                         {"id": "crawl", "title": "Gezinme & Analiz", "runner": crawl_phase, "enabled": True},
-                         {"id": "offensive", "title": "Saldırı (Unified)", "runner": offensive_phase_runner_unified, "enabled": True},
-                         {"id": "reporting", "title": "Raporlama", "runner": reporting_phase, "enabled": True}
+                        {"id": "waf_detect",  "title": "WAF Tespiti",    "runner": phase_waf_detect,              "enabled": True},
+                        {"id": "discovery",   "title": "Keşif",          "runner": phase_discovery,               "enabled": True},
+                        {"id": "port_scan",   "title": "Port Taraması",  "runner": phase_portscan,                "enabled": True},
+                        {"id": "reporting",   "title": "Raporlama",      "runner": run_reporting_and_integration, "enabled": True},
                     ]
 
                 # Merge manually if needed
