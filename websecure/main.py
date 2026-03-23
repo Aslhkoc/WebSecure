@@ -154,91 +154,6 @@ def offensive_nosqli(url, session, **kwargs):
             _logger.error(f"NoSQLi Scan failed: {e}")
 
 
-def scan_ports_or_distributed(url, results, cfg, detailed=False, debug=False, protocol="tcp"):
-    # REPLACED: Legacy Python scanner removed. Now using dedicated Nmap integration per user request.
-    from websecure.integrations.nmap import NmapWrapper
-    from urllib.parse import urlparse
-    import logging
-
-    try:
-        if "://" in url:
-            parsed = urlparse(url)
-            host = parsed.hostname or url
-        else:
-            host = url.split(":")[0]
-
-        nmap = NmapWrapper()
-        if not nmap.is_available():
-            logging.error("Nmap binary not found but is REQUIRED. Port scan failed.")
-            results["port_scan_summary"] = {"error": "Nmap binary missing"}
-            return []
-
-        # Config overrides
-        nmap_cfg = cfg.get("nmap", {}) or {}
-        
-        # Determine Ports
-        # If detailed (profile=deep/aggressive), prefer FULL scan (-p-) unless specific list provided? 
-        # Actually usually 'details' implies scan everything. 
-        # But if config says "ports: [80, 443]", user might want ONLY those.
-        # Let's stick to: If detailed -> -p- (standard deep scan behavior). If not -> config ports or -F.
-        
-        ports_arg = "-F"
-        if detailed:
-            ports_arg = "-p-"
-        else:
-            c_ports = nmap_cfg.get("ports", [])
-            if c_ports:
-                ports_arg = "-p" + ",".join(map(str, c_ports))
-        
-        # Extra args from config
-        c_args = nmap_cfg.get("arguments", []) or []
-        extra = []
-        if detailed:
-            extra.append("-sV") # Version detection
-        
-        # Append config args (e.g. -T4, -Pn etc)
-        if c_args:
-            # Avoid duplicates if possible, or just append. Nmap usually takes last or all.
-            for a in c_args:
-                if a not in extra:
-                    extra.append(a)
-
-        scan_res = nmap.scan(host, ports=ports_arg, extra_args=extra)
-
-        # Map Nmap results to WebSecure format
-        open_ports = []
-        port_records = []
-        
-        for item in scan_res:
-             p = item.get("port")
-             if p:
-                 open_ports.append(p)
-                 port_records.append({
-                     "host": item.get("ip") or host,
-                     "port": p,
-                     "proto": item.get("protocol", "tcp"),
-                     "state": "open",
-                     "service": item.get("service", "unknown"),
-                     "product": item.get("product", ""),
-                     "version": item.get("version", "")
-                 })
-
-        # Populate results for reporting (maintaining compatibility with existing keys)
-        results["port_scan"] = port_records 
-        results["nmap"] = port_records      
-        results["open_ports"] = open_ports
-        
-        results["port_scan_summary"] = {
-            "scanned": "Nmap Full" if detailed else "Nmap Fast",
-            "open": len(open_ports),
-            "details": port_records
-        }
-        
-        return open_ports
-
-    except Exception as e:
-        logging.error(f"Nmap Scan Failed: {e}")
-        return []
 
 
 _BOUNDARY_EXC = tuple([
@@ -917,11 +832,7 @@ if _reporting_mod is None:
 else:
     add_result = getattr(_reporting_mod, "add_result", lambda *_a, **_k: None)
     configure_logging = getattr(_reporting_mod, "configure_logging", lambda *_a, **_k: None)
-    _pri = getattr(_reporting_mod, "perform_reporting_and_integration", None)
-    if _pri is not None:
-        perform_reporting = _pri
-    else:
-        _pri = getattr(_reporting_mod, "perform_reporting", None)
+    _pri = getattr(_reporting_mod, "perform_reporting", None)
     if _pri is None:
         def perform_reporting(*_a, **_k):
             _flush = getattr(_reporting_mod, "flush", None)
@@ -937,36 +848,7 @@ else:
 
 # --- Skorlama & entegrasyon ---
 
-# --- Port tarama & discovery ---
-
-def scan_ports(url, results, detailed=False, debug=False, protocol="tcp"):
-    """NmapWrapper üzerinden port taraması. scanners/port_scan.py kaldırıldı."""
-    try:
-        from websecure.integrations.nmap import NmapWrapper
-        from urllib.parse import urlparse
-        host = urlparse(url).hostname if "://" in url else url.split(":")[0]
-        nmap = NmapWrapper()
-        if not nmap.is_available():
-            print("[PortScan] Nmap binary bulunamadı.")
-            return
-        mode = "deep" if detailed else "standard"
-        print(f"[PortScan] {host} üzerinde Nmap başlatılıyor (mod={mode})...")
-        data = nmap.scan(host, mode=mode)
-        if data:
-            results.setdefault("port_scan", []).extend(data)
-            results.setdefault("open_ports", []).extend(
-                [item["port"] for item in data if item.get("port")]
-            )
-    except Exception as e:
-        print(f"[PortScan] Hata: {e}")
-
-def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: bool = False, protocol: str = "tcp"):
-    rw = ((cfg.get('remote_workers') or {}).get('port_scan') or {}) if isinstance(cfg, dict) else {}
-    if rw.get('enabled') and rw.get('workers'):
-        targets = [url] if isinstance(url, str) else list(url or [])
-        ports = list(range(1, 1024))
-        return scan_ports_distributed(targets, ports, rw.get('workers'), shared_key=rw.get('shared_key'))
-    return scan_ports(url, results, detailed=detailed, debug=debug, protocol=protocol)
+# --- Port tarama: phases.py:phase_portscan() kullanılır, bu wrapper'lar kaldırıldı ---
 
 
 # --- Port Scanner ---
@@ -1003,7 +885,6 @@ if crawl_website is None:
 
 # --- Güvenlik başlıkları ---
 # [WS12_RULE] scanner modül adı ≡ dosya adı (headers.py)
-from websecure.scanners.headers import get_security_headers as scan_security_headers
 from websecure.scanners.headers import get_security_headers as scan_security_headers
 
 
@@ -3004,10 +2885,14 @@ O====|_______________________________________________________>  1   1 0
             run_plan_if_needed(ctx)
         else:
             print("[!] CRITICAL: run_plan_if_needed fonksiyonu bulunamadi, manuel yedek calistiriliyor...")
-            # Fallback legacy implementation (only if framework fails)
+            # Fallback: phases.py:phase_portscan() doğrudan çağrılır
             print("[•] Port taraması (TCP)…")
             t = mark("ports")
-            scan_ports_or_distributed(url, results, cfg, detailed=detailed, debug=debug, protocol="tcp")
+            try:
+                from websecure.core.phases import phase_portscan as _pp
+                _pp(ctx)
+            except Exception as _pe:
+                print(f"[PortScan] Fallback hata: {_pe}")
             mark("ports", t)
             
             discovery_enrich(url, results, open_ports=results.get("open_ports"), detailed=detailed, debug=debug)

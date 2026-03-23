@@ -10,86 +10,11 @@ from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
 
 try:
     import requests
-    from requests.adapters import HTTPAdapter
-    from requests.packages.urllib3.util.retry import Retry
 except ImportError:
     requests = None
-    HTTPAdapter = object
-    Retry = object
 
 # ========================== Constants ==========================
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/119 Safari/537.36"
-)
-
-# ========================== HTTP Session ==========================
-# WAF Bypass Logic (Ghost Integration)
-try:
-    from websecure.core.waf_bypass import WAFBypassAdapter
-    _HAS_WAF_BYPASS = True
-except ImportError:
-    WAFBypassAdapter = HTTPAdapter
-    _HAS_WAF_BYPASS = False
-
-class _TimeoutHTTPAdapter(WAFBypassAdapter):
-    def __init__(self, *args, **kwargs):
-        self.timeout = kwargs.pop("timeout", 20)
-        super().__init__(*args, **kwargs)
-
-    def send(self, request, **kwargs):
-        timeout = kwargs.get("timeout")
-        if timeout is None:
-            kwargs["timeout"] = self.timeout
-        return super().send(request, **kwargs)
-
-def hardened_session(
-    proxies: Dict[str, str] = None,
-    verify: bool = False,
-    timeout: int = 20,
-    retries: int = 2,
-    backoff_factor: float = 0.5,
-    pool_connections: int = 10,
-    pool_maxsize: int = 10,
-    user_agent: str = None
-) -> "requests.Session":
-    if requests is None:
-        raise ImportError("requests library is required for hardened_session")
-
-    s = requests.Session()
-    
-    # Retry strategy
-    retry_strategy = Retry(
-        total=retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"]
-    )
-    
-    adapter = _TimeoutHTTPAdapter(
-        timeout=timeout,
-        max_retries=retry_strategy,
-        pool_connections=pool_connections,
-        pool_maxsize=pool_maxsize
-    )
-    
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    
-    s.verify = verify
-    if proxies:
-        s.proxies.update(proxies)
-        
-    s.headers.update({
-        "User-Agent": user_agent or _BROWSER_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
-    })
-    
-    return s
+# hardened_session kaldırıldı — websecure.core.http:hardened_session() kullanılır
 
 def silence_insecure_request_warnings() -> None:
     try:

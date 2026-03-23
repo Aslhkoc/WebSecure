@@ -1905,15 +1905,7 @@ def flush(session=None, cfg: Dict | None = None, results: Dict | None = None) ->
 
 
 
-def perform_reporting_and_integration(session, cfg: dict, results: dict, logger: 'logging.Logger|None'=None, **_kw) -> dict:
-    """
-    global _logger
-    if logger is not None:
-        _logger = logger
-    Birleşik giriş noktası: raporu üretir ve entegrasyonları tetikler.
-    scan_modes/_resolve_reporter bu fonksiyonu arar.
-    """
-    return perform_reporting(session, cfg, results) or {}
+# perform_reporting_and_integration kaldırıldı — perform_reporting() direkt kullanılır
 
 
 
@@ -3036,7 +3028,6 @@ websecure.core.cvss_scorer
 CVSS v3.1 scoring for WebSecure findings.
 Maps finding types to base vectors, adjusts for context (auth, WAF).
 """
-from __future__ import annotations
 import logging
 from typing import Dict, Optional, Tuple
 

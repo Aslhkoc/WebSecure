@@ -332,7 +332,7 @@ from websecure.core.utils import (
     current_identity,
     get_logging_prefs,
 )
-from .utils import hardened_session, normalize_url, resolve_canonical_base
+from .utils import normalize_url, resolve_canonical_base
 try:
     import httpx
 except ImportError:
