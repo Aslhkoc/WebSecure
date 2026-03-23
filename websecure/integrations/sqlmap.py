@@ -2,6 +2,9 @@ import requests
 import time
 import json
 import logging
+import os
+import shutil
+import subprocess
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
@@ -104,7 +107,6 @@ class SQLMapWrapper:
         """
         if not self.is_available():
             # Try to find if not in path
-            import os
             from pathlib import Path
             root = Path(__file__).resolve().parent.parent.parent
             possible = [

@@ -1770,10 +1770,6 @@ def verify_for_phase(cfg_or_session, phase: str = "", url: str | None = None) ->
     return base_verify
 
 
-HTTP_METRICS = {
-    # egress health observed at runtime
-}
-
 def _emit_egress_degraded(feature: str, reason: str, details: dict | None = None) -> None:
     rec = {'feature': str(feature), 'reason': str(reason)}
     if isinstance(details, dict):

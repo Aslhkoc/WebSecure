@@ -305,56 +305,98 @@ def phase_discovery(ctx: dict):
         _logger.warning(f"External discovery tool failed: {e}")
 
 def phase_portscan(ctx: dict):
-    # UPDATED: Using Nmap with config
-    nmap_cfg = ctx.get("config",{}).get("nmap", {}) or {}
+    """
+    Nmap port taraması.
+    Tarama modu config'deki scan_profile'a göre otomatik seçilir:
+      STEALTH  → stealth mod (SYN -T2)
+      NORMAL   → standard (servis+script)
+      AGGRESSIVE → deep (OS+script+aggressive)
+    """
+    nmap_cfg = ctx.get("config", {}).get("nmap", {}) or {}
     if not nmap_cfg.get("enabled", True):
-        add_result("portscan", {"severity":"note","message":"nmap disabled"})
+        add_result("portscan", {"severity": "note", "message": "nmap disabled"})
         return
-        
+
     from websecure.integrations.nmap import NmapWrapper
     host = ctx.get("host")
     if not host:
-         u = ctx.get("url") or ctx.get("target") or ""
-         if u:
-             host = _host_from_url(u)
+        u = ctx.get("url") or ctx.get("target") or ""
+        if u:
+            host = _host_from_url(u)
     if not host:
         return
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity":"warning","message":"Nmap binary not found."})
+        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı."})
         return
 
-    # Config arguments
+    # Mode selection: config override > scan_profile auto
+    nmap_mode = nmap_cfg.get("mode", None)
+    if not nmap_mode:
+        scan_profile = str((ctx.get("config") or {}).get("scan_profile", "NORMAL")).upper()
+        nmap_mode = {"STEALTH": "stealth", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
+
+    # Port override
     ports_cfg = nmap_cfg.get("ports", [])
-    ports_arg = "-F"
-    if ports_cfg:
-        ports_arg = "-p" + ",".join(map(str, ports_cfg))
-    
+    ports_arg = ",".join(map(str, ports_cfg)) if ports_cfg else None
+
     extra_args = nmap_cfg.get("arguments", [])
 
-    res = nmap.scan(host, ports=ports_arg, extra_args=extra_args)
+    # Vuln script mode if explicitly configured
+    vuln_mode = nmap_cfg.get("vuln_scripts", False)
+    if vuln_mode:
+        extra_args = extra_args + ["--script", "vuln,auth,default", "--script-timeout", "30s"]
+
+    _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
+    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args)
+
+    # Store OS guess in ctx for use by other phases
+    os_guesses = list({item["os_guess"] for item in res if item.get("os_guess")})
+    if os_guesses and isinstance(ctx, dict):
+        ctx.setdefault("os_guess", os_guesses[0])
 
     for item in res:
         p = item.get("port")
-        if p:
-            svc = item.get("service", "?")
-            product = item.get("product", "")
-            version = item.get("version", "")
-            add_result("nmap", {
-                "severity": "info",
-                "message": f"Open port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version})".strip(),
-                "host": item.get("ip") or item.get("hostname") or host,
-                "port": p,
-                "proto": item.get("protocol", "tcp"),
-                "service": svc,
-                "product": product,
-                "version": version,
-                "state": "open",
-            })
+        if not p:
+            continue
+        svc = item.get("service", "?")
+        product = item.get("product", "")
+        version = item.get("version", "")
+        scripts = item.get("scripts", {})
+        add_result("nmap", {
+            "severity": "info",
+            "message": f"Açık port: {p}/{item.get('protocol', 'tcp')} ({svc} {product} {version})".strip(),
+            "host": item.get("ip") or item.get("hostname") or host,
+            "port": p,
+            "proto": item.get("protocol", "tcp"),
+            "service": svc,
+            "product": product,
+            "version": version,
+            "cpe": item.get("cpe", []),
+            "os_guess": item.get("os_guess", ""),
+            "scripts": scripts,
+            "state": "open",
+        })
+        # Flag interesting services for deeper scanning
+        if svc in ("http", "https", "http-alt", "http-proxy"):
+            ctx_techs = getattr(ctx, "technologies", None)
+            if isinstance(ctx_techs, list) and "web" not in ctx_techs:
+                ctx_techs.append("web")
+        # Flag script findings as separate results
+        for script_id, script_out in scripts.items():
+            if script_out and any(kw in script_out.lower() for kw in ("vuln", "vulnerable", "cve-", "exploit")):
+                add_result("vulnerability", {
+                    "severity": "high",
+                    "tool": "nmap-nse",
+                    "script": script_id,
+                    "host": host,
+                    "port": p,
+                    "evidence": script_out[:500],
+                })
 
     if not res:
-        add_result("portscan", {"severity": "note", "message": "No open ports found (Nmap)."})
+        add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
 
 def phase_tls(ctx: dict):
     url = ctx.get("url") or ctx.get("target", "")
@@ -2237,19 +2279,21 @@ def run_ffuf_scan(ctx) -> None:
     if not _get_config(ctx, "offensive.ffuf.enabled", True):
         return
 
-    # [WS3] Dynamic Wordlist Collection
+    # [WS3] Dynamic Wordlist Collection + SecLists/PATT kurulum tespiti
     from websecure.core.utils import collect_all_wordlists
+    from websecure.core.utils.wordlists import get_tech_extensions
     import tempfile
-    
+
     _logger.info("Dinamik wordlist taraması başlatılıyor...")
     wl_data = collect_all_wordlists()
     all_wls = wl_data.get("all", [])
     count = wl_data.get("count", 0)
     est_lines = wl_data.get("total_lines_est", 0)
-    
-    _logger.info(f"[Wordlists] Toplam {count} adet wordlist dosyası bulundu.")
-    _logger.info(f"[Wordlists] Tahmini toplam satır: {est_lines}")
-    
+    curated = wl_data.get("curated", {})
+    seclists_root = wl_data.get("seclists_root", "")
+
+    _logger.info(f"[Wordlists] {count} wordlist bulundu | SecLists: {'VAR' if seclists_root else 'YOK'} | ~{est_lines} satır")
+
     if count == 0:
         add_result("ffuf", {"status": "skipped", "reason": "No wordlists found in dynamic search"})
         return
@@ -2335,28 +2379,32 @@ def run_ffuf_scan(ctx) -> None:
         if proxy:
             custom_args.extend(["-x", proxy])
 
+        # --- Curated discovery wordlist (SecLists priority over merged) ---
+        discovery_wl = merged_wl_path  # default: merged everything
+        curated_disc = curated.get("discovery", [])
+        if curated_disc:
+            discovery_wl = curated_disc[0]  # best curated dir list
+            _logger.info(f"[FFUF] Curated wordlist kullanılıyor: {discovery_wl}")
+
         # --- Directory/path discovery ---
-        findings = wrapper.run_scan(url, wordlist=merged_wl_path, custom_args=custom_args)
+        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args)
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
-        # --- File extension discovery: base + tech-aware extensions ---
-        _ff_techs = set(getattr(ctx, "technologies", []) or [])
-        sensitive_exts = ".bak,.env,.config,.xml,.json,.txt,.zip,.sql,.log,.old,.backup,.db,.key,.pem,.yml,.yaml,.conf"
-        if "php" in _ff_techs:
-            sensitive_exts += ",.php,.php3,.php5,.phtml,.inc"
-        if "aspnet" in _ff_techs or "iis" in _ff_techs:
-            sensitive_exts += ",.aspx,.ashx,.asmx,.asp,.cshtml"
-        if "java" in _ff_techs:
-            sensitive_exts += ",.jsp,.jspx,.do,.action,.faces"
-        if "python" in _ff_techs:
-            sensitive_exts += ",.py,.pyc"
-        if "nodejs" in _ff_techs:
-            sensitive_exts += ",.js,.ts,.mjs"
+        # --- API endpoint discovery (if curated api list available) ---
+        curated_api = curated.get("api", [])
+        if curated_api:
+            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args)
+            for f in api_findings:
+                add_result("discovery", {"tool": "ffuf", "category": "api", **f})
+
+        # --- File extension discovery: tech-aware via get_tech_extensions() ---
+        _ff_techs = list(getattr(ctx, "technologies", []) or [])
+        sensitive_exts = get_tech_extensions(_ff_techs)
         _logger.info(f"[FFUF] Extension scan (techs: {_ff_techs or 'generic'}): {sensitive_exts}")
         ext_findings = wrapper.run_scan(
             url,
-            wordlist=merged_wl_path,
+            wordlist=curated_disc[0] if curated_disc else merged_wl_path,
             extensions=sensitive_exts,
             custom_args=custom_args,
         )

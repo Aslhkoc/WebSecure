@@ -69,15 +69,51 @@ def _generate_junk_header() -> tuple[str, str]:
     val = "".join(random.choices(string.ascii_letters + string.digits, k=random.randint(4, 12)))
     return key, val
 
+def _double_encode_path(path: str) -> str:
+    """Double URL-encode each percent sign: /admin%27 -> /admin%2527"""
+    import re
+    return re.sub(r'%([0-9A-Fa-f]{2})', lambda m: f'%25{m.group(1)}', path)
+
+
+def _unicode_encode_path(path: str) -> str:
+    """Replace ASCII letters with unicode equivalents to bypass signature matching."""
+    # Use unicode fullwidth variants for select chars (WAF signature confusion)
+    _map = {
+        'a': '\u0430', 'e': '\u0435', 'o': '\u043e',
+        'p': '\u0440', 'c': '\u0441', 'x': '\u0445',
+    }
+    return "".join(_map.get(c, c) if random.random() < 0.3 else c for c in path)
+
+
+def _case_randomize_path(path: str) -> str:
+    """Randomly change ASCII letter case in URL path segments."""
+    return "".join(
+        c.upper() if c.isalpha() and random.random() < 0.5 else c
+        for c in path
+    )
+
+
 class WAFBypassAdapter(HTTPAdapter):
     """
     Adapter that injects WAF bypass headers, randomizes casing,
-    and performs path obfuscation.
+    and performs path obfuscation + payload encoding based on bypass flags
+    set by BypassStrategyEngine.
     """
+
+    def __init__(self, session_ref=None, **kwargs):
+        super().__init__(**kwargs)
+        self._session_ref = session_ref
+
+    def _get_flag(self, name: str, default=False):
+        s = self._session_ref
+        if s is None:
+            return default
+        return getattr(s, name, default)
+
     def send(self, request: PreparedRequest, **kwargs):
         # 1. Rotate User-Agent
         if "User-Agent" not in request.headers or "python-requests" in request.headers["User-Agent"]:
-             request.headers["User-Agent"] = get_random_user_agent()
+            request.headers["User-Agent"] = get_random_user_agent()
 
         # 2. Inject IP Spoofing Headers
         spoof_headers = get_spoof_headers()
@@ -85,55 +121,88 @@ class WAFBypassAdapter(HTTPAdapter):
             if k not in request.headers:
                 request.headers[k] = v
 
-        # [NIGHTMARE] Extra Bypass Headers (Cloudflare, IIS, etc.)
+        # Extra Bypass Headers (Cloudflare, IIS, Nginx overrides)
         request.headers["X-Rewrite-URL"] = request.path_url
         request.headers["X-Original-URL"] = request.path_url
         request.headers["X-Forwarded-Scheme"] = "https"
         request.headers["X-Forwarded-Proto"] = "https"
 
-        # 3. Path Obfuscation
-        if random.random() < 0.2: 
-            try:
-                parsed = urlparse(request.url)
-                path = parsed.path
-                if path and path.startswith("/"):
-                    tactic = random.choice(["double_slash", "current_dir", "semicolon"])
-                    new_path = path
-                    if tactic == "double_slash":
-                        new_path = "/" + path.lstrip("/")
-                    elif tactic == "current_dir":
-                        new_path = "/./" + path.lstrip("/")
-                    elif tactic == "semicolon":
-                        # /admin -> /admin;.css
-                        new_path = path + ";.css"
-                    
-                    request.url = urlunparse((
-                        parsed.scheme, parsed.netloc, new_path,
-                        parsed.params, parsed.query, parsed.fragment
-                    ))
-            except Exception:
-                pass
+        # 3. Path Mutations — applied based on active bypass flags
+        try:
+            parsed = urlparse(request.url)
+            path = parsed.path or "/"
 
-        # 4. Header Modification (Junk & Case)
-        # Note: requests/urllib3 might canonicalize headers, but we try.
+            # 3a. Double URL encoding (e.g. %27 → %2527)
+            if self._get_flag("_bypass_double_encode"):
+                path = _double_encode_path(path)
+
+            # 3b. Unicode char substitution
+            elif self._get_flag("_bypass_unicode"):
+                path = _unicode_encode_path(path)
+
+            # 3c. Case randomization for case-insensitive WAF rules
+            elif self._get_flag("_bypass_case"):
+                path = _case_randomize_path(path)
+
+            # 3d. Random structural obfuscation (always active, low probability)
+            elif random.random() < 0.2 and path.startswith("/"):
+                tactic = random.choice(["double_slash", "current_dir", "semicolon", "null_byte_ext"])
+                if tactic == "double_slash":
+                    path = "//" + path.lstrip("/")
+                elif tactic == "current_dir":
+                    path = "/./" + path.lstrip("/")
+                elif tactic == "semicolon":
+                    path = path + ";.css"
+                elif tactic == "null_byte_ext":
+                    path = path + "%00.html"
+
+            # Apply suffix if set (e.g. from random_path_suffix strategy)
+            suffix = getattr(self._session_ref, "_bypass_path_suffix", None) if self._session_ref else None
+            if suffix and not path.endswith(suffix):
+                path = path.rstrip("/") + suffix
+
+            request.url = urlunparse((
+                parsed.scheme, parsed.netloc, path,
+                parsed.params, parsed.query, parsed.fragment
+            ))
+        except Exception:
+            pass
+
+        # 4. Header Modification (Junk)
         if random.random() < 0.3:
-             junk_k, junk_v = _generate_junk_header()
-             request.headers[junk_k] = junk_v
+            junk_k, junk_v = _generate_junk_header()
+            request.headers[junk_k] = junk_v
 
-        # 5. Add common noise headers to look more like a browser
+        # 5. Browser noise headers
         if "Accept-Language" not in request.headers:
-            request.headers["Accept-Language"] = random.choice(["en-US,en;q=0.9", "tr-TR,tr;q=0.9", "en-GB,en;q=0.8"])
+            request.headers["Accept-Language"] = random.choice([
+                "en-US,en;q=0.9", "tr-TR,tr;q=0.9,en;q=0.8",
+                "en-GB,en;q=0.8", "de-DE,de;q=0.9,en;q=0.7",
+            ])
         if "DNT" not in request.headers:
             request.headers["DNT"] = "1"
         if "Upgrade-Insecure-Requests" not in request.headers:
             request.headers["Upgrade-Insecure-Requests"] = "1"
-            
-        # 6. [NIGHTMARE] HPP (HTTP Parameter Pollution) Injection
-        # Appends a dummy parameter to confuse WAFs
-        if random.random() < 0.15:
-            sep = "&" if "?" in request.url else "?"
-            junk_param = f"utm_debug={random.randint(1000,9999)}"
-            request.url += sep + junk_param
+        if "Sec-Fetch-Site" not in request.headers:
+            request.headers["Sec-Fetch-Site"] = "none"
+        if "Sec-Fetch-Mode" not in request.headers:
+            request.headers["Sec-Fetch-Mode"] = "navigate"
+        if "Sec-Fetch-User" not in request.headers:
+            request.headers["Sec-Fetch-User"] = "?1"
+
+        # 6. HPP — duplicate a real parameter to confuse WAF parsers
+        if self._get_flag("_bypass_hpp") or random.random() < 0.15:
+            try:
+                parsed2 = urlparse(request.url)
+                if parsed2.query:
+                    # Duplicate the first param with a slight variation
+                    first_pair = parsed2.query.split("&")[0]
+                    request.url = request.url + "&" + first_pair
+                else:
+                    junk_param = f"_={random.randint(1000, 9999)}"
+                    request.url += "?" + junk_param
+            except Exception:
+                pass
 
         return super().send(request, **kwargs)
 
@@ -141,12 +210,16 @@ class WAFBypassSession(requests.Session):
     """
     A requests.Session subclass that automatically uses WAFBypassAdapter
     and adds random jitter/delay to requests.
+    Bypass strategy flags (_bypass_double_encode, _bypass_unicode, etc.)
+    are set by BypassStrategyEngine and read by WAFBypassAdapter at send time.
     """
     def __init__(self, jitter_range: tuple[float, float] = (0.5, 2.0)):
         super().__init__()
         self.jitter_range = jitter_range
-        self.mount("https://", WAFBypassAdapter())
-        self.mount("http://", WAFBypassAdapter())
+        # Pass self so adapter can read bypass flags from this session
+        adapter = WAFBypassAdapter(session_ref=self)
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
         self.headers.update({
             "User-Agent": get_random_user_agent(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -216,23 +289,29 @@ def _s_xff(session):
 
 @BypassStrategyEngine.register("unicode_normalization")
 def _s_unicode(session):
-    session.headers["X-Unicode-Bypass"] = "1"
-    # Actual normalization applied per-payload in mutator.py
+    """Unicode normalization bypass — encode reserved chars as unicode escapes."""
+    session._bypass_unicode = True
+    # Also set Content-Type with charset hint
+    if "Content-Type" not in session.headers:
+        session.headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
 
 
 @BypassStrategyEngine.register("double_url_encoding")
 def _s_double_enc(session):
-    session.headers["X-Double-Encode"] = "1"
+    """Double URL encoding — marks session so WAFBypassAdapter applies %25xx encoding."""
+    session._bypass_double_encode = True
 
 
 @BypassStrategyEngine.register("case_sensitivity_bypass")
 def _s_case(session):
-    session.headers["X-Case-Bypass"] = "1"
+    """Path case randomization for case-insensitive WAF rules."""
+    session._bypass_case = True
 
 
 @BypassStrategyEngine.register("hpp_duplicate_params")
 def _s_hpp(session):
-    session.headers["X-HPP"] = "1"
+    """HTTP Parameter Pollution — duplicate key=val pairs to confuse WAF parsers."""
+    session._bypass_hpp = True
 
 
 @BypassStrategyEngine.register("json_unicode_escape")
