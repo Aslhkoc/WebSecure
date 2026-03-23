@@ -34,12 +34,25 @@ if __name__ == "__main__":
             "selenium": ["selenium>=4.23.1", "webdriver-manager>=4.0.2"],
             "speed": ["python-Levenshtein>=0.25.0"],
             "pdf": ["weasyprint>=61.0"],
-            "bypass": ["tls-client>=1.0.1", "cloudscraper>=1.2.71"],
+            # WAF bypass: curl_cffi en kritik bileşen (JA3/JA4 TLS taklidi)
+            "bypass": [
+                "curl-cffi>=0.6.0",
+                "tls-client>=1.0.1",
+                "cloudscraper>=1.2.71",
+            ],
+            # SOCKS5 proxy desteği (residential proxy pool için)
+            "proxies": [
+                "requests[socks]>=2.32.0",
+                "PySocks>=1.7.1",
+            ],
             "full": [
                 "playwright>=1.46.0",
                 "weasyprint>=61.0",
+                "curl-cffi>=0.6.0",
                 "tls-client>=1.0.1",
                 "cloudscraper>=1.2.71",
+                "requests[socks]>=2.32.0",
+                "PySocks>=1.7.1",
             ],
         },
     )

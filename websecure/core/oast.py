@@ -1,11 +1,13 @@
 from __future__ import annotations
 import asyncio
+import base64
 import contextlib
 import hashlib
 import hmac
 import inspect
 import json as _json
 import logging
+import os
 import random
 import string
 import time
@@ -19,6 +21,76 @@ from importlib.util import find_spec
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urlsplit, urlunsplit
 import requests as _req
+
+# ---------------------------------------------------------------------------
+# RSA + AES-GCM yardımcıları (interactsh şifreli polling için)
+# ---------------------------------------------------------------------------
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa, padding as _asym_padding
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.backends import default_backend
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
+
+_logger = logging.getLogger(__name__)
+
+
+def _generate_rsa_keypair(key_size: int = 2048) -> tuple[bytes, str]:
+    """
+    RSA anahtar çifti üretir.
+    Döner: (private_key_pem_bytes, public_key_der_base64_str)
+    """
+    if not _CRYPTO_OK:
+        raise RuntimeError("cryptography paketi gerekli: pip install cryptography")
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=key_size,
+        backend=default_backend(),
+    )
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_der = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    public_b64 = base64.b64encode(public_der).decode("ascii")
+    return private_pem, public_b64
+
+
+def _rsa_decrypt(private_key_pem: bytes, ciphertext: bytes) -> bytes:
+    """RSA-OAEP ile şifrelenmiş veriyi çözer."""
+    if not _CRYPTO_OK:
+        raise RuntimeError("cryptography paketi gerekli")
+    private_key = serialization.load_pem_private_key(
+        private_key_pem, password=None, backend=default_backend()
+    )
+    return private_key.decrypt(
+        ciphertext,
+        _asym_padding.OAEP(
+            mgf=_asym_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+
+
+def _aes_gcm_decrypt(key: bytes, data: bytes) -> bytes:
+    """
+    AES-GCM ile şifrelenmiş veriyi çözer.
+    interactsh formatı: ilk 12 byte nonce, geri kalan ciphertext+tag
+    """
+    if not _CRYPTO_OK:
+        raise RuntimeError("cryptography paketi gerekli")
+    if len(data) < 12:
+        raise ValueError("AES-GCM verisi çok kısa")
+    nonce, ciphertext = data[:12], data[12:]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None)
 
 # --- Dynamic Imports for Resilience ---
 httpx = import_module('httpx') if find_spec('httpx') is not None else None
@@ -213,31 +285,71 @@ class GenericOSATClient(_BaseOSAT, IOSATClient):
         return found
 
 class InteractshClient(_BaseOSAT, IOSATClient):
+    """
+    Gerçek interactsh protokolü ile çalışan OAST istemcisi.
+
+    interactsh sunucusu (interact.sh / oast.fun) RSA-OAEP + AES-GCM
+    tabanlı şifreli polling kullanır:
+
+    1. Kayıt: RSA public key + secret → sunucu correlation_id + domain döner
+    2. Polling: /poll?id=...&secret=... → {"aes_key": "<b64>", "data": [...]}
+       - aes_key, RSA-OAEP ile şifreli AES anahtarıdır
+       - data öğeleri AES-GCM ile şifreli JSON eventlerdir (nonce ilk 12 byte)
+    """
+
     def __init__(self, cfg: OSATConfig):
         super().__init__(cfg)
         self._registered = False
         self._correlation_id: Optional[str] = None
         self._secret: Optional[str] = None
+        self._private_key_pem: Optional[bytes] = None
+        self._public_key_b64: Optional[str] = None
+        self._encrypted: bool = True  # Sunucu şifreleme kullanıyor mu
 
     async def _ensure_registered(self) -> None:
-        if self._registered: return
+        if self._registered:
+            return
         url = self.cfg.interact_base.rstrip("/") + self.cfg.interact_register_path
         secret = uuid.uuid4().hex
+
+        # RSA anahtar çifti oluştur (cryptography mevcut değilse şifresiz fallback)
+        if _CRYPTO_OK:
+            try:
+                self._private_key_pem, self._public_key_b64 = _generate_rsa_keypair()
+            except Exception as e:
+                _logger.debug(f"[OAST] RSA üretim hatası: {e} — şifresiz mod deneniyor")
+                self._encrypted = False
+        else:
+            self._encrypted = False
+
+        payload: Dict[str, Any] = {"secret-key": secret}
+        if self._encrypted and self._public_key_b64:
+            payload["public-key"] = self._public_key_b64
+
         try:
-            r = await self._client.post(url, json={"secret": secret})
-            if r.status_code != 200:
+            r = await self._client.post(url, json=payload)
+            if r.status_code not in (200, 201):
+                # Bazı self-hosted örnekler GET ile kayıt destekler
                 r = await self._client.get(url, params={"secret": secret})
-            
-            if r.status_code == 200:
+
+            if r.status_code in (200, 201):
                 data = r.json() or {}
-                self._correlation_id = str(data.get("id") or data.get("correlation_id") or "")
-                self._secret = str(data.get("secret") or secret)
+                self._correlation_id = str(
+                    data.get("id") or data.get("correlation_id") or ""
+                )
+                self._secret = str(data.get("secret-key") or data.get("secret") or secret)
                 root = str(data.get("domain") or "").strip(".")
                 if root:
                     self.cfg.root_domain = root
                     self.cfg.dns_domain = root
                 self._registered = True
-        except Exception:
+                _logger.info(
+                    f"[OAST] interactsh kaydı başarılı: "
+                    f"id={self._correlation_id[:12] if self._correlation_id else '?'}, "
+                    f"domain={self.cfg.root_domain}, encrypted={self._encrypted}"
+                )
+        except Exception as e:
+            _logger.warning(f"[OAST] interactsh kayıt hatası: {e}")
             self._registered = False
 
     async def new_token(self) -> str:
@@ -245,32 +357,82 @@ class InteractshClient(_BaseOSAT, IOSATClient):
         return gen_token(self.cfg.payload_prefix or "x")
 
     def payloads_for(self, token: str) -> Dict[str, List[str]]:
-        return build_payloads(self.cfg.root_domain, token, include_dns=self.cfg.enable_dns, include_http=self.cfg.enable_http, include_bxss=self.cfg.enable_bxss)
+        return build_payloads(
+            self.cfg.root_domain, token,
+            include_dns=self.cfg.enable_dns,
+            include_http=self.cfg.enable_http,
+            include_bxss=self.cfg.enable_bxss,
+        )
 
     async def poll_async(self, interested_tokens: Iterable[str]) -> List[Dict[str, Any]]:
         await self._ensure_registered()
-        if not self._registered: return []
-        
+        if not self._registered:
+            return []
+
         poll_url = self.cfg.interact_base.rstrip("/") + self.cfg.interact_poll_path
-        found = []
+        tokens = set(interested_tokens or [])
+        found: List[Dict[str, Any]] = []
+
         try:
-            r = await self._client.get(poll_url, params={"id": self._correlation_id, "secret": self._secret})
-            if r.status_code == 200:
-                data = r.json() or {}
-                evs = data.get("events") or data.get("records") or []
-                tokens = set(interested_tokens or [])
-                for ev in evs:
-                    tok = str(ev.get("token") or ev.get("unique_id") or "")
-                    if not tok:
-                        raw = str(ev.get("raw-request") or ev.get("request") or "")
-                        for t in tokens:
-                            if t and t in raw:
-                                tok = t; break
-                    if tok in tokens:
-                        found.append({"token": tok, "raw": ev, "ts": ev.get("time")})
-        except Exception:
-            pass
+            r = await self._client.get(
+                poll_url,
+                params={"id": self._correlation_id, "secret": self._secret},
+            )
+            if r.status_code != 200:
+                return found
+
+            data = r.json() or {}
+
+            # --- Şifreli yanıt (gerçek interactsh protokolü) ---
+            if self._encrypted and self._private_key_pem and "aes_key" in data:
+                evs = self._decrypt_events(data)
+            else:
+                # Şifresiz fallback (self-hosted veya test ortamı)
+                evs = data.get("data") or data.get("events") or data.get("records") or []
+
+            for ev in evs:
+                if not isinstance(ev, dict):
+                    continue
+                tok = str(ev.get("unique-id") or ev.get("unique_id") or ev.get("token") or "")
+                if not tok:
+                    # Ham istek içinde token ara
+                    raw_req = str(ev.get("raw-request") or ev.get("request") or "")
+                    for t in tokens:
+                        if t and t in raw_req:
+                            tok = t
+                            break
+                if tok in tokens:
+                    found.append({
+                        "token": tok,
+                        "raw": ev,
+                        "ts": ev.get("timestamp") or ev.get("time"),
+                        "protocol": ev.get("protocol", ""),
+                        "remote_address": ev.get("remote-address", ""),
+                    })
+        except Exception as e:
+            _logger.debug(f"[OAST] Polling hatası: {e}")
         return found
+
+    def _decrypt_events(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        interactsh şifreli yanıtını çözer.
+        data = {"aes_key": "<b64_rsa_enc_aes_key>", "data": ["<b64_aes_enc_item>", ...]}
+        """
+        events: List[Dict[str, Any]] = []
+        try:
+            aes_key_enc = base64.b64decode(data["aes_key"])
+            aes_key = _rsa_decrypt(self._private_key_pem, aes_key_enc)
+
+            for item in (data.get("data") or []):
+                try:
+                    raw_bytes = _aes_gcm_decrypt(aes_key, base64.b64decode(item))
+                    ev = _json.loads(raw_bytes.decode("utf-8", errors="replace"))
+                    events.append(ev)
+                except Exception as e:
+                    _logger.debug(f"[OAST] Event çözme hatası: {e}")
+        except Exception as e:
+            _logger.warning(f"[OAST] AES anahtarı çözme hatası: {e}")
+        return events
 
 class CollaboratorClient(_BaseOSAT, IOSATClient):
     # Similar structure to Generic but potentially custom polling logic
@@ -451,10 +613,12 @@ class OASTPollerThread:
 
     def _do_poll(self) -> None:
         try:
-            if hasattr(self._client, 'poll') and callable(self._client.poll):
-                events = self._client.poll()
-                if events:
-                    self._process_events(events)
+            tokens = list(self._token_map.keys())
+            if not tokens:
+                return
+            events = poll_events_sync(self._client, tokens, timeout=int(self._poll_interval + 10))
+            if events:
+                self._process_events(events)
         except Exception as e:
             _logger.debug(f"[OAST] Client poll failed: {e}")
 
@@ -481,12 +645,26 @@ def start_global_oast_poller(cfg: dict = None) -> Optional[OASTPollerThread]:
     global _GLOBAL_OAST_POLLER
     cfg = cfg or {}
     oast_cfg = cfg.get("oast", {})
-    interact_base = oast_cfg.get("interact_base", "https://interact.sh")
     poll_interval = float(oast_cfg.get("poll_interval", 5.0))
     try:
-        client = InteractshClient(server=interact_base)
+        # OSATConfig üzerinden InteractshClient oluştur (constructor imzası sabit)
+        osat_cfg = OSATConfig.from_dict({
+            "provider": oast_cfg.get("provider", "interactsh"),
+            "interact_base": oast_cfg.get("interact_base", "https://interact.sh"),
+            "interact_register_path": oast_cfg.get("interact_register_path", "/register"),
+            "interact_poll_path": oast_cfg.get("interact_poll_path", "/poll"),
+            "root_domain": oast_cfg.get("root_domain", ""),
+            "dns_domain": oast_cfg.get("dns_domain", ""),
+            "api_key": oast_cfg.get("api_key", ""),
+            "enable_dns": oast_cfg.get("enable_dns", True),
+            "enable_http": oast_cfg.get("enable_http", True),
+            "enable_bxss": oast_cfg.get("enable_bxss", False),
+            "payload_prefix": oast_cfg.get("payload_prefix", "ws"),
+        })
+        client = InteractshClient(osat_cfg)
         _GLOBAL_OAST_POLLER = OASTPollerThread(client, poll_interval=poll_interval)
         _GLOBAL_OAST_POLLER.start()
+        _logger.info("[OAST] Global poller başlatıldı.")
         return _GLOBAL_OAST_POLLER
     except Exception as e:
         _logger.warning(f"[OAST] Could not start poller: {e}")

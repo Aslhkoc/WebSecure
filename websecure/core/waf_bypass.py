@@ -257,11 +257,26 @@ def _s_referer(session):
 
 @BypassStrategyEngine.register("tls_fingerprint_chrome")
 def _s_tls(session):
-    # tls-client handles JA3 fingerprint at transport level
+    """
+    TLS parmak izi sahteciliği.
+
+    curl_cffi mevcutsa: HttpClient sürücüsünü curl_cffi'ye geçmek için
+    bayrak koyar. curl_cffi yoksa tls-client'a, o da yoksa sessizce geçer.
+    """
+    # 1. curl_cffi — en iyi JA3/JA4 taklidi
+    try:
+        from websecure.core.tls_driver import _CURL_CFFI_AVAILABLE, _resolve_profile
+        if _CURL_CFFI_AVAILABLE:
+            session._use_curl_cffi = True
+            session._curl_cffi_profile = _resolve_profile("chrome_124")
+            return
+    except ImportError:
+        pass
+
+    # 2. tls-client fallback
     try:
         import tls_client as _tc
         tls_sess = _tc.Session(client_identifier="chrome_120")
-        # Copy cookies/headers from requests session
         tls_sess.headers.update(dict(session.headers))
         session._tls_client = tls_sess
     except ImportError:

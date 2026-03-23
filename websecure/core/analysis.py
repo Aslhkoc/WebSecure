@@ -494,10 +494,17 @@ class CaptchaConfig:
     site_key: Optional[str] = None
     site_url: Optional[str] = None
     tesseract_lang: str = "eng"
-    timeout_sec: int = 90
+    timeout_sec: int = 120
     poll_interval_sec: int = 5
     two_captcha_base: str = "https://2captcha.com"
     anti_captcha_base: str = "https://api.anti-captcha.com"
+    # CapSolver / gelişmiş ayarlar
+    capsolver_base: str = "https://api.capsolver.com"
+    recaptcha_type: str = "RecaptchaV2TaskProxyless"  # V3 için: RecaptchaV3TaskProxyless
+    recaptcha_action: str = ""           # reCAPTCHA v3 action adı
+    min_score: float = 0.5               # reCAPTCHA v3 minimum skor
+    hcaptcha_enterprise_payload: Optional[Dict[str, Any]] = None
+
 
 def read_captcha_config(config: Dict[str, Any]) -> CaptchaConfig:
     sec = (config or {}).get("settings", {}).get("security", {}) if config else {}
@@ -508,11 +515,17 @@ def read_captcha_config(config: Dict[str, Any]) -> CaptchaConfig:
         site_key=c.get("site_key"),
         site_url=c.get("site_url"),
         tesseract_lang=c.get("tesseract_lang", "eng"),
-        timeout_sec=int(c.get("timeout_sec", 90)),
+        timeout_sec=int(c.get("timeout_sec", 120)),
         poll_interval_sec=int(c.get("poll_interval_sec", 5)),
         two_captcha_base=c.get("two_captcha_base", "https://2captcha.com"),
         anti_captcha_base=c.get("anti_captcha_base", "https://api.anti-captcha.com"),
+        capsolver_base=c.get("capsolver_base", "https://api.capsolver.com"),
+        recaptcha_type=c.get("recaptcha_type", "RecaptchaV2TaskProxyless"),
+        recaptcha_action=c.get("recaptcha_action", ""),
+        min_score=float(c.get("min_score", 0.5)),
+        hcaptcha_enterprise_payload=c.get("hcaptcha_enterprise_payload"),
     )
+
 
 @runtime_checkable
 class ImageCaptchaSolver(Protocol):
@@ -522,49 +535,344 @@ class ImageCaptchaSolver(Protocol):
 class RecaptchaV2Solver(Protocol):
     def solve(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]: ...
 
+
 class NoneProvider(ImageCaptchaSolver, RecaptchaV2Solver):
-    def solve(self, *a, **k) -> Optional[str]: return None
+    def solve(self, *a, **k) -> Optional[str]:
+        return None
+
 
 class OCRProvider(ImageCaptchaSolver):
     def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
-        if not (Image and pytesseract): return None
+        if not (Image and pytesseract):
+            return None
         img = Image.open(io.BytesIO(img_bytes))
         return pytesseract.image_to_string(img, lang=cfg.tesseract_lang).strip() or None
 
-class TwoCaptchaProvider(ImageCaptchaSolver, RecaptchaV2Solver):
-    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
-        if not cfg.api_key: return None
-        # Simplified implementation
-        try:
-            r = requests.post(f"{cfg.two_captcha_base}/in.php", data={
-                "key": cfg.api_key, "method": "base64", 
-                "body": base64.b64encode(img_bytes).decode("ascii"), "json": 1
-            }, timeout=30)
-            if r.json().get("status") != 1: return None
-            req_id = r.json().get("request")
-            
-            start = time.time()
-            while time.time() - start < cfg.timeout_sec:
-                time.sleep(cfg.poll_interval_sec)
-                r2 = requests.get(f"{cfg.two_captcha_base}/res.php", params={
-                    "key": cfg.api_key, "action": "get", "id": req_id, "json": 1
-                }, timeout=30)
-                if r2.json().get("status") == 1: return r2.json().get("request")
-        except Exception:
-            pass
+
+# ---------------------------------------------------------------------------
+# 2captcha Provider (resim + reCAPTCHA v2/v3 + hCaptcha + Turnstile)
+# ---------------------------------------------------------------------------
+
+class TwoCaptchaProvider(ImageCaptchaSolver):
+    """
+    2captcha.com API entegrasyonu.
+
+    Desteklenen tipler:
+      - Resim CAPTCHA  → solve(img_bytes, cfg)
+      - reCAPTCHA v2   → solve_recaptcha(site_key, site_url, cfg)
+      - reCAPTCHA v3   → solve_recaptcha_v3(site_key, site_url, cfg)
+      - hCaptcha       → solve_hcaptcha(site_key, site_url, cfg)
+      - Turnstile      → solve_turnstile(site_key, site_url, cfg)
+    """
+
+    # --- Ortak polling yardımcısı ---
+    @staticmethod
+    def _poll_result(api_key: str, req_id: str, cfg: CaptchaConfig, base: str) -> Optional[str]:
+        start = time.time()
+        while time.time() - start < cfg.timeout_sec:
+            time.sleep(cfg.poll_interval_sec)
+            try:
+                r = requests.get(
+                    f"{base}/res.php",
+                    params={"key": api_key, "action": "get", "id": req_id, "json": 1},
+                    timeout=30,
+                )
+                d = r.json()
+                if d.get("status") == 1:
+                    return d.get("request")
+                if d.get("request") == "ERROR_CAPTCHA_UNSOLVABLE":
+                    return None
+            except Exception:
+                pass
         return None
 
+    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
+        """Resim CAPTCHA çözme."""
+        if not cfg.api_key:
+            return None
+        try:
+            r = requests.post(
+                f"{cfg.two_captcha_base}/in.php",
+                data={
+                    "key": cfg.api_key,
+                    "method": "base64",
+                    "body": base64.b64encode(img_bytes).decode("ascii"),
+                    "json": 1,
+                },
+                timeout=30,
+            )
+            d = r.json()
+            if d.get("status") != 1:
+                return None
+            return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
+        except Exception:
+            return None
+
+    def solve_recaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """reCAPTCHA v2 token çözme."""
+        if not cfg.api_key:
+            return None
+        try:
+            r = requests.post(
+                f"{cfg.two_captcha_base}/in.php",
+                data={
+                    "key": cfg.api_key,
+                    "method": "userrecaptcha",
+                    "googlekey": site_key,
+                    "pageurl": site_url,
+                    "json": 1,
+                },
+                timeout=30,
+            )
+            d = r.json()
+            if d.get("status") != 1:
+                return None
+            return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
+        except Exception:
+            return None
+
+    def solve_recaptcha_v3(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """reCAPTCHA v3 token çözme."""
+        if not cfg.api_key:
+            return None
+        try:
+            data: Dict[str, Any] = {
+                "key": cfg.api_key,
+                "method": "userrecaptcha",
+                "version": "v3",
+                "googlekey": site_key,
+                "pageurl": site_url,
+                "min_score": cfg.min_score,
+                "json": 1,
+            }
+            if cfg.recaptcha_action:
+                data["action"] = cfg.recaptcha_action
+            r = requests.post(f"{cfg.two_captcha_base}/in.php", data=data, timeout=30)
+            d = r.json()
+            if d.get("status") != 1:
+                return None
+            return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
+        except Exception:
+            return None
+
+    def solve_hcaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """hCaptcha token çözme."""
+        if not cfg.api_key:
+            return None
+        try:
+            data: Dict[str, Any] = {
+                "key": cfg.api_key,
+                "method": "hcaptcha",
+                "sitekey": site_key,
+                "pageurl": site_url,
+                "json": 1,
+            }
+            r = requests.post(f"{cfg.two_captcha_base}/in.php", data=data, timeout=30)
+            d = r.json()
+            if d.get("status") != 1:
+                return None
+            return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
+        except Exception:
+            return None
+
+    def solve_turnstile(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """Cloudflare Turnstile token çözme."""
+        if not cfg.api_key:
+            return None
+        try:
+            data: Dict[str, Any] = {
+                "key": cfg.api_key,
+                "method": "turnstile",
+                "sitekey": site_key,
+                "pageurl": site_url,
+                "json": 1,
+            }
+            r = requests.post(f"{cfg.two_captcha_base}/in.php", data=data, timeout=30)
+            d = r.json()
+            if d.get("status") != 1:
+                return None
+            return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
+        except Exception:
+            return None
+
+
+# ---------------------------------------------------------------------------
+# CapSolver Provider (resim + reCAPTCHA v2/v3 + hCaptcha + Turnstile + Funcaptcha)
+# ---------------------------------------------------------------------------
+
+class CapSolverProvider(ImageCaptchaSolver):
+    """
+    CapSolver API entegrasyonu (api.capsolver.com).
+
+    CapSolver, 2captcha'dan farklı bir REST yapısı kullanır:
+      POST /createTask  → {"taskId": "..."}
+      POST /getTaskResult → {"status": "ready", "solution": {...}}
+
+    Desteklenen tipler:
+      - Resim CAPTCHA       → ImageToTextTask
+      - reCAPTCHA v2        → ReCaptchaV2TaskProxyless
+      - reCAPTCHA v3        → ReCaptchaV3TaskProxyless
+      - hCaptcha            → HCaptchaTaskProxyless
+      - Cloudflare Turnstile→ AntiCloudflareTask
+      - Funcaptcha          → FunCaptchaTaskProxyless
+    """
+
+    def _create_task(self, cfg: CaptchaConfig, task: Dict[str, Any]) -> Optional[str]:
+        """Görev oluştur, taskId döner."""
+        try:
+            r = requests.post(
+                f"{cfg.capsolver_base}/createTask",
+                json={"clientKey": cfg.api_key, "task": task},
+                timeout=30,
+            )
+            d = r.json()
+            if d.get("errorId", 1) != 0:
+                return None
+            return str(d.get("taskId", ""))
+        except Exception:
+            return None
+
+    def _get_result(self, cfg: CaptchaConfig, task_id: str) -> Optional[Dict[str, Any]]:
+        """Sonuç gelene kadar polling yap."""
+        start = time.time()
+        while time.time() - start < cfg.timeout_sec:
+            time.sleep(cfg.poll_interval_sec)
+            try:
+                r = requests.post(
+                    f"{cfg.capsolver_base}/getTaskResult",
+                    json={"clientKey": cfg.api_key, "taskId": task_id},
+                    timeout=30,
+                )
+                d = r.json()
+                if d.get("errorId", 1) != 0:
+                    return None
+                if d.get("status") == "ready":
+                    return d.get("solution") or {}
+            except Exception:
+                pass
+        return None
+
+    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
+        """Resim CAPTCHA çözme."""
+        if not cfg.api_key:
+            return None
+        task_id = self._create_task(cfg, {
+            "type": "ImageToTextTask",
+            "body": base64.b64encode(img_bytes).decode("ascii"),
+        })
+        if not task_id:
+            return None
+        sol = self._get_result(cfg, task_id)
+        return sol.get("text") if sol else None
+
+    def solve_recaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """reCAPTCHA v2 token çözme."""
+        if not cfg.api_key:
+            return None
+        task_type = cfg.recaptcha_type or "ReCaptchaV2TaskProxyless"
+        task_id = self._create_task(cfg, {
+            "type": task_type,
+            "websiteURL": site_url,
+            "websiteKey": site_key,
+        })
+        if not task_id:
+            return None
+        sol = self._get_result(cfg, task_id)
+        return sol.get("gRecaptchaResponse") if sol else None
+
+    def solve_recaptcha_v3(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """reCAPTCHA v3 token çözme."""
+        if not cfg.api_key:
+            return None
+        task: Dict[str, Any] = {
+            "type": "ReCaptchaV3TaskProxyless",
+            "websiteURL": site_url,
+            "websiteKey": site_key,
+            "minScore": cfg.min_score,
+        }
+        if cfg.recaptcha_action:
+            task["pageAction"] = cfg.recaptcha_action
+        task_id = self._create_task(cfg, task)
+        if not task_id:
+            return None
+        sol = self._get_result(cfg, task_id)
+        return sol.get("gRecaptchaResponse") if sol else None
+
+    def solve_hcaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """hCaptcha token çözme."""
+        if not cfg.api_key:
+            return None
+        task: Dict[str, Any] = {
+            "type": "HCaptchaTaskProxyless",
+            "websiteURL": site_url,
+            "websiteKey": site_key,
+        }
+        if cfg.hcaptcha_enterprise_payload:
+            task["enterprisePayload"] = cfg.hcaptcha_enterprise_payload
+        task_id = self._create_task(cfg, task)
+        if not task_id:
+            return None
+        sol = self._get_result(cfg, task_id)
+        return sol.get("gRecaptchaResponse") or sol.get("token") if sol else None
+
+    def solve_turnstile(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+        """Cloudflare Turnstile token çözme."""
+        if not cfg.api_key:
+            return None
+        task_id = self._create_task(cfg, {
+            "type": "AntiCloudflareTask",
+            "websiteURL": site_url,
+            "websiteKey": site_key,
+        })
+        if not task_id:
+            return None
+        sol = self._get_result(cfg, task_id)
+        return sol.get("token") if sol else None
+
+
+# ---------------------------------------------------------------------------
+# Provider seçici ve yardımcı fonksiyonlar
+# ---------------------------------------------------------------------------
+
 def _select_solver(cfg: CaptchaConfig):
-    if cfg.provider == "ocr": return OCRProvider()
-    if cfg.provider == "2captcha": return TwoCaptchaProvider()
+    if cfg.provider == "ocr":
+        return OCRProvider()
+    if cfg.provider == "2captcha":
+        return TwoCaptchaProvider()
+    if cfg.provider == "capsolver":
+        return CapSolverProvider()
     return NoneProvider()
+
 
 def solve_image_captcha_png_bytes(img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
     return _select_solver(cfg).solve(img_bytes, cfg)
 
+
 def solve_recaptcha_v2_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
     s = _select_solver(cfg)
-    if hasattr(s, "solve_recaptcha"): return s.solve_recaptcha(site_key, site_url, cfg)  # type: ignore
+    if hasattr(s, "solve_recaptcha"):
+        return s.solve_recaptcha(site_key, site_url, cfg)  # type: ignore
+    return None
+
+
+def solve_recaptcha_v3_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+    s = _select_solver(cfg)
+    if hasattr(s, "solve_recaptcha_v3"):
+        return s.solve_recaptcha_v3(site_key, site_url, cfg)  # type: ignore
+    return None
+
+
+def solve_hcaptcha_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+    s = _select_solver(cfg)
+    if hasattr(s, "solve_hcaptcha"):
+        return s.solve_hcaptcha(site_key, site_url, cfg)  # type: ignore
+    return None
+
+
+def solve_turnstile_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
+    s = _select_solver(cfg)
+    if hasattr(s, "solve_turnstile"):
+        return s.solve_turnstile(site_key, site_url, cfg)  # type: ignore
     return None
 
 # ============================================================================
