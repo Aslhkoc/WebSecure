@@ -252,7 +252,7 @@ def run_content_discovery(url, cfg, results, timeout=900, debug=False, call_time
     Redirects to flow_runner.run_discovery_extended with a context object.
     """
     try:
-        from websecure.core.flow_runner import run_discovery_extended
+        from websecure.core.phases import run_discovery_extended
         from websecure.core.http import hardened_session # Need session
         
         # Emulate context

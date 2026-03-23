@@ -205,7 +205,7 @@ def _try_rotate_identity(session_obj) -> bool:
     Returns True if rotation signal sent successfully.
     """
     try:
-        from websecure.core.tor_manager import rotate_tor_identity, get_tor_proxy
+        from websecure.core.waf_bypass import rotate_tor_identity, get_tor_proxy
         if rotate_tor_identity():
             # Refresh proxy usage in session just in case
             proxy = get_tor_proxy()
@@ -883,7 +883,7 @@ class _RequestsDriver:
         # HttpClient.__init__ tarafından enjekte edilen _proxy_pool kullanılır.
         if "proxies" not in kw:
             try:
-                from websecure.core.tor_manager import get_egress_manager as _gem
+                from websecure.core.waf_bypass import get_egress_manager as _gem
                 em = _gem()
                 proxy_url = em.get_next_egress() if em else None
             except Exception:
@@ -1044,7 +1044,7 @@ class HttpClient:
         waf_enabled = self.cfg.get("waf", {}).get("enabled", False) if isinstance(self.cfg, dict) else False
         if waf_enabled:
             try:
-                from websecure.core.tls_driver import _CURL_CFFI_AVAILABLE
+                from websecure.core.waf_bypass import _CURL_CFFI_AVAILABLE
                 if _CURL_CFFI_AVAILABLE and driver not in ("httpx", "curl_cffi"):
                     driver = "curl_cffi"
                 elif not _CURL_CFFI_AVAILABLE and _HTTPX_AVAILABLE and driver != "httpx":
@@ -1060,7 +1060,7 @@ class HttpClient:
 
         if self.driver_name == "curl_cffi":
             try:
-                from websecure.core.tls_driver import CurlCffiDriver, _CURL_CFFI_AVAILABLE
+                from websecure.core.waf_bypass import CurlCffiDriver, _CURL_CFFI_AVAILABLE
                 if _CURL_CFFI_AVAILABLE:
                     _imp = (self.cfg.get("privacy", {}).get("impersonation", {}) or {}) if isinstance(self.cfg, dict) else {}
                     _profile = str(_imp.get("profile", "chrome_124"))
@@ -1151,7 +1151,7 @@ class HttpClient:
                 if self._consecutive_blocks >= 2:
                     # Hafif blok: Tor/Proxy rotasyonu dene
                     try:
-                        from websecure.core.tor_manager import rotate_tor_identity
+                        from websecure.core.waf_bypass import rotate_tor_identity
                         rotate_tor_identity()
                     except: pass
                     
@@ -1189,7 +1189,7 @@ class HttpClient:
         # curl_cffi sürücüsü — proxy rotation entegrasyonu
         if self.driver_name == "curl_cffi" and hasattr(self._driver, "update_proxy"):
             try:
-                from websecure.core.tor_manager import get_egress_manager as _gem
+                from websecure.core.waf_bypass import get_egress_manager as _gem
                 em = _gem()
                 if em:
                     new_proxy = em.get_next_egress()

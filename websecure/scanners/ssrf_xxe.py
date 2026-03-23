@@ -15,8 +15,8 @@ from websecure.core.payloads import load_external_payloads
 
 # Smart context analysis
 try:
-    from websecure.core.input_analyzer import (
-        analyze_input_context, 
+    from websecure.core.analysis import (
+        analyze_input_context,
         should_skip_payload_category,
         format_analysis_log,
         InputContext

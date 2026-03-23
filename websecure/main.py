@@ -32,7 +32,7 @@ def _opt_import(mod, func):
         return None
 
 from websecure.core.phases import build_plan, run_plan_if_needed
-from websecure.core.discovery_helpers import discovery_enrich
+from websecure.crawler import discovery_enrich
 from websecure.core.alerts import AlertManager
 from websecure.core.reporting import (
     verify_and_score, 
@@ -792,9 +792,9 @@ def _get_resolve_canonical_base():
     return _fallback
 
 
-_scan_spec = _ws_spec("websecure.core.scan_modes")
+_scan_spec = _ws_spec("websecure.core.phases")
 if _scan_spec is not None:
-    _scan_mod = importlib.import_module("websecure.core.scan_modes")
+    _scan_mod = importlib.import_module("websecure.core.phases")
     ScanContext = getattr(_scan_mod, "ScanContext", None)
     ScanMode = getattr(_scan_mod, "ScanMode", None)
     run_mode = getattr(_scan_mod, "run_mode", None)
@@ -2354,7 +2354,7 @@ O====|_______________________________________________________>  1   1 0
     if _tor_interval and _tor_port:
          try:
              print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
-             from websecure.core.tor_manager import init_tor_control, start_auto_rotation, rotate_tor_identity
+             from websecure.core.waf_bypass import init_tor_control, start_auto_rotation, rotate_tor_identity
              
              # Global kontrolcüyü başlat
              init_tor_control({"enabled": True, "control_port": int(_tor_port)})
