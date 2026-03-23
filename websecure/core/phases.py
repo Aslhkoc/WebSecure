@@ -714,6 +714,39 @@ def _runner_ffuf(ctx) -> None:
 
 def _runner_xss(ctx) -> None:
     run_xss_scan(ctx)
+
+def _runner_subdomain(ctx) -> None:
+    """Subdomain enumeration: DNS brute + subfinder + amass + crt.sh"""
+    try:
+        from websecure.scanners.subdomain import run as _sub_run
+        target = getattr(ctx, "target", None) or getattr(ctx, "base_url", None) or ""
+        if not target:
+            return
+        cfg = getattr(ctx, "config", {}) or {}
+        results = _sub_run(target, cfg=cfg)
+        for r in results:
+            add_result("subdomains", r)
+        _logger.info(f"[phases] Subdomain tarama tamamlandı: {len(results)} bulgu")
+    except Exception as e:
+        _logger.warning(f"[phases] Subdomain tarama hatası: {e}")
+
+def _runner_open_redirect(ctx) -> None:
+    """Open redirect taraması."""
+    try:
+        from websecure.scanners.open_redirect import run as _or_run
+        target = getattr(ctx, "target", None) or getattr(ctx, "base_url", None) or ""
+        if not target:
+            return
+        cfg = getattr(ctx, "config", {}) or {}
+        session = getattr(ctx, "session", None)
+        # Crawler'dan gelen URL listesini de gönder
+        urls = list(getattr(ctx, "endpoints", None) or [])
+        results = _or_run(target, cfg=cfg, session=session, urls=urls)
+        for r in results:
+            add_result("offensive", r)
+        _logger.info(f"[phases] Open redirect tarama tamamlandı: {len(results)} bulgu")
+    except Exception as e:
+        _logger.warning(f"[phases] Open redirect tarama hatası: {e}")
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -1405,6 +1438,7 @@ def _offensive_phases(ctx) -> List[Phase]:
 
     phases: List[Phase] = [
         Phase(id="waf_detect", title="WAF Tespiti", enabled=True, runner=lambda c: _safe(c, lambda: phase_waf_detect(c), "waf_detect"), tags=["waf","recon"]),
+        Phase(id="subdomain", title="Subdomain Enumeration", enabled=_flag("subdomain", default=True), runner=lambda c: _safe(c, lambda: _runner_subdomain(c), "subdomain"), tags=["recon","dns","passive"]),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
         Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
@@ -1534,6 +1568,13 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("dom_xss", default=True),
             runner=lambda c: _safe(c, lambda: _runner_dom_xss(c), "dom_xss"),
             tags=["xss", "browser", "dom"],
+        ),
+        Phase(
+            id="open_redirect",
+            title="Open Redirect",
+            enabled=_flag("open_redirect", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_open_redirect(c), "open_redirect"),
+            tags=["active", "redirect", "a01"],
         ),
         Phase(id="verify_and_score", title="Doğrulama & Skorlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_verify_and_score(c), "verify_and_score"), tags=["verify","score"]),
         Phase(id="reporting", title="Raporlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_reporting_and_integration(c), "reporting"), tags=["report"])
