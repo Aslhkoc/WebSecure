@@ -205,7 +205,7 @@ def _try_rotate_identity(session_obj) -> bool:
     Returns True if rotation signal sent successfully.
     """
     try:
-        from websecure.core.tor_manager import rotate_tor_identity, get_tor_proxy
+        from websecure.core.waf_bypass import rotate_tor_identity, get_tor_proxy
         if rotate_tor_identity():
             # Refresh proxy usage in session just in case
             proxy = get_tor_proxy()
@@ -879,19 +879,17 @@ class _RequestsDriver:
             headers.setdefault(k, v)
         kw["headers"] = headers
 
-        # Load Global Config to check Proxy
-        from websecure.core.payloads import _load_cfg 
-        cfg = _load_cfg().get("proxy", {})
-        if cfg.get("enabled") and cfg.get("url"):
-            kw["proxies"] = {
-                "http": cfg["url"],
-                "https": cfg["url"]
-            }
-            # Auto-rotate periodically
-            if cfg.get("tor_control", {}).get("enabled"):
-                 limit = int(cfg["tor_control"].get("rotate_every_n_requests", 50))
-                 if limit > 0 and random.randint(1, limit) == 1:
-                     rotate_tor_identity()
+        # Proxy yükleme: payloads._load_cfg bağımlılığından kurtarıldı.
+        # HttpClient.__init__ tarafından enjekte edilen _proxy_pool kullanılır.
+        if "proxies" not in kw:
+            try:
+                from websecure.core.waf_bypass import get_egress_manager as _gem
+                em = _gem()
+                proxy_url = em.get_next_egress() if em else None
+            except Exception:
+                proxy_url = None
+            if proxy_url:
+                kw["proxies"] = {"http": proxy_url, "https": proxy_url}
 
         pol = hpm_current_policy()
         self._rps = float(pol.get("rps", self._rps))
@@ -1041,23 +1039,49 @@ class HttpClient:
 
         # Sürücü seçimi
         driver = str(http_cfg.get("driver", "requests")).strip().lower()
-        
-        # WAF Mode: Force HTTPX if available (HTTP/2 Bypass)
-        waf_enabled = self.cfg.get("waf", {}).get("enabled", False)
-        if waf_enabled and _HTTPX_AVAILABLE:
-            if driver != "httpx":
-                 # Log only if we are actually switching
-                 pass 
-            driver = "httpx"
+
+        # WAF modu: önce curl_cffi (en güçlü TLS taklidi), yoksa httpx, yoksa requests
+        waf_enabled = self.cfg.get("waf", {}).get("enabled", False) if isinstance(self.cfg, dict) else False
+        if waf_enabled:
+            try:
+                from websecure.core.waf_bypass import _CURL_CFFI_AVAILABLE
+                if _CURL_CFFI_AVAILABLE and driver not in ("httpx", "curl_cffi"):
+                    driver = "curl_cffi"
+                elif not _CURL_CFFI_AVAILABLE and _HTTPX_AVAILABLE and driver != "httpx":
+                    driver = "httpx"
+            except ImportError:
+                if _HTTPX_AVAILABLE and driver != "httpx":
+                    driver = "httpx"
 
         if driver == "httpx" and not _HTTPX_AVAILABLE:
             driver = "requests"
+
         self.driver_name = driver
-        self._driver = (
-            _HttpxDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
-            if self.driver_name == "httpx"
-            else _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
-        )
+
+        if self.driver_name == "curl_cffi":
+            try:
+                from websecure.core.waf_bypass import CurlCffiDriver, _CURL_CFFI_AVAILABLE
+                if _CURL_CFFI_AVAILABLE:
+                    _imp = (self.cfg.get("privacy", {}).get("impersonation", {}) or {}) if isinstance(self.cfg, dict) else {}
+                    _profile = str(_imp.get("profile", "chrome_124"))
+                    _proxy = self._proxy_pool.next() if self._proxy_pool.enabled else None
+                    _proxy_url = _proxy.url if _proxy else None
+                    self._driver = CurlCffiDriver(
+                        profile=_profile,
+                        proxy_url=_proxy_url,
+                        verify=self.verify,
+                        timeout_pair=self._timeout_pair,
+                    )
+                else:
+                    self.driver_name = "requests"
+                    self._driver = _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
+            except Exception:
+                self.driver_name = "requests"
+                self._driver = _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
+        elif self.driver_name == "httpx":
+            self._driver = _HttpxDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
+        else:
+            self._driver = _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
 
         # Kimliksiz mod idempotent kısıtı
         kz = self.cfg.get("kimliksiz_mod") or {}
@@ -1127,7 +1151,7 @@ class HttpClient:
                 if self._consecutive_blocks >= 2:
                     # Hafif blok: Tor/Proxy rotasyonu dene
                     try:
-                        from websecure.core.tor_manager import rotate_tor_identity
+                        from websecure.core.waf_bypass import rotate_tor_identity
                         rotate_tor_identity()
                     except: pass
                     
@@ -1162,9 +1186,20 @@ class HttpClient:
     def request(self, method: str, url: str, **kw) -> UnifiedResponse:
         self._pace_before()
 
-        # curl-impersonate modu
+        # curl_cffi sürücüsü — proxy rotation entegrasyonu
+        if self.driver_name == "curl_cffi" and hasattr(self._driver, "update_proxy"):
+            try:
+                from websecure.core.waf_bypass import get_egress_manager as _gem
+                em = _gem()
+                if em:
+                    new_proxy = em.get_next_egress()
+                    self._driver.update_proxy(new_proxy)
+            except Exception:
+                pass
+
+        # curl-impersonate subprocess modu (curl_cffi yokken fallback)
         imp_cfg = (self.cfg.get("privacy") or {}).get("impersonation") if isinstance(self.cfg, dict) else None
-        if isinstance(imp_cfg, dict) and imp_cfg.get("enabled") and str(imp_cfg.get("mode", "")).lower() == "curl":
+        if isinstance(imp_cfg, dict) and imp_cfg.get("enabled") and str(imp_cfg.get("mode", "")).lower() == "curl" and self.driver_name != "curl_cffi":
             ident = current_identity(self.cfg) if self.cfg else {}
             proxy_url = ident.get("proxy_url") or self._proxy_pool.next(url)
             hdrs = dict(kw.get("headers") or {})
@@ -1734,10 +1769,6 @@ def verify_for_phase(cfg_or_session, phase: str = "", url: str | None = None) ->
 
     return base_verify
 
-
-HTTP_METRICS = {
-    # egress health observed at runtime
-}
 
 def _emit_egress_degraded(feature: str, reason: str, details: dict | None = None) -> None:
     rec = {'feature': str(feature), 'reason': str(reason)}

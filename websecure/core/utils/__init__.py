@@ -1,9 +1,8 @@
 # Facade for backward compatibility
 from .net import *
-from .text import *
+from .helpers import *
 from .system import *
 from .config import *
-from .cache import *
 from .wordlists import *
 # from .ports import *  # REMOVED: Legacy port scanner deleted.
 

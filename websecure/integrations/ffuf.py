@@ -1,3 +1,9 @@
+"""
+websecure.integrations.ffuf
+----------------------------
+Fuzzing tool wrappers.
+(Merged from ffuf.py + feroxbuster.py)
+"""
 import json
 import logging
 import shutil
@@ -8,12 +14,13 @@ from typing import List, Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+
 class FFUFWrapper:
     """
     Wrapper for FFUF (Fuzz Faster U Fool).
     Requires 'ffuf' binary to be in PATH.
     """
-    
+
     def __init__(self, binary_path: str = "ffuf"):
         self.binary = binary_path
         self._check_binary()
@@ -21,8 +28,7 @@ class FFUFWrapper:
     def _check_binary(self):
         if shutil.which(self.binary):
             return
-            
-        import os
+
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent.parent
         possible = [
@@ -30,22 +36,21 @@ class FFUFWrapper:
             str(root / "tools" / "ffuf.exe")
         ]
         for p in possible:
-             if os.path.exists(p):
-                 self.binary = p
-                 return
+            if os.path.exists(p):
+                self.binary = p
+                return
 
         logger.warning(f"FFUF binary not found at '{self.binary}'. Fuzzing will be disabled.")
 
     def is_available(self) -> bool:
-        # Check if the binary is directly executable or if it's a .py script that needs python
         if self.binary.endswith(".py"):
             import sys
             return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
         return shutil.which(self.binary) is not None
 
-    def run_scan(self, 
-                 url: str, 
-                 wordlist: str, 
+    def run_scan(self,
+                 url: str,
+                 wordlist: str,
                  extensions: Optional[str] = None,
                  threads: int = 40,
                  custom_args: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -65,10 +70,8 @@ class FFUFWrapper:
             url += "FUZZ"
 
         findings = []
-        
-        # Temp file for JSON output
         fd, temp_output = tempfile.mkstemp(suffix=".json")
-        os.close(fd) # Close handle immediately
+        os.close(fd)
 
         try:
             cmd = []
@@ -84,31 +87,29 @@ class FFUFWrapper:
                 "-o", temp_output,
                 "-of", "json",
                 "-t", str(threads),
-                "-mc", "200,204,301,302,307,401,403" # Interesting codes
+                "-mc", "200,204,301,302,307,401,403"
             ])
-            
+
             if extensions:
                 cmd.extend(["-e", extensions])
-                
+
             if custom_args:
                 cmd.extend(custom_args)
 
             logger.info(f"Starting FFUF scan on {url}")
             process = subprocess.run(
-                cmd, 
-                stdout=subprocess.PIPE, 
+                cmd,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False
             )
 
             if process.returncode != 0 and process.stderr:
-                # FFUF found nothing or error? FFUF doesn't always exit 0
                 logger.debug(f"FFUF stderr: {process.stderr}")
 
-            # Parse Output
             findings = self._parse_json_output(temp_output)
-            
+
         except Exception as e:
             logger.error(f"FFUF execution failed: {e}")
         finally:
@@ -125,8 +126,6 @@ class FFUFWrapper:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                
-            # FFUF JSON structure: { "results": [ ... ] }
             for item in data.get("results", []):
                 results.append({
                     "input": item.get("input", {}).get("FUZZ", ""),
@@ -142,5 +141,71 @@ class FFUFWrapper:
             logger.warning("FFUF output was not valid JSON.")
         except Exception as e:
             logger.error(f"FFUF result parsing error: {e}")
-            
         return results
+
+
+# ============================================================================
+# SECTION 2: Feroxbuster (merged from feroxbuster.py)
+# ============================================================================
+
+class FeroxbusterWrapper:
+    """Wrapper for Feroxbuster binary."""
+
+    def __init__(self):
+        self.binary = "feroxbuster"
+
+    def is_available(self) -> bool:
+        return shutil.which(self.binary) is not None
+
+    def scan(self, target: str, wordlist: str = None, threads: int = 50,
+             depth: int = 1, extra_args: List[str] = None) -> List[Dict[str, Any]]:
+        if not self.is_available():
+            logger.warning("Feroxbuster binary not found.")
+            return []
+
+        fd, temp_output = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+
+        try:
+            cmd = [self.binary, "--url", target, "--threads", str(threads),
+                   "--depth", str(depth), "--json", "--output", temp_output]
+
+            if wordlist:
+                cmd.extend(["--wordlist", wordlist])
+
+            if extra_args:
+                cmd.extend(extra_args)
+
+            logger.info(f"Starting Feroxbuster on {target}...")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+            results = []
+            if os.path.exists(temp_output):
+                with open(temp_output, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if data.get("type") == "response":
+                                results.append({
+                                    "url": data.get("url"),
+                                    "status": data.get("status"),
+                                    "length": data.get("content_length"),
+                                    "words": data.get("word_count"),
+                                    "lines": data.get("line_count"),
+                                    "title": data.get("title", "")
+                                })
+                        except json.JSONDecodeError:
+                            pass
+            return results
+
+        except Exception as e:
+            logger.error(f"Feroxbuster execution error: {e}")
+            return []
+        finally:
+            if os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except:
+                    pass

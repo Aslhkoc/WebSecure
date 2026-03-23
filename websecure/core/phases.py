@@ -110,6 +110,124 @@ def _importable(mod: str):
         _report_phase_error('phases', 'phases.py', e)
         return False
 
+
+# =============================================================================
+# TECH DETECTION ENGINE
+# Detects CMS/framework/language/DB from HTTP headers, cookies, and body.
+# Called BEFORE phase selection so tech_trigger logic fires correctly.
+# =============================================================================
+
+def _detect_technologies(resp) -> set:
+    """
+    Detect technologies from an HTTP response object.
+    Returns a set of lowercase technology identifiers.
+    """
+    techs = set()
+    if resp is None:
+        return techs
+
+    headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
+    body = ""
+    try:
+        body = (resp.text or "").lower()
+    except Exception:
+        pass
+    cookies_str = " ".join(headers.get("set-cookie", "").lower().split())
+
+    # --- Server header ---
+    server = headers.get("server", "")
+    if "apache" in server:       techs.add("apache")
+    if "nginx" in server:        techs.add("nginx")
+    if "iis" in server:          techs.add("iis"); techs.add("windows")
+    if "cloudflare" in server:   techs.add("cloudflare")
+    if "lighttpd" in server:     techs.add("lighttpd")
+    if "caddy" in server:        techs.add("caddy")
+    if "tomcat" in server:       techs.add("tomcat"); techs.add("java")
+    if "jetty" in server:        techs.add("jetty"); techs.add("java")
+
+    # --- X-Powered-By ---
+    xpb = headers.get("x-powered-by", "")
+    if "php" in xpb:             techs.add("php")
+    if "asp.net" in xpb.lower(): techs.add("aspnet"); techs.add("iis")
+    if "express" in xpb.lower(): techs.add("nodejs"); techs.add("express")
+
+    # --- Cookies ---
+    if "phpsessid" in cookies_str:        techs.add("php")
+    if "jsessionid" in cookies_str:       techs.add("java"); techs.add("tomcat")
+    if "asp.net_sessionid" in cookies_str: techs.add("aspnet")
+    if "laravel_session" in cookies_str:  techs.add("php"); techs.add("laravel")
+    if "django" in cookies_str or "csrftoken" in cookies_str: techs.add("python"); techs.add("django")
+    if "flask" in cookies_str or "session=" in cookies_str:   techs.add("python"); techs.add("flask")
+
+    # --- CMS/Framework specific headers ---
+    if "x-drupal-cache" in headers or "x-drupal-dynamic-cache" in headers:
+        techs.add("drupal"); techs.add("php")
+    if "x-pingback" in headers:
+        techs.add("wordpress"); techs.add("php")
+    xgen = headers.get("x-generator", "")
+    if "wordpress" in xgen.lower(): techs.add("wordpress"); techs.add("php")
+    if "drupal" in xgen.lower():    techs.add("drupal"); techs.add("php")
+    if "joomla" in xgen.lower():    techs.add("joomla"); techs.add("php")
+
+    # --- Body patterns ---
+    if "wp-content" in body or "wp-includes" in body or "/wp-json/" in body:
+        techs.add("wordpress"); techs.add("php")
+    if "joomla" in body and ("option=com_" in body or "mosConfig" in body):
+        techs.add("joomla"); techs.add("php")
+    if "drupal" in body and ("drupal.settings" in body or "drupal.behaviors" in body):
+        techs.add("drupal"); techs.add("php")
+    if "laravel" in body or "_token" in body:
+        if "php" not in techs and "laravel" in body:
+            techs.add("laravel"); techs.add("php")
+    if "react" in body and ("__reactfiber" in body or "react.development" in body or "_next" in body):
+        techs.add("react")
+    if "_next/static" in body or "next.js" in body:
+        techs.add("nextjs"); techs.add("nodejs")
+    if "nuxt" in body:             techs.add("nuxtjs"); techs.add("nodejs")
+    if "angular" in body and ("ng-version" in body or "ng-app" in body):
+        techs.add("angular")
+    if "vue.js" in body or "vue.min.js" in body:
+        techs.add("vue")
+    if "django" in body:           techs.add("python"); techs.add("django")
+    if "flask" in body and "werkzeug" in body: techs.add("python"); techs.add("flask")
+    if "graphql" in body or "/graphql" in body or "graphiql" in body:
+        techs.add("graphql")
+    if "swagger" in body or "openapi" in body:
+        techs.add("rest_api")
+    if "/api/v" in body or "/api/" in body:
+        techs.add("rest_api")
+
+    # --- Content-type based ---
+    ct = headers.get("content-type", "")
+    if "application/json" in ct:   techs.add("rest_api")
+
+    return techs
+
+
+def _quick_tech_probe(ctx) -> set:
+    """
+    Makes a fast HEAD/GET to the target and populates ctx.technologies.
+    Called at build_plan() time so _flag(tech_trigger=...) works correctly.
+    """
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return set()
+    existing = getattr(ctx, "technologies", None)
+    if existing:
+        return set(existing)
+    try:
+        sess = hardened_session({})
+        resp = sess.get(url, timeout=8, allow_redirects=True)
+        techs = _detect_technologies(resp)
+        ctx.technologies = list(techs)
+        if techs:
+            _logger.info(f"[TechProbe] Detected: {', '.join(sorted(techs))}")
+            add_result("meta", {"stage": "tech_probe", "technologies": list(techs)})
+        return techs
+    except Exception as e:
+        _logger.debug(f"[TechProbe] Quick probe failed: {e}")
+        return set()
+
 def _call_if_exists(modname: str, cand_funcs=("run","scan","main","execute"), *args, **kwargs) -> bool:
     try:
         mod = importlib.import_module(modname)
@@ -132,7 +250,7 @@ def _call_if_exists(modname: str, cand_funcs=("run","scan","main","execute"), *a
 def phase_waf_detect(ctx: dict):
     """Detect WAF before offensive scanning to choose bypass strategies."""
     try:
-        from websecure.core.waf_detector import WAFDetector
+        from websecure.core.waf_bypass import WAFDetector
         target = ctx.get("target") or ctx.get("url") or ""
         if not target:
             return
@@ -187,56 +305,98 @@ def phase_discovery(ctx: dict):
         _logger.warning(f"External discovery tool failed: {e}")
 
 def phase_portscan(ctx: dict):
-    # UPDATED: Using Nmap with config
-    nmap_cfg = ctx.get("config",{}).get("nmap", {}) or {}
+    """
+    Nmap port taraması.
+    Tarama modu config'deki scan_profile'a göre otomatik seçilir:
+      STEALTH  → stealth mod (SYN -T2)
+      NORMAL   → standard (servis+script)
+      AGGRESSIVE → deep (OS+script+aggressive)
+    """
+    nmap_cfg = ctx.get("config", {}).get("nmap", {}) or {}
     if not nmap_cfg.get("enabled", True):
-        add_result("portscan", {"severity":"note","message":"nmap disabled"})
+        add_result("portscan", {"severity": "note", "message": "nmap disabled"})
         return
-        
+
     from websecure.integrations.nmap import NmapWrapper
     host = ctx.get("host")
     if not host:
-         u = ctx.get("url") or ctx.get("target") or ""
-         if u:
-             host = _host_from_url(u)
+        u = ctx.get("url") or ctx.get("target") or ""
+        if u:
+            host = _host_from_url(u)
     if not host:
         return
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity":"warning","message":"Nmap binary not found."})
+        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı."})
         return
 
-    # Config arguments
+    # Mode selection: config override > scan_profile auto
+    nmap_mode = nmap_cfg.get("mode", None)
+    if not nmap_mode:
+        scan_profile = str((ctx.get("config") or {}).get("scan_profile", "NORMAL")).upper()
+        nmap_mode = {"STEALTH": "stealth", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
+
+    # Port override
     ports_cfg = nmap_cfg.get("ports", [])
-    ports_arg = "-F"
-    if ports_cfg:
-        ports_arg = "-p" + ",".join(map(str, ports_cfg))
-    
+    ports_arg = ",".join(map(str, ports_cfg)) if ports_cfg else None
+
     extra_args = nmap_cfg.get("arguments", [])
 
-    res = nmap.scan(host, ports=ports_arg, extra_args=extra_args)
+    # Vuln script mode if explicitly configured
+    vuln_mode = nmap_cfg.get("vuln_scripts", False)
+    if vuln_mode:
+        extra_args = extra_args + ["--script", "vuln,auth,default", "--script-timeout", "30s"]
+
+    _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
+    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args)
+
+    # Store OS guess in ctx for use by other phases
+    os_guesses = list({item["os_guess"] for item in res if item.get("os_guess")})
+    if os_guesses and isinstance(ctx, dict):
+        ctx.setdefault("os_guess", os_guesses[0])
 
     for item in res:
         p = item.get("port")
-        if p:
-            svc = item.get("service", "?")
-            product = item.get("product", "")
-            version = item.get("version", "")
-            add_result("nmap", {
-                "severity": "info",
-                "message": f"Open port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version})".strip(),
-                "host": item.get("ip") or item.get("hostname") or host,
-                "port": p,
-                "proto": item.get("protocol", "tcp"),
-                "service": svc,
-                "product": product,
-                "version": version,
-                "state": "open",
-            })
+        if not p:
+            continue
+        svc = item.get("service", "?")
+        product = item.get("product", "")
+        version = item.get("version", "")
+        scripts = item.get("scripts", {})
+        add_result("nmap", {
+            "severity": "info",
+            "message": f"Açık port: {p}/{item.get('protocol', 'tcp')} ({svc} {product} {version})".strip(),
+            "host": item.get("ip") or item.get("hostname") or host,
+            "port": p,
+            "proto": item.get("protocol", "tcp"),
+            "service": svc,
+            "product": product,
+            "version": version,
+            "cpe": item.get("cpe", []),
+            "os_guess": item.get("os_guess", ""),
+            "scripts": scripts,
+            "state": "open",
+        })
+        # Flag interesting services for deeper scanning
+        if svc in ("http", "https", "http-alt", "http-proxy"):
+            ctx_techs = getattr(ctx, "technologies", None)
+            if isinstance(ctx_techs, list) and "web" not in ctx_techs:
+                ctx_techs.append("web")
+        # Flag script findings as separate results
+        for script_id, script_out in scripts.items():
+            if script_out and any(kw in script_out.lower() for kw in ("vuln", "vulnerable", "cve-", "exploit")):
+                add_result("vulnerability", {
+                    "severity": "high",
+                    "tool": "nmap-nse",
+                    "script": script_id,
+                    "host": host,
+                    "port": p,
+                    "evidence": script_out[:500],
+                })
 
     if not res:
-        add_result("portscan", {"severity": "note", "message": "No open ports found (Nmap)."})
+        add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
 
 def phase_tls(ctx: dict):
     url = ctx.get("url") or ctx.get("target", "")
@@ -280,11 +440,11 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.nosqli",
         "websecure.scanners.ssrf_xxe",
         "websecure.scanners.file_upload",
-        "websecure.scanners.auth",
+        "websecure.scanners.auth_scanners",
         # Phase 4 new scanners
         "websecure.scanners.ssti",
         "websecure.scanners.idor",
-        "websecure.scanners.auth_matrix",
+        "websecure.scanners.auth_scanners",
         "websecure.scanners.js_analyzer",
     ]
     hit = 0
@@ -474,89 +634,86 @@ class Phase:
     tags: List[str] = field(default_factory=list)
     visible: bool = True
 
-def _runner_discovery(ctx) -> None:
-    # Skip discovery when flow preflight marked blocked
+def is_blocked(ctx) -> bool:
+    """Tarama bloke mi? cancelled veya critical_error bayraklarını kontrol eder."""
+    if ctx is None:
+        return False
+    if bool(getattr(ctx, "cancelled", False)):
+        return True
+    shared = getattr(ctx, "shared", None)
+    if isinstance(shared, dict) and bool(shared.get("critical_error", False)):
+        return True
+    return False
+
+
+def adjust_scan_mode(results: dict, cfg: dict) -> str:
+    """HTTP metriklerine göre scan profilini dinamik ayarlar."""
+    current = str((cfg or {}).get("scan_profile", "NORMAL")).upper()
+    four = int(results.get("403", 0)) + int(results.get("429", 0))
+    ok = int(results.get("2xx", 0))
+    if four >= 5:
+        if current == "AGGRESSIVE":
+            return "NORMAL"
+        if current == "NORMAL":
+            return "STEALTH"
+    if ok >= 20 and four == 0:
+        if current == "STEALTH":
+            return "NORMAL"
+        if current == "NORMAL":
+            return "AGGRESSIVE"
+    return current
+
+
+def flush(ctx=None):
+    """Raporlama tamponunu diske yazar."""
     try:
-        from websecure.core.flow_runner import is_blocked
-        if is_blocked(ctx):
-            add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
-            return
+        from websecure.core.reporting import flush as _rf
+        return _rf()
     except Exception:
         pass
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_discovery_extended") or not callable(getattr(fm, "run_discovery_extended")):
-        add_result("meta", {"stage": "discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_discovery_extended(ctx)
+
+
+def _runner_discovery(ctx) -> None:
+    if is_blocked(ctx):
+        add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
+        return
+    run_discovery_extended(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_fuzz_and_param_discovery") or not callable(getattr(fm, "run_fuzz_and_param_discovery")):
-        add_result("meta", {"stage": "fuzz_param_discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_fuzz_and_param_discovery(ctx)
+    run_fuzz_and_param_discovery(ctx)
 
 def _runner_oast_verification(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_oast_verification") or not callable(getattr(fm, "run_oast_verification")):
-        add_result("meta", {"stage": "oast", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_oast_verification(ctx)
+    run_oast_verification(ctx)
 
 def _runner_reporting_and_integration(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_reporting_and_integration") or not callable(getattr(fm, "run_reporting_and_integration")):
-        add_result("meta", {"stage": "reporting", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_reporting_and_integration(ctx)
+    run_reporting_and_integration(ctx)
 
 def _runner_authorization_matrix(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_authorization_matrix") or not callable(getattr(fm, "run_authorization_matrix")):
-        add_result("meta", {"stage": "authorization", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_authorization_matrix(ctx)
+    run_authorization_matrix(ctx)
 
 def _runner_feroxbuster(ctx):
-    fn = _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")
-    if callable(fn):
-        fn(ctx)
-    else:
-        add_result("meta", {"stage": "feroxbuster", "status": "skipped:not-found"})
+    run_feroxbuster_scan(ctx)
     return _mk_result("feroxbuster", "finished", {})
 
+def _runner_nuclei(ctx):
+    run_nuclei_scan(ctx)
+    return _mk_result("nuclei", "finished", {})
+
 def _runner_js_analysis(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_js_analysis") or not callable(getattr(fm, "run_js_analysis")):
-        add_result("js_analysis", {"status": "skipped", "reason": "flow_runner missing run_js_analysis"})
-        return
-    fm.run_js_analysis(ctx)
+    run_js_analysis(ctx)
 
 def _runner_sqlmap(ctx):
-    fn = _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")
-    if callable(fn):
-        fn(ctx)
-    else:
-        add_result("meta", {"stage": "sqlmap", "status": "skipped:not-found"})
+    run_sqlmap_scan(ctx)
     return _mk_result("sqlmap", "finished", {})
 
-
-
 def _runner_business_logic_races(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_business_logic_races") or not callable(getattr(fm, "run_business_logic_races")):
-        add_result("meta", {"stage": "races", "status": "skipped:no-function"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-        return
-    fm.run_business_logic_races(ctx)
+    run_business_logic_races(ctx)
 
 def _runner_ffuf(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_ffuf_scan") or not callable(getattr(fm, "run_ffuf_scan")):
-         add_result("meta", {"stage": "ffuf", "status": "skipped:no-flow-runner"})
-         return
-    fm.run_ffuf_scan(ctx)
+    run_ffuf_scan(ctx)
 
 def _runner_xss(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_xss_scan") or not callable(getattr(fm, "run_xss_scan")):
-         add_result("meta", {"stage": "xss", "status": "skipped:no-flow-runner"})
-         return
-    fm.run_xss_scan(ctx)
+    run_xss_scan(ctx)
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -1144,7 +1301,7 @@ def _runner_idor(ctx) -> None:
 
 
 def _runner_auth_matrix(ctx) -> None:
-    mod = _opt_import("websecure.scanners.auth_matrix") or _opt_import("scanners.auth_matrix")
+    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
     if not mod:
         add_result("meta", {"stage": "auth_matrix", "status": "skipped:module-not-found"})
         return
@@ -1188,8 +1345,7 @@ def _runner_dom_xss(ctx) -> None:
 def _runner_verify_and_score(ctx) -> None:
     """Run verification + CVSS scoring on all accumulated findings."""
     try:
-        from websecure.core.reporting import get_global_results, verify_and_score
-        from websecure.core.cvss_scorer import score_findings
+        from websecure.core.reporting import get_global_results, verify_and_score, score_findings
         g_res = get_global_results()
         all_findings = []
         for bucket, items in g_res.items():
@@ -1254,6 +1410,7 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
         Phase(id="ffuf", title="FFUF Content & File Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content","files"]),
         Phase(id="feroxbuster", title="Feroxbuster Recursive Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
+        Phase(id="nuclei", title="Nuclei Vulnerability Scanner", enabled=_flag("nuclei", default=True), runner=lambda c: _safe(c, lambda: _runner_nuclei(c), "nuclei"), tags=["vuln","cve","nuclei"]),
         Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
         Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
         Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
@@ -1396,6 +1553,12 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
     Eğer ctx.base_plan yoksa yalnızca `offensive` fazları döndürür.
     Dönen yapı sade dict'lere dönüştürülür; runner callables korunur.
     """
+    # Quick tech probe before phase selection so tech_trigger flags work correctly
+    if not getattr(ctx, "technologies", None):
+        try:
+            _quick_tech_probe(ctx)
+        except Exception:
+            pass
     base: List[Phase] = []
     existing = getattr(ctx, "base_plan", None)
     if isinstance(existing, list):
@@ -1469,28 +1632,43 @@ def run_discovery(ctx):
         except Exception as e:
             add_result("errors", {"stage": "discovery_fallback", "error": str(e)})
 
-    # --- Smart Tactics Analysis ---
+    # --- Smart Tactics Analysis: header + body + endpoint-based detection ---
     if isinstance(results, dict):
-        techs = set()
+        techs = set(getattr(ctx, "technologies", []) or [])
         endpoints = results.get("endpoints", []) or []
-        
-        # GraphQL Detection
-        if any("graphql" in u or "gql" in u for u in endpoints):
+
+        # Endpoint URL pattern detection
+        if any("graphql" in u or "/gql" in u for u in endpoints):
             techs.add("graphql")
-        
-        # API Detection (REST/JSON)
         if any("/api/" in u for u in endpoints) or any(u.endswith(".json") for u in endpoints):
             techs.add("rest_api")
-        
-        # CMS / Framework
-        if any("wp-content" in u or "wp-json" in u for u in endpoints):
-            techs.add("wordpress")
-            
-        # Store in context for build_plan
+        if any("wp-content" in u or "wp-json" in u or "wp-admin" in u for u in endpoints):
+            techs.add("wordpress"); techs.add("php")
+        if any(".jsp" in u or ".do" in u for u in endpoints):
+            techs.add("java")
+        if any(".php" in u for u in endpoints):
+            techs.add("php")
+        if any(".aspx" in u or ".ashx" in u for u in endpoints):
+            techs.add("aspnet")
+        if any("websocket" in u or "/ws/" in u for u in endpoints):
+            techs.add("websocket")
+        if any("socket.io" in u for u in endpoints):
+            techs.add("websocket"); techs.add("nodejs")
+
+        # Also do a fresh header probe if we haven't done it yet
+        if url and not getattr(ctx, "_tech_probe_done", False):
+            try:
+                from websecure.core.http import hardened_session as _hs
+                _resp = _hs({}).get(url, timeout=8, allow_redirects=True)
+                techs |= _detect_technologies(_resp)
+                ctx._tech_probe_done = True
+            except Exception:
+                pass
+
         ctx.technologies = list(techs)
         if techs:
-             add_result("meta", {"stage": "smart_analysis", "detected_technologies": list(techs)})
-             print(f"[Smart Tactics] Algılanan Teknolojiler: {', '.join(techs)}")
+            add_result("meta", {"stage": "smart_analysis", "detected_technologies": list(techs)})
+            _logger.info(f"[SmartTactics] Teknolojiler: {', '.join(sorted(techs))}")
 
     eps = len((results.get("endpoints") or [])) if isinstance(results, dict) else 0
     add_result("phase_event", {"phase": "discovery", "checked": eps})
@@ -1704,3 +1882,2046 @@ def run_plan_if_needed(ctx: dict):
                 _logger.debug(f"Skipping phase {pid} (enabled={enabled})")
 
     results["meta"]["scan_end"] = _t.time()
+
+
+# ===========================================================================
+# MERGED FROM: websecure/core/flow_runner.py
+# Phase execution functions: run_discovery_extended, run_xss_scan, run_sqlmap_scan,
+# run_ffuf_scan, adjust_scan_mode, flush, is_blocked
+# ===========================================================================
+import logging
+import os
+import shutil
+import time
+
+from websecure.core.reporting import add_result
+from websecure.core.http import hardened_session
+from websecure.crawler import WebCrawler, CrawlerConfig
+
+# Integration Wrappers
+try:
+    from websecure.integrations.sqlmap import SQLMapWrapper
+except ImportError:
+    SQLMapWrapper = None
+
+try:
+    from websecure.integrations.ffuf import FFUFWrapper
+except ImportError:
+    FFUFWrapper = None
+
+try:
+    from websecure.integrations.nuclei import NucleiWrapper
+except ImportError:
+    NucleiWrapper = None
+
+try:
+    from websecure.integrations.ffuf import FeroxbusterWrapper
+except ImportError:
+    FeroxbusterWrapper = None
+
+try:
+    from websecure.core.oast import IOSATClient
+except ImportError:
+    IOSATClient = None
+
+# Fallback/Nuclei for XSS if external tools preferred
+try:
+    from websecure.scanners.owasp import run_owasp_and_nuclei
+except ImportError:
+    run_owasp_and_nuclei = None
+
+# [WS3] Robust Local Scanners (Always Available)
+try:
+    from websecure.scanners.xss import run as run_local_xss
+except ImportError:
+    run_local_xss = None
+
+try:
+    from websecure.scanners.sqli import run as run_local_sqli
+except ImportError:
+    run_local_sqli = None
+
+_logger = logging.getLogger(__name__)
+
+
+def _get_config(ctx, key: str, default: Any = None) -> Any:
+    cfg = getattr(ctx, "config", {}) or {}
+    if not isinstance(cfg, dict):
+        return default
+    
+    parts = key.split(".")
+    curr = cfg
+    for p in parts:
+        if isinstance(curr, dict) and p in curr:
+            curr = curr[p]
+        else:
+            return default
+    return curr
+
+def _resolve_proxy(ctx) -> str | None:
+    """Helper to get proxy string from config (Tor/Rotation)."""
+    # 1. Check if Tor is active via proxy_manager
+    tor = _get_config(ctx, "proxy.tor.enabled", False)
+    if tor:
+        return "socks5://127.0.0.1:9050" 
+    
+    # 2. Check explicit proxy
+    proxy_url = _get_config(ctx, "http.proxy")
+    if proxy_url:
+        return proxy_url
+    
+    return None
+
+def run_discovery_extended(ctx) -> None:
+    """
+    Runs the advanced crawler discovery phase.
+    Supports Visibility and Proxy.
+    """
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return
+
+    _logger.info(f"Starting Extended Discovery on {url}")
+    session = getattr(ctx, "session", None) or hardened_session()
+    
+    # Configure Crawler
+    c_cfg = CrawlerConfig()
+    c_cfg.max_depth = int(_get_config(ctx, "discovery.max_depth", 3))
+    c_cfg.max_pages = int(_get_config(ctx, "discovery.max_pages", 50))
+    
+    # [Check 1] Visibility
+    is_visible = bool(getattr(ctx, "visible", False) or _get_config(ctx, "crawl.browser.headless") is False)
+    
+    # [Check 5] Proxy/Evasion
+    proxy_server = _resolve_proxy(ctx)
+    if proxy_server:
+        _logger.info(f"[Evasion] Crawler using proxy: {proxy_server}")
+
+    # Note: WebCrawler inner logic should handle driver proxy config if implemented
+    crawler = WebCrawler(
+        session, 
+        start_url=url, 
+        config=c_cfg, 
+        debug=bool(getattr(ctx, "debug", False)),
+        driver=None # Driver will be initialized inside with visibility check if crawler.py supports it
+    )
+    
+    # If crawler.py WebCrawler supports 'headless' param in init, use it. 
+    # Current code inspection suggests it auto-detects or uses driver.
+    
+    res = crawler.start()
+    
+    # Update Context Results
+    if isinstance(res, dict):
+        current_res = getattr(ctx, "results", {}) or {}
+        # Merge carefully
+        found_endpoints = res.get("endpoints", [])
+        
+        # [WS3] Fallback: If no endpoints found, use base URL to ensure offensive scanners have a target.
+        if not found_endpoints and url:
+             _logger.info("Discovery yielded no endpoints. Forcing base URL as target for offensive phases.")
+             found_endpoints = [url]
+        
+        # [WS3] Enhanced Form Parsing (User Logic Integration)
+        # Force a fetch of base URL to parse dynamic inputs/forms if not done
+        try:
+             from websecure.core.form_parser import extract_all_forms
+             t_html = ""
+             # Try to get HTML from crawler results if available, else fetch
+             if isinstance(res, dict) and res.get("html"):
+                  t_html = res.get("html")
+             elif ctx.session:
+                  # Quick fetch
+                  try:
+                       rr = ctx.session.get(url, timeout=10)
+                       t_html = rr.text
+                  except: pass
+             
+             if t_html:
+                  new_forms = extract_all_forms(t_html, url)
+                  # Merge into results['forms_meta']
+                  existing_forms = current_res.get("forms_meta", [])
+                  # Convert to list if it's a dict (old format?) usually list of pages
+                  # We'll append a "virtual page" for these forms
+                  if new_forms:
+                        _logger.info(f"[FormParser] Extracted {len(new_forms)} forms (including dynamic script inputs).")
+                        # Add as a generic page entry
+                        existing_forms.append({
+                             "url": url,
+                             "forms": new_forms
+                        })
+                        current_res["forms_meta"] = existing_forms
+        except ImportError:
+             _logger.warning("Could not import form_parser.")
+        except Exception as e:
+             _logger.error(f"Form parsing failed: {e}")
+
+        existing = set(current_res.get("endpoints", []))
+        existing.update(found_endpoints)
+        current_res["endpoints"] = list(existing)
+        
+        # Merge other keys
+        for k, v in res.items():
+            if k != "endpoints":
+                current_res[k] = v
+        
+        ctx.results = current_res
+        
+    add_result("meta", {"stage": "discovery_extended", "count": len(getattr(ctx, "results", {}).get("endpoints", []))})
+
+
+def _prioritize_urls(urls: List[str]) -> List[str]:
+    """
+    Sorts URLs by 'interest' level for offensive scanning.
+    High Priority: Login, Admin, Payment, Parameters
+    Low Priority: Deep nesting, Static-looking, Logout
+    """
+    if not urls: return []
+    
+    def _score(u: str) -> int:
+        s = 0
+        ul = u.lower()
+        if "?" in ul: s += 20
+        if any(k in ul for k in ("login", "signin", "auth", "admin", "account", "register", "signup")): s += 50
+        if any(k in ul for k in ("pay", "checkout", "cart", "buy", "order")): s += 40
+        if "password" in ul or "reset" in ul: s += 30
+        
+        # Penalize deep nesting (often irrelevant content)
+        s -= (ul.count("/") * 2)
+        
+        # Avoid destructive/logout
+        if "logout" in ul or "signout" in ul: s -= 500
+        
+        return s
+        
+    return sorted(list(set(urls)), key=_score, reverse=True)
+
+
+
+def run_sqlmap_scan(ctx) -> None:
+    """
+    Runs SQLMap against the target using the integration wrapper.
+    [Check 1, 2, 5] Tools working, Payload/Exploit, Proxy support.
+    """
+    if SQLMapWrapper is None:
+        add_result("sqlmap", {"status": "skipped", "reason": "Integration module missing"})
+        return
+
+    url = getattr(ctx, "base_url", None)
+    if not url:
+        return
+
+    # Check config
+    if not _get_config(ctx, "offensive.sqlmap.enabled", True):
+        return
+
+    _logger.info("Launching SQLMap scan...")
+    wrapper = SQLMapWrapper()
+    if not wrapper.is_available():
+        add_result("sqlmap", {"status": "skipped", "reason": "Binary not found in PATH"})
+        return
+
+    # [Check 2] Payloads/Exploit levels
+    level = int(_get_config(ctx, "offensive.sqlmap.level", 1))
+    risk = int(_get_config(ctx, "offensive.sqlmap.risk", 1))
+    
+    # [Check 5] Proxy
+    extra_args = []
+    proxy = _resolve_proxy(ctx)
+    if proxy:
+        extra_args.append(f"--proxy={proxy}")
+        _logger.info(f"[Evasion] SQLMap using proxy: {proxy}")
+
+    if _get_config(ctx, "offensive.sqlmap.random_agent", True):
+        extra_args.append("--random-agent")
+
+
+    # [Smart] Tech-aware extension hints from detected technologies
+    techs = set(getattr(ctx, "technologies", []) or [])
+    tech_extra_args = []
+    if "php" in techs:
+        _logger.info("[Smart-SQLi] PHP detected — prioritizing PHP endpoints")
+    if "java" in techs:
+        _logger.info("[Smart-SQLi] Java detected — prioritizing JSP/servlet endpoints")
+    if "aspnet" in techs:
+        _logger.info("[Smart-SQLi] ASP.NET detected — prioritizing ASPX endpoints")
+
+    # [FIX] Iterate over ALL discovered endpoints, not just base URL
+    raw_endpoints = getattr(ctx, "results", {}).get("endpoints", [])
+    # [WS3] Priority Sort: Attack Login/Payment/Param-heavy first!
+    endpoints = _prioritize_urls(raw_endpoints)
+
+    if not endpoints:
+        endpoints = [url]
+
+    # [FIX] Get discovered params to hint SQLMap
+    params = getattr(ctx, "results", {}).get("param_candidates", [])
+
+    # Smart param prioritization: numeric IDs and search params are high-value for SQLi
+    high_value_params = []
+    _sqli_hint_patterns = ("id", "uid", "user_id", "item", "product", "cat", "page", "search", "q", "query", "order", "sort")
+    for p in params:
+        if any(h in p.lower() for h in _sqli_hint_patterns):
+            high_value_params.append(p)
+            _logger.info(f"[Smart-SQLi] High-priority parameter: {p}")
+
+    param_str = ",".join(params) if params else None
+
+    findings = []
+    _logger.info(f"Launching SQLMap scan on {len(endpoints)} endpoints...")
+    
+    for target_ep in endpoints:
+        # Skip static assets to save time
+        if any(target_ep.endswith(ext) for ext in (".png", ".jpg", ".css", ".js")):
+            continue
+            
+        cmd_args = list(extra_args)
+        if param_str:
+            cmd_args.append(f"-p {param_str}")  # Force test these params
+        
+        # [WS3] Boost Level/Risk for High-Value Targets
+        # If the URL contains high-value params, we might want to boost intensity
+        # For now, we just ensure they are tested.
+            
+        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args)
+        findings.extend(current_findings)
+    
+    # Report
+    if findings:
+        for f in findings:
+            # [Check 2] Validating exploits
+            # [WS3] Merge finding data to expose 'evidence' key to reporting
+            entry = {
+                "severity": "high", 
+                "type": "SQL Injection",
+                "tool": "sqlmap"
+            }
+            if isinstance(f, dict):
+                entry.update(f) # Merges raw_finding and EVIDENCE
+            else:
+                entry["detail"] = f
+                
+            add_result("sqlmap", entry)
+    else:
+        add_result("sqlmap", {"status": "finished", "findings": 0})
+
+    # [WS3] Python-based SQLi (Robust Fallback/Companion)
+    if run_local_sqli:
+        _logger.info("[SQLi] Running internal robust SQLi scanner (Python)...")
+        # Ensure discovered params are passed via results if needed, but scanner reads forms_meta itself
+        run_local_sqli(
+            endpoints,
+            getattr(ctx, "session", None),
+            results=getattr(ctx, "results", {}), 
+            debug=bool(getattr(ctx, "debug", False))
+        )
+
+
+def run_xss_scan(ctx) -> None:
+    """
+    [Check 2] XSS Payload/Exploit trials.
+    [WS3] UPDATED: Uses Robust Local XSS Scanner (xss.py) + Nuclei/OWASP as secondary.
+    """
+    _logger.info("Launching XSS Scan...")
+
+    # Inject detected tech_stack into results so get_smart_payloads() can filter correctly
+    _results = getattr(ctx, "results", {}) or {}
+    _tech = list(getattr(ctx, "technologies", []) or [])
+    if _tech and "tech_stack" not in _results:
+        _results["tech_stack"] = _tech
+
+    # 1. Local Python Scanner (Robust)
+    if run_local_xss:
+        _logger.info("[XSS] Running internal XSS scanner (Python/Canary)...")
+        _raw_eps = _results.get("endpoints", [])
+        # [WS3] Smart Prioritization
+        _eps = _prioritize_urls(_raw_eps)
+        if not _eps:
+             _eps = [getattr(ctx, "base_url", "")]
+
+        run_local_xss(
+            _eps,
+            getattr(ctx, "session", None),
+            results=_results,
+            debug=bool(getattr(ctx, "debug", False))
+        )
+    else:
+        _logger.warning("[XSS] Internal scanner missing (xss.py).")
+
+    # 2. Nuclei / OWASP (Secondary)
+    if run_owasp_and_nuclei:
+        # Nuclei handles XSS templates
+        run_owasp_and_nuclei(
+            getattr(ctx, "base_url", ""), 
+            getattr(ctx, "results", {}), 
+            getattr(ctx, "session", None),
+            config=getattr(ctx, "config", {}),
+            debug=bool(getattr(ctx, "debug", False))
+        )
+    else:
+        if not run_local_xss:
+             add_result("xss", {"status": "skipped", "reason": "ALL XSS modules missing"})
+
+
+def run_ffuf_scan(ctx) -> None:
+    """
+    Runs FFUF fuzzing.
+    [Check 6] Wordlists usage.
+    """
+    if FFUFWrapper is None:
+        add_result("ffuf", {"status": "skipped", "reason": "Integration module missing"})
+        return
+
+    url = getattr(ctx, "base_url", None)
+    if not url:
+        return
+
+    if not _get_config(ctx, "offensive.ffuf.enabled", True):
+        return
+
+    # [WS3] Dynamic Wordlist Collection + SecLists/PATT kurulum tespiti
+    from websecure.core.utils import collect_all_wordlists
+    from websecure.core.utils.wordlists import get_tech_extensions
+    import tempfile
+
+    _logger.info("Dinamik wordlist taraması başlatılıyor...")
+    wl_data = collect_all_wordlists()
+    all_wls = wl_data.get("all", [])
+    count = wl_data.get("count", 0)
+    est_lines = wl_data.get("total_lines_est", 0)
+    curated = wl_data.get("curated", {})
+    seclists_root = wl_data.get("seclists_root", "")
+
+    _logger.info(f"[Wordlists] {count} wordlist bulundu | SecLists: {'VAR' if seclists_root else 'YOK'} | ~{est_lines} satır")
+
+    if count == 0:
+        add_result("ffuf", {"status": "skipped", "reason": "No wordlists found in dynamic search"})
+        return
+
+    # Merge into a single temp file
+    # ... code for merging wordlists ...
+    
+    # [WS3] Smart Login Audit
+    # We run this if discovery found forms, or if we want to probe the login page specifically
+    if _get_config(ctx, "offensive.login_audit.enabled", True):
+        try:
+            from websecure.core.auth_flow import LoginAuditor
+            
+            # Identify forms from crawler results
+            forms_meta = getattr(ctx, "results", {}).get("forms_meta", [])
+            
+            # If no forms meta, maybe we can try the base URL if it looks like login?
+            # For now, rely on crawler output.
+            
+            if forms_meta:
+                _logger.info(f"[Login-Audit] Found {len(forms_meta)} potential login forms. Starting Smart Audit (1000+ words)...")
+                
+                # Resolve wordlist path
+                import os
+                wl_path = os.path.join(os.getcwd(), "websecure/wordlists/passwords_top1000.txt")
+                if not os.path.exists(wl_path):
+                     _logger.warning("[Login-Audit] Wordlist not found, generating default...")
+                     # write basic if missing (failsafe)
+                     with open(wl_path, "w") as f: f.write("admin\n123456\npassword\n")
+                
+                auditor = LoginAuditor(getattr(ctx, "session"), url, wl_path)
+                
+                # Re-feed forms into auditor (since auditor heuristic runs on HTML, 
+                # but we already have form meta, we might need to adapt or just let auditor re-check URLs)
+                # Simpler: Let auditor Scan the LOGIN urls found
+                
+                login_urls = [f['url'] for f in forms_meta]
+                
+                # Fetch content again to parse inputs accurately
+                for l_url in login_urls:
+                    try:
+                        resp = getattr(ctx, "session").get(l_url, timeout=10)
+                        auditor.discover_forms(resp.text, l_url)
+                    except Exception:
+                        pass
+                        
+                results = auditor.run_audit()
+                for res in results:
+                    add_result("auth", res)
+                    
+        except Exception as e:
+            _logger.error(f"[Login-Audit] Failed: {e}")
+
+    # Return or continue...
+
+    # This is safer than multiple -w flags for a single FUZZ keyword
+    merged_wl_path = "merged_wordlist_temp.txt"  # Local temp for visibility or debug
+    try:
+        # Create a true temp file to avoid clutter, or keeping it if debug needed? 
+        # User wants "connected", let's make a temp file that is cleaned up.
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, prefix='ws_merged_vl_', suffix='.txt', encoding='utf-8', errors='ignore') as tmp:
+            merged_wl_path = tmp.name
+            for wl_file in all_wls:
+                try:
+                    with open(wl_file, 'r', encoding='utf-8', errors='ignore') as src:
+                        shutil.copyfileobj(src, tmp)
+                        tmp.write("\n") # Ensure separation
+                except Exception as e:
+                    _logger.warning(f"Failed to merge wordlist {wl_file}: {e}")
+                    
+        _logger.info(f"[Wordlists] Tüm listeler birleştirildi: {merged_wl_path}")
+        
+        wrapper = FFUFWrapper()
+        if not wrapper.is_available():
+            add_result("ffuf", {"status": "skipped", "reason": "Binary not found"})
+            return
+
+        _logger.info(f"Launching FFUF scan with MERGED wordlist...")
+
+        custom_args = []
+        # [Check 5] Proxy
+        proxy = _resolve_proxy(ctx)
+        if proxy:
+            custom_args.extend(["-x", proxy])
+
+        # --- Curated discovery wordlist (SecLists priority over merged) ---
+        discovery_wl = merged_wl_path  # default: merged everything
+        curated_disc = curated.get("discovery", [])
+        if curated_disc:
+            discovery_wl = curated_disc[0]  # best curated dir list
+            _logger.info(f"[FFUF] Curated wordlist kullanılıyor: {discovery_wl}")
+
+        # --- Directory/path discovery ---
+        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args)
+        for f in findings:
+            add_result("discovery", {"tool": "ffuf", **f})
+
+        # --- API endpoint discovery (if curated api list available) ---
+        curated_api = curated.get("api", [])
+        if curated_api:
+            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args)
+            for f in api_findings:
+                add_result("discovery", {"tool": "ffuf", "category": "api", **f})
+
+        # --- File extension discovery: tech-aware via get_tech_extensions() ---
+        _ff_techs = list(getattr(ctx, "technologies", []) or [])
+        sensitive_exts = get_tech_extensions(_ff_techs)
+        _logger.info(f"[FFUF] Extension scan (techs: {_ff_techs or 'generic'}): {sensitive_exts}")
+        ext_findings = wrapper.run_scan(
+            url,
+            wordlist=curated_disc[0] if curated_disc else merged_wl_path,
+            extensions=sensitive_exts,
+            custom_args=custom_args,
+        )
+        try:
+            from websecure.scanners.js_analyzer import classify_discovered_file
+            for f in ext_findings:
+                f_url = f.get("url", "")
+                f_status = f.get("status", 200)
+                classified = classify_discovered_file(f_url, f_status)
+                if classified:
+                    add_result("files_discovered", classified)
+                    if classified.get("severity") in ("Critical", "High"):
+                        add_result("offensive", classified)
+                else:
+                    add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+        except ImportError:
+            for f in ext_findings:
+                add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+            
+    finally:
+        # Cleanup
+        if os.path.exists(merged_wl_path):
+             try:
+                 os.remove(merged_wl_path)
+                 _logger.debug("Merged wordlist deleted.")
+             except:
+                 pass
+
+
+def run_feroxbuster_scan(ctx) -> None:
+    """
+    Runs Feroxbuster for content discovery.
+    """
+    if FeroxbusterWrapper is None:
+        add_result("feroxbuster", {"status": "skipped", "reason": "Integration module missing"})
+        return
+        
+    url = getattr(ctx, "base_url", None)
+    if not url:
+        return
+        
+    if not _get_config(ctx, "offensive.feroxbuster.enabled", True):
+        return
+
+    wrapper = FeroxbusterWrapper()
+    if not wrapper.is_available():
+        add_result("feroxbuster", {"status": "skipped", "reason": "Binary not found"})
+        return
+
+    _logger.info("Launching Feroxbuster scan...")
+    depth = int(_get_config(ctx, "discovery.depth", 2))
+    
+    extra_args = []
+    # [Check 5] Proxy
+    proxy = _resolve_proxy(ctx)
+    if proxy:
+        extra_args.extend(["--proxy", proxy])
+        
+    findings = wrapper.scan(url, depth=depth, extra_args=extra_args)
+    
+    new_eps = []
+    for f in findings:
+        f_url = f.get("url")
+        if f_url:
+             new_eps.append(f_url)
+        add_result("discovery", {"tool": "feroxbuster", **f})
+
+    # [WS3] FEEDBACK LOOP: Add to endpoints for offensive tools
+    if new_eps:
+        current_res = getattr(ctx, "results", {}) or {}
+        existing = set(current_res.get("endpoints", []))
+        before_count = len(existing)
+        existing.update(new_eps)
+        current_res["endpoints"] = list(existing)
+        if len(existing) > before_count:
+             _logger.info(f"[Feroxbuster] Added {len(existing) - before_count} new endpoints to offensive context.")
+        ctx.results = current_res
+
+
+def run_nuclei_scan(ctx) -> None:
+    """
+    Runs Nuclei vulnerability scanner against the target.
+    Uses tech-aware template selection: detected technologies determine
+    which Nuclei template tags are activated.
+    """
+    if NucleiWrapper is None:
+        add_result("nuclei", {"status": "skipped", "reason": "NucleiWrapper not importable"})
+        return
+
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return
+
+    if not _get_config(ctx, "offensive.nuclei.enabled", True):
+        add_result("nuclei", {"status": "skipped", "reason": "Disabled in config"})
+        return
+
+    wrapper = NucleiWrapper()
+    if not wrapper.is_available():
+        add_result("nuclei", {"status": "skipped", "reason": "nuclei binary not found"})
+        return
+
+    tech_stack = list(getattr(ctx, "technologies", []) or [])
+    proxy = _resolve_proxy(ctx)
+    rate_limit = int(_get_config(ctx, "offensive.nuclei.rate_limit", 150))
+    severity = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
+    extra_tags = _get_config(ctx, "offensive.nuclei.extra_tags", "")
+    tags = None
+    if extra_tags:
+        tags = extra_tags
+
+    _logger.info(f"[Nuclei] Starting scan on {url} (tech: {tech_stack or 'auto'})")
+
+    findings = wrapper.scan(
+        target=url,
+        tags=tags,
+        severity=severity,
+        rate_limit=rate_limit,
+        proxy=proxy,
+        tech_stack=tech_stack,
+    )
+
+    for finding in findings:
+        sev = finding.get("severity", "Info")
+        add_result("nuclei", finding)
+        if sev in ("Critical", "High", "Medium"):
+            add_result("offensive", finding)
+
+    add_result("meta", {"stage": "nuclei", "findings": len(findings)})
+    _logger.info(f"[Nuclei] Scan complete: {len(findings)} finding(s)")
+
+
+def run_js_analysis(ctx) -> None:
+    """
+    Discovers and analyses JavaScript files on the target:
+    - Extracts hidden API endpoints / internal paths
+    - Detects hardcoded secrets, tokens, API keys
+    """
+    url = getattr(ctx, "base_url", None)
+    if not url:
+        return
+
+    if not _get_config(ctx, "offensive.js_analysis.enabled", True):
+        add_result("js_analysis", {"status": "skipped", "reason": "Disabled in config"})
+        return
+
+    try:
+        from websecure.scanners.js_analyzer import JSAnalyzer
+    except ImportError:
+        add_result("js_analysis", {"status": "skipped", "reason": "js_analyzer module missing"})
+        return
+
+    _logger.info("[JSAnalyzer] Starting JavaScript file analysis...")
+    results_bucket = getattr(ctx, "results", {}) or {}
+    session = getattr(ctx, "session", None)
+
+    analyzer = JSAnalyzer(session=session, results=results_bucket, debug=False)
+    findings = analyzer.run(url)
+
+    for f in findings:
+        add_result("js_analysis", f)
+        if f.get("severity") in ("High", "Critical"):
+            add_result("offensive", f)
+
+    _logger.info(f"[JSAnalyzer] Done. {len(findings)} finding(s) recorded.")
+
+
+def run_reporting_and_integration(ctx) -> None:
+    from websecure.core.reporting import perform_reporting
+    
+    results = getattr(ctx, "results", {}) or {}
+    cfg = getattr(ctx, "config", {}) or {}
+    session = getattr(ctx, "session", None)
+    
+    _logger.info("Generating Final Reports...")
+    perform_reporting(session, cfg, results)
+
+
+def run_oast_verification(ctx) -> None:
+    add_result("meta", {"stage": "oast", "status": "not_implemented_yet"})
+
+
+
+def run_fuzz_and_param_discovery(ctx) -> None:
+    """
+    Parametre keşfi ve fuzzing fazı.
+    Ana döngüdeki (main.py) fuzzing adımından önce, spesifik parametre analizi yapar.
+    """
+    # [WS3] Eğer scanners/param_miner.py eklenirse buraya bağlanacak.
+    # Şimdilik ana döngüye bırakıyoruz ama logluyoruz.
+    add_result("meta", {"stage": "fuzz_param_discovery", "status": "delegated_to_main_loop"})
+    _logger.info("Fuzzing ve Parametre Analizi ana döngüye (fuzzing fazı) devredildi.")
+
+def run_authorization_matrix(ctx) -> None:
+    """
+    Yetkilendirme matrisi (IDOR/PrivEsc) testi.
+    scanners.auth modülünü kullanır.
+    """
+    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
+    if not mod:
+        add_result("auth_matrix", {"status": "skipped", "reason": "Module not found"})
+        return
+
+    # run(session, base_url, users=[...]) imzasına uyum sağla
+    run_fn = getattr(mod, "run", None)
+    if not callable(run_fn):
+        add_result("auth_matrix", {"status": "skipped", "reason": "run() function missing"})
+        return
+
+    # Config'den kullanıcıları al
+    cfg = getattr(ctx, "config", {}) or {}
+    auth_cfg = cfg.get("auth", {}) or {}
+    if not auth_cfg.get("matrix_enabled", True):
+        return
+
+    users = auth_cfg.get("users", []) # [{"user": "admin", "pass": "123"}, ...]
+    
+    _logger.info("Launching Authorization Matrix Scan...")
+    
+    # Session ve URL
+    sess = getattr(ctx, "session", None) or hardened_session()
+    url = getattr(ctx, "base_url", "")
+    
+    try:
+        # Modülün run fonksiyonunu çağır
+        # Not: scanners.auth.run genelde (url, session, config) veya (url, users) bekler.
+        # İmzayı dinamik kontrol edelim.
+        kw = _filter_kwargs(run_fn, {"url": url, "base_url": url, "session": sess, "config": cfg, "users": users})
+        findings = run_fn(**kw)
+        
+        if findings:
+            for f in findings:
+                add_result("auth_matrix", f)
+        add_result("meta", {"stage": "auth_matrix", "findings": len(findings) if findings else 0})
+
+    except Exception as e:
+        _logger.error(f"Auth Matrix Error: {e}")
+        add_result("errors", {"stage": "auth_matrix", "error": str(e)})
+
+
+def run_business_logic_races(ctx) -> None:
+    """
+    Business Logic Race Condition testlerini çalıştırır.
+    websecure.core.bl_concurrency modülünü kullanır.
+    """
+    try:
+        from websecure.core.bl_concurrency import run_race_conditions
+    except ImportError:
+        add_result("meta", {"stage": "races", "status": "skipped:missing_core_module"})
+        return
+
+    sess = getattr(ctx, "session", None) or hardened_session()
+    url = getattr(ctx, "base_url", "")
+    cfg = getattr(ctx, "config", {}) or {}
+    results_bucket = getattr(ctx, "results", {}) or {}
+    debug = bool(getattr(ctx, "debug", False))
+
+    if not _get_config(ctx, "business_logic.enabled", True):
+        return
+
+    _logger.info("Launching Business Logic Race Conditions Scan...")
+    
+    # Raporlama callback
+    def _cb(evt, data):
+        if debug:
+            _logger.debug(f"[Race] {evt}: {data}")
+
+    try:
+        stats = run_race_conditions(sess, url, cfg, results_bucket, debug=debug, event_cb=_cb)
+        _logger.info(f"Race Scan Finished: {stats}")
+    except Exception as e:
+        _logger.error(f"Race Scan Failed: {e}")
+        add_result("errors", {"stage": "races", "error": str(e)})
+
+
+
+# ===========================================================================
+# MERGED FROM: websecure/core/scan_modes.py
+# ScanContext, ScanMode, run_mode, run, run_many, build_plan delegates
+# ===========================================================================
+from websecure.core.utils import _ws_import_any, _ws_maybe_import_any
+from importlib import import_module
+from websecure.core.http import hardened_session
+import re
+import logging
+from importlib.util import find_spec
+import asyncio
+import importlib
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+import importlib.util as _ilu
+from websecure.core.http import hardened_session as _hardened_session
+# --- scan_modes merge: duplicate definitions removed, using originals defined above ---
+
+
+def __ensure_triple_plan(plan):
+    out = []
+    for item in list(plan or []):
+        if isinstance(item, (list, tuple)):
+            if len(item) == 3:
+                out.append(tuple(item))
+            elif len(item) == 2:
+                name, fn = item
+                est = 90 if str(name).lower() not in ("discovery","portscan","tls","security_headers") else {"discovery":60,"portscan":60,"tls":45,"security_headers":45}.get(str(name).lower(),90)
+                out.append((name, est, fn))
+        else:
+            # pass through (unknown)
+            out.append(item)
+    return out
+
+def __run_plan_adapt(run_plan_fn, plan, ctx, cfg):
+    try:
+        params = list(__ins.signature(run_plan_fn).parameters.keys())
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [scan_modes]', exc_info=True)
+        _report_phase_error('scan_modes', 'scan_modes.py', e)
+        params = ["plan", "ctx"]
+    if len(params) >= 3:
+        return run_plan_fn(plan, ctx, cfg)
+    return run_plan_fn(plan, ctx)
+
+# --- Safe signature-aware call helper (prevents TypeError for unexpected kwargs) ---
+import inspect as _ins
+
+def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None, context=None):
+    """
+    Signature-aware caller:
+      - If _fn(ctx, phases) is expected, synthesize ctx and phases.
+      - Else call with filtered kwargs: (session, base_url|url|base, config|cfg, logger)
+    """
+    import inspect as _ins_local
+    try:
+        params = list(_ins_local.signature(_fn).parameters.keys())
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [scan_modes]', exc_info=True)
+        _report_phase_error('scan_modes', 'scan_modes.py', e)
+        params = []
+
+    # If runner expects (ctx, phases): build minimal ctx + phases
+    if (len(params) >= 2 and params[0] == "ctx" and params[1] == "phases") or {"ctx","phases"}.issubset(params):
+        # Build a minimal ScanContext if not provided
+        if context is None:
+            try:
+                pass  # ScanContext is defined in this module (merged from scan_modes.py)
+            except _BOUNDARY_EXC as e:
+                _logger.error('phase error [scan_modes]', exc_info=True)
+                _report_phase_error('scan_modes', 'scan_modes.py', e)
+                # Fallback tiny context
+                class _SC:  # type: ignore
+                    def __init__(self, url, session, config, logger):
+                        self.url, self.session, self.config, self.logger = url, session, (config or {}), logger
+                        self.results = {}
+                        self.detailed = False
+                        self.save_report = False
+                        self.debug = False
+            context = _SC(url=base_url, session=session, config=(config or {}), logger=logger)
+
+        try:
+            from websecure.core.phases import build_plan as _build_plan
+        except _BOUNDARY_EXC as e:
+            _logger.error('phase error [scan_modes]', exc_info=True)
+            _report_phase_error('scan_modes', 'scan_modes.py', e)
+            # ultimate fallback: empty plan
+            def _build_plan(_ctx): return []  # type: ignore
+
+        phases = getattr(context, "phases", None) or _build_plan(context)
+        # normalize phases if they are dicts from build_plan
+        if phases and isinstance(phases, (list, tuple)) and phases and isinstance(phases[0], dict):
+            phases = [(str(p.get('id') or p.get('name') or 'phase'), p.get('runner')) for p in phases if callable(p.get('runner'))]
+        return _fn(context, phases)
+
+    # Otherwise: filter kwargs to expected names
+    try:
+        params = _ins_local.signature(_fn).parameters
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [scan_modes]', exc_info=True)
+        _report_phase_error('scan_modes', 'scan_modes.py', e)
+        params = {}
+
+    kwargs = {}
+    if "context" in params:
+        kwargs["context"] = context
+    elif "ctx" in params:
+        kwargs["ctx"] = context
+    
+    # Pass raw results if requested (and context not used or redundant)
+    if "results" in params:
+        if context and context.results:
+            kwargs["results"] = context.results
+        else:
+            kwargs["results"] = {}
+
+    if "session" in params:
+        kwargs["session"] = session
+    if "base_url" in params:
+        kwargs["base_url"] = base_url
+    elif "url" in params:
+        kwargs["url"] = base_url
+    elif "base" in params:
+        kwargs["base"] = base_url
+    if "config" in params:
+        kwargs["config"] = config
+    elif "cfg" in params:
+        kwargs["cfg"] = config
+    if "logger" in params:
+        kwargs["logger"] = logger
+    return _fn(**kwargs) if kwargs else _fn()
+def _safe_construct_and_run(_cls, session, base_url, config, logger=None):
+    """
+    Constructs class with only supported kwargs, then calls run_all/run appropriately,
+    again filtering kwargs if the methods accept parameters.
+    """
+    # Construct
+    try:
+        cparams = _ins.signature(_cls).parameters
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [scan_modes]', exc_info=True)
+        _report_phase_error('scan_modes', 'scan_modes.py', e)
+        cparams = {}
+    ckwargs = {}
+    # Check for context/results in constructor
+    # Note: Usually scanners take session/results in __init__
+    if "results" in cparams:
+         # Need to retrieve results from somewhere. 
+         # In _safe_construct_and_run signature we don't have 'context' explicitly passed often, 
+         # but let's check if we can get it. 
+         # Actually this function doesn't receive context, only session/base_url/config.
+         # We'll skip results here unless we change signature. 
+         # Wait, looking at usage, this is called by phases.py usually.
+         # For now, standard scanners take 'results' in __init__.
+         # We will pass empty dict if not available, OR if we had context we'd pass it.
+         pass 
+
+    if "session" in cparams:
+        ckwargs["session"] = session
+    if "base_url" in cparams:
+        ckwargs["base_url"] = base_url
+    elif "url" in cparams:
+        ckwargs["url"] = base_url
+    if "config" in cparams:
+        ckwargs["config"] = config
+    elif "cfg" in cparams:
+        ckwargs["cfg"] = config
+    if "logger" in cparams:
+        ckwargs["logger"] = logger
+    inst = _cls(**ckwargs) if ckwargs else _cls()
+
+    # Prefer run_all, fallback to run
+    runner = getattr(inst, "run_all", None) or getattr(inst, "run", None)
+    if not callable(runner):
+        # if the instance itself is callable, try that
+        if callable(inst):
+            return _safe_call_runner(inst, session, base_url, config, logger)
+        return None
+
+    try:
+        rparams = _ins.signature(runner).parameters
+    except _BOUNDARY_EXC as e:
+        _logger.error('phase error [scan_modes]', exc_info=True)
+        _report_phase_error('scan_modes', 'scan_modes.py', e)
+        rparams = {}
+    rkwargs = {}
+    if "context" in rparams:
+         # We don't have context here easily in _safe_construct_and_run unless passed.
+         # But wait, this function is usually called from run_plan which might not have full context object 
+         # if it was called with simple args. 
+         # However, if we look at _safe_call_runner, it builds context.
+         pass
+
+    if "results" in rparams:
+         # Similar issue.
+         pass
+
+    if "session" in rparams:
+        rkwargs["session"] = session
+    if "base_url" in rparams:
+        rkwargs["base_url"] = base_url
+    elif "url" in rparams:
+        rkwargs["url"] = base_url
+    if "config" in rparams:
+        rkwargs["config"] = config
+    elif "cfg" in rparams:
+        rkwargs["cfg"] = config
+    if "logger" in rparams:
+        rkwargs["logger"] = logger
+    return runner(**rkwargs) if rkwargs else runner()
+
+
+# --- Qualified import helpers (no try/except, no lazy hacks) ---
+_PKG_ROOT = (__package__.split('.')[0] if __package__ else 'websecure')  # expected 'websecure'
+
+def _qualify(name: str) -> str:
+    # Map 'core.xxx' to 'websecure.core.xxx' inside the package
+    if name.startswith(f"{_PKG_ROOT}."):
+        return name
+    if name.startswith("core."):
+        return f"{_PKG_ROOT}.{name}"
+    return name
+
+# _opt_import ve _resolve_module yukarıda tanımlı (satır 367 ve 379) — duplicate kaldırıldı
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../<root>
+_SITEPK_SUBSTR = ("site-packages", "dist-packages")
+
+
+_reporting = _opt_import("websecure.core.reporting")
+_requests = _opt_import("requests")
+
+
+class ScanMode:
+    NORMAL = "normal"
+    DETAILED = "detailed"
+    AUTHENTICATED = "authenticated"
+    DEEP = "deep"  # eklendi
+    # Aliases
+    STEALTH = NORMAL
+    AGGRESSIVE = DEEP
+
+
+@dataclass
+class ScanContext:
+    url: str = ""
+    scheme: str = ""
+    config: Dict[str, Any] | None = None
+    driver: Any = None
+    session: Any = None
+    results: Dict[str, Any] | None = None
+    detailed: bool = False
+    save_report: bool = False
+    debug: bool = False
+    logger: Any = None
+
+    def __post_init__(self):
+        if self.config is None:
+            self.config = {}
+        if self.results is None:
+            self.results = {}
+
+    @property
+    def endpoints(self):
+        return self.results.get("endpoints", [])
+
+
+
+# ------------------------- Raporlama köprüleri -------------------------
+def _report(bucket: str, item: Dict[str, Any]) -> None:
+    if _reporting and hasattr(_reporting, "add_result"):
+        _reporting.add_result(bucket, item)
+
+
+def _flush_report() -> None:
+    if _reporting and hasattr(_reporting, "flush"):
+        _reporting.flush()
+
+
+def _get_or_create_session(sess: Any):
+    """session nesnesi varsa döner, yoksa hardened_session oluşturur."""
+    if sess is not None:
+        return sess
+    if _requests is None:
+        raise RuntimeError("requests modülü bulunamadı; oturum gerekli.")
+    return _hardened_session({})
+
+
+def _resolve_reporter():
+    """
+    Yerel raporlama modülünü güvenli biçimde çözer.
+    Öncelik: build.lib.core.reporting → core.reporting → kökte reporting.py.
+    site-packages/dist-packages altındaki 'reporting' paketleri BİLİNÇLİ OLARAK ATLANIR.
+    Dönüş: çağrılabilir bir fonksiyon ya da None.
+    """
+    # 1) build.lib.core.reporting
+    spec_bl = _ilu.find_spec("build.lib.core.reporting")
+    if spec_bl is not None:
+        origin = _spec_origin(spec_bl)
+        if origin and _is_local_path(origin):
+            mod = importlib.import_module("build.lib.core.reporting")
+            fn = getattr(mod, "perform_reporting_and_integration", None)
+            if callable(fn):
+                return fn
+
+    # 2) core.reporting
+    spec_core = _ilu.find_spec("websecure.core.reporting")
+    if spec_core is not None:
+        origin = _spec_origin(spec_core)
+        if origin and _is_local_path(origin):
+            mod = importlib.import_module("websecure.core.reporting")
+            fn = getattr(mod, "perform_reporting_and_integration", None)
+            if callable(fn):
+                return fn
+
+    # 3) düz 'reporting' sadece yerelse
+    spec_plain = _ilu.find_spec("reporting")
+    if spec_plain is not None:
+        origin = _spec_origin(spec_plain)
+        if origin and _is_local_path(origin) and not _is_sitepkg_path(origin):
+            mod = importlib.import_module("reporting")
+            fn = getattr(mod, "perform_reporting_and_integration", None)
+            if callable(fn):
+                return fn
+
+    # 4) Dosya yolundan yükleme (kök/reporting.py)
+    local_path = _PROJECT_ROOT / "reporting.py"
+    if local_path.exists():
+        spec = _ilu.spec_from_file_location("websec_reporting_local", str(local_path))
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)  # type: ignore
+            fn = getattr(module, "perform_reporting_and_integration", None)
+            if callable(fn):
+                return fn
+
+    return None
+
+
+def _maybe_perform_reporting(ctx: 'ScanContext'):
+    rep_fn = _resolve_reporter()
+    if not callable(rep_fn):
+        return
+
+    cfg = ctx.config or {}
+    rep_cfg = (cfg.get("reporting") or {})
+    enabled = bool(rep_cfg) or bool(getattr(ctx, "save_report", False))
+    if not enabled:
+        return
+
+    # Hata saklama yok: raporlama fonksiyonu patlarsa görünür şekilde yükselir
+    rep_fn(ctx.session, cfg, ctx.results)
+
+
+# ---------------------- Authenticated akışı arayıcı ----------------------
+def _resolve_auth_runner():
+    """
+    authenticated_scan veya varyantlarını bulur; None dönebilir.
+
+    """
+    # Birincil adaylar
+    for m in ("core.authenticated_scan", "authenticated_scan"):
+        mod = _opt_import(m)
+        if not mod:
+            continue
+
+        fn = getattr(mod, "run", None)
+        if callable(fn):
+            return lambda session, base_url, config, logger: _safe_call_runner(fn, session, base_url, config, logger)
+
+        cls = getattr(mod, "AuthenticatedScanner", None)
+        if cls is not None:
+            def _call(session, base_url, config, logger):
+                scanner = cls(session=session, base_url=base_url, config=config, logger=logger)
+                run_all = getattr(scanner, "run_all", None)
+                return run_all() if callable(run_all) else scanner.run()
+
+            return _call
+
+    # Geriye dönük (zorunlu değil)
+    for m in ("core.flow_runner", "flow_runner"):
+        mod = _opt_import(m)
+        if not mod:
+            continue
+        for cand in ("run_authenticated", "run", "main"):
+            fn = getattr(mod, cand, None)
+            if callable(fn):
+                return lambda session, base_url, config, logger: _safe_call_runner(fn, session, base_url, config, logger)
+    return None
+
+
+# ----------------------------- Offensive profil haritası -----------------------------
+def offensive_enabled_map(config: dict[str, 'Any']) -> dict[str, bool]:
+    off = config.get('offensive') or {}
+    mode = str((config.get('mode') or '')).upper()
+    def _e(k: str, default: bool) -> bool:
+        v = off.get(k)
+        if isinstance(v, dict) and 'enabled' in v:
+            return bool(v.get('enabled'))
+        return True if mode in ('AGGRESSIVE','DEEP') else default
+    return {
+        'request_smuggling': _e('request_smuggling', False),
+        'mass_assignment': _e('mass_assignment', False),
+        'jwt_attacks': _e('jwt_attacks', False),
+        'nosql_injection': _e('nosql_injection', False),
+        'websocket_fuzz': _e('websocket_fuzz', False),
+    }
+
+
+
+# ----------------------------- Ana giriş -----------------------------
+import asyncio
+import logging
+
+
+# [AUTO-CLEANUP] removed duplicate def '_resolve_auth_runner' defined at lines 393-421
+
+
+# ----------------------------- Offensive profil haritası -----------------------------
+# [AUTO-CLEANUP] removed duplicate def 'offensive_enabled_map' defined at lines 425-439
+
+
+# ----------------------------- Ana giriş -----------------------------
+
+def incremental_targets(all_links: list[str], previous: list[str] | None = None) -> list[str]:
+    prev = set(previous or [])
+    return [u for u in (all_links or []) if u not in prev]
+
+
+from dataclasses import dataclass
+from typing import Dict, Any, List, Set
+import time
+
+from websecure.core.reporting import add_result
+
+
+@dataclass(frozen=True)
+class HProfilePolicy:
+    name: str
+    rps: float
+    concurrency: int
+    allow_categories: Set[str]
+    idempotent_only: bool
+    oast: bool
+    heavy_modules: bool
+    robots_respect: bool
+    politeness_ms: int
+    # Geçiş eşikleri
+    obs_seconds: int
+    min_req: int
+    up_when_block_rate_below: float  # 0.01 => %1
+    down_when_block_rate_above: float  # 0.05 => %5
+
+
+class HProfileManager:
+
+    def __init__(self, profiles: Dict[str, Any] | None = None, active: str = "normal"):
+        # Policy set + active profile
+        self._policies: Dict[str, HProfilePolicy] = self._load_policies(profiles or {})
+        act = str(active or "normal").strip().lower()
+        self._active: str = act if act in self._policies else "normal"
+        # Runtime stats for adaptive switching
+        self._timeline: List[Dict[str, Any]] = []
+        self._req_count: int = 0
+        self._blocked_count: int = 0
+        import time as _t
+        self._window_start: float = _t.monotonic()
+        # ... (sınıfın diğer kısımları aynen)
+
+    @staticmethod
+    def _as_bool(x: Any, default: bool) -> bool:
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, str):
+            lx = x.strip().lower()
+            if lx in ('1', 'true', 'yes', 'on'):
+                return True
+            if lx in ('0', 'false', 'no', 'off'):
+                return False
+        return default
+
+    @staticmethod
+    def _as_set(xs: Any) -> Set[str]:
+        if isinstance(xs, (list, tuple, set)):
+            return {str(x).strip().lower() for x in xs if str(x).strip()}
+        return set()
+
+    @staticmethod
+    def _num(x, default: float) -> float:
+        # Safe numeric converter without try/except
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, str):
+            s = x.strip()
+            # Accept simple ints/floats and scientific notation
+            if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', s):
+                return float(s)
+        return float(default)
+
+    def _load_policies(self, cfg: Dict[str, Any]) -> Dict[str, HProfilePolicy]:
+        pols: Dict[str, HProfilePolicy] = {}
+        
+        # Tam kapsamlı tarama olduğunu belirten profil adları
+        _FULL_SCOPE = {'aggressive', 'deep', 'nightmare', 'safe_full', 'smart'}
+        _ALL_CATS = ['xss', 'sqli', 'ssrf', 'xxe', 'rce', 'nosqli', 'ssti', 'open_redirect', 'prototype_pollution', 'deserialization', 'ldap', 'xpath', 'crlf']
+
+        def build(name: str, node: Dict[str, Any]) -> HProfilePolicy:
+            # Profil tipini belirle
+            is_full = name in _FULL_SCOPE or '*' in (node.get('modules') or [])
+            is_stealth = name in ('stealth', 'safe_full')
+            
+            # Parametreleri çek (Config yoksa mantıklı varsayılanlar kullan)
+            # RPS: Stealth/Safe=2-5, Normal=12-20, Aggressive/Deep=50+, Nightmare=100
+            def_rps = 2.0 if is_stealth else (60.0 if name in ('aggressive', 'nightmare') else 15.0)
+            rps = self._num(node.get('rps'), def_rps)
+            
+            # Concurrency: Stealth=2-10, Normal=20, Aggressive=60+
+            def_conc = 5 if is_stealth else (60 if name in ('aggressive', 'nightmare') else 25)
+            conc = int(node.get('concurrency') or def_conc)
+            
+            # Kategoriler: Full profiller için hepsi, aksi halde kısıtlı
+            if node.get('allow_categories'):
+                allow_cats = self._as_set(node.get('allow_categories'))
+            else:
+                allow_cats = set(_ALL_CATS) if is_full else {'xss', 'sqli', 'ssrf', 'ssti', 'open_redirect'}
+                
+            idem = self._as_bool(node.get('idempotent_only'), is_stealth and name != 'safe_full') # Safe full runs everything
+            
+            # OAST: Aggressive/Safe_full/Deep needs it
+            oast = self._as_bool(node.get('oast', node.get('oast_enabled', False)), is_full)
+            
+            # Heavy: Aggressive/Safe_full
+            heavy = self._as_bool(node.get('heavy_modules'), is_full)
+            
+            # Robots: Stealth/Normal respects, Aggressive/Nightmare ignores
+            # Safe_full usually respects? Let's say respect for safe_full unless disabled manually
+            def_robots = True
+            if name in ('aggressive', 'nightmare'): def_robots = False
+            robots = self._as_bool(node.get('robots_respect'), def_robots)
+            
+            # Politeness
+            def_polite = 1500 if name == 'safe_full' else (800 if name == 'stealth' else (0 if name in ('aggressive', 'nightmare') else 300))
+            polite = int(node.get('politeness_ms') or def_polite)
+            
+            obs = int(node.get('obs_seconds') or 60)
+            min_req = int(node.get('min_req') or 40)
+            
+            # Adaptive Blocking Thresholds
+            up_below = self._num(node.get('up_when_block_rate_below'), 0.01 if is_stealth else 0.005)
+            down_above = self._num(node.get('down_when_block_rate_above'), 0.05 if name in ('aggressive', 'nightmare') else 0.03)
+            
+            return HProfilePolicy(name, rps, conc, allow_cats, idem, oast, heavy, robots, polite, obs, min_req,
+                                  up_below, down_above)
+
+        # Tüm tanımlı profilleri yükle
+        for k, node in cfg.items():
+            if isinstance(node, dict):
+                pols[k] = build(k, node)
+                
+        # Eğer 'normal' profil yoksa backup oluştur
+        if 'normal' not in pols:
+            pols['normal'] = build('normal', {})
+            
+        return pols
+
+    # Timeline
+    def _emit_event(self, etype: str, data: Dict[str, Any]) -> None:
+        evt = {'t': time.time(), 'type': etype, **data}
+        self._timeline.append(evt)
+        add_result('profile_event', evt)
+
+    def policy(self) -> HProfilePolicy:
+        return self._policies[self._active]
+
+    def name(self) -> str:
+        return self._active
+
+    # HTTP sinyalleri
+    def record_status(self, status_code: int) -> None:
+        self._req_count += 1
+        if status_code in (429, 403):
+            self._blocked_count += 1
+        self._maybe_rotate()
+
+    def _reset_window(self) -> None:
+        self._req_count = 0
+        self._blocked_count = 0
+        self._window_start = time.monotonic()
+
+    def _maybe_rotate(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._window_start
+        pol = self.policy()
+        if elapsed < float(pol.obs_seconds):
+            return
+        if self._req_count < pol.min_req:
+            self._reset_window()
+            return
+        rate = 0.0 if self._req_count <= 0 else (self._blocked_count / float(self._req_count))
+
+        # Geçiş kuralları:
+        # AGGRESSIVE → NORMAL: blok oranı üst eşiğin üzerinde
+        # NORMAL → STEALTH: blok oranı üst eşiğin üzerinde
+        # STEALTH → NORMAL: blok oranı alt eşiğin altında
+        # NORMAL → AGGRESSIVE: blok oranı çok düşük
+        cur = self._active
+        nxt = cur
+        if cur == 'aggressive' and rate >= pol.down_when_block_rate_above:
+            nxt = 'normal'
+        elif cur == 'normal' and rate >= pol.down_when_block_rate_above:
+            nxt = 'stealth'
+        elif cur == 'stealth' and rate <= pol.up_when_block_rate_below:
+            nxt = 'normal'
+        elif cur == 'normal' and rate <= pol.up_when_block_rate_below:
+            nxt = 'aggressive'
+
+        if nxt != cur:
+            old_pol = self.policy()
+            self._active = nxt
+            new_pol = self.policy()
+            self._emit_event('profile_switch', {
+                'from': cur,
+                'to': nxt,
+                'window_seconds': pol.obs_seconds,
+                'req': self._req_count,
+                'blocked': self._blocked_count,
+                'block_rate': rate,
+                'old_rps': old_pol.rps,
+                'new_rps': new_pol.rps,
+                'old_conc': old_pol.concurrency,
+                'new_conc': new_pol.concurrency,
+            })
+
+        self._reset_window()
+
+
+# ---- Global Tekil ----
+_HPM: HProfileManager | None = None
+
+
+# [AUTO-CLEANUP] removed duplicate def 'hpm_init_from_config' defined at lines 625-632
+
+
+def hpm_bootstrap_from_file(path: str) -> None:
+    import json, os
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    hpm_init_from_config(data)
+
+
+def hpm() -> HProfileManager:
+    if _HPM is None:
+        # Varsayılan boş yapı; kullanıcı init etmemişse minimum profille ayağa kalkar
+        hpm_init_from_config({'settings': {'profiles': {}, 'scan_profile': 'normal'}})
+    return _HPM  # type: ignore
+
+
+# Kısa yardımcılar
+# [AUTO-CLEANUP] removed duplicate def 'hpm_record_status' defined at lines 650-651
+
+
+# [AUTO-CLEANUP] removed duplicate def 'hpm_current_policy' defined at lines 654-666
+
+
+# ==== HPM Tekil Yönetici (imza-tabanlı başlatma; try/except yok) ====
+import inspect as _inspect
+from typing import Dict as _Dict, Any as _Any
+
+_HPM: "HProfileManager | None" = globals().get("_HPM", None)
+
+
+def _set_attr_if_present(obj, name: str, value) -> None:
+    if hasattr(obj, name):
+        setattr(obj, name, value)
+
+
+def hpm_init_from_config(cfg: _Dict[str, _Any] | None) -> None:
+    global _HPM
+    settings = (cfg or {}).get("settings") or {}
+    profiles = settings.get("profiles") or {}
+    initial = str(settings.get("scan_profile") or "normal")
+
+    sig = _inspect.signature(HProfileManager)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+    names = [p.name for p in params]
+
+    if len(params) >= 2 or ({"profiles", "active"} <= set(names)):
+        _HPM = HProfileManager(profiles, initial)  # type: ignore[arg-type]
+        return
+
+    if len(params) == 1 or ("profiles" in names and "active" not in names):
+        _HPM = HProfileManager(profiles)  # type: ignore[arg-type]
+        if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
+            _HPM.set_active(initial)  # type: ignore[attr-defined]
+        else:
+            _set_attr_if_present(_HPM, "active", initial)
+            _set_attr_if_present(_HPM, "_active", initial)
+        return
+
+    _HPM = HProfileManager()  # type: ignore[call-arg]
+    if hasattr(_HPM, "load_profiles") and callable(getattr(_HPM, "load_profiles")):
+        _HPM.load_profiles(profiles)  # type: ignore[attr-defined]
+    else:
+        _set_attr_if_present(_HPM, "_policies", profiles)
+        _set_attr_if_present(_HPM, "policies", profiles)
+    if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
+        _HPM.set_active(initial)  # type: ignore[attr-defined]
+    else:
+        _set_attr_if_present(_HPM, "_active", initial)
+        _set_attr_if_present(_HPM, "active", initial)
+
+
+# [AUTO-CLEANUP] removed duplicate def 'hpm' defined at lines 717-721
+
+
+def hpm_record_status(status_code: int) -> None:
+    mgr = hpm()
+    if hasattr(mgr, "record_status") and callable(getattr(mgr, "record_status")):
+        mgr.record_status(int(status_code))  # type: ignore[attr-defined]
+
+
+def hpm_current_policy() -> _Dict[str, _Any]:
+    mgr = hpm()
+    pol = None
+    if hasattr(mgr, "policy") and callable(getattr(mgr, "policy")):
+        pol = mgr.policy()  # type: ignore[attr-defined]
+
+    def _get(obj, name: str, default):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    allow = _get(pol, "allow_categories", []) or []
+    if not isinstance(allow, list):
+        allow = list(allow)
+
+    return {
+        "name": _get(pol, "name", "normal"),
+        "rps": _get(pol, "rps", 10.0),
+        "concurrency": _get(pol, "concurrency", 10),
+        "allow_categories": sorted(set(allow)),
+        "idempotent_only": bool(_get(pol, "idempotent_only", True)),
+        "oast": bool(_get(pol, "oast", False)),
+        "heavy_modules": bool(_get(pol, "heavy_modules", False)),
+        "robots_respect": bool(_get(pol, "robots_respect", True)),
+        "politeness_ms": int(_get(pol, "politeness_ms", 300)),
+    }
+
+def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
+    """
+    NORMAL/DETAILED/DEEP: core.phases.build_plan + core.runner.run_plan (signature-aware).
+    AUTHENTICATED: dış köprü + raporlama.
+    """
+    mode = (mode or "").strip().lower()
+    if mode == "stealth":
+        mode = ScanMode.NORMAL
+    elif mode == "aggressive":
+        mode = ScanMode.DEEP
+
+    # Ensure session and target
+    context.session = _ensure_session(getattr(context, "session", None))
+    cfg = context.config or {}
+    base_url = (getattr(context, "url", None) or cfg.get("base_url") or cfg.get("target") or "")
+    if not base_url:
+        _report("errors", {"stage": "run_mode", "error": "Target/base_url eksik"})
+        _flush_report()
+        _maybe_perform_reporting(context)
+        return context.results
+
+    # Non-authenticated modes
+    if mode in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.DEEP):
+        context.detailed = (mode != ScanMode.NORMAL)
+
+        # build_plan ve run_plan bu modülde tanımlı (merged from phases + runner)
+        import sys as _sys
+        _self_mod = _sys.modules.get(__name__) or _sys.modules.get("websecure.core.phases")
+        build_plan_fn = globals().get("build_plan") or (getattr(_self_mod, "build_plan", None) if _self_mod else None)
+        run_plan_fn = globals().get("run_plan") or (getattr(_self_mod, "run_plan", None) if _self_mod else None)
+
+        if not callable(build_plan_fn) or not callable(run_plan_fn):
+            _report("errors", {"stage": "run_mode", "error": "Flow runner çözümlemesi başarısız (build_plan/run_plan yok)"})
+            _flush_report()
+            _maybe_perform_reporting(context)
+            return context.results
+
+        plan = build_plan_fn(context)
+        plan = __ensure_triple_plan(plan)
+
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(__run_plan_adapt(run_plan_fn, plan, context, cfg))
+        else:
+            asyncio.run(__run_plan_adapt(run_plan_fn, plan, context, cfg))
+
+        _flush_report()
+        _maybe_perform_reporting(context)
+        return context.results
+
+    # Authenticated mode
+    if mode == ScanMode.AUTHENTICATED:
+        auth_runner = _resolve_auth_runner()
+        if not callable(auth_runner):
+            _report("errors", {"stage": "run_mode", "error": "Authenticated runner bulunamadı"})
+            _flush_report()
+            _maybe_perform_reporting(context)
+            return context.results
+        logger = logging.getLogger(__name__)
+        auth_runner(context.session, base_url, cfg, logger=logger)
+        _flush_report()
+        _maybe_perform_reporting(context)
+        return context.results
+
+    _report("errors", {"stage": "run_mode", "error": f"desteklenmeyen mod: {mode}"})
+    _flush_report()
+    _maybe_perform_reporting(context)
+    return context.results
+
+
+# ===========================================================================
+# MERGED FROM: websecure/core/runner.py
+# RunnerConfig, run_plan, run, run_many, _build_ctx, _ensure_session
+# ===========================================================================
+# adjust_scan_mode defined in this module (merged from flow_runner.py)
+from websecure.core.reporting import get_bucket_results
+import asyncio
+from dataclasses import dataclass
+from typing import List, Tuple, Awaitable, Callable, Optional, Dict, Any
+import sys
+import time
+import asyncio
+# ScanContext defined in this module (merged from scan_modes.py)
+from websecure.core.reporting import log_info, log_warn, add_result, flush as _report_flush
+# flush defined in this module (merged from flow_runner.py)
+from importlib.util import find_spec
+from types import SimpleNamespace
+from types import SimpleNamespace
+import importlib
+
+from typing import TYPE_CHECKING, Callable
+# run_plan is defined in this module (merged from runner.py)
+# --------------------------- Dinamik import yardımcıları ---------------------------
+def _missing_guard(symbol: str, where: str):
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError(f"{symbol} kullanılabilir değil: {where} modülü/öğesi bulunamadı.")
+    return _raise
+
+def _import_first_available(module_names: list[str]):
+    """İlk mevcut modül adını döndürür; hiçbiri yoksa None."""
+    for name in module_names:
+        if name and find_spec(name) is not None:
+            return importlib.import_module(name)
+    return None
+
+_pkg = (__package__ or "").strip()
+
+# --------------------------- flow_runner fonksiyonları ---------------------------
+# Varsayılan: çağrılırsa NET hata versin (susturma yok)
+_run_all = _missing_guard("run_all_extended", "flow_runner")
+_run_plan_if_needed = _missing_guard("run_plan_if_needed", "flow_runner")
+_flush_reporting = _missing_guard("flush_reporting", "flow_runner")
+
+_flow_mod_candidates = []
+if _pkg:
+    _flow_mod_candidates.append(f"{_pkg}.flow_runner")
+_flow_mod_candidates.append("core.flow_runner")
+
+_flow_mod = _import_first_available(_flow_mod_candidates)
+if _flow_mod is not None:
+    if hasattr(_flow_mod, "run_all_extended"):
+        _run_all = getattr(_flow_mod, "run_all_extended")
+    if hasattr(_flow_mod, "run_plan_if_needed"):
+        _run_plan_if_needed = getattr(_flow_mod, "run_plan_if_needed")
+    if hasattr(_flow_mod, "flush_reporting"):
+        _flush_reporting = getattr(_flow_mod, "flush_reporting")
+
+# --------------------------- http.hardened_session ---------------------------
+# Not: hardened oturum opsiyonel ise None bırakılabilir; zorunlu ise guard kullan.
+_hardened_session = None
+
+_http_mod_candidates = []
+if _pkg:
+    _http_mod_candidates.append(f"{_pkg}.http")
+_http_mod_candidates.append("core.http")
+
+_http_mod = _import_first_available(_http_mod_candidates)
+if _http_mod is not None and hasattr(_http_mod, "hardened_session"):
+    _hardened_session = getattr(_http_mod, "hardened_session")
+
+# --------------------------- İptal/Kritik kontrol ---------------------------
+def _is_cancelled(ctx: 'ScanContext') -> bool:
+    if ctx is None:
+        return False
+    if bool(getattr(ctx, "cancelled", False)):
+        return True
+    shared = getattr(ctx, "shared", None)
+    if isinstance(shared, dict) and bool(shared.get("critical_error", False)):
+        return True
+    return False
+
+# --------------------------- Tipler ---------------------------
+PhaseFn = Callable[[ScanContext], Awaitable[None]]
+Plan = List[Tuple[str, int, PhaseFn]]  # (ad, tahmini_saniye, faz_fn)
+
+@dataclass
+class RunnerConfig:
+    interactive: bool = False               # True ise 'ask' seçeneği input() ile sorulur
+    on_timeout: str = "extend"              # "extend" | "retry" | "skip" | "ask"
+    extend_factor: float = 1.5              # zaman aşımında yeni timeout = eski * faktor
+    max_timeout_sec: int = 30 * 60          # tek faz için üst sınır
+    max_retries: int = 1                    # zaman aşımı sonrası tekrar sayısı
+    progress_cb: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
+    confirm_cb: Optional[Callable[[str, int, int, ScanContext], bool]] = None  # (faz_adı, deneme, timeout, ctx) -> extend?
+
+# --------------------------- Yardımcılar ---------------------------
+def _cfg_from_ctx(ctx: ScanContext) -> RunnerConfig:
+    rcfg = ((getattr(ctx, "config", {}) or {}).get("runner") or {})
+    return RunnerConfig(
+        interactive=bool(rcfg.get("interactive", False)),
+        on_timeout=str(rcfg.get("on_timeout", "extend")).lower(),
+        extend_factor=float(rcfg.get("extend_factor", 1.5)),
+        max_timeout_sec=int(rcfg.get("max_timeout_sec", 30*60)),
+        max_retries=int(rcfg.get("max_retries", 1)),
+        progress_cb=rcfg.get("progress_cb"),
+        confirm_cb=rcfg.get("confirm_cb"),
+    )
+def _dynamic_estimate(name: str, base_est: int, ctx: ScanContext) -> int:
+    est = int(base_est)
+    lname = name.lower()
+    if "injection" in lname:
+        p = len((ctx.results or {}).get("detected_get_params") or [])
+        f = len((ctx.results or {}).get("detected_forms") or [])
+        est = base_est + 30 * (p if p > 0 else 1) + 20 * (1 if f > 0 else 0)
+    elif "owasp" in lname:
+        open_ports = (ctx.results or {}).get("open_ports") or []
+        est = base_est + 10 * len(open_ports)
+    # 60s–20m aralığına kelepçe
+    return max(60, min(est, 20 * 60))
+
+def _should_extend(name: str, attempt: int, timeout_sec: int, cfg: 'RunnerConfig', ctx: 'ScanContext') -> bool:
+    # DIP: confirm_cb varsa karar oradan gelir (sorumluluk çağıranda; hata saklanmaz)
+    if callable(getattr(cfg, "confirm_cb", None)):
+        return bool(cfg.confirm_cb(name, attempt, timeout_sec, ctx))
+
+    decision = getattr(cfg, "on_timeout", None)
+    if decision == "ask" and getattr(cfg, "interactive", False):
+        # Yalnızca gerçekten etkileşimli uçta sor
+        if hasattr(sys, "stdin") and sys.stdin is not None and sys.stdin.isatty():
+            ans = (input(f"[?] '{name}' zaman aşımına uğradı. Süreyi uzatalım mı? (E/h): ").strip().lower() or "")
+            return not ans.startswith("h")
+        # TTY yoksa “ask” mümkün değil → uzatma yok
+        return False
+
+    return decision in ("extend", "retry")
+
+
+async def _run_phase_with_policy(name: str, base_est: int, phase: 'PhaseFn', ctx: 'ScanContext', cfg: 'RunnerConfig') -> None:
+    est = _dynamic_estimate(name, base_est, ctx)
+    attempts = 0
+
+    # progress: start
+    if callable(getattr(cfg, "progress_cb", None)):
+        cfg.progress_cb("start", name, {"estimate_sec": est})
+
+    t_phase_start = time.time()
+
+    while True:
+        # kritik/iptal kontrolü
+        if _is_cancelled(ctx):
+            add_result("meta", {"stage": "phase", "name": name, "status": "cancelled"})
+            return
+
+        log_info(f"\n[i] Aşama: {name}  (~{max(1, est // 60)} dk)")
+
+        task = asyncio.create_task(phase(ctx))
+        done, pending = await asyncio.wait({task}, timeout=est)
+
+        # Zaman aşımı
+        if pending:
+            for t in pending:
+                t.cancel()
+            log_warn(f"Aşama '{name}' tahmini sürede bitmedi (timeout={est}s).")
+
+            if attempts >= getattr(cfg, "max_retries", 0) or not _should_extend(name, attempts + 1, est, cfg, ctx):
+                # progress: skipped
+                if callable(getattr(cfg, "progress_cb", None)):
+                    cfg.progress_cb("skipped", name, {"attempts": attempts, "reason": "timeout"})
+                add_result("meta", {
+                    "stage": "phase",
+                    "name": name,
+                    "status": "skipped_timeout",
+                    "duration_sec": round(time.time() - t_phase_start, 2)
+                })
+                return
+
+            # yeniden dene: deneme sayısını artır, süreyi yeniden değerlendir
+            attempts += 1
+            est = _dynamic_estimate(name, base_est, ctx)
+            continue
+
+        # Tamamlandı: sonucu değerlendir (hata saklama yok)
+        finished = next(iter(done))
+        exc = finished.exception()
+        if exc is not None:
+            # Hata durumunu rapora yaz ve yükselt (susturma yok)
+            add_result("meta", {
+                "stage": "phase",
+                "name": name,
+                "status": "error",
+                "error": str(exc),
+                "duration_sec": round(time.time() - t_phase_start, 2)
+            })
+            raise exc
+
+        # Başarılı
+        if callable(getattr(cfg, "progress_cb", None)):
+            cfg.progress_cb("done", name, {"attempts": attempts})
+
+        add_result("meta", {
+            "stage": "phase",
+            "name": name,
+            "status": "done",
+            "duration_sec": round(time.time() - t_phase_start, 2)
+        })
+        return
+
+async def run_plan(plan: 'Plan', ctx: 'ScanContext', cfg: 'Dict'):
+    """
+    Planı sıralı ve politikaya bağlı timeout yönetimiyle çalıştırır.
+    Hata saklama yok: faz içi hatalar 'meta: error' olarak rapora yazılır ve faz biter;
+    run_plan try/except kullanmaz, böylece kontrol akışı sade ve deterministiktir.
+    """
+    # Plan G hook: profil ayarı (rapor metriklerine göre)
+    _ = adjust_scan_mode(get_bucket_results(), cfg)
+
+    cfg_local = _cfg_from_ctx(ctx)
+    for (name, base_est, phase) in plan:
+        if _is_cancelled(ctx):
+            add_result("meta", {"stage": "phase", "name": name, "status": "cancelled"})
+            _report_flush() # sonuç kovalarını/phase izini kayda geç
+            return
+        # Fazın kendi içinde timeout/hata durumları rapora işlenir;
+        await _run_phase_with_policy(name, base_est, phase, ctx, cfg_local)
+
+
+
+# === PATCH: WebSecure Upgrade (auto-applied) @ 2025-09-07T16:53:43.705200 ===
+
+# Politikalar: hata yönetimi + iptal
+from typing import Literal, cast
+import signal
+
+ErrorPolicy = Literal["continue","skip","stop","ask"]
+
+@dataclass
+class _ExtendedRunnerConfig(RunnerConfig):
+    on_error: ErrorPolicy = "continue"   # continue | skip | stop | ask
+    cancel_on_sigint: bool = True
+
+def _cfg_extend(cfg: RunnerConfig, ctx: ScanContext) -> _ExtendedRunnerConfig:
+    rcfg = ((getattr(ctx, "config", {}) or {}).get("runner") or {})
+    return _ExtendedRunnerConfig(
+        **cfg.__dict__,
+        on_error=str(rcfg.get("on_error","continue")).lower(),
+        cancel_on_sigint=bool(rcfg.get("cancel_on_sigint", True)),
+    )
+import sys
+import time
+import asyncio
+import signal
+import threading
+
+def _install_cancel_hook(enabled: bool):
+    if not enabled:
+        return lambda: None
+
+    # Sadece ana thread ve SIGINT mevcutsa kanca kur.
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    has_sigint = hasattr(signal, "SIGINT") and callable(getattr(signal, "signal", None))
+    if not (is_main_thread and has_sigint):
+        return lambda: None
+
+    cancelled = {"val": False}
+
+    def _mark(_signum, _frame):
+        cancelled["val"] = True  # Yerel bayrak; iptal kontrolünüz ctx tarafında ilerliyor.
+
+    old = signal.getsignal(signal.SIGINT) if hasattr(signal, "getsignal") else None
+    signal.signal(signal.SIGINT, _mark)
+
+    def _restore():
+        if old is not None and is_main_thread and has_sigint:
+            signal.signal(signal.SIGINT, old)
+
+    return _restore
+
+
+_EXPORTS = ("run", "run_many", "run_plan")
+__all__ = [name for name in _EXPORTS if name in globals()]
+
+
+
+# Yardımcı: bir fonksiyonun beklenen modülden gelip gelmediğini doğrula
+def _is_from_modules(fn, *expected_modules: str) -> bool:
+    if fn is None:
+        return False
+    modname = getattr(fn, "__module__", "") or ""
+    # hem "core.flow_runner" gibi tam ad hem de ".flow_runner" soneki desteklenir
+    return any(modname == m or modname.endswith(f".{m.split('.')[-1]}") for m in expected_modules)
+
+# --------------------------- Context Kurulumu ---------------------------
+def _resolve_url_from_target(target, cfg) -> str | None:
+    # target içinden url çıkar
+    if isinstance(target, str):
+        return target
+    if isinstance(target, dict):
+        return target.get("url") or target.get("base_url") or target.get("target")
+    # nesne benzeri
+    url = getattr(target, "url", None) or getattr(target, "base_url", None) or getattr(target, "target", None)
+    if url:
+        return url
+    # cfg içinden yedek
+    if isinstance(cfg, dict):
+        return cfg.get("base_url") or cfg.get("target")
+    return getattr(cfg, "base_url", None) or getattr(cfg, "target", None)
+
+def _build_ctx(target, cfg, session=None, debug=False):
+    url = _resolve_url_from_target(target, cfg)
+    if not url:
+        log_warn("hedef URL çıkarılamadı: target/cfg içinde 'url' ya da 'base_url' yok")
+    # mevcut session yoksa ve gerçek hardened_session varsa kur
+    sess = session
+    if sess is None and callable(_hardened_session) and _is_from_modules(_hardened_session, "core.http", "http"):
+        sess = _hardened_session(cfg)
+    ctx = SimpleNamespace(url=url, base_url=url, session=sess, config=(cfg or {}), results={}, debug=bool(debug))
+    return ctx
+
+# --------------------------- Koşucu Köprüleri ---------------------------
+def _flow_runner_available() -> bool:
+    # Tekrar import etmeden, fonksiyonun gerçekten flow_runner modülünden gelip gelmediğini kontrol et
+    return (
+        _is_from_modules(_run_plan_if_needed, "core.flow_runner", "flow_runner")
+        or _is_from_modules(_run_all, "core.flow_runner", "flow_runner")
+        or _is_from_modules(_flush_reporting, "core.flow_runner", "flow_runner")
+    )
+
+def run(target, cfg, *, session=None, debug=False, event_cb=None):
+    """Sadece faz planını çalıştırır; mükerrer tarama yok."""
+    # Önce bağlamı kur, sonra oturumu garanti altına al
+    ctx = _build_ctx(target, cfg, session=session, debug=debug)
+    _ensure_session(ctx)
+
+    # Plan çalıştırma (tüm fazlar + rapor)
+    if _is_from_modules(_run_plan_if_needed, "core.flow_runner", "flow_runner") and callable(_run_plan_if_needed):
+        _run_plan_if_needed(ctx, event_cb=event_cb)
+    else:
+        log_warn("run_plan_if_needed mevcut değil (flow_runner bulunamadı).")
+
+    # Raporu diske yazdır (susturma yok)
+    _flush_reporting(ctx)
+    return getattr(ctx, "results", None)
+
+
+
+def run_many(targets, cfg, *, session=None, debug=False, event_cb=None, progress_cb=None):
+    """Birden çok hedefi sırayla koşturur (seri); hata yutma yok."""
+    results = []
+    for idx, t in enumerate(list(targets or [])):
+        if callable(progress_cb):
+            progress_cb("start", {"index": idx, "target": t})
+        res = run(t, cfg, session=session, debug=debug, event_cb=event_cb)
+        results.append({"target": t, "results": res})
+        if callable(progress_cb):
+            progress_cb("end", {"index": idx, "target": t})
+    return results
+
+def _dyn_profile_update(stats: dict, current: str) -> str:
+    p = (current or "NORMAL").upper()
+    four = int(stats.get("403",0)) + int(stats.get("429",0))
+    ok = int(stats.get("2xx",0))
+    if four >= 5:
+        if p == "AGGRESSIVE": return "NORMAL"
+        if p == "NORMAL": return "STEALTH"
+    if ok >= 20 and four == 0:
+        if p == "STEALTH": return "NORMAL"
+        if p == "NORMAL": return "AGGRESSIVE"
+    return p
+
+
+def _maybe_adjust_profile(current: str) -> str:
+    pkg = (__package__ or "").strip()
+    candidates = []
+    if pkg:
+        candidates.append(f"{pkg}.http")   # yerel paket
+    candidates.append("core.http")         # proje içi çekirdek
+    candidates.append("http")              # düz ad (legacy)
+
+    http_mod = None
+    for name in candidates:
+        if find_spec(name) is not None:
+            http_mod = importlib.import_module(name)
+            break
+
+    if http_mod is None or not hasattr(http_mod, "get_http_metrics"):
+        log_warn("get_http_metrics yok; profil ayarı değiştirilmedi.")
+        return current
+
+    stats = http_mod.get_http_metrics()    # hata varsa yükselir; saklama yok
+    return _dyn_profile_update(stats, current)
+
+
+
+# -- Compatibility wrapper: accept (plan, ctx) or (plan, ctx, cfg) --
+def run_plan_adapt(*args, _run_plan=None, **kwargs):
+
+    import inspect
+
+    # 1) run_plan hedefini çağrı anında çöz
+    rp = _run_plan if _run_plan is not None else globals().get("run_plan")
+    if rp is None or not callable(rp):
+        raise RuntimeError("run_plan not available in current module scope")
+
+    # 2) Argümanları tek noktadan çıkar
+    plan = kwargs.get("plan", args[0] if len(args) > 0 else None)
+    ctx  = kwargs.get("ctx",  args[1] if len(args) > 1 else None)
+    cfg  = kwargs.get("cfg",  args[2] if len(args) > 2 else getattr(ctx, "config", None))
+
+    # 3) İmzaya göre çağır
+    params = list(inspect.signature(rp).parameters.values())
+    if len(params) >= 3:
+        return rp(plan, ctx, cfg)
+    elif len(params) == 2:
+        return rp(plan, ctx)
+    else:
+        # Olağandışı durum: beklenmeyen imza
+        return rp()
+
+def _ensure_session(ctx):
+    from websecure.core.http import build_session
+    if getattr(ctx, "session", None) is None:
+        cfg = getattr(ctx, "config", {}) or {}
+        ctx.session = build_session(cfg)
+    return ctx.session

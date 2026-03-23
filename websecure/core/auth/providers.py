@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Protocol
 
 from .totp import TOTP
-from .email import EmailOtpProvider
-# SMS, Push, DeviceFlow can be imported or implemented here as wrappers
+from .flows import EmailOtpProvider  # merged from email.py
 
 logger = logging.getLogger(__name__)
 

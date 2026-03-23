@@ -32,7 +32,7 @@ def _opt_import(mod, func):
         return None
 
 from websecure.core.phases import build_plan, run_plan_if_needed
-from websecure.core.discovery_helpers import discovery_enrich
+from websecure.crawler import discovery_enrich
 from websecure.core.alerts import AlertManager
 from websecure.core.reporting import (
     verify_and_score, 
@@ -67,12 +67,27 @@ _logger = _logging.getLogger(__name__)
 _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
 
-# [UI] MSF-Style Banner
-# try:
-#     from websecure.core.banner import print_banner
-#     print_banner(modules_count=18) # Core modules count (Updated)
-# except ImportError:
-#     pass
+# [UI] MSF-Style Banner (inlined from banner.py)
+import random as _banner_random, platform as _banner_platform
+_BANNER_VERSION = "2.0.4-dev"
+_BANNER_CODENAME = "GhostProtocol"
+_BANNERS = [r"""
+  ██████  ███████ ███    ██ ███████ ███████ ██████  ██      ██████  ██ ████████
+ ██  ████ ██      ████   ██ ██      ██      ██   ██ ██     ██    ██ ██    ██
+ ██   ███ █████   ██ ██  ██ ███████ █████   ██████  ██     ██    ██ ██    ██
+ ██  ████ ██      ██  ██ ██      ██ ██      ██      ██     ██    ██ ██    ██
+  ██████  ███████ ██   ████ ███████ ███████ ██      ██████  ██████  ██    ██
+
+                      [ SYSTEM: COMPROMISED ]
+               [ TARGET: ACQUIRED | VECTOR: LETHAL ]
+"""]
+
+def print_banner(modules_count: int = 0) -> None:
+    print(_banner_random.choice(_BANNERS))
+    print(f"       =[ WebSecure v{_BANNER_VERSION} [{_BANNER_CODENAME}]")
+    print(f"       =[ Modules: {modules_count} loaded")
+    print(f"       =[ OS: {_banner_platform.system()} {_banner_platform.release()}")
+    print("")
     
     # [WS3] Dynamic Wordlist Report
 try:
@@ -792,9 +807,9 @@ def _get_resolve_canonical_base():
     return _fallback
 
 
-_scan_spec = _ws_spec("websecure.core.scan_modes")
+_scan_spec = _ws_spec("websecure.core.phases")
 if _scan_spec is not None:
-    _scan_mod = importlib.import_module("websecure.core.scan_modes")
+    _scan_mod = importlib.import_module("websecure.core.phases")
     ScanContext = getattr(_scan_mod, "ScanContext", None)
     ScanMode = getattr(_scan_mod, "ScanMode", None)
     run_mode = getattr(_scan_mod, "run_mode", None)
@@ -958,7 +973,7 @@ def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: 
     # Auto-binded orphan modules (plugin imports) — DO NOT REMOVE
     for _m in [
         'websecure.core.injection',
-        'websecure.core.runner',
+        'websecure.core.phases',
         'websecure.core.safe_regex',
         'websecure.core.auth.auth_flow' if _ws_has('websecure.core.auth.auth_flow') else None,
         'websecure.crawler',
@@ -1081,8 +1096,8 @@ if _ws_spec("websecure.scanners.ws_fuzz") is None:
 
 # --- Authorization ---
 # --- Authorization ---
-_authz = importlib.import_module("websecure.scanners.auth") if _ws_spec(
-    "websecure.scanners.auth") is not None else None
+_authz = importlib.import_module("websecure.scanners.auth_scanners") if _ws_spec(
+    "websecure.scanners.auth_scanners") is not None else None
 RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
 RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
 # In auth.py, the function is check_idor or compare_roles? 
@@ -1097,8 +1112,8 @@ def _auth_wrapper(url, session, debug=False, auth_ctx=None):
     if not auth_ctx or not hasattr(auth_ctx, "build_sessions"):
         return findings
     sessions = auth_ctx.build_sessions()
-    if sys.modules.get("websecure.scanners.auth"):
-        m = sys.modules["websecure.scanners.auth"]
+    if sys.modules.get("websecure.scanners.auth_scanners"):
+        m = sys.modules["websecure.scanners.auth_scanners"]
         _comp = getattr(m, "compare_roles", None)
         _idor = getattr(m, "check_idor", None)
         if callable(_comp):
@@ -2354,7 +2369,7 @@ O====|_______________________________________________________>  1   1 0
     if _tor_interval and _tor_port:
          try:
              print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
-             from websecure.core.tor_manager import init_tor_control, start_auto_rotation, rotate_tor_identity
+             from websecure.core.waf_bypass import init_tor_control, start_auto_rotation, rotate_tor_identity
              
              # Global kontrolcüyü başlat
              init_tor_control({"enabled": True, "control_port": int(_tor_port)})
