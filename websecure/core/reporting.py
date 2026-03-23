@@ -11,8 +11,47 @@ from typing import Any, Dict, List, Optional, Iterable, Tuple
 from urllib.parse import urlparse, urlsplit, urlunsplit
 from pathlib import Path
 from collections import defaultdict
-from websecure.core.ci_gate import should_fail_ci
 from websecure.core.alerts import AlertManager
+
+# ========================== CI Gate (inlined from ci_gate.py) ==========================
+import logging as _ci_logging
+_ci_logger = _ci_logging.getLogger(__name__)
+
+def should_fail_ci(cfg: dict, results: dict) -> bool:
+    """
+    CI Quality Gate Logic.
+    Determines if the scan should fail based on configuration and results.
+    """
+    ci_cfg = cfg.get("ci") or {}
+    fail_on = ci_cfg.get("fail_on") or []
+    if not fail_on:
+        return False
+    normalized_fail = [s.strip().lower() for s in fail_on if isinstance(s, str)]
+    if not normalized_fail:
+        return False
+    counts = {}
+    if "summary" in results and "counts" in results["summary"]:
+        counts = results["summary"]["counts"]
+    elif "findings" in results:
+        counts = {"kritik": 0, "yüksek": 0, "orta": 0, "düşük": 0, "bilgi": 0}
+        for cat, items in results["findings"].items():
+            for item in items:
+                s = str(item.get("severity") or "Bilgi").lower()
+                if s in ["critical", "severe"]: s = "kritik"
+                elif s in ["high"]: s = "yüksek"
+                elif s in ["medium"]: s = "orta"
+                elif s in ["low"]: s = "düşük"
+                elif s in ["info"]: s = "bilgi"
+                counts[s] = counts.get(s, 0) + 1
+    for severity, count in counts.items():
+        if count > 0:
+            if "any" in normalized_fail:
+                _ci_logger.error(f"CI Failure: Found {count} issues (Rule: 'any')")
+                return True
+            if severity.lower() in normalized_fail:
+                _ci_logger.error(f"CI Failure: Found {count} issues with severity '{severity}'")
+                return True
+    return False
 
 # --- Globals for async/callback reporting ---
 _GLOBAL_LOCK = threading.Lock()

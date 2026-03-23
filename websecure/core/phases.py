@@ -280,11 +280,11 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.nosqli",
         "websecure.scanners.ssrf_xxe",
         "websecure.scanners.file_upload",
-        "websecure.scanners.auth",
+        "websecure.scanners.auth_scanners",
         # Phase 4 new scanners
         "websecure.scanners.ssti",
         "websecure.scanners.idor",
-        "websecure.scanners.auth_matrix",
+        "websecure.scanners.auth_scanners",
         "websecure.scanners.js_analyzer",
     ]
     hit = 0
@@ -1137,7 +1137,7 @@ def _runner_idor(ctx) -> None:
 
 
 def _runner_auth_matrix(ctx) -> None:
-    mod = _opt_import("websecure.scanners.auth_matrix") or _opt_import("scanners.auth_matrix")
+    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
     if not mod:
         add_result("meta", {"stage": "auth_matrix", "status": "skipped:module-not-found"})
         return
@@ -1726,7 +1726,7 @@ except ImportError:
     FFUFWrapper = None
 
 try:
-    from websecure.integrations.feroxbuster import FeroxbusterWrapper
+    from websecure.integrations.ffuf import FeroxbusterWrapper
 except ImportError:
     FeroxbusterWrapper = None
 
@@ -2355,7 +2355,7 @@ def run_authorization_matrix(ctx) -> None:
     Yetkilendirme matrisi (IDOR/PrivEsc) testi.
     scanners.auth modülünü kullanır.
     """
-    mod = _opt_import("scanners.auth")
+    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
     if not mod:
         add_result("auth_matrix", {"status": "skipped", "reason": "Module not found"})
         return

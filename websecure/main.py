@@ -67,12 +67,27 @@ _logger = _logging.getLogger(__name__)
 _req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
 
-# [UI] MSF-Style Banner
-# try:
-#     from websecure.core.banner import print_banner
-#     print_banner(modules_count=18) # Core modules count (Updated)
-# except ImportError:
-#     pass
+# [UI] MSF-Style Banner (inlined from banner.py)
+import random as _banner_random, platform as _banner_platform
+_BANNER_VERSION = "2.0.4-dev"
+_BANNER_CODENAME = "GhostProtocol"
+_BANNERS = [r"""
+  ██████  ███████ ███    ██ ███████ ███████ ██████  ██      ██████  ██ ████████
+ ██  ████ ██      ████   ██ ██      ██      ██   ██ ██     ██    ██ ██    ██
+ ██   ███ █████   ██ ██  ██ ███████ █████   ██████  ██     ██    ██ ██    ██
+ ██  ████ ██      ██  ██ ██      ██ ██      ██      ██     ██    ██ ██    ██
+  ██████  ███████ ██   ████ ███████ ███████ ██      ██████  ██████  ██    ██
+
+                      [ SYSTEM: COMPROMISED ]
+               [ TARGET: ACQUIRED | VECTOR: LETHAL ]
+"""]
+
+def print_banner(modules_count: int = 0) -> None:
+    print(_banner_random.choice(_BANNERS))
+    print(f"       =[ WebSecure v{_BANNER_VERSION} [{_BANNER_CODENAME}]")
+    print(f"       =[ Modules: {modules_count} loaded")
+    print(f"       =[ OS: {_banner_platform.system()} {_banner_platform.release()}")
+    print("")
     
     # [WS3] Dynamic Wordlist Report
 try:
@@ -1081,8 +1096,8 @@ if _ws_spec("websecure.scanners.ws_fuzz") is None:
 
 # --- Authorization ---
 # --- Authorization ---
-_authz = importlib.import_module("websecure.scanners.auth") if _ws_spec(
-    "websecure.scanners.auth") is not None else None
+_authz = importlib.import_module("websecure.scanners.auth_scanners") if _ws_spec(
+    "websecure.scanners.auth_scanners") is not None else None
 RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
 RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
 # In auth.py, the function is check_idor or compare_roles? 
@@ -1097,8 +1112,8 @@ def _auth_wrapper(url, session, debug=False, auth_ctx=None):
     if not auth_ctx or not hasattr(auth_ctx, "build_sessions"):
         return findings
     sessions = auth_ctx.build_sessions()
-    if sys.modules.get("websecure.scanners.auth"):
-        m = sys.modules["websecure.scanners.auth"]
+    if sys.modules.get("websecure.scanners.auth_scanners"):
+        m = sys.modules["websecure.scanners.auth_scanners"]
         _comp = getattr(m, "compare_roles", None)
         _idor = getattr(m, "check_idor", None)
         if callable(_comp):
