@@ -110,6 +110,124 @@ def _importable(mod: str):
         _report_phase_error('phases', 'phases.py', e)
         return False
 
+
+# =============================================================================
+# TECH DETECTION ENGINE
+# Detects CMS/framework/language/DB from HTTP headers, cookies, and body.
+# Called BEFORE phase selection so tech_trigger logic fires correctly.
+# =============================================================================
+
+def _detect_technologies(resp) -> set:
+    """
+    Detect technologies from an HTTP response object.
+    Returns a set of lowercase technology identifiers.
+    """
+    techs = set()
+    if resp is None:
+        return techs
+
+    headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
+    body = ""
+    try:
+        body = (resp.text or "").lower()
+    except Exception:
+        pass
+    cookies_str = " ".join(headers.get("set-cookie", "").lower().split())
+
+    # --- Server header ---
+    server = headers.get("server", "")
+    if "apache" in server:       techs.add("apache")
+    if "nginx" in server:        techs.add("nginx")
+    if "iis" in server:          techs.add("iis"); techs.add("windows")
+    if "cloudflare" in server:   techs.add("cloudflare")
+    if "lighttpd" in server:     techs.add("lighttpd")
+    if "caddy" in server:        techs.add("caddy")
+    if "tomcat" in server:       techs.add("tomcat"); techs.add("java")
+    if "jetty" in server:        techs.add("jetty"); techs.add("java")
+
+    # --- X-Powered-By ---
+    xpb = headers.get("x-powered-by", "")
+    if "php" in xpb:             techs.add("php")
+    if "asp.net" in xpb.lower(): techs.add("aspnet"); techs.add("iis")
+    if "express" in xpb.lower(): techs.add("nodejs"); techs.add("express")
+
+    # --- Cookies ---
+    if "phpsessid" in cookies_str:        techs.add("php")
+    if "jsessionid" in cookies_str:       techs.add("java"); techs.add("tomcat")
+    if "asp.net_sessionid" in cookies_str: techs.add("aspnet")
+    if "laravel_session" in cookies_str:  techs.add("php"); techs.add("laravel")
+    if "django" in cookies_str or "csrftoken" in cookies_str: techs.add("python"); techs.add("django")
+    if "flask" in cookies_str or "session=" in cookies_str:   techs.add("python"); techs.add("flask")
+
+    # --- CMS/Framework specific headers ---
+    if "x-drupal-cache" in headers or "x-drupal-dynamic-cache" in headers:
+        techs.add("drupal"); techs.add("php")
+    if "x-pingback" in headers:
+        techs.add("wordpress"); techs.add("php")
+    xgen = headers.get("x-generator", "")
+    if "wordpress" in xgen.lower(): techs.add("wordpress"); techs.add("php")
+    if "drupal" in xgen.lower():    techs.add("drupal"); techs.add("php")
+    if "joomla" in xgen.lower():    techs.add("joomla"); techs.add("php")
+
+    # --- Body patterns ---
+    if "wp-content" in body or "wp-includes" in body or "/wp-json/" in body:
+        techs.add("wordpress"); techs.add("php")
+    if "joomla" in body and ("option=com_" in body or "mosConfig" in body):
+        techs.add("joomla"); techs.add("php")
+    if "drupal" in body and ("drupal.settings" in body or "drupal.behaviors" in body):
+        techs.add("drupal"); techs.add("php")
+    if "laravel" in body or "_token" in body:
+        if "php" not in techs and "laravel" in body:
+            techs.add("laravel"); techs.add("php")
+    if "react" in body and ("__reactfiber" in body or "react.development" in body or "_next" in body):
+        techs.add("react")
+    if "_next/static" in body or "next.js" in body:
+        techs.add("nextjs"); techs.add("nodejs")
+    if "nuxt" in body:             techs.add("nuxtjs"); techs.add("nodejs")
+    if "angular" in body and ("ng-version" in body or "ng-app" in body):
+        techs.add("angular")
+    if "vue.js" in body or "vue.min.js" in body:
+        techs.add("vue")
+    if "django" in body:           techs.add("python"); techs.add("django")
+    if "flask" in body and "werkzeug" in body: techs.add("python"); techs.add("flask")
+    if "graphql" in body or "/graphql" in body or "graphiql" in body:
+        techs.add("graphql")
+    if "swagger" in body or "openapi" in body:
+        techs.add("rest_api")
+    if "/api/v" in body or "/api/" in body:
+        techs.add("rest_api")
+
+    # --- Content-type based ---
+    ct = headers.get("content-type", "")
+    if "application/json" in ct:   techs.add("rest_api")
+
+    return techs
+
+
+def _quick_tech_probe(ctx) -> set:
+    """
+    Makes a fast HEAD/GET to the target and populates ctx.technologies.
+    Called at build_plan() time so _flag(tech_trigger=...) works correctly.
+    """
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return set()
+    existing = getattr(ctx, "technologies", None)
+    if existing:
+        return set(existing)
+    try:
+        sess = hardened_session({})
+        resp = sess.get(url, timeout=8, allow_redirects=True)
+        techs = _detect_technologies(resp)
+        ctx.technologies = list(techs)
+        if techs:
+            _logger.info(f"[TechProbe] Detected: {', '.join(sorted(techs))}")
+            add_result("meta", {"stage": "tech_probe", "technologies": list(techs)})
+        return techs
+    except Exception as e:
+        _logger.debug(f"[TechProbe] Quick probe failed: {e}")
+        return set()
+
 def _call_if_exists(modname: str, cand_funcs=("run","scan","main","execute"), *args, **kwargs) -> bool:
     try:
         mod = importlib.import_module(modname)
@@ -534,6 +652,10 @@ def _runner_authorization_matrix(ctx) -> None:
 def _runner_feroxbuster(ctx):
     run_feroxbuster_scan(ctx)
     return _mk_result("feroxbuster", "finished", {})
+
+def _runner_nuclei(ctx):
+    run_nuclei_scan(ctx)
+    return _mk_result("nuclei", "finished", {})
 
 def _runner_js_analysis(ctx) -> None:
     run_js_analysis(ctx)
@@ -1246,6 +1368,7 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
         Phase(id="ffuf", title="FFUF Content & File Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content","files"]),
         Phase(id="feroxbuster", title="Feroxbuster Recursive Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
+        Phase(id="nuclei", title="Nuclei Vulnerability Scanner", enabled=_flag("nuclei", default=True), runner=lambda c: _safe(c, lambda: _runner_nuclei(c), "nuclei"), tags=["vuln","cve","nuclei"]),
         Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
         Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
         Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
@@ -1388,6 +1511,12 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
     Eğer ctx.base_plan yoksa yalnızca `offensive` fazları döndürür.
     Dönen yapı sade dict'lere dönüştürülür; runner callables korunur.
     """
+    # Quick tech probe before phase selection so tech_trigger flags work correctly
+    if not getattr(ctx, "technologies", None):
+        try:
+            _quick_tech_probe(ctx)
+        except Exception:
+            pass
     base: List[Phase] = []
     existing = getattr(ctx, "base_plan", None)
     if isinstance(existing, list):
@@ -1461,28 +1590,43 @@ def run_discovery(ctx):
         except Exception as e:
             add_result("errors", {"stage": "discovery_fallback", "error": str(e)})
 
-    # --- Smart Tactics Analysis ---
+    # --- Smart Tactics Analysis: header + body + endpoint-based detection ---
     if isinstance(results, dict):
-        techs = set()
+        techs = set(getattr(ctx, "technologies", []) or [])
         endpoints = results.get("endpoints", []) or []
-        
-        # GraphQL Detection
-        if any("graphql" in u or "gql" in u for u in endpoints):
+
+        # Endpoint URL pattern detection
+        if any("graphql" in u or "/gql" in u for u in endpoints):
             techs.add("graphql")
-        
-        # API Detection (REST/JSON)
         if any("/api/" in u for u in endpoints) or any(u.endswith(".json") for u in endpoints):
             techs.add("rest_api")
-        
-        # CMS / Framework
-        if any("wp-content" in u or "wp-json" in u for u in endpoints):
-            techs.add("wordpress")
-            
-        # Store in context for build_plan
+        if any("wp-content" in u or "wp-json" in u or "wp-admin" in u for u in endpoints):
+            techs.add("wordpress"); techs.add("php")
+        if any(".jsp" in u or ".do" in u for u in endpoints):
+            techs.add("java")
+        if any(".php" in u for u in endpoints):
+            techs.add("php")
+        if any(".aspx" in u or ".ashx" in u for u in endpoints):
+            techs.add("aspnet")
+        if any("websocket" in u or "/ws/" in u for u in endpoints):
+            techs.add("websocket")
+        if any("socket.io" in u for u in endpoints):
+            techs.add("websocket"); techs.add("nodejs")
+
+        # Also do a fresh header probe if we haven't done it yet
+        if url and not getattr(ctx, "_tech_probe_done", False):
+            try:
+                from websecure.core.http import hardened_session as _hs
+                _resp = _hs({}).get(url, timeout=8, allow_redirects=True)
+                techs |= _detect_technologies(_resp)
+                ctx._tech_probe_done = True
+            except Exception:
+                pass
+
         ctx.technologies = list(techs)
         if techs:
-             add_result("meta", {"stage": "smart_analysis", "detected_technologies": list(techs)})
-             print(f"[Smart Tactics] Algılanan Teknolojiler: {', '.join(techs)}")
+            add_result("meta", {"stage": "smart_analysis", "detected_technologies": list(techs)})
+            _logger.info(f"[SmartTactics] Teknolojiler: {', '.join(sorted(techs))}")
 
     eps = len((results.get("endpoints") or [])) if isinstance(results, dict) else 0
     add_result("phase_event", {"phase": "discovery", "checked": eps})
@@ -1703,12 +1847,10 @@ def run_plan_if_needed(ctx: dict):
 # Phase execution functions: run_discovery_extended, run_xss_scan, run_sqlmap_scan,
 # run_ffuf_scan, adjust_scan_mode, flush, is_blocked
 # ===========================================================================
-from __future__ import annotations
 import logging
 import os
 import shutil
 import time
-from typing import Dict, Any, List
 
 from websecure.core.reporting import add_result
 from websecure.core.http import hardened_session
@@ -1724,6 +1866,11 @@ try:
     from websecure.integrations.ffuf import FFUFWrapper
 except ImportError:
     FFUFWrapper = None
+
+try:
+    from websecure.integrations.nuclei import NucleiWrapper
+except ImportError:
+    NucleiWrapper = None
 
 try:
     from websecure.integrations.ffuf import FeroxbusterWrapper
@@ -1947,51 +2094,34 @@ def run_sqlmap_scan(ctx) -> None:
         extra_args.append("--random-agent")
 
 
-    # [WS3] Smart Engine Integration
-    try:
-        from websecure.core.smart_engine import analyze_target_context
-        # We need headers for detection. Try to get from session or make a quick HEAD
-        # For now, we use a heuristic based on URL and known info
-        smart_ctx = analyze_target_context(url, {}, []) # Headers not readily avail in ctx yet, improving later
-        
-        # Determine extensions based on tech stack
-        extensions = ""
-        techs = smart_ctx.get("tech_stack", [])
-        if "php" in techs:
-            _logger.info("[Smart-Engine] PHP detected! Adding .php extension to fuzzing.")
-            extensions += ",.php"
-        if "aspnet" in techs:
-            _logger.info("[Smart-Engine] ASP.NET detected! Adding .aspx,.ashx extensions.")
-            extensions += ",.aspx,.ashx"
-        if "java" in techs:
-            extensions += ",.jsp,.do"
-            
-    except ImportError:
-        pass
+    # [Smart] Tech-aware extension hints from detected technologies
+    techs = set(getattr(ctx, "technologies", []) or [])
+    tech_extra_args = []
+    if "php" in techs:
+        _logger.info("[Smart-SQLi] PHP detected — prioritizing PHP endpoints")
+    if "java" in techs:
+        _logger.info("[Smart-SQLi] Java detected — prioritizing JSP/servlet endpoints")
+    if "aspnet" in techs:
+        _logger.info("[Smart-SQLi] ASP.NET detected — prioritizing ASPX endpoints")
 
     # [FIX] Iterate over ALL discovered endpoints, not just base URL
     raw_endpoints = getattr(ctx, "results", {}).get("endpoints", [])
     # [WS3] Priority Sort: Attack Login/Payment/Param-heavy first!
     endpoints = _prioritize_urls(raw_endpoints)
-    
+
     if not endpoints:
         endpoints = [url]
-    
+
     # [FIX] Get discovered params to hint SQLMap
     params = getattr(ctx, "results", {}).get("param_candidates", [])
-    
-    # [WS3] Smart Param Analysis
-    # If we have params, analyze them to find High-Value Targets for SQLi
+
+    # Smart param prioritization: numeric IDs and search params are high-value for SQLi
     high_value_params = []
-    try:
-        from websecure.core.smart_engine import analyze_target_context
-        p_analysis = analyze_target_context(url, {}, list(params)).get("param_risks", {})
-        for p, vulns in p_analysis.items():
-            if "sqli" in vulns:
-                high_value_params.append(p)
-                _logger.info(f"[Smart-Engine] High-Risk SQLi Parameter detected: {p}")
-    except Exception:
-        pass
+    _sqli_hint_patterns = ("id", "uid", "user_id", "item", "product", "cat", "page", "search", "q", "query", "order", "sort")
+    for p in params:
+        if any(h in p.lower() for h in _sqli_hint_patterns):
+            high_value_params.append(p)
+            _logger.info(f"[Smart-SQLi] High-priority parameter: {p}")
 
     param_str = ",".join(params) if params else None
 
@@ -2051,20 +2181,26 @@ def run_xss_scan(ctx) -> None:
     [WS3] UPDATED: Uses Robust Local XSS Scanner (xss.py) + Nuclei/OWASP as secondary.
     """
     _logger.info("Launching XSS Scan...")
-    
+
+    # Inject detected tech_stack into results so get_smart_payloads() can filter correctly
+    _results = getattr(ctx, "results", {}) or {}
+    _tech = list(getattr(ctx, "technologies", []) or [])
+    if _tech and "tech_stack" not in _results:
+        _results["tech_stack"] = _tech
+
     # 1. Local Python Scanner (Robust)
     if run_local_xss:
         _logger.info("[XSS] Running internal XSS scanner (Python/Canary)...")
-        _raw_eps = getattr(ctx, "results", {}).get("endpoints", [])
+        _raw_eps = _results.get("endpoints", [])
         # [WS3] Smart Prioritization
         _eps = _prioritize_urls(_raw_eps)
         if not _eps:
              _eps = [getattr(ctx, "base_url", "")]
-        
+
         run_local_xss(
             _eps,
             getattr(ctx, "session", None),
-            results=getattr(ctx, "results", {}),
+            results=_results,
             debug=bool(getattr(ctx, "debug", False))
         )
     else:
@@ -2204,9 +2340,20 @@ def run_ffuf_scan(ctx) -> None:
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
-        # --- File extension discovery (backup, config, env files) ---
-        sensitive_exts = ".php,.asp,.aspx,.jsp,.html,.bak,.env,.config,.xml,.json,.txt,.zip,.sql,.log,.old,.backup,.db,.key,.pem"
-        _logger.info("[FFUF] Starting file extension scan...")
+        # --- File extension discovery: base + tech-aware extensions ---
+        _ff_techs = set(getattr(ctx, "technologies", []) or [])
+        sensitive_exts = ".bak,.env,.config,.xml,.json,.txt,.zip,.sql,.log,.old,.backup,.db,.key,.pem,.yml,.yaml,.conf"
+        if "php" in _ff_techs:
+            sensitive_exts += ",.php,.php3,.php5,.phtml,.inc"
+        if "aspnet" in _ff_techs or "iis" in _ff_techs:
+            sensitive_exts += ",.aspx,.ashx,.asmx,.asp,.cshtml"
+        if "java" in _ff_techs:
+            sensitive_exts += ",.jsp,.jspx,.do,.action,.faces"
+        if "python" in _ff_techs:
+            sensitive_exts += ",.py,.pyc"
+        if "nodejs" in _ff_techs:
+            sensitive_exts += ",.js,.ts,.mjs"
+        _logger.info(f"[FFUF] Extension scan (techs: {_ff_techs or 'generic'}): {sensitive_exts}")
         ext_findings = wrapper.run_scan(
             url,
             wordlist=merged_wl_path,
@@ -2287,6 +2434,59 @@ def run_feroxbuster_scan(ctx) -> None:
         if len(existing) > before_count:
              _logger.info(f"[Feroxbuster] Added {len(existing) - before_count} new endpoints to offensive context.")
         ctx.results = current_res
+
+
+def run_nuclei_scan(ctx) -> None:
+    """
+    Runs Nuclei vulnerability scanner against the target.
+    Uses tech-aware template selection: detected technologies determine
+    which Nuclei template tags are activated.
+    """
+    if NucleiWrapper is None:
+        add_result("nuclei", {"status": "skipped", "reason": "NucleiWrapper not importable"})
+        return
+
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    if not url:
+        return
+
+    if not _get_config(ctx, "offensive.nuclei.enabled", True):
+        add_result("nuclei", {"status": "skipped", "reason": "Disabled in config"})
+        return
+
+    wrapper = NucleiWrapper()
+    if not wrapper.is_available():
+        add_result("nuclei", {"status": "skipped", "reason": "nuclei binary not found"})
+        return
+
+    tech_stack = list(getattr(ctx, "technologies", []) or [])
+    proxy = _resolve_proxy(ctx)
+    rate_limit = int(_get_config(ctx, "offensive.nuclei.rate_limit", 150))
+    severity = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
+    extra_tags = _get_config(ctx, "offensive.nuclei.extra_tags", "")
+    tags = None
+    if extra_tags:
+        tags = extra_tags
+
+    _logger.info(f"[Nuclei] Starting scan on {url} (tech: {tech_stack or 'auto'})")
+
+    findings = wrapper.scan(
+        target=url,
+        tags=tags,
+        severity=severity,
+        rate_limit=rate_limit,
+        proxy=proxy,
+        tech_stack=tech_stack,
+    )
+
+    for finding in findings:
+        sev = finding.get("severity", "Info")
+        add_result("nuclei", finding)
+        if sev in ("Critical", "High", "Medium"):
+            add_result("offensive", finding)
+
+    add_result("meta", {"stage": "nuclei", "findings": len(findings)})
+    _logger.info(f"[Nuclei] Scan complete: {len(findings)} finding(s)")
 
 
 def run_js_analysis(ctx) -> None:
@@ -2437,7 +2637,6 @@ def run_business_logic_races(ctx) -> None:
 # MERGED FROM: websecure/core/scan_modes.py
 # ScanContext, ScanMode, run_mode, run, run_many, build_plan delegates
 # ===========================================================================
-from __future__ import annotations
 from websecure.core.utils import _ws_import_any, _ws_maybe_import_any
 from importlib import import_module
 from websecure.core.http import hardened_session
@@ -2502,7 +2701,7 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
         # Build a minimal ScanContext if not provided
         if context is None:
             try:
-                # ScanContext is defined in this module (merged from scan_modes.py)  # self-module import
+                pass  # ScanContext is defined in this module (merged from scan_modes.py)
             except _BOUNDARY_EXC as e:
                 _logger.error('phase error [scan_modes]', exc_info=True)
                 _report_phase_error('scan_modes', 'scan_modes.py', e)
@@ -3258,7 +3457,6 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
 # MERGED FROM: websecure/core/runner.py
 # RunnerConfig, run_plan, run, run_many, _build_ctx, _ensure_session
 # ===========================================================================
-from __future__ import annotations
 # adjust_scan_mode defined in this module (merged from flow_runner.py)
 from websecure.core.reporting import get_bucket_results
 import asyncio
