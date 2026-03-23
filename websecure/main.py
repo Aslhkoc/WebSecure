@@ -958,7 +958,7 @@ def scan_ports_or_distributed(url, results, cfg, detailed: bool = False, debug: 
     # Auto-binded orphan modules (plugin imports) — DO NOT REMOVE
     for _m in [
         'websecure.core.injection',
-        'websecure.core.runner',
+        'websecure.core.phases',
         'websecure.core.safe_regex',
         'websecure.core.auth.auth_flow' if _ws_has('websecure.core.auth.auth_flow') else None,
         'websecure.crawler',

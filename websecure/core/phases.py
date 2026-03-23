@@ -474,89 +474,82 @@ class Phase:
     tags: List[str] = field(default_factory=list)
     visible: bool = True
 
-def _runner_discovery(ctx) -> None:
-    # Skip discovery when flow preflight marked blocked
+def is_blocked(ctx) -> bool:
+    """Tarama bloke mi? cancelled veya critical_error bayraklarını kontrol eder."""
+    if ctx is None:
+        return False
+    if bool(getattr(ctx, "cancelled", False)):
+        return True
+    shared = getattr(ctx, "shared", None)
+    if isinstance(shared, dict) and bool(shared.get("critical_error", False)):
+        return True
+    return False
+
+
+def adjust_scan_mode(results: dict, cfg: dict) -> str:
+    """HTTP metriklerine göre scan profilini dinamik ayarlar."""
+    current = str((cfg or {}).get("scan_profile", "NORMAL")).upper()
+    four = int(results.get("403", 0)) + int(results.get("429", 0))
+    ok = int(results.get("2xx", 0))
+    if four >= 5:
+        if current == "AGGRESSIVE":
+            return "NORMAL"
+        if current == "NORMAL":
+            return "STEALTH"
+    if ok >= 20 and four == 0:
+        if current == "STEALTH":
+            return "NORMAL"
+        if current == "NORMAL":
+            return "AGGRESSIVE"
+    return current
+
+
+def flush(ctx=None):
+    """Raporlama tamponunu diske yazar."""
     try:
-        # is_blocked is defined in this module (merged from flow_runner.py)
-        if is_blocked(ctx):
-            add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
-            return
+        from websecure.core.reporting import flush as _rf
+        return _rf()
     except Exception:
         pass
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_discovery_extended") or not callable(getattr(fm, "run_discovery_extended")):
-        add_result("meta", {"stage": "discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_discovery_extended(ctx)
+
+
+def _runner_discovery(ctx) -> None:
+    if is_blocked(ctx):
+        add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
+        return
+    run_discovery_extended(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_fuzz_and_param_discovery") or not callable(getattr(fm, "run_fuzz_and_param_discovery")):
-        add_result("meta", {"stage": "fuzz_param_discovery", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_fuzz_and_param_discovery(ctx)
+    run_fuzz_and_param_discovery(ctx)
 
 def _runner_oast_verification(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_oast_verification") or not callable(getattr(fm, "run_oast_verification")):
-        add_result("meta", {"stage": "oast", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_oast_verification(ctx)
+    run_oast_verification(ctx)
 
 def _runner_reporting_and_integration(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_reporting_and_integration") or not callable(getattr(fm, "run_reporting_and_integration")):
-        add_result("meta", {"stage": "reporting", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_reporting_and_integration(ctx)
+    run_reporting_and_integration(ctx)
 
 def _runner_authorization_matrix(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_authorization_matrix") or not callable(getattr(fm, "run_authorization_matrix")):
-        add_result("meta", {"stage": "authorization", "status": "skipped:no-flow-runner"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return'); return
-    fm.run_authorization_matrix(ctx)
+    run_authorization_matrix(ctx)
 
 def _runner_feroxbuster(ctx):
-    fn = _opt_import("websecure.core.flow_runner", "run_feroxbuster_scan")
-    if callable(fn):
-        fn(ctx)
-    else:
-        add_result("meta", {"stage": "feroxbuster", "status": "skipped:not-found"})
+    run_feroxbuster_scan(ctx)
     return _mk_result("feroxbuster", "finished", {})
 
 def _runner_js_analysis(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_js_analysis") or not callable(getattr(fm, "run_js_analysis")):
-        add_result("js_analysis", {"status": "skipped", "reason": "flow_runner missing run_js_analysis"})
-        return
-    fm.run_js_analysis(ctx)
+    run_js_analysis(ctx)
 
 def _runner_sqlmap(ctx):
-    fn = _opt_import("websecure.core.flow_runner", "run_sqlmap_scan")
-    if callable(fn):
-        fn(ctx)
-    else:
-        add_result("meta", {"stage": "sqlmap", "status": "skipped:not-found"})
+    run_sqlmap_scan(ctx)
     return _mk_result("sqlmap", "finished", {})
 
-
-
 def _runner_business_logic_races(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_business_logic_races") or not callable(getattr(fm, "run_business_logic_races")):
-        add_result("meta", {"stage": "races", "status": "skipped:no-function"}); _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-        return
-    fm.run_business_logic_races(ctx)
+    run_business_logic_races(ctx)
 
 def _runner_ffuf(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_ffuf_scan") or not callable(getattr(fm, "run_ffuf_scan")):
-         add_result("meta", {"stage": "ffuf", "status": "skipped:no-flow-runner"})
-         return
-    fm.run_ffuf_scan(ctx)
+    run_ffuf_scan(ctx)
 
 def _runner_xss(ctx) -> None:
-    fm = _opt_import("websecure.core.flow_runner") or _opt_import("flow_runner")
-    if not fm or not hasattr(fm, "run_xss_scan") or not callable(getattr(fm, "run_xss_scan")):
-         add_result("meta", {"stage": "xss", "status": "skipped:no-flow-runner"})
-         return
-    fm.run_xss_scan(ctx)
+    run_xss_scan(ctx)
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -2458,82 +2451,7 @@ from pathlib import Path
 import sys
 import importlib.util as _ilu
 from websecure.core.http import hardened_session as _hardened_session
-import inspect as __ins
-from importlib.util import find_spec as _find_spec
-from importlib import import_module as _import_module
-import socket, ssl, json, importlib, importlib.util as _iul  # noqa: E401
-import logging as _logging  # noqa: E401
-_logger = _logging.getLogger(__name__)
-_req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
-requests = _req_mod  # alias; may be None
-
-
-
-_BOUNDARY_EXC = tuple([
-    (_req_mod.exceptions.RequestException if (_req_mod and hasattr(_req_mod, "exceptions")) else Exception),
-    TimeoutError,
-    ssl.SSLError,
-    socket.gaierror,
-    OSError,
-    json.JSONDecodeError,
-    ImportError,
-    ValueError,
-])
-
-__all__ = ['run_mode','run','run_many','build_plan','hpm_current_policy']
-
-def _importable(mod: str) -> bool:
-    return _find_spec(mod) is not None
-
-def _import_mod(*candidates: str):
-    for name in candidates:
-        if _importable(name):
-            return _import_module(name)
-    raise ModuleNotFoundError(f"Modül bulunamadı: {candidates!r}")
-
-def run(*args, **kwargs):
-    fr = _import_mod('websecure.core.flow_runner', 'core.flow_runner')
-    if hasattr(fr, 'run') and callable(fr.run):
-        return fr.run(*args, **kwargs)
-    raise AttributeError("flow_runner.run bulunamadı")
-
-def run_many(*args, **kwargs):
-    fr = _import_mod('websecure.core.flow_runner', 'core.flow_runner')
-    if hasattr(fr, 'run_many') and callable(fr.run_many):
-        return fr.run_many(*args, **kwargs)
-    # Geriye uyumlu köprü: run_many yoksa run ile çoklu çalıştır
-    targets = args[0] if args else None
-    rest = args[1:] if len(args) > 1 else ()
-    if isinstance(targets, (list, tuple)) and hasattr(fr, 'run') and callable(fr.run):
-        return [fr.run(t, *rest, **kwargs) for t in targets]
-    if hasattr(fr, 'run') and callable(fr.run):
-        return fr.run(*args, **kwargs)
-    raise AttributeError("flow_runner.run_many ve run bulunamadı")
-
-def build_plan(*args, **kwargs):
-    ph = _import_mod('websecure.core.phases', 'core.phases')
-    if hasattr(ph, 'build_plan') and callable(ph.build_plan):
-        return ph.build_plan(*args, **kwargs)
-    raise AttributeError("phases.build_plan bulunamadı")
-
-def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
-    _rmod = None
-    if _iul.find_spec('websecure.core.reporting') is not None:
-        _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('core.reporting') is not None:
-        _rmod = importlib.import_module('core.reporting')
-    if _rmod is not None and hasattr(_rmod, 'add_result'):
-        _rmod.add_result(
-            type="phase_error",
-            severity="error",
-            message=str(_err),
-            meta={
-                "phase": _phase,
-                "where": _where,
-                "exc_type": _err.__class__.__name__,
-            },
-        )
-# --- end auto-injected header ---
+# --- scan_modes merge: duplicate definitions removed, using originals defined above ---
 
 
 def __ensure_triple_plan(plan):
@@ -2740,48 +2658,9 @@ def _qualify(name: str) -> str:
         return f"{_PKG_ROOT}.{name}"
     return name
 
-def _opt_import(mod: str):
-    full = _qualify(mod)
-    return _ws_maybe_import_any(full, mod)
-from typing import Any, Dict, Optional
-
+# _opt_import ve _resolve_module yukarıda tanımlı (satır 367 ve 379) — duplicate kaldırıldı
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../<root>
 _SITEPK_SUBSTR = ("site-packages", "dist-packages")
-
-
-def _spec_origin(spec) -> str:
-    return "" if spec is None or getattr(spec, "origin", None) in (None, "built-in") else str(
-        Path(spec.origin).resolve())
-
-
-def _is_sitepkg_path(p: str) -> bool:
-    up = p.replace('\\', '/').lower()
-    return any(s in up for s in _SITEPK_SUBSTR)
-
-
-def _is_local_path(p: str) -> bool:
-    return bool(p) and str(Path(p)).startswith(str(_PROJECT_ROOT))
-
-
-
-def _resolve_module(primary: str, fallbacks: list[str] | None = None):
-    """
-    Önce tam paket adını (ör. 'scanners.jwt'), sonra fallback'leri, en sonda düz modül ismini dener.
-    Import sırasında modül içi hatalar yükselir (susturma yok).
-    """
-    cands: list[str] = [primary]
-    if fallbacks:
-        cands.extend([m for m in fallbacks if m])
-
-    base = primary.rsplit(".", 1)[-1] if primary else ""
-    if base and base not in cands:
-        cands.append(base)
-
-    for m in cands:
-        mod = _opt_import(m)
-        if mod is not None:
-            return mod
-    return None
 
 
 _reporting = _opt_import("websecure.core.reporting")
@@ -2834,7 +2713,8 @@ def _flush_report() -> None:
         _reporting.flush()
 
 
-def _ensure_session(sess: Any):
+def _get_or_create_session(sess: Any):
+    """session nesnesi varsa döner, yoksa hardened_session oluşturur."""
     if sess is not None:
         return sess
     if _requests is None:
@@ -3329,21 +3209,19 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
     if mode in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.DEEP):
         context.detailed = (mode != ScanMode.NORMAL)
 
-        # Resolve phases & runner
-        pkg = (__package__ or "").strip()
-        phases_mod = (_opt_import(f"{pkg}.phases") if pkg else None) or _opt_import("websecure.core.phases") or _opt_import("phases")
-        runner_mod = (_opt_import(f"{pkg}.runner") if pkg else None) or _opt_import("websecure.core.runner") or _opt_import("runner")
+        # build_plan ve run_plan bu modülde tanımlı (merged from phases + runner)
+        import sys as _sys
+        _self_mod = _sys.modules.get(__name__) or _sys.modules.get("websecure.core.phases")
+        build_plan_fn = globals().get("build_plan") or (getattr(_self_mod, "build_plan", None) if _self_mod else None)
+        run_plan_fn = globals().get("run_plan") or (getattr(_self_mod, "run_plan", None) if _self_mod else None)
 
-        build_plan = getattr(phases_mod, "build_plan", None) if phases_mod else None
-        run_plan_fn = getattr(runner_mod, "run_plan", None) if runner_mod else None
-
-        if not callable(build_plan) or not callable(run_plan_fn):
+        if not callable(build_plan_fn) or not callable(run_plan_fn):
             _report("errors", {"stage": "run_mode", "error": "Flow runner çözümlemesi başarısız (build_plan/run_plan yok)"})
             _flush_report()
             _maybe_perform_reporting(context)
             return context.results
 
-        plan = build_plan(context)
+        plan = build_plan_fn(context)
         plan = __ensure_triple_plan(plan)
 
         loop = asyncio.get_event_loop_policy().get_event_loop()

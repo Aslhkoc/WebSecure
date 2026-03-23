@@ -18,13 +18,8 @@ from websecure.core.alerts import AlertManager
 _GLOBAL_LOCK = threading.Lock()
 _GLOBAL_RESULTS: Dict[str, List[Any]] = defaultdict(list)
 
-def add_result(bucket: str, entry: Dict[str, Any]):
-    """
-    Thread-safe way to add a finding to the global results.
-    Used by scanners running in threads or async tasks.
-    """
-    with _GLOBAL_LOCK:
-        _GLOBAL_RESULTS[bucket].append(entry)
+# add_result (full implementation) is defined below at line ~534 with normalization + redaction + alerts.
+# _GLOBAL_RESULTS is kept in sync by that implementation.
 
 def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict]:
     """
@@ -89,22 +84,8 @@ def get_global_results() -> Dict[str, List[Any]]:
         # Return a shallow copy to avoid concurrent mod issues during read
         return {k: v[:] for k, v in _GLOBAL_RESULTS.items()}
 
-def perform_reporting(session, cfg: dict, results: dict):
-    """
-    Compat wrapper for main.py to trigger reporting.
-    Merges local results with global callback results.
-    """
-    # 1. Merge Globals
-    g_res = get_global_results()
-    for bucket, items in g_res.items():
-        if bucket not in results:
-            results[bucket] = []
-        results[bucket].extend(items)
-        
-    # 2. Finalize
-    # Create a dummy context as expected by finalize_reports
-    ctx = {"results": results, "session": session}
-    finalize_reports(ctx, cfg)
+# perform_reporting (full implementation with logger support) defined below at ~line 1502.
+# Simple compat wrapper removed to avoid override confusion.
 
 def _sarif_from_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Minimal SARIF 2.1.0 skeleton
@@ -547,6 +528,9 @@ def add_result(bucket: str, item: Any) -> None:
         if bucket not in _buckets:
             _buckets[bucket] = []
         _buckets[bucket].append(safe_it)
+        # Keep _GLOBAL_RESULTS in sync for get_global_results() callers
+        with _GLOBAL_LOCK:
+            _GLOBAL_RESULTS[bucket].append(safe_it)
 
         # [WS3] Universal Evidence Handling
         # If item has 'evidence', we log it specifically or save artifacts
@@ -1088,7 +1072,7 @@ def _render_ssl_table(results: Dict) -> str:
     return "\n".join(out)
 
 
-def render_markdown_report(results: Dict) -> str:
+def _render_markdown_report_inline(results: Dict) -> str:
     # Hazırlık
     items_raw = _coerce_final(results)
     items = _dedupe_findings(items_raw)
@@ -1283,14 +1267,13 @@ def render_markdown_report(results: Dict) -> str:
 
 def render_markdown_report(results: Dict) -> str:
     """
-    Delegates to the dedicated Markdown reporter module.
+    Delegates to the dedicated Markdown reporter module; falls back to inline implementation.
     """
     try:
         from websecure.reporters import markdown
         return markdown.render(results)
-    except Exception as e:
-        _logger.error(f"Markdown render failed using module, falling back to simple: {e}")
-        return _render_markdown_report_simple(results)  # Fallback logic if needed, or just "" 
+    except Exception:
+        return _render_markdown_report_inline(results)
 
 def _render_markdown_report_simple(results: Dict) -> str:
     # Just a stump to allow execution if import fails
