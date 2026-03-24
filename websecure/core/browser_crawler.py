@@ -26,6 +26,14 @@ except ImportError:
 @dataclass
 class BrowserCrawlConfig:
     headless: bool = True
+    """
+    True  → Chrome arka planda çalışır (görünmez, daha hızlı).
+    False → Chrome görünür pencerede açılır; test adımlarını, form
+            doldurmayı ve payload denemelerini gerçek zamanlı izleyebilirsiniz.
+    CLI'dan --show-browser / config: browser.headless=false ile değiştirin.
+    """
+    show_browser: bool = False   # headless=False için kısayol; True yapınca Chrome görünür
+    slow_mo_ms: int = 0          # show_browser=True iken adımlar arası gecikme (ms) — izlemeyi kolaylaştırır
     max_pages: int = 50
     timeout_ms: int = 15000
     wait_after_load_ms: int = 1500
@@ -101,9 +109,19 @@ class BrowserCrawler:
         self._visited = set()
         self._result = BrowserCrawlResult()
 
-        launch_opts: Dict[str, Any] = {"headless": self.config.headless}
+        # show_browser=True → headless=False (görünür Chrome)
+        use_headless = self.config.headless and not self.config.show_browser
+        launch_opts: Dict[str, Any] = {"headless": use_headless}
+        if self.config.slow_mo_ms > 0 and not use_headless:
+            launch_opts["slow_mo"] = self.config.slow_mo_ms
         if self.config.proxy_url:
             launch_opts["proxy"] = {"server": self.config.proxy_url}
+
+        if not use_headless:
+            _logger.info(
+                "[BrowserCrawler] Görünür mod aktif — Chrome penceresi açılıyor. "
+                "Test adımlarını, form doldurmayı ve payload denemelerini izleyebilirsiniz."
+            )
 
         async with async_playwright() as pw:
             browser: Browser = await pw.chromium.launch(**launch_opts)

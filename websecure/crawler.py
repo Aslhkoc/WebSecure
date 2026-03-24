@@ -417,6 +417,12 @@ class WebCrawler:
                 queued = cp["queued"]
                 pages_crawled = cp["pages_crawled"]
                 if self.debug: print(f"[Crawler] Resumed from checkpoint: {pages_crawled} pages.")
+                try:
+                    from websecure.core.reporting import get_live_monitor
+                    first_url = cp["queue"][0][0] if cp["queue"] else self.root
+                    get_live_monitor().log_resume(pages_crawled, first_url)
+                except Exception:
+                    pass
 
         # Robots & Sitemap
         if not self.cfg.ignore_robots:

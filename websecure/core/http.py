@@ -240,6 +240,35 @@ def _smart_request(self, method, url, **kwargs):
         _sleep_for_rps()
 
         try:
+            # Live monitor: log each outgoing request
+            try:
+                from websecure.core.reporting import get_live_monitor
+                import urllib.parse as _up
+                _kw_params  = kwargs.get("params") or {}
+                _kw_data    = kwargs.get("data") or {}
+                _kw_json    = kwargs.get("json") or {}
+                _payload_hint = ""
+                _param_hint   = ""
+                if _kw_params:
+                    _param_hint   = list(_kw_params.keys())[0] if isinstance(_kw_params, dict) else ""
+                if _kw_data:
+                    _payload_hint = str(_kw_data)[:60]
+                elif _kw_json:
+                    _payload_hint = str(_kw_json)[:60]
+                # Also extract from URL query string
+                if not _param_hint:
+                    _qs = _up.parse_qs(_up.urlparse(url).query)
+                    if _qs:
+                        _param_hint = list(_qs.keys())[0]
+                get_live_monitor().log_request(
+                    str(method).upper(), url,
+                    phase=phase,
+                    payload=_payload_hint,
+                    param=_param_hint,
+                )
+            except Exception:
+                pass
+
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
 
@@ -248,6 +277,12 @@ def _smart_request(self, method, url, **kwargs):
 
             if status in (403, 429):
                 print(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")
+                # Live monitor: ban detected
+                try:
+                    from websecure.core.reporting import get_live_monitor
+                    get_live_monitor().log_ban_detected(status, url)
+                except Exception:
+                    pass
 
                 if attempt <= max_retries:
                     rotated = _try_rotate_identity(self)

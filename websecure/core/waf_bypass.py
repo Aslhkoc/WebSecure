@@ -122,10 +122,16 @@ class WAFBypassAdapter(HTTPAdapter):
                     new_proxy = get_tor_proxy()
                     if new_proxy:
                         sess.proxies.update(new_proxy)
+                        proxy_str = list(new_proxy.values())[0]
                         logger.debug(
                             "[WAFBypass] Continuous rotation: proxy → %s (req#%d)",
-                            list(new_proxy.values())[0], sess._req_counter,
+                            proxy_str, sess._req_counter,
                         )
+                        try:
+                            from websecure.core.reporting import get_live_monitor
+                            get_live_monitor().log_rotation(sess._req_counter, proxy_str)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 

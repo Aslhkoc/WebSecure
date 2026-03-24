@@ -1879,7 +1879,13 @@ def run_plan_if_needed(ctx: dict):
         
         if enabled and callable(runner):
             if item.get("visible", True):
-                print(f"[•] Faz: {item.get('title', pid)}")
+                phase_title = item.get('title', pid)
+                print(f"[•] Faz: {phase_title}")
+                try:
+                    from websecure.core.reporting import get_live_monitor
+                    get_live_monitor().log_phase(phase_title)
+                except Exception:
+                    pass
             
             # Run safely
             start_t = _t.time()
@@ -1899,6 +1905,11 @@ def run_plan_if_needed(ctx: dict):
                 _logger.debug(f"Skipping phase {pid} (enabled={enabled})")
 
     results["meta"]["scan_end"] = _t.time()
+    try:
+        from websecure.core.reporting import get_live_monitor
+        get_live_monitor().summary()
+    except Exception:
+        pass
 
 
 # ===========================================================================
