@@ -123,6 +123,9 @@ class PluginRegistry:
             ("websecure.scanners.tls",              None,                   "tls"),
             ("websecure.scanners.infrastructure",   None,                   "tls"),
             ("websecure.scanners.js_analyzer",      "JSAnalyzer",           "offensive"),
+            ("websecure.scanners.prototype_pollution", None,                 "offensive"),
+            ("websecure.scanners.crlf_injection",   None,                   "offensive"),
+            ("websecure.scanners.race_condition",    None,                   "offensive"),
         ]
 
         for module_path, class_name, phase in _BUILTIN_SCANNERS:

