@@ -111,6 +111,24 @@ class WAFBypassAdapter(HTTPAdapter):
         return getattr(s, name, default)
 
     def send(self, request: PreparedRequest, **kwargs):
+        # 0. Continuous IP rotation — swap proxy every N requests
+        sess = self._session_ref
+        if sess is not None and hasattr(sess, "_req_counter"):
+            sess._req_counter += 1
+            rotate_every = getattr(sess, "_rotate_every", 10)
+            if sess._req_counter % max(1, rotate_every) == 0:
+                try:
+                    from websecure.core.waf_bypass import get_tor_proxy
+                    new_proxy = get_tor_proxy()
+                    if new_proxy:
+                        sess.proxies.update(new_proxy)
+                        logger.debug(
+                            "[WAFBypass] Continuous rotation: proxy → %s (req#%d)",
+                            list(new_proxy.values())[0], sess._req_counter,
+                        )
+                except Exception:
+                    pass
+
         # 1. Rotate User-Agent
         if "User-Agent" not in request.headers or "python-requests" in request.headers["User-Agent"]:
             request.headers["User-Agent"] = get_random_user_agent()
@@ -291,10 +309,20 @@ class WAFBypassSession(requests.Session):
     and adds random jitter/delay to requests.
     Bypass strategy flags (_bypass_double_encode, _bypass_unicode, etc.)
     are set by BypassStrategyEngine and read by WAFBypassAdapter at send time.
+
+    Continuous IP rotation: proxy is rotated every _rotate_every requests
+    (default 10) so the source IP changes throughout the entire scan, not
+    only after a ban is detected.
     """
-    def __init__(self, jitter_range: tuple[float, float] = (0.5, 2.0)):
+    def __init__(
+        self,
+        jitter_range: tuple[float, float] = (0.5, 2.0),
+        rotate_every: int = 10,
+    ):
         super().__init__()
-        self.jitter_range = jitter_range
+        self.jitter_range   = jitter_range
+        self._rotate_every  = rotate_every   # rotate proxy after this many requests
+        self._req_counter   = 0              # incremented by WAFBypassAdapter.send()
         # Pass self so adapter can read bypass flags from this session
         adapter = WAFBypassAdapter(session_ref=self)
         self.mount("https://", adapter)
@@ -1539,6 +1567,29 @@ def init_egress_manager(cfg: dict = None) -> EgressManager:
 def get_egress_manager() -> Optional[EgressManager]:
     """Global EgressManager örneğini döner (başlatılmamışsa None)."""
     return _global_egress
+
+
+def get_tor_proxy() -> Optional[Dict[str, str]]:
+    """
+    Return a requests-compatible proxy dict for the current Tor/residential egress.
+
+    Returns ``{"http": url, "https": url}`` or ``None`` if no proxy is configured.
+    Used by http._try_rotate_identity() after a ban is detected.
+    """
+    em = _global_egress
+    if em is not None:
+        url = em.get_next_egress()
+        if url:
+            return {"http": url, "https": url}
+    # Fallback: bare Tor SOCKS5 if port 9050 is open
+    try:
+        import socket as _sock
+        with _sock.create_connection(("127.0.0.1", 9050), timeout=0.5):
+            tor_url = "socks5h://127.0.0.1:9050"
+            return {"http": tor_url, "https": tor_url}
+    except Exception:
+        pass
+    return None
 
 
 # ===========================================================================

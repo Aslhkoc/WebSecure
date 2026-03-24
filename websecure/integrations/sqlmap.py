@@ -145,71 +145,174 @@ class SQLMapWrapper:
                 cmd = [self.binary]
 
             cmd.extend([
-                "-u", target, 
-                "--batch", 
-                "--risk", str(risk), 
+                "-u", target,
+                "--batch",
+                "--risk", str(risk),
                 "--level", str(level),
                 "--output-dir", out_dir,
-                "--disable-coloring"
+                "--disable-coloring",
+                "--forms",           # also test HTML form inputs
+                "--parse-errors",    # expose DB error messages
             ])
             if extra_args:
                 cmd.extend(extra_args)
-            
+
             logger.info(f"Starting SQLMap binary scan on {target}...")
-            # We want to wait for it.
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            
-            # Check results.csv in output directory/target_hostname
-            # Structure: out_dir/hostname/log
-            # log file contains findings.
-            
-            results = []
-            
-            # Find the log file
-            for root, dirs, files in os.walk(out_dir):
-                if "log" in files:
-                    log_path = os.path.join(root, "log")
-                    # 'log' file format:
-                    # [time] [INFO] ...
-                    # CSV format inside log? No, it's text usually unless --parse-errors.
-                    # Wait, sqlmap has a 'results.csv' if configured? 
-                    # Actually parsing 'log' file for key phrases is standard usage.
-                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        for line in f:
-                            # Simple heuristic: look for "Parameter: ... ("
-                            # Or "Type: " 
-                            # Simple heuristic: look for "Parameter: ... ("
-                            # Or "Type: " 
-                            if "Type: " in line:
-                                current_finding = {"raw_finding": line.strip(), "evidence": {}}
-                                results.append(current_finding)
-                            
-                            # [WS3] Data Extraction Logic
-                            # Capture Banner, Tables, Users if they appear in logs
-                            if "banner: " in line.lower():
-                                banner = line.split(":", 1)[1].strip()
-                                for r in results: r.setdefault("evidence", {})["database_banner"] = banner
-                            
-                            if "database management system users" in line.lower():
-                                # subsequent lines might have users, simplified for now
-                                for r in results: r.setdefault("evidence", {})["extracted_data_type"] = "users"
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=300,
+            )
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
 
-                            if "available databases" in line.lower():
-                                for r in results: r.setdefault("evidence", {})["extracted_data_type"] = "dbs"
+            results = _parse_sqlmap_output(stdout + "\n" + stderr, target)
 
-                            if "retrieved:" in line.lower():
-                                # Catch generic data dumps
-                                dumped = line.split("retrieved:", 1)[1].strip()
-                                for r in results: 
-                                    ev = r.setdefault("evidence", {})
-                                    ev.setdefault("dumped_data", []).append(dumped)
-                            
+            # Also scan the log file written to out_dir for any extra detail
+            for dirpath, _, filenames in os.walk(out_dir):
+                if "log" in filenames:
+                    try:
+                        with open(os.path.join(dirpath, "log"), encoding="utf-8", errors="replace") as fh:
+                            log_text = fh.read()
+                        extra = _parse_sqlmap_output(log_text, target)
+                        # Merge: append findings not already in results
+                        seen = {r.get("parameter") for r in results}
+                        for r in extra:
+                            if r.get("parameter") not in seen:
+                                results.append(r)
+                                seen.add(r.get("parameter"))
+                    except Exception:
+                        pass
+
             return results
 
+        except subprocess.TimeoutExpired:
+            logger.warning(f"SQLMap timed out on {target}")
+            return []
         except Exception as e:
             logger.error(f"SQLMap binary execution error: {e}")
             return []
         finally:
             try:
                 shutil.rmtree(out_dir)
-            except: pass
+            except Exception:
+                pass
+
+
+def _parse_sqlmap_output(text: str, target: str) -> List[Dict[str, Any]]:
+    """
+    Parse sqlmap textual output into structured finding dicts.
+
+    Handles the multi-line block that sqlmap emits for each vulnerable parameter:
+
+        Parameter: id (GET)
+            Type: boolean-based blind
+            Title: AND boolean-based blind - WHERE or HAVING clause
+            Payload: id=1 AND 1=1-- -
+
+    Also extracts: database banner, DBMS type, tables, users, retrieved data.
+    """
+    results: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+
+    # Shared metadata extracted from the whole run
+    dbms_banner: str = ""
+    dbms_type:   str = ""
+    databases:   List[str] = []
+    db_users:    List[str] = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+
+        # DBMS identification
+        m = re.search(r"back-end DBMS:\s*(.+)", stripped, re.I)
+        if m:
+            dbms_type = m.group(1).strip()
+
+        # Banner
+        m = re.search(r"banner:\s*'([^']+)'", stripped, re.I)
+        if m and not dbms_banner:
+            dbms_banner = m.group(1).strip()
+
+        # Available databases
+        m = re.search(r"\[\*\]\s+(\w+)\s*$", stripped)
+        if m and "available databases" in text[:text.find(stripped) + 50].lower():
+            databases.append(m.group(1))
+
+        # Current user / users
+        m = re.search(r"current user is:\s*'([^']+)'", stripped, re.I)
+        if m:
+            db_users.append(m.group(1).strip())
+
+        # ── Parameter block start ─────────────────────────────────────────
+        m = re.match(r"Parameter:\s+(.+?)\s+\((\w+)\)", stripped)
+        if m:
+            if current:
+                results.append(current)
+            current = {
+                "type":        "SQL Injection",
+                "url":         target,
+                "severity":    "Critical",
+                "parameter":   m.group(1).strip(),
+                "method":      m.group(2).upper(),
+                "injections":  [],
+                "evidence":    {},
+                "description": "",
+            }
+            continue
+
+        if current is None:
+            continue
+
+        # Injection type
+        m = re.match(r"Type:\s+(.+)", stripped)
+        if m:
+            inj: Dict[str, Any] = {"type": m.group(1).strip()}
+            current["injections"].append(inj)
+            continue
+
+        # Title
+        m = re.match(r"Title:\s+(.+)", stripped)
+        if m and current["injections"]:
+            current["injections"][-1]["title"] = m.group(1).strip()
+            continue
+
+        # Payload
+        m = re.match(r"Payload:\s+(.+)", stripped)
+        if m and current["injections"]:
+            current["injections"][-1]["payload"] = m.group(1).strip()
+            continue
+
+        # Retrieved data lines
+        m = re.search(r"retrieved:\s+(.+)", stripped, re.I)
+        if m:
+            current["evidence"].setdefault("retrieved_data", []).append(m.group(1).strip())
+
+    # Flush last block
+    if current:
+        results.append(current)
+
+    # Annotate all findings with shared metadata
+    for r in results:
+        if dbms_type:
+            r["evidence"]["dbms"] = dbms_type
+        if dbms_banner:
+            r["evidence"]["banner"] = dbms_banner
+        if databases:
+            r["evidence"]["databases"] = databases
+        if db_users:
+            r["evidence"]["db_users"] = db_users
+        # Build human-readable description
+        inj_types = ", ".join(i.get("type", "") for i in r.get("injections", []))
+        r["description"] = (
+            f"SQL injection in parameter '{r['parameter']}' ({r['method']}) "
+            f"via {inj_types or 'unknown technique'}. "
+            + (f"DBMS: {dbms_type}. " if dbms_type else "")
+            + (f"Banner: {dbms_banner}." if dbms_banner else "")
+        )
+
+    return results
