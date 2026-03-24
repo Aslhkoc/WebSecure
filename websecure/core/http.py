@@ -75,46 +75,24 @@ _HTTP_POLICY = {
     }
 }
 
-# ---- HTTP Pace Manager (decoupled from scan_modes to avoid circular imports) ----
-from threading import Lock as _HPM_Lock
-
-class _HttpPaceManager:
-    __slots__ = ("_rps","_min","_max","_lock")
-    def __init__(self, rps: float = 2.0, rps_min: float = 0.2, rps_max: float = 20.0):
-        self._rps = float(rps)
-        self._min = float(rps_min)
-        self._max = float(rps_max)
-        self._lock = _HPM_Lock()
-
-    def record(self, status: int) -> None:
-        s = int(status) if isinstance(status, int) else 0
-        # Simple control law: backoff on 429/403, gently ramp up on 2xx
-        with self._lock:
-            if s == 429:
-                self._rps = max(self._min, self._rps * 0.5)
-            elif s == 403:
-                self._rps = max(self._min, self._rps * 0.8)
-            elif 200 <= s < 300:
-                self._rps = min(self._max, self._rps * 1.1)
-            elif 500 <= s < 600:
-                # be a little conservative on server errors
-                self._rps = max(self._min, self._rps * 0.9)
-
-    def current_policy(self) -> dict:
-        # No hidden state; expose policy dict
-        return {"rps": self._rps}
-
-_HPM = _HttpPaceManager()
-
-def hpm_current_policy() -> dict:
-    """Return current pacing policy for HTTP requests (no imports)."""
-    return _HPM.current_policy()
-
-def hpm_record_status(status_code: int) -> None:
-    """Record an HTTP response status to adjust pacing (no imports)."""
-    _HPM.record(status_code)
-
-# ---- /HTTP Pace Manager ----
+# ---- Circuit Breaker (replaces _HttpPaceManager stub) ----
+try:
+    from websecure.core.circuit_breaker import (
+        cb_check as _cb_check,
+        cb_record as _cb_record,
+        cb_record_error as _cb_record_error,
+        cb_reset as _cb_reset,
+        CircuitBreakerTripped as _CircuitBreakerTripped,
+    )
+    _CB_AVAILABLE = True
+except ImportError:
+    _CB_AVAILABLE = False
+    def _cb_check(): pass
+    def _cb_record(s): pass
+    def _cb_record_error(): pass
+    def _cb_reset(): pass
+    class _CircuitBreakerTripped(Exception): pass
+# ---- /Circuit Breaker ----
 
 _CURRENT_RPS = contextvars.ContextVar("CURRENT_RPS", default=2)
 _LAST_IDENTITY = contextvars.ContextVar("LAST_IDENTITY", default=None)
@@ -188,15 +166,11 @@ def _observe_rate_headers(headers: Dict[str, str]) -> Optional[int]:
     except ValueError:
         return None
 
-def _on_429(headers: Dict[str, str]) -> None:
-    rps = max(1, int(_CURRENT_RPS.get()))
-    factor = float(_HTTP_POLICY["rate_limit"]["backoff_multiplier"])
-    new_rps = max(_HTTP_POLICY["rate_limit"]["min_rps"], int(max(1, rps * factor)))
-    _CURRENT_RPS.set(new_rps)
+def _respect_retry_after(headers: Dict[str, str]) -> None:
+    """Honor Retry-After header on 429 responses. Circuit breaker handles threshold logic."""
     ra = _parse_retry_after(headers) if _HTTP_POLICY["rate_limit"]["respect_retry_after"] else None
-    
     wait_time = ra if (ra is not None and ra > 0) else 5.0
-    print(f"[HTTP] Backoff triggered -> RPS {rps}→{new_rps}; sleeping {wait_time:.1f}s")
+    print(f"[HTTP] Retry-After → sleeping {wait_time:.1f}s")
     time.sleep(wait_time)
 
 def _try_rotate_identity(session_obj) -> bool:
@@ -235,85 +209,92 @@ def _maybe_recover_from_backoff() -> None:
         print(f"[HTTP] canary → RPS {rps}→{_CURRENT_RPS.get()} (phase={ACTIVE_PHASE.get()})")
 
 def _smart_request(self, method, url, **kwargs):
-        phase = ACTIVE_PHASE.get()
-        # Initial identity setup
-        hdrs = dict(kwargs.get("headers", {}) or {})
-        identity_headers = _choose_identity_for_phase(phase)
-        for k, v in identity_headers.items():
-            if k not in hdrs:
-                hdrs[k] = v
-        
-        # Policy checks
-        method_u = str(method).upper()
-        post_ratio_ok = kwargs.pop("_post_ratio_ok", False)
-        if not _respect_idempotent_first(phase, method_u, post_ratio_ok):
-            raise RuntimeError(f"Non-idempotent method blocked by policy in phase '{phase}': {method_u}")
-        
-        kwargs["headers"] = hdrs
-        
-        # --- IMMORTAL LOOP: Auto-Heal & Retry ---
-        max_retries = 3  # How many times to rotate IP before giving up on THIS specific URL
-        attempt = 0
-        
-        while attempt <= max_retries:
-            attempt += 1
-            _sleep_for_rps()
-            
-            try:
-                resp = super(type(self), self).request(method, url, **kwargs)
-                status = resp.status_code
-                
-                # Check for BAN / Rate Limit
-                if status in (403, 429):
-                    print(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries+1}...")
-                    
-                    # If it's a hard ban (403) or severe limit (429), try to ROTATE Identity
-                    if attempt <= max_retries:
-                         # Trigger rotation logic
-                         rotated = _try_rotate_identity(self)
-                         if rotated:
-                             print("[Autopilot] Identity rotated successfully. Retrying request...")
-                             # Update current request headers with new identity if needed
-                             new_ident = _choose_identity_for_phase(phase) # Re-roll user agent etc.
-                             kwargs["headers"].update(new_ident)
-                             continue # Retry loop
-                         else:
-                             # Rotation failed (maybe no Tor), perform standard backoff
-                             _on_429(dict(resp.headers))
-                             # Retry once more after backoff?
-                             continue
-                    
-                    # If we ran out of attempts, just return the blocked response
-                    return resp
+    phase = ACTIVE_PHASE.get()
 
-                # Success or Normal Error (404, 500 etc)
-                # Check for rate limit recovery headers
-                rem = _observe_rate_headers(dict(resp.headers))
-                if rem is not None and rem > 0:
-                    _maybe_recover_from_backoff()
-                    
+    # Identity setup
+    hdrs = dict(kwargs.get("headers", {}) or {})
+    for k, v in _choose_identity_for_phase(phase).items():
+        if k not in hdrs:
+            hdrs[k] = v
+
+    # Idempotent-first policy
+    method_u      = str(method).upper()
+    post_ratio_ok = kwargs.pop("_post_ratio_ok", False)
+    if not _respect_idempotent_first(phase, method_u, post_ratio_ok):
+        raise RuntimeError(
+            f"Non-idempotent method blocked by policy in phase '{phase}': {method_u}"
+        )
+
+    kwargs["headers"] = hdrs
+
+    # --- Circuit breaker pre-check ---
+    # Raises CircuitBreakerTripped immediately if circuit is OPEN
+    _cb_check()
+
+    # --- IMMORTAL LOOP: Auto-Heal & Retry ---
+    max_retries = 3
+    attempt     = 0
+
+    while attempt <= max_retries:
+        attempt += 1
+        _sleep_for_rps()
+
+        try:
+            resp   = super(type(self), self).request(method, url, **kwargs)
+            status = resp.status_code
+
+            # Feed status into circuit breaker
+            _cb_record(status)
+
+            if status in (403, 429):
+                print(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")
+
+                if attempt <= max_retries:
+                    rotated = _try_rotate_identity(self)
+                    if rotated:
+                        print("[Autopilot] Identity rotated. Retrying…")
+                        _cb_reset()  # new identity → clean slate for circuit breaker
+                        kwargs["headers"].update(_choose_identity_for_phase(phase))
+                        continue
+                    else:
+                        # Honor Retry-After; circuit breaker tracks the 429 streak
+                        _respect_retry_after(dict(resp.headers))
+                        continue
+
                 return resp
 
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-                # Connection died? Likely Tor rotating or network blip.
-                err_msg = str(e).lower()
-                is_timeout = "timeout" in err_msg or "timed out" in err_msg
-                
-                print(f"[Autopilot] Connection error ({e.__class__.__name__}). Retrying {attempt}/{max_retries}...")
-                
-                # If it is a heavy timeout (SOCKS/Connect), try rotating identity on the spot
-                if is_timeout and attempt < max_retries:
-                     _try_rotate_identity(self)
-                
-                if attempt <= max_retries:
-                    time.sleep(1.0) # Reduced brief pause
-                    continue
-                
-                # If we exhausted retries, log and raise/return response
-                print(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
-                raise e # Give up
-        
-        return resp # Should not be reached logic-wise but safe fallback
+            # --- CAPTCHA detection on 200/OK responses ---
+            _captcha_mw = _get_captcha_middleware()
+            if _captcha_mw is not None:
+                solved = _captcha_mw.handle(self, resp, url, kwargs, method)
+                if solved is not None:
+                    return solved
+
+            # Canary recovery (RPS ramp-up on success)
+            if _observe_rate_headers(dict(resp.headers)) is not None:
+                _maybe_recover_from_backoff()
+
+            return resp
+
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.RequestException) as e:
+            _cb_record_error()
+            err_msg    = str(e).lower()
+            is_timeout = "timeout" in err_msg or "timed out" in err_msg
+            print(f"[Autopilot] Connection error ({e.__class__.__name__}). Retry {attempt}/{max_retries}…")
+
+            if is_timeout and attempt < max_retries:
+                _try_rotate_identity(self)
+
+            if attempt <= max_retries:
+                time.sleep(1.0)
+                continue
+
+            print(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
+            raise e
+
+    return resp  # safe fallback (loop should always return or raise above)
 
 import contextvars
 import json
@@ -341,17 +322,84 @@ import importlib.util as _impspec
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry as Urllib3Retry
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:  # sadece IDE tipi için, runtime’da çalışmaz
-    from websecure.core.detect import classify_401_403, classify_access_block
 _HTTPX_AVAILABLE = _impspec.find_spec("httpx") is not None
-try:
-    from websecure.core.detect import classify_401_403, classify_access_block  # runtime import
-except Exception:
-    def classify_401_403(resp):  # fallback: no-op classifier
-        return None
-    def classify_access_block(status, headers, text):  # fallback: no-op classifier
-        return None
+
+# ---------------------------------------------------------------------------
+# CAPTCHA middleware (lazy — only active when config sets a solver provider)
+# ---------------------------------------------------------------------------
+_CAPTCHA_MIDDLEWARE = None  # set by install_captcha_config()
+
+def install_captcha_config(cfg_dict: dict) -> None:
+    """
+    Push CAPTCHA config from the main config blob into the HTTP layer.
+    Call once at scan startup alongside install_http_phase_policies().
+    """
+    global _CAPTCHA_MIDDLEWARE
+    try:
+        from websecure.core.analysis import CaptchaBypassMiddleware, read_captcha_config
+        cap_cfg = read_captcha_config(cfg_dict)
+        if cap_cfg.provider != "none":
+            _CAPTCHA_MIDDLEWARE = CaptchaBypassMiddleware(cap_cfg)
+    except Exception:
+        pass
+
+def _get_captcha_middleware():
+    return _CAPTCHA_MIDDLEWARE
+
+
+# ---------------------------------------------------------------------------
+# Access block classifier — replaces the dead websecure.core.detect import
+# ---------------------------------------------------------------------------
+
+def classify_access_block(status: int, headers, body: str) -> str:
+    """
+    Classify a blocked HTTP response into a machine-readable category.
+
+    Returns one of:
+      rate_limit     — 429 or Retry-After present
+      waf_challenge  — WAF JS/CAPTCHA challenge page (Cloudflare, Akamai …)
+      captcha_block  — CAPTCHA challenge (reCAPTCHA / hCaptcha in body)
+      auth_required  — plain 401/403 without WAF/CAPTCHA signals
+      unknown        — everything else
+    """
+    get_hdr = headers.get if callable(getattr(headers, "get", None)) else (lambda k, d=None: d)
+    server   = (get_hdr("server", "") or "").lower()
+    via      = (get_hdr("via", "") or "").lower()
+    retry_a  = get_hdr("retry-after", None)
+    text     = (body or "").lower()
+
+    if status == 429 or retry_a is not None:
+        return "rate_limit"
+
+    if any(s in server + via for s in ("cloudflare", "akamai", "imperva", "incapsula")):
+        return "waf_challenge"
+    if any(s in text for s in ("attention required", "checking your browser", "cf-browser-verification")):
+        return "waf_challenge"
+
+    if status in (401, 403):
+        if any(s in text for s in ("captcha", "recaptcha", "hcaptcha", "turnstile")):
+            return "captcha_block"
+        return "auth_required"
+
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# HPM (HTTP Pace Manager) — lazy-import from phases to avoid circular deps
+# ---------------------------------------------------------------------------
+def hpm_current_policy() -> dict:
+    try:
+        from websecure.core.phases import hpm_current_policy as _hpm_pol
+        return _hpm_pol()
+    except Exception:
+        return {"rps": 0.0}
+
+def hpm_record_status(status_code: int) -> None:
+    try:
+        from websecure.core.phases import hpm_record_status as _hpm_rec
+        _hpm_rec(int(status_code))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +920,9 @@ class _RequestsDriver:
              pass
 
     def request_once(self, method: str, url: str, **kw) -> requests.Response:
+        # Circuit breaker pre-check — raises if scan is halted
+        _cb_check()
+
         kw.pop("verify", None)
         kw.setdefault("timeout", self.timeout_pair)
         headers = dict(kw.pop("headers", {}) or {})
@@ -879,8 +930,6 @@ class _RequestsDriver:
             headers.setdefault(k, v)
         kw["headers"] = headers
 
-        # Proxy yükleme: payloads._load_cfg bağımlılığından kurtarıldı.
-        # HttpClient.__init__ tarafından enjekte edilen _proxy_pool kullanılır.
         if "proxies" not in kw:
             try:
                 from websecure.core.waf_bypass import get_egress_manager as _gem
@@ -900,20 +949,16 @@ class _RequestsDriver:
         _collect_rate_limit(resp, url)
         st = int(getattr(resp, "status_code", 0) or 0)
         hpm_record_status(st)
+        _cb_record(st)  # feed circuit breaker
 
-        if st in (429, 403):
-            kind = classify_access_block(st, getattr(resp, "headers", {}), getattr(resp, "text", ""))
-            if kind == "rate-limit":
-                ra = getattr(resp, "headers", {}).get("Retry-After") or None
-                ra_s = str(ra) if ra is not None else ""
-                ra_val = float(ra_s) if ra_s.replace(".", "", 1).isdigit() else None
-                self._on_429(ra_val)
-                add_result(
-                    "anti_block_event",
-                    {"type": "rate-limit", "url": url, "status": st, "retry_after": ra},
-                )
-            elif kind in ("waf", "ban"):
-                add_result("anti_block_event", {"type": kind, "url": url, "status": st})
+        if st == 429:
+            ra = getattr(resp, "headers", {}).get("Retry-After") or None
+            ra_s  = str(ra) if ra is not None else ""
+            ra_val = float(ra_s) if ra_s.replace(".", "", 1).isdigit() else None
+            self._on_429(ra_val)
+            add_result("anti_block_event", {"type": "rate-limit", "url": url, "status": st, "retry_after": ra})
+        elif st == 403:
+            add_result("anti_block_event", {"type": "forbidden", "url": url, "status": st})
 
         return resp
 
@@ -1135,10 +1180,6 @@ class HttpClient:
             raw = self._driver.request_once(method, url, **kw)
             resp = UnifiedResponse(raw, driver=("httpx" if self.driver_name == "httpx" else "requests"))
             status = resp.status_code
-
-            kind = classify_401_403(resp)
-            if kind:
-                note_auth_outcome(kind)
 
             _collect_rate_limit(resp, url)
             

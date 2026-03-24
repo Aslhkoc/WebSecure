@@ -254,18 +254,6 @@ def cloud_hints(headers: Dict[str, Any]) -> List[str]:
         if "azure" in val or "microsoft" in val: hints.append("azure")
     return sorted(set(hints))
 
-def classify_401_403(resp) -> Optional[str]:
-    status = getattr(resp, "status_code", None)
-    if status not in (401, 403): return None
-    text = (getattr(resp, "text", "") or "").lower()
-    headers = {str(k).lower(): str(v).lower() for k, v in (getattr(resp, "headers", {}) or {}).items()}
-    
-    waf_keys = ("cf-ray", "cloudflare", "akamai", "imperva", "incapsula", "mod_security")
-    if any(k in headers.get("server", "") for k in waf_keys) or "waf" in text:
-        return "WAF"
-    if headers.get("retry-after") or "rate limit" in text:
-        return "RateLimit"
-    return "Auth"
 
 # ============================================================================
 # SECTION 4: WAF DETECTION & EVASION (formerly waf.py)
@@ -541,12 +529,6 @@ class NoneProvider(ImageCaptchaSolver, RecaptchaV2Solver):
         return None
 
 
-class OCRProvider(ImageCaptchaSolver):
-    def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
-        if not (Image and pytesseract):
-            return None
-        img = Image.open(io.BytesIO(img_bytes))
-        return pytesseract.image_to_string(img, lang=cfg.tesseract_lang).strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -835,8 +817,6 @@ class CapSolverProvider(ImageCaptchaSolver):
 # ---------------------------------------------------------------------------
 
 def _select_solver(cfg: CaptchaConfig):
-    if cfg.provider == "ocr":
-        return OCRProvider()
     if cfg.provider == "2captcha":
         return TwoCaptchaProvider()
     if cfg.provider == "capsolver":
@@ -874,6 +854,223 @@ def solve_turnstile_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> O
     if hasattr(s, "solve_turnstile"):
         return s.solve_turnstile(site_key, site_url, cfg)  # type: ignore
     return None
+
+
+# ---------------------------------------------------------------------------
+# CAPTCHA Challenge Detection & Bypass Middleware
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CaptchaChallenge:
+    """Describes a detected CAPTCHA challenge in an HTTP response."""
+    challenge_type: str          # recaptcha_v2 | recaptcha_v3 | hcaptcha | turnstile | cloudflare_iuam
+    site_key: Optional[str]      # extracted data-sitekey (None if not extractable)
+    page_url: str                # canonical page URL for solver APIs
+
+
+_LOGGER_CC = logging.getLogger("websecure.captcha")
+
+
+class CaptchaDetector:
+    """
+    Inspects HTTP responses for CAPTCHA challenges and extracts site keys.
+
+    Detection order (most specific first):
+      1. Cloudflare Turnstile   — cf-turnstile widget + data-sitekey
+      2. hCaptcha               — hcaptcha.com script presence + data-sitekey
+      3. reCAPTCHA v3           — grecaptcha.execute() call + site key
+      4. reCAPTCHA v2           — g-recaptcha / data-sitekey
+      5. Cloudflare IUAM        — JS challenge page (no site key, needs token solve)
+    """
+
+    # Body text markers (lowercased match)
+    _CF_IUAM     = ("checking your browser", "cf-browser-verification",
+                    "jschl_vc", "jschl_answer", "please wait while we check your browser")
+    _TURNSTILE   = ("challenges.cloudflare.com/turnstile", "cf-turnstile")
+    _HCAPTCHA    = ("hcaptcha.com/1/api.js", "h-captcha", "data-hcaptcha-widget-id")
+    _RECAPTCHA   = ("www.google.com/recaptcha", "recaptcha/api.js", "g-recaptcha")
+
+    # Patterns for site key extraction (compiled once)
+    _RE_TURNSTILE_KEY  = re.compile(
+        r'cf-turnstile[^>]*data-sitekey=["\']([A-Za-z0-9_\-]{10,80})["\']', re.I | re.S)
+    _RE_HCAPTCHA_KEY   = re.compile(
+        r'data-sitekey=["\']([A-Za-z0-9_\-]{10,80})["\']', re.I)
+    _RE_RECAPTCHA_V3   = re.compile(
+        r'grecaptcha\.execute\s*\(\s*["\']([A-Za-z0-9_\-]{10,80})["\']', re.I)
+    _RE_RECAPTCHA_V2   = re.compile(
+        r'data-sitekey=["\']([A-Za-z0-9_\-]{10,80})["\']', re.I)
+    _RE_RENDER_KEY     = re.compile(
+        r'[?&]render=["\']?([A-Za-z0-9_\-]{10,80})["\']?', re.I)
+
+    def detect(self, response) -> Optional[CaptchaChallenge]:
+        """
+        Returns a CaptchaChallenge if the response contains a CAPTCHA,
+        or None if the response is clean.
+        """
+        status  = getattr(response, "status_code", 200)
+        if status not in (200, 403, 429, 503):
+            return None
+
+        raw_text = getattr(response, "text", "") or ""
+        text     = raw_text.lower()
+        url      = str(getattr(response, "url", ""))
+
+        # 1. Cloudflare Turnstile
+        if any(s in text for s in self._TURNSTILE):
+            m = self._RE_TURNSTILE_KEY.search(raw_text)
+            if not m:
+                m = self._RE_HCAPTCHA_KEY.search(raw_text)
+            return CaptchaChallenge(
+                challenge_type="turnstile",
+                site_key=m.group(1) if m else None,
+                page_url=url,
+            )
+
+        # 2. hCaptcha
+        if any(s in text for s in self._HCAPTCHA):
+            m = self._RE_HCAPTCHA_KEY.search(raw_text)
+            return CaptchaChallenge(
+                challenge_type="hcaptcha",
+                site_key=m.group(1) if m else None,
+                page_url=url,
+            )
+
+        # 3. reCAPTCHA v3 (execute call present)
+        if "grecaptcha.execute" in text:
+            m = self._RE_RECAPTCHA_V3.search(raw_text)
+            if not m:
+                m = self._RE_RENDER_KEY.search(raw_text)
+            return CaptchaChallenge(
+                challenge_type="recaptcha_v3",
+                site_key=m.group(1) if m else None,
+                page_url=url,
+            )
+
+        # 4. reCAPTCHA v2
+        if any(s in text for s in self._RECAPTCHA):
+            m = self._RE_RECAPTCHA_V2.search(raw_text)
+            return CaptchaChallenge(
+                challenge_type="recaptcha_v2",
+                site_key=m.group(1) if m else None,
+                page_url=url,
+            )
+
+        # 5. Cloudflare IUAM (JS challenge, no site key)
+        if any(s in text for s in self._CF_IUAM):
+            return CaptchaChallenge(
+                challenge_type="cloudflare_iuam",
+                site_key=None,
+                page_url=url,
+            )
+
+        return None
+
+
+class CaptchaBypassMiddleware:
+    """
+    Wired into _smart_request (http.py).
+
+    When a response contains a detectable CAPTCHA challenge:
+      1. Detects challenge type and extracts site key.
+      2. Routes to the configured solver (2captcha or capsolver).
+      3. Injects the solved token into a retry request.
+      4. Returns the retry response, or None on any failure.
+
+    Activated only when CaptchaConfig.provider != "none".
+    """
+
+    def __init__(self, cfg: Optional[CaptchaConfig] = None) -> None:
+        self._cfg      = cfg or CaptchaConfig()
+        self._detector = CaptchaDetector()
+
+    def handle(
+        self,
+        session,
+        response,
+        url: str,
+        request_kwargs: dict,
+        method: str = "GET",
+    ) -> Optional[Any]:
+        """
+        Check response for CAPTCHA; solve and retry if found.
+        Returns the retry response on success, None otherwise.
+        """
+        challenge = self._detector.detect(response)
+        if challenge is None:
+            return None
+
+        _LOGGER_CC.info(
+            "[CaptchaMiddleware] %s detected on %s (site_key=%s)",
+            challenge.challenge_type, url, challenge.site_key,
+        )
+        print(f"[CaptchaMiddleware] {challenge.challenge_type} detected — solving…")
+
+        token = self._solve(challenge)
+        if token is None:
+            _LOGGER_CC.warning(
+                "[CaptchaMiddleware] Could not solve %s (no token returned)",
+                challenge.challenge_type,
+            )
+            return None
+
+        injected = self._inject_token(challenge, token, dict(request_kwargs))
+        try:
+            return session.request(method, url, **injected)
+        except Exception as exc:
+            _LOGGER_CC.warning("[CaptchaMiddleware] Retry after solve failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    def _solve(self, challenge: CaptchaChallenge) -> Optional[str]:
+        cfg    = self._cfg
+        solver = _select_solver(cfg)
+        ctype  = challenge.challenge_type
+
+        if ctype == "recaptcha_v3" and hasattr(solver, "solve_recaptcha_v3"):
+            return solver.solve_recaptcha_v3(challenge.site_key or "", challenge.page_url, cfg)
+
+        if ctype in ("recaptcha_v2", "cloudflare_iuam") and hasattr(solver, "solve_recaptcha"):
+            return solver.solve_recaptcha(challenge.site_key or "", challenge.page_url, cfg)
+
+        if ctype == "hcaptcha" and hasattr(solver, "solve_hcaptcha"):
+            return solver.solve_hcaptcha(challenge.site_key or "", challenge.page_url, cfg)
+
+        if ctype == "turnstile" and hasattr(solver, "solve_turnstile"):
+            return solver.solve_turnstile(challenge.site_key or "", challenge.page_url, cfg)
+
+        return None
+
+    def _inject_token(
+        self,
+        challenge: CaptchaChallenge,
+        token: str,
+        kwargs: dict,
+    ) -> dict:
+        ctype = challenge.challenge_type
+
+        if ctype in ("recaptcha_v2", "recaptcha_v3"):
+            params = dict(kwargs.get("params") or {})
+            params["g-recaptcha-response"] = token
+            kwargs["params"] = params
+
+        elif ctype == "hcaptcha":
+            params = dict(kwargs.get("params") or {})
+            params["h-captcha-response"] = token
+            kwargs["params"] = params
+
+        elif ctype == "turnstile":
+            headers = dict(kwargs.get("headers") or {})
+            headers["cf-turnstile-response"] = token
+            kwargs["headers"] = headers
+
+        elif ctype == "cloudflare_iuam":
+            # Treat solved token as cf_clearance cookie value
+            cookies = dict(kwargs.get("cookies") or {})
+            cookies["cf_clearance"] = token
+            kwargs["cookies"] = cookies
+
+        return kwargs
+
 
 # ============================================================================
 # SECTION 6: LOGIN DISCOVERY (formerly login_discovery.py)

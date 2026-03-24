@@ -111,13 +111,12 @@ except ImportError:
 
 
 try:
-    from websecure.scanners import request_smuggling, jwt, nosqli, rate_limit
+    from websecure.scanners import request_smuggling, jwt, nosqli
 except ImportError:
     request_smuggling = None
     jwt = None
     nosqli = None
-    rate_limit = None
-    _logger.warning("[Main] Failed to import request_smuggling, jwt, nosqli, or rate_limit.")
+    _logger.warning("[Main] Failed to import request_smuggling, jwt, or nosqli.")
 
 
 # [WS3] Offensive Scanner Wrappers (Bridge)
@@ -3321,16 +3320,7 @@ O====|_______________________________________________________>  1   1 0
             _safe_call(_run_xss, merged_eps, session=session, debug=debug)
 
 
-        # 5. Rate Limit (Orphaned Fix)
-        if rate_limit and (cfg.get("scanners") or {}).get("rate_limit"):
-             print("[•] Rate Limit taraması…")
-             try:
-                 rl_scanner = rate_limit.RateLimitScanner(session, results, debug=debug)
-                 rl_scanner.run(ctx.url)
-             except Exception as e:
-                 _logger.error(f"RateLimit failed: {e}")
-
-        # 6. CSRF (New Module)
+        # 5. CSRF (New Module)
         if csrf and (cfg.get("scanners") or {}).get("csrf"):
              print("[•] CSRF taraması…")
              try:

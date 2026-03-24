@@ -5,8 +5,6 @@ from .graphql import GraphQLScanner
 from .passive_recon import PassiveJSScanner, ContentDiscoveryScanner
 from .infrastructure import get_security_headers, scan_tls, check_ssl_certificate
 from .auth import AuthenticatedSession, check_idor, probe_auth_only
-from .rate_limit import RateLimitScanner
-
 __all__ = [
     "BaseScanner",
     "SSRFScanner",
@@ -21,5 +19,4 @@ __all__ = [
     "AuthenticatedSession",
     "check_idor",
     "probe_auth_only",
-    "RateLimitScanner"
 ]

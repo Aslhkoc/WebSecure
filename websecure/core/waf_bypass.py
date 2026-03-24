@@ -377,16 +377,16 @@ def _s_param_frag(session):
     session.headers["X-Param-Frag"] = "1"
 
 
-@BypassStrategyEngine.register("cf_clearance_wait")
-def _s_cf_wait(session):
-    # Handled by cloudscraper integration
-    try:
-        import cloudscraper
-        cs = cloudscraper.create_scraper()
-        cs.headers.update(dict(session.headers))
-        session._cloudscraper = cs
-    except ImportError:
-        pass
+@BypassStrategyEngine.register("captcha_bypass")
+def _s_captcha_bypass(session):
+    """
+    Activates the CaptchaBypassMiddleware on this session.
+
+    The middleware is already wired globally through http.install_captcha_config().
+    This strategy marks the session so that per-session CAPTCHA solving is
+    enabled when a challenge is encountered during scanning.
+    """
+    session._captcha_bypass_enabled = True
 
 
 def build_bypass_session(waf_profile=None) -> WAFBypassSession:
@@ -1448,7 +1448,7 @@ _WAF_SIGNATURES: Dict[str, Dict] = {
         "bypass_strategies": [
             "chunked_encoding", "content_type_mismatch", "xff_internal_cidr",
             "unicode_normalization", "http2_pseudo_header_order",
-            "tls_fingerprint_chrome", "random_path_suffix", "cf_clearance_wait",
+            "tls_fingerprint_chrome", "random_path_suffix", "captcha_bypass",
         ],
     },
     "aws_waf": {

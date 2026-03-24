@@ -430,7 +430,6 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.jwt",
         "websecure.scanners.ws_fuzz",
         "websecure.scanners.graphql",
-        "websecure.scanners.rate_limit",
         "websecure.scanners.csrf",
         "websecure.scanners.owasp",
         "websecure.scanners.passive_recon",
@@ -1215,22 +1214,6 @@ def _runner_owasp_nuclei(ctx) -> None:
 
 
 
-def _runner_rate_limit(ctx) -> None:
-    mod = _opt_import("scanners.rate_limit")
-    if not mod:
-        add_result("offensive", {"type": "Rate Limit", "severity": "Bilgi", "reason": "Modül bulunamadı."})
-        return
-    
-    # Initialize scanner
-    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
-    sess = getattr(ctx, "session", None)
-    
-    if hasattr(mod, "RateLimitScanner"):
-        scanner = mod.RateLimitScanner(sess, debug=bool(getattr(ctx, "debug", False)))
-        scanner.run(base_url)
-    elif hasattr(mod, "run"):
-        # Functional variant
-        mod.run(sess, base_url, getattr(ctx, "results", {}))
 
 def _runner_scanners_graphql(ctx) -> None:
     mod = _opt_import("scanners.graphql")
@@ -1525,13 +1508,6 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("graphql_attacks", default=True, tech_trigger="graphql"),
             runner=lambda c: _safe(c, lambda: _runner_graphql(c), "scanners.graphql_attacks"),
             tags=["graphql", "api"],
-        ),
-        Phase(
-            id="scanners.rate_limit",
-            title="Rate Limit & Throttling",
-            enabled=_flag("rate_limit", default=True),
-            runner=lambda c: _safe(c, lambda: _runner_rate_limit(c), "scanners.rate_limit"),
-            tags=["infra", "dos"],
         ),
         Phase(
             id="owasp_and_nuclei",
