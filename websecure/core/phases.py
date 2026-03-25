@@ -1302,7 +1302,14 @@ def _runner_ssti(ctx) -> None:
         try:
             scanner_cls = getattr(mod, "SSTIScanner", None)
             if scanner_cls:
-                scanner_cls(session=sess, results=results).run(url, endpoints=endpoints)
+                forms = results.get("forms_meta", []) if results else []
+                all_forms = []
+                for page in forms:
+                    if isinstance(page, dict):
+                        all_forms.extend(page.get("forms", []))
+                scanner_cls(session=sess, results=results).run(
+                    url, endpoints=endpoints, forms=all_forms
+                )
             else:
                 run_fn(url, session=sess, results=results)
         except Exception as e:
