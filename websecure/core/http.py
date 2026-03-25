@@ -36,10 +36,6 @@ def _emit_egress_degraded(feature: str, reason: str, details: dict | None = None
 def set_phase(name: str):
     HTTP_METRICS["phase"] = name
 
-# [AUTO-CLEANUP] removed duplicate def 'hardened_session' defined at lines 29-37
-
-# [AUTO-CLEANUP] removed duplicate def 'verify_for_phase' defined at lines 39-42
-
 def is_open(host: str, port: int, timeout: float = 0.4) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -951,8 +947,8 @@ class _RequestsDriver:
         # Attempt Tor Rotation on Block
         try:
              rotate_tor_identity()
-        except:
-             pass
+        except Exception as e:
+             _logger.debug(f"[http] Tor identity rotation failed: {e}")
 
     def request_once(self, method: str, url: str, **kw) -> requests.Response:
         # Circuit breaker pre-check — raises if scan is halted

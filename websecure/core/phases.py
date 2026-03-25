@@ -415,7 +415,7 @@ def phase_tls(ctx: dict):
         add_result("tls", {"severity": "warning", "message": f"TLS scan error: {e}"})
 
 def phase_sec_headers(ctx: dict):
-    if not _call_if_exists("websecure.scanners.headers", ("run","scan")):
+    if not _call_if_exists("websecure.scanners.infrastructure", ("run","scan")):
         add_result("security_headers", {"severity":"note","message":"security_headers scanner not present; skipped"})
 
 def phase_offensive(ctx: dict):
@@ -1757,15 +1757,14 @@ def run_tls(ctx):
 
 
 def run_security_headers(ctx):
-    """Güvenlik başlıkları: scan(session, endpoints, results, debug=False, config=None)"""
-    from websecure.scanners.headers import scan as _scan_headers
+    """Güvenlik başlıkları taraması."""
+    from websecure.scanners.infrastructure import get_security_headers as _scan_headers
     session = getattr(ctx, "session", None)
     url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
     if not url:
         return _mk_result("security_headers", "skipped:no-url")
     results = getattr(ctx, "results", None) or {}
-    endpoints = [url]
-    _scan_headers(session, endpoints, results, debug=False, config=getattr(ctx, "config", None))
+    _scan_headers(url, results, session=session, debug=False)
     return _mk_result("security_headers", "ok")
 
 
@@ -1824,12 +1823,12 @@ def run_port_scan_basic(ctx, *, event_cb=None):
 
 
 def run_security_headers_basic(ctx, *, event_cb=None):
-    from websecure.scanners.headers import scan as _scan_headers
+    from websecure.scanners.infrastructure import get_security_headers as _scan_headers
     from websecure.core.reporting import add_result
     sess = getattr(ctx, "session", None)
     base_url = getattr(ctx, "base_url", None)
     results = getattr(ctx, "results", {})
-    _scan_headers(sess, base_url, results, debug=bool(getattr(ctx, "debug", False)))
+    _scan_headers(base_url, results, session=sess, debug=bool(getattr(ctx, "debug", False)))
     add_result("headers_checked", {"base_url": base_url})
     return results.get("headers", {})
 
@@ -2458,7 +2457,7 @@ def run_ffuf_scan(ctx) -> None:
              try:
                  os.remove(merged_wl_path)
                  _logger.debug("Merged wordlist deleted.")
-             except:
+             except OSError:
                  pass
 
 
@@ -2997,72 +2996,6 @@ def _get_or_create_session(sess: Any):
     return _hardened_session({})
 
 
-def _resolve_reporter():
-    """
-    Yerel raporlama modülünü güvenli biçimde çözer.
-    Öncelik: build.lib.core.reporting → core.reporting → kökte reporting.py.
-    site-packages/dist-packages altındaki 'reporting' paketleri BİLİNÇLİ OLARAK ATLANIR.
-    Dönüş: çağrılabilir bir fonksiyon ya da None.
-    """
-    # 1) build.lib.core.reporting
-    spec_bl = _ilu.find_spec("build.lib.core.reporting")
-    if spec_bl is not None:
-        origin = _spec_origin(spec_bl)
-        if origin and _is_local_path(origin):
-            mod = importlib.import_module("build.lib.core.reporting")
-            fn = getattr(mod, "perform_reporting_and_integration", None)
-            if callable(fn):
-                return fn
-
-    # 2) core.reporting
-    spec_core = _ilu.find_spec("websecure.core.reporting")
-    if spec_core is not None:
-        origin = _spec_origin(spec_core)
-        if origin and _is_local_path(origin):
-            mod = importlib.import_module("websecure.core.reporting")
-            fn = getattr(mod, "perform_reporting_and_integration", None)
-            if callable(fn):
-                return fn
-
-    # 3) düz 'reporting' sadece yerelse
-    spec_plain = _ilu.find_spec("reporting")
-    if spec_plain is not None:
-        origin = _spec_origin(spec_plain)
-        if origin and _is_local_path(origin) and not _is_sitepkg_path(origin):
-            mod = importlib.import_module("reporting")
-            fn = getattr(mod, "perform_reporting_and_integration", None)
-            if callable(fn):
-                return fn
-
-    # 4) Dosya yolundan yükleme (kök/reporting.py)
-    local_path = _PROJECT_ROOT / "reporting.py"
-    if local_path.exists():
-        spec = _ilu.spec_from_file_location("websec_reporting_local", str(local_path))
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)  # type: ignore
-            fn = getattr(module, "perform_reporting_and_integration", None)
-            if callable(fn):
-                return fn
-
-    return None
-
-
-def _maybe_perform_reporting(ctx: 'ScanContext'):
-    rep_fn = _resolve_reporter()
-    if not callable(rep_fn):
-        return
-
-    cfg = ctx.config or {}
-    rep_cfg = (cfg.get("reporting") or {})
-    enabled = bool(rep_cfg) or bool(getattr(ctx, "save_report", False))
-    if not enabled:
-        return
-
-    # Hata saklama yok: raporlama fonksiyonu patlarsa görünür şekilde yükselir
-    rep_fn(ctx.session, cfg, ctx.results)
-
-
 # ---------------------- Authenticated akışı arayıcı ----------------------
 def _resolve_auth_runner():
     """
@@ -3124,11 +3057,7 @@ import asyncio
 import logging
 
 
-# [AUTO-CLEANUP] removed duplicate def '_resolve_auth_runner' defined at lines 393-421
-
-
 # ----------------------------- Offensive profil haritası -----------------------------
-# [AUTO-CLEANUP] removed duplicate def 'offensive_enabled_map' defined at lines 425-439
 
 
 # ----------------------------- Ana giriş -----------------------------
@@ -3349,9 +3278,6 @@ class HProfileManager:
 _HPM: HProfileManager | None = None
 
 
-# [AUTO-CLEANUP] removed duplicate def 'hpm_init_from_config' defined at lines 625-632
-
-
 def hpm_bootstrap_from_file(path: str) -> None:
     import json, os
     with open(path, 'r', encoding='utf-8') as f:
@@ -3364,13 +3290,6 @@ def hpm() -> HProfileManager:
         # Varsayılan boş yapı; kullanıcı init etmemişse minimum profille ayağa kalkar
         hpm_init_from_config({'settings': {'profiles': {}, 'scan_profile': 'normal'}})
     return _HPM  # type: ignore
-
-
-# Kısa yardımcılar
-# [AUTO-CLEANUP] removed duplicate def 'hpm_record_status' defined at lines 650-651
-
-
-# [AUTO-CLEANUP] removed duplicate def 'hpm_current_policy' defined at lines 654-666
 
 
 # ==== HPM Tekil Yönetici (imza-tabanlı başlatma; try/except yok) ====
@@ -3419,9 +3338,6 @@ def hpm_init_from_config(cfg: _Dict[str, _Any] | None) -> None:
     else:
         _set_attr_if_present(_HPM, "_active", initial)
         _set_attr_if_present(_HPM, "active", initial)
-
-
-# [AUTO-CLEANUP] removed duplicate def 'hpm' defined at lines 717-721
 
 
 def hpm_record_status(status_code: int) -> None:
@@ -3477,7 +3393,6 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
     if not base_url:
         _report("errors", {"stage": "run_mode", "error": "Target/base_url eksik"})
         _flush_report()
-        _maybe_perform_reporting(context)
         return context.results
 
     # Non-authenticated modes
@@ -3493,7 +3408,6 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
         if not callable(build_plan_fn) or not callable(run_plan_fn):
             _report("errors", {"stage": "run_mode", "error": "Flow runner çözümlemesi başarısız (build_plan/run_plan yok)"})
             _flush_report()
-            _maybe_perform_reporting(context)
             return context.results
 
         plan = build_plan_fn(context)
@@ -3506,7 +3420,6 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
             asyncio.run(__run_plan_adapt(run_plan_fn, plan, context, cfg))
 
         _flush_report()
-        _maybe_perform_reporting(context)
         return context.results
 
     # Authenticated mode
@@ -3515,17 +3428,14 @@ def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
         if not callable(auth_runner):
             _report("errors", {"stage": "run_mode", "error": "Authenticated runner bulunamadı"})
             _flush_report()
-            _maybe_perform_reporting(context)
             return context.results
         logger = logging.getLogger(__name__)
         auth_runner(context.session, base_url, cfg, logger=logger)
         _flush_report()
-        _maybe_perform_reporting(context)
         return context.results
 
     _report("errors", {"stage": "run_mode", "error": f"desteklenmeyen mod: {mode}"})
     _flush_report()
-    _maybe_perform_reporting(context)
     return context.results
 
 
@@ -3560,8 +3470,11 @@ def _missing_guard(symbol: str, where: str):
 def _import_first_available(module_names: list[str]):
     """İlk mevcut modül adını döndürür; hiçbiri yoksa None."""
     for name in module_names:
-        if name and find_spec(name) is not None:
-            return importlib.import_module(name)
+        try:
+            if name and find_spec(name) is not None:
+                return importlib.import_module(name)
+        except (ModuleNotFoundError, ValueError):
+            continue
     return None
 
 _pkg = (__package__ or "").strip()

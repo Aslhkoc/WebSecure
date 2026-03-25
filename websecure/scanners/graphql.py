@@ -56,7 +56,7 @@ class GraphQLClient:
         if "json" in ct or s.startswith("{") or s.startswith("["):
             try:
                 return json.loads(text)
-            except:
+            except (ValueError, TypeError):
                 pass
         return {}
 
@@ -129,7 +129,7 @@ class BatchProbe:
             dt = _t.time() - t0
             if r.status_code == 200 and (r.text or "").strip().startswith("["):
                 return [Finding(url, "Batch Queries Supported", "Medium", {"len": len(arr_payload)}, r.status_code, dt)]
-        except:
+        except Exception:
             pass
         return []
 
@@ -141,6 +141,193 @@ class AliasProbe:
         if code == 200 and "errors" not in (j or {}) and dt > 1.0:
             return [Finding(url, "Excessive Alias processing (DoS risk)", "Medium", q, code, dt)]
         return []
+
+
+class FieldSuggestionProbe:
+    """
+    Sends intentionally misspelled field names and extracts server suggestions.
+    Suggestions reveal real field/type names — information disclosure.
+    Uses parse_suggestions() from the merged graphql_utils section.
+    """
+    _INVALID_FIELDS = [
+        "userss", "profilee", "accountts", "adminnn",
+        "queryy", "mutationn", "viewerr", "meee",
+    ]
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        out: List[Finding] = []
+        for bad_field in self._INVALID_FIELDS:
+            q = {"query": f"{{ {bad_field} }}"}
+            code, j, raw, dt = client.post(url, q)
+            errors = (j or {}).get("errors") or []
+            combined = " ".join(str(e) for e in errors) if errors else (raw or "")
+            suggestions = parse_suggestions(combined)
+            if suggestions:
+                out.append(Finding(
+                    url, "GraphQL Field Name Suggestion Disclosure", "Low",
+                    q, code, dt,
+                    f"Server reveals field names via suggestions: {suggestions[:5]}",
+                ))
+                break  # one confirmed is sufficient
+        return out
+
+
+class AuthBypassProbe:
+    """
+    Detects GraphQL auth bypass by comparing authenticated vs. unauthenticated responses.
+    If both return non-empty data, the endpoint is accessible without auth.
+    """
+    _ME_QUERIES = [
+        {"query": "query { me { id email } }"},
+        {"query": "query { viewer { id login } }"},
+        {"query": "query { currentUser { id username } }"},
+        {"query": "query { whoami { id name } }"},
+    ]
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        for q in self._ME_QUERIES:
+            code_auth, j_auth, _, dt = client.post(url, q)
+            if code_auth != 200:
+                continue
+            data_auth = (j_auth or {}).get("data")
+            if not data_auth:
+                continue
+            # Re-request without auth credentials
+            with _DropAuth(client.session):
+                code_na, j_na, _, _ = client.post(url, q)
+            data_na = (j_na or {}).get("data")
+            if code_na == 200 and data_na:
+                return [Finding(
+                    url, "GraphQL Auth Bypass — Unauthenticated Data Access", "High",
+                    q, code_na, dt,
+                    f"Query returns data without auth credentials: {list(data_na.keys())[:3]}",
+                )]
+        return []
+
+
+class IDORProbe:
+    """
+    Detects IDOR by fuzzing sequential object IDs.
+    If the server returns different objects for sequential IDs without access control,
+    that indicates broken object-level authorization.
+    """
+    _ID_TEMPLATES = [
+        "query Q($id:ID!){{ user(id:$id){{ id email username }} }}",
+        "query Q($id:Int!){{ user(id:$id){{ id name }} }}",
+        "query Q($id:ID!){{ node(id:$id){{ id __typename }} }}",
+        "query Q($id:ID!){{ account(id:$id){{ id username }} }}",
+        "query Q($id:ID!){{ profile(id:$id){{ id displayName }} }}",
+    ]
+    _TEST_IDS = ["0", "1", "2", "3", "-1", "admin", "100"]
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        for tmpl in self._ID_TEMPLATES:
+            seen_data: Set[str] = set()
+            for test_id in self._TEST_IDS:
+                q = {"query": tmpl, "variables": {"id": test_id}}
+                code, j, _, dt = client.post(url, q)
+                if code != 200 or "errors" in (j or {}):
+                    continue
+                data = (j or {}).get("data")
+                if not data:
+                    continue
+                fingerprint = json.dumps(data, sort_keys=True)
+                if fingerprint not in seen_data:
+                    seen_data.add(fingerprint)
+                    if len(seen_data) > 1:
+                        return [Finding(
+                            url, "GraphQL IDOR — Sequential ID Object Enumeration", "High",
+                            q, code, dt,
+                            f"Distinct objects returned for sequential IDs (template: {tmpl[:60]}...)",
+                        )]
+        return []
+
+
+class DepthAbuseProbe:
+    """
+    Sends a deeply nested query to test for missing query depth limits.
+    Deep queries can cause exponential resolver work (DoS).
+    """
+    DEPTH = 12
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        nested = "{ id }"
+        for _ in range(self.DEPTH):
+            nested = f"{{ friends {nested} }}"
+        q = {"query": f"query Depth {{ user(id:\"1\") {nested} }}"}
+        code, j, _, dt = client.post(url, q)
+        if code == 200 and "errors" not in (j or {}):
+            severity = "Medium" if dt > 2.0 else "Low"
+            return [Finding(
+                url, "GraphQL No Query Depth Limit Detected", severity,
+                q, code, dt,
+                f"Depth-{self.DEPTH} nested query accepted in {dt:.2f}s without depth error",
+            )]
+        return []
+
+
+class DirectiveInjectionProbe:
+    """
+    Tests whether the server accepts unexpected or experimental directives.
+    Directive injection can bypass field-level access control or cause errors.
+    """
+    _PAYLOADS = [
+        {"query": "query { __typename @skip(if: false) }"},
+        {"query": "query { __typename @include(if: true) }"},
+        {"query": "{ __typename @stream }"},
+        {"query": "{ __typename @defer }"},
+        {"query": "{ __typename @cacheControl(maxAge: 0) }"},
+    ]
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        out: List[Finding] = []
+        for q in self._PAYLOADS:
+            code, j, _, dt = client.post(url, q)
+            if code == 200 and (j or {}).get("data") and "errors" not in (j or {}):
+                out.append(Finding(
+                    url, "GraphQL Unrecognized Directive Accepted", "Low",
+                    q, code, dt,
+                    f"Directive accepted without error: {q['query']}",
+                ))
+        return out
+
+
+class InfoDisclosureProbe:
+    """
+    Checks whether error messages reveal stack traces, internal file paths,
+    SQL fragments, or other sensitive implementation details.
+    """
+    _TRIGGER_QUERIES = [
+        {"query": "{ nonExistentField }"},
+        {"query": "query { user(id: \"' OR 1=1--\") { id } }"},
+        {"query": "{ __type(name: \"Query\") { fields { name args { name type { name } } } } }"},
+        {"query": "mutation M { nonExistentMutation }"},
+    ]
+    _SENSITIVE_PATTERNS = [
+        (r"(?i)traceback|stack trace|at \w+\.java:\d+", "Stack trace"),
+        (r"(?i)/home/\w+|/var/www|/srv/|C:\\\\Users\\\\", "Internal file path"),
+        (r"(?i)SELECT\s+\w|INSERT\s+INTO|UPDATE\s+\w+\s+SET", "SQL fragment"),
+        (r"(?i)password\s*=|secret\s*=|api_key\s*=|private_key", "Credential key"),
+        (r"(?i)mongodb://|mysql://|postgresql://|redis://", "Database connection string"),
+    ]
+
+    def run(self, client: GraphQLClient, url: str) -> List[Finding]:
+        out: List[Finding] = []
+        for q in self._TRIGGER_QUERIES:
+            code, j, raw, dt = client.post(url, q)
+            text = raw or ""
+            for pat, label in self._SENSITIVE_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    snippet = text[max(0, m.start() - 40): m.end() + 40].replace("\n", " ")
+                    out.append(Finding(
+                        url, f"GraphQL Information Disclosure — {label}", "Medium",
+                        q, code, dt,
+                        f"Pattern '{label}' found in error: ...{snippet}...",
+                    ))
+                    break
+        return out
+
 
 # --- Main Scanner Class ---
 class GraphQLScanner(BaseScanner):
@@ -161,15 +348,29 @@ class GraphQLScanner(BaseScanner):
         client = GraphQLClient(self.session)
         vulns = 0
 
+        probes = [
+            IntrospectionProbe(),
+            WeakValidationProbe(),
+            BatchProbe(),
+            AliasProbe(),
+            FieldSuggestionProbe(),
+            AuthBypassProbe(),
+            IDORProbe(),
+            DepthAbuseProbe(),
+            DirectiveInjectionProbe(),
+            InfoDisclosureProbe(),
+        ]
+
         for ep in endpoints:
-            probes = [IntrospectionProbe(), WeakValidationProbe(), BatchProbe(), AliasProbe()]
             for p in probes:
                 for f in p.run(client, ep):
                     self.add(bucket, {
                         "endpoint": f.endpoint,
                         "issue": f.issue,
                         "severity": f.severity,
-                        "details": f.body_hint or f.issue
+                        "details": f.body_hint or f.issue,
+                        "payload": f.payload,
+                        "latency_s": round(f.latency, 3) if f.latency else None,
                     })
                     vulns += 1
         
@@ -203,7 +404,7 @@ class GraphQLScanner(BaseScanner):
                 elif r_post.status_code == 400 and "graphql" in r_post.text.lower():
                     # If it says "Bad Request: GraphQL query missing", it's an endpoint!
                     found.append(target)
-            except:
+            except Exception:
                 pass
         return list(set(found))
 
@@ -218,14 +419,10 @@ def run(target: str, session=None, **kwargs):
 # MERGED FROM: websecure/core/graphql_utils.py
 # GraphQL helpers: JWT utils, batching, APQ, authz diff matrix, suggestion parser
 # ===========================================================================
-from __future__ import annotations
 import base64
-import json
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Mapping
-import re
 import hashlib as _hl
+from typing import Iterator, Mapping
 
 # ---------------------------------------------------------------------------
 # Basit auth yardımcıları (cookie + header snapshot/drop)

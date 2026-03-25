@@ -20,6 +20,7 @@ import secrets
 import string
 import logging
 import base64
+import binascii
 import io
 import statistics
 import threading
@@ -27,6 +28,7 @@ import contextlib
 import importlib.util
 from pathlib import Path
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Callable, Iterable, Protocol, runtime_checkable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin, parse_qsl, urlsplit
@@ -65,7 +67,8 @@ except ImportError:
     Image = None
 
 # WebSecure Imports
-from websecure.core.utils import normalize_url, resolve_canonical_base, hardened_session, verify_for_phase
+from websecure.core.utils import normalize_url, resolve_canonical_base
+from websecure.core.http import hardened_session, verify_for_phase
 from websecure.core.reporting import add_result, log_warn
 
 _logger = logging.getLogger(__name__)
@@ -1155,16 +1158,6 @@ Phase 2 Özellikleri:
 - Teknoloji Farkındalığı (Tech-Stack filtering)
 """
 
-from __future__ import annotations
-import re
-import json
-import base64
-import binascii
-from enum import Enum, auto
-from typing import List, Set, Optional, Dict, Any, Tuple
-from dataclasses import dataclass, field
-
-
 class InputContext(Enum):
     """Input alanı bağlam türleri"""
     # Authentication
@@ -1301,7 +1294,7 @@ def _is_json(s: str) -> bool:
     try:
         json.loads(s)
         return True
-    except:
+    except (ValueError, TypeError):
         return False
 
 def _is_xml(s: str) -> bool:
@@ -1327,7 +1320,7 @@ def _is_base64(s: str) -> bool:
     try:
         base64.b64decode(s, validate=True)
         return True
-    except:
+    except Exception:
         return False
 
 # =============================================================================

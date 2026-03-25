@@ -1,8 +1,14 @@
+from __future__ import annotations
+import hashlib
 import random
+import re
+import threading
 import time
 import logging
 import string
-from typing import Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -10,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from requests.models import PreparedRequest
 
 logger = logging.getLogger(__name__)
+_logger = logger  # alias used in merged modules
 
 # --- Enhanced User-Agents List ---
 _USER_AGENTS = [
@@ -168,9 +175,18 @@ class WAFBypassAdapter(HTTPAdapter):
             elif self._get_flag("_bypass_case"):
                 path = _case_randomize_path(path)
 
-            # 3d. Random structural obfuscation (always active, low probability)
+            # 3d. Structural obfuscation — round-robin through all tactics
             elif random.random() < 0.2 and path.startswith("/"):
-                tactic = random.choice(["double_slash", "current_dir", "semicolon", "null_byte_ext"])
+                _ALL_TACTICS = ["double_slash", "current_dir", "semicolon", "null_byte_ext"]
+                sess = self._session_ref
+                if sess is not None:
+                    tried = getattr(sess, "_path_tactics_tried", set())
+                    untried = [t for t in _ALL_TACTICS if t not in tried]
+                    tactic = untried[0] if untried else random.choice(_ALL_TACTICS)
+                    tried.add(tactic)
+                    sess._path_tactics_tried = tried
+                else:
+                    tactic = random.choice(_ALL_TACTICS)
                 if tactic == "double_slash":
                     path = "//" + path.lstrip("/")
                 elif tactic == "current_dir":
@@ -370,14 +386,27 @@ class BypassStrategyEngine:
         return decorator
 
     def apply(self, session: "WAFBypassSession", strategies: list) -> "WAFBypassSession":
-        """Apply all listed strategies to the session. Returns modified session."""
+        """Apply all listed strategies to the session. Tracks applied/failed for diagnostics."""
+        applied: List[str] = []
+        failed: List[str] = []
         for name in strategies:
             fn = self._STRATEGIES.get(name)
-            if fn:
-                try:
-                    fn(session)
-                except Exception as e:
-                    logger.debug(f"[BypassEngine] Strategy '{name}' error: {e}")
+            if not fn:
+                failed.append(f"unknown:{name}")
+                logger.debug(f"[BypassEngine] Unknown strategy: '{name}'")
+                continue
+            try:
+                fn(session)
+                applied.append(name)
+            except Exception as e:
+                failed.append(f"{name}:{e}")
+                logger.warning(f"[BypassEngine] Strategy '{name}' failed: {e}")
+        session._applied_strategies = applied
+        session._failed_strategies = failed
+        if applied:
+            logger.debug(f"[BypassEngine] Applied: {applied}")
+        if failed:
+            logger.info(f"[BypassEngine] Failed/unknown: {failed}")
         return session
 
 
@@ -556,16 +585,34 @@ def _s_http2_pseudo(session):
         pass
 
 
+_DEFAULT_BYPASS_STRATEGIES = [
+    "xff_internal_cidr",
+    "chunked_encoding",
+    "double_url_encoding",
+    "random_path_suffix",
+]
+
 def build_bypass_session(waf_profile=None) -> WAFBypassSession:
     """
     Build a WAFBypassSession with strategies applied for the detected WAF.
-    If waf_profile is None or no WAF detected, returns a plain WAFBypassSession.
+    If no WAF is detected, applies a default set of generic evasion strategies
+    to maximise bypass chances against unknown protection.
     """
     session = WAFBypassSession()
-    if waf_profile and getattr(waf_profile, 'detected', False):
+    if waf_profile and getattr(waf_profile, "detected", False):
         strategies = waf_profile.bypass_strategies or []
         _engine.apply(session, strategies)
-        logger.info(f"[BypassEngine] Applied {len(strategies)} strategies for {waf_profile.vendor}")
+        logger.info(
+            f"[BypassEngine] Vendor '{waf_profile.vendor}': "
+            f"{len(strategies)} strategies applied"
+        )
+    else:
+        # Unknown/undetected WAF — apply safe generic strategies
+        _engine.apply(session, _DEFAULT_BYPASS_STRATEGIES)
+        logger.info(
+            f"[BypassEngine] No WAF detected — applied {len(_DEFAULT_BYPASS_STRATEGIES)} "
+            "default generic strategies"
+        )
     return session
 
 
@@ -573,21 +620,6 @@ def build_bypass_session(waf_profile=None) -> WAFBypassSession:
 # MERGED FROM: websecure/core/tls_driver.py
 # curl_cffi tabanlı JA3/JA4 TLS parmak izi taklidi
 # ===========================================================================
-"""
-tls_driver.py — curl_cffi tabanlı TLS parmak izi sahteciliği.
-
-Cloudflare, Akamai, Imperva gibi JA3/JA4 tabanlı WAF'lar Python
-requests/httpx kütüphanelerinin standart TLS imzasını tanır ve engeller.
-Bu modül curl_cffi kullanarak gerçek tarayıcı TLS握手taklidini sağlar.
-"""
-from __future__ import annotations
-
-import logging
-import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
-_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Opsiyonel import — curl_cffi kurulu değilse sessizce degrade edilir
@@ -842,19 +874,6 @@ Desteklenen vendor formatları:
   - Ülke bazlı hedefleme
   - Vendor'a özel URL oluşturucu
 """
-from __future__ import annotations
-
-import hashlib
-import logging
-import random
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
-from urllib.parse import urlparse
-
-_logger = logging.getLogger(__name__)
 
 # Bir proxy'nin devre dışı bırakılması için izin verilen arka arkaya hata sayısı
 DEFAULT_FAILURE_THRESHOLD = 3
@@ -1608,14 +1627,6 @@ websecure.core.waf_detector
 WAF fingerprinting via probe-response analysis.
 Identifies vendor, confidence level, and recommends bypass strategies.
 """
-from __future__ import annotations
-import logging
-import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-
-_logger = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # WAF Signatures
 # ---------------------------------------------------------------------------

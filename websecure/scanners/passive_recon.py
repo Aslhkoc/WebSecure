@@ -12,21 +12,61 @@ logger = logging.getLogger(__name__)
 
 # --- Common Constants ---
 SENSITIVE_FILES = [
-    ".env", ".git/HEAD", ".svn/entries", ".DS_Store",
-    "config.json", "web.config", "security.txt", "sitemap.xml"
+    # Version control / config leaks
+    ".env", ".env.local", ".env.production", ".env.backup",
+    ".git/HEAD", ".git/config", ".git/COMMIT_EDITMSG",
+    ".svn/entries", ".svn/wc.db",
+    ".DS_Store", "Thumbs.db",
+    # Application config
+    "config.json", "config.yaml", "config.yml", "settings.json",
+    "web.config", "app.config", "appsettings.json",
+    "database.yml", "database.json", "db.json",
+    # Security / disclosure files
+    "security.txt", ".well-known/security.txt",
+    "humans.txt", "crossdomain.xml", "clientaccesspolicy.xml",
+    # Backup files
+    "backup.sql", "dump.sql", "db.sql",
+    "backup.zip", "backup.tar.gz",
+    "index.php.bak", "index.html.bak",
+    # Common admin/debug paths
+    "phpinfo.php", "info.php", "test.php",
+    "admin/", "phpmyadmin/", "adminer.php",
+    # Dependency / build manifests
+    "package.json", "composer.json", "Gemfile",
+    "requirements.txt", "Pipfile",
+    "yarn.lock", "package-lock.json",
+    # Source maps
+    "main.js.map", "app.js.map", "bundle.js.map",
+    "static/js/main.chunk.js.map",
+    # Sitemap / robots
+    "sitemap.xml", "sitemap_index.xml", "robots.txt",
+    # Log files
+    "error.log", "access.log", "debug.log", "app.log",
 ]
 
 class PassiveJSScanner(BaseScanner):
     """
-    Scans JavaScript files for hardcoded secrets and endpoints.
+    Scans JavaScript files for hardcoded secrets, endpoints, emails, and source maps.
     """
     SECRET_PATTERNS = {
-        "AWS Access Key": r"AKIA[0-9A-Z]{16}",
-        "Google API Key": r"AIza[0-9A-Za-z\\-_]{35}",
-        "Slack Token": r"xox[baprs]-([0-9a-zA-Z]{10,48})",
-        "Generic API Key": r"(?i)(api_key|apikey|secret|token)\s*[:=]\s*['\"]([a-zA-Z0-9\-_]{16,})['\"]",
-        "JWT": r"eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+",
-        "S3 Bucket": r"s3:\/\/[a-z0-9\.-]+|[a-z0-9\.-]+\.s3\.amazonaws\.com"
+        "AWS Access Key":       r"AKIA[0-9A-Z]{16}",
+        "AWS Secret Key":       r"(?i)aws.{0,20}secret.{0,20}['\"][0-9a-zA-Z/+]{40}['\"]",
+        "Google API Key":       r"AIza[0-9A-Za-z\-_]{35}",
+        "Google OAuth":         r"[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com",
+        "Slack Token":          r"xox[baprs]-[0-9A-Za-z\-]{10,48}",
+        "Slack Webhook":        r"https://hooks\.slack\.com/services/T[0-9A-Z]+/B[0-9A-Z]+/[0-9a-zA-Z]+",
+        "GitHub Token":         r"ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82}",
+        "GitLab Token":         r"glpat-[0-9a-zA-Z\-_]{20}",
+        "Stripe Key":           r"(?:r|s)k_(?:live|test)_[0-9a-zA-Z]{24,}",
+        "Twilio":               r"SK[0-9a-fA-F]{32}",
+        "SendGrid":             r"SG\.[0-9A-Za-z\-_]{22}\.[0-9A-Za-z\-_]{43}",
+        "JWT":                  r"eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+",
+        "S3 Bucket":            r"s3://[a-z0-9.\-]+|[a-z0-9.\-]+\.s3(?:\.[a-z0-9\-]+)?\.amazonaws\.com",
+        "Generic API Key":      r"(?i)(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token)\s*[:=]\s*['\"]([a-zA-Z0-9\-_]{16,})['\"]",
+        "Private Key":          r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----",
+        "Bearer Token":         r"(?i)Authorization\s*:\s*Bearer\s+[a-zA-Z0-9\-_\.]+",
+        "Email Address":        r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
+        "Internal IP":          r"(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}",
     }
 
     def scan(self, js_urls: List[str]) -> List[Dict[str, Any]]:
@@ -74,9 +114,18 @@ class PassiveJSScanner(BaseScanner):
         return entropy < 3.5
 
     def _find_endpoints(self, content: str) -> List[str]:
-        # Simple regex for relative and absolute URLs
-        regex = r"""(['"])(?:/|https?://)[a-zA-Z0-9_./-]+\1"""
-        return [m.group(0).strip("'\"") for m in re.finditer(regex, content)]
+        """Extract relative and absolute URLs/paths from JS content."""
+        found = set()
+        # Absolute URLs
+        for m in re.finditer(r"""['"]?(https?://[a-zA-Z0-9_.\-/?=&%#+:@]+)['"]?""", content):
+            found.add(m.group(1).strip("'\""))
+        # Relative paths (at least 2 segments, no extension or .json/.xml/.php etc.)
+        for m in re.finditer(r"""['"](/(?:[a-zA-Z0-9_\-]+/)*[a-zA-Z0-9_\-]+(?:\.[a-zA-Z]{2,4})?)['"]""", content):
+            found.add(m.group(1))
+        # fetch/axios/XMLHttpRequest patterns
+        for m in re.finditer(r"""(?:fetch|axios\.(?:get|post|put|delete|patch)|url\s*[:=])\s*['"]((?:https?://|/)[^'"]+)['"]""", content):
+            found.add(m.group(1))
+        return list(found)[:50]  # cap to avoid noise
 
 
 class ContentDiscoveryScanner(BaseScanner):
@@ -133,7 +182,7 @@ class ContentDiscoveryScanner(BaseScanner):
                         evidence={"subdomains": list(subs)}
                     ))
 
-        except:
+        except Exception:
             pass
         return findings
 
@@ -163,7 +212,7 @@ class ContentDiscoveryScanner(BaseScanner):
                         details=f"Found {len(subs)} subdomains in sitemap.xml",
                         evidence={"subdomains": list(subs)}
                     ))
-        except:
+        except Exception:
             pass
         return findings
 
@@ -186,7 +235,7 @@ class ContentDiscoveryScanner(BaseScanner):
                 domain = urlparse(u).netloc
                 if domain and domain.endswith(root_domain) and domain != base_domain:
                     subdomains.add(domain)
-        except:
+        except Exception:
             pass
         return subdomains
 
@@ -195,48 +244,91 @@ class ContentDiscoveryScanner(BaseScanner):
         for f in SENSITIVE_FILES:
             url = urljoin(base_url, f"/{f}")
             try:
-                resp = self.session.get(url, timeout=3, allow_redirects=False)
-                if resp.status_code == 200:
-                    # Basic content verification could be added here
-                    findings.append(self.create_finding(
-                        type="Sensitive File Exposure",
-                        url=url,
-                        severity="Medium",
-                        details=f"Sensitive file {f} is publicly accessible.",
-                    ))
-            except:
+                resp = self.session.get(url, timeout=4, allow_redirects=False)
+                if resp.status_code != 200:
+                    continue
+
+                content = resp.text or ""
+                severity = "Medium"
+                details = f"Sensitive file '{f}' is publicly accessible"
+
+                # Elevate severity for high-value files
+                if any(x in f for x in (".env", ".git", ".sql", "private", "secret", "password", "credential")):
+                    severity = "High"
+                    details += " — may contain credentials or secrets"
+                elif f.endswith(".map"):
+                    severity = "Low"
+                    details += " — source map exposes original source code"
+                elif f in ("phpinfo.php", "info.php"):
+                    severity = "High"
+                    details += " — PHP configuration disclosure"
+
+                # Content-based severity boost
+                if re.search(r"(?i)(password|secret|private_key|api_key)\s*=\s*[^\s]{4,}", content):
+                    severity = "Critical"
+                    details += " — credential pattern found in content"
+
+                findings.append(self.create_finding(
+                    type="Sensitive File Exposure",
+                    url=url,
+                    severity=severity,
+                    details=details,
+                    evidence={"content_snippet": content[:300]},
+                ))
+            except Exception:
                 pass
         return findings
 
 def run(target: str, session=None, results=None, **kwargs):
-    # 1. Content Discovery
+    if results is None:
+        results = {}
+    results.setdefault("passive", [])
+
+    # 1. Content Discovery (robots, sitemap, sensitive files)
     cd_scanner = ContentDiscoveryScanner(session, results)
-    cd_scanner.run(target) # BaseScanner.run usually expects 'scan' or override
-    # But wait, ContentDiscoveryScanner overrides 'scan' but inherits BaseScanner.
-    # BaseScanner.run calls scan(). So we can call .run(target) if BaseScanner has it.
-    # Let's check BaseScanner briefly... assuming it has standard run->scan linkage.
-    # If not, we call scan directly.
-    # Actually, the file content shows ContentDiscoveryScanner defines scan(target_url), not run.
-    # BaseScanner normally has run(). Let's assume standard usage.
-    # But to be safe, I'll call scan local method if uncertain about BaseScanner.
-    
-    # Actually, looking at previous files, BaseScanner usually has run().
-    # However, to be 100% safe with minimal assumptions:
     findings_cd = cd_scanner.scan(target)
-    if results and "passive" in results: results["passive"].extend(findings_cd)
-    
-    # 2. JS Scan
-    # We need JS urls. Crawl data?
-    js_urls = []
-    if results and "discovery" in results:
-        # extract js from discovery
-        pass
-    
-    # For now, let's just do a basic check on the target itself if it ends in .js
-    if target.endswith(".js"):
+    results["passive"].extend(findings_cd)
+
+    # 2. JS Secret & Endpoint Scan
+    # Collect JS URLs from: discovery results, explicit kwarg, and page crawl
+    js_urls: List[str] = []
+
+    # From crawl/discovery results
+    discovery = results.get("discovery", {})
+    if isinstance(discovery, dict):
+        for u in discovery.get("js", []):
+            if isinstance(u, str) and u.endswith(".js"):
+                js_urls.append(u)
+        # Also scan any endpoint that looks like JS
+        for u in discovery.get("query", []):
+            if isinstance(u, str) and u.endswith(".js"):
+                js_urls.append(u)
+
+    # Explicit JS URL list from kwargs
+    for u in kwargs.get("js_urls", []):
+        if u not in js_urls:
+            js_urls.append(u)
+
+    # If target itself is a JS file
+    if target.endswith(".js") and target not in js_urls:
         js_urls.append(target)
-        
-    js_scanner = PassiveJSScanner(session, results)
-    findings_js = js_scanner.scan(js_urls)
-    if results and "passive" in results: results["passive"].extend(findings_js)
+
+    # Probe the target page and extract referenced JS files
+    if not js_urls and session:
+        try:
+            resp = session.get(target, timeout=8)
+            if resp.status_code == 200:
+                for m in re.finditer(r'<script[^>]+src=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', resp.text, re.IGNORECASE):
+                    js_path = m.group(1)
+                    js_full = urljoin(target, js_path)
+                    if js_full not in js_urls:
+                        js_urls.append(js_full)
+        except Exception as e:
+            logger.debug(f"[PassiveRecon] JS extraction from page failed: {e}")
+
+    if js_urls:
+        logger.info(f"[PassiveRecon] Scanning {len(js_urls)} JS file(s)")
+        js_scanner = PassiveJSScanner(session, results)
+        findings_js = js_scanner.scan(js_urls)
+        results["passive"].extend(findings_js)
 

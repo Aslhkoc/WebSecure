@@ -22,9 +22,11 @@ from importlib import import_module
 try:
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives.serialization import Encoding as _CryptoEncoding
     _HAS_CRYPTO = True
 except ImportError:
     _HAS_CRYPTO = False
+    _CryptoEncoding = None
 
 import requests
 from websecure.core.http import hardened_session, verify_for_phase, classify_access_block
@@ -205,11 +207,119 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
     perm = _header(resp, "Permissions-Policy")
     cov.perm_policy = "PASS" if perm else "WARN"
 
-    # CORS Reflection
-    if origin_for_cors:
-        acao = _header(resp, "Access-Control-Allow-Origin")
-        if acao == origin_for_cors:
-             findings.append(HeaderFinding("CORS Reflection", "Medium", "Origin reflected dynamically.", evidence={"ACAO": acao}, tags=["CORS"]))
+    # ── CORS Analysis ──────────────────────────────────────────────────────
+    acao = _header(resp, "Access-Control-Allow-Origin")
+    acac = _header(resp, "Access-Control-Allow-Credentials")
+    acao_methods = _header(resp, "Access-Control-Allow-Methods")
+
+    if acao == "*":
+        if acac and acac.lower() == "true":
+            findings.append(HeaderFinding(
+                "CORS Wildcard + Credentials",
+                "Critical",
+                "Access-Control-Allow-Origin: * combined with Allow-Credentials: true — "
+                "browsers block this but some frameworks strip the restriction silently.",
+                evidence={"ACAO": acao, "ACAC": acac},
+                recommendation="Never combine wildcard ACAO with credentials.",
+                tags=["CORS"],
+            ))
+        else:
+            findings.append(HeaderFinding(
+                "CORS Wildcard Origin",
+                "Medium",
+                "Any origin can read responses from this endpoint.",
+                evidence={"ACAO": acao},
+                recommendation="Restrict ACAO to trusted origins.",
+                tags=["CORS"],
+            ))
+    elif acao and acao.lower() == "null":
+        findings.append(HeaderFinding(
+            "CORS Null Origin Allowed",
+            "High",
+            "ACAO: null allows sandboxed iframes and file:// origins — exploitable via sandboxed iframes.",
+            evidence={"ACAO": acao},
+            tags=["CORS"],
+        ))
+    elif acao and origin_for_cors and acao == origin_for_cors:
+        findings.append(HeaderFinding(
+            "CORS Origin Reflection",
+            "High",
+            "Server dynamically reflects the request Origin header — "
+            "any origin can read authenticated responses.",
+            evidence={"ACAO": acao, "reflected_origin": origin_for_cors},
+            recommendation="Maintain an explicit allowlist of trusted origins.",
+            tags=["CORS"],
+        ))
+
+    # ── Cookie Security Analysis ────────────────────────────────────────────
+    set_cookie_headers = []
+    raw_headers = getattr(resp, "headers", {})
+    if hasattr(raw_headers, "getlist"):
+        set_cookie_headers = raw_headers.getlist("Set-Cookie")
+    elif hasattr(raw_headers, "items"):
+        set_cookie_headers = [v for k, v in raw_headers.items() if k.lower() == "set-cookie"]
+
+    for cookie_str in set_cookie_headers:
+        cookie_lower = cookie_str.lower()
+        cookie_name = cookie_str.split("=")[0].strip()
+
+        if "httponly" not in cookie_lower:
+            findings.append(HeaderFinding(
+                "Cookie Missing HttpOnly Flag",
+                "Medium",
+                f"Cookie '{cookie_name}' is accessible via JavaScript — XSS can steal it.",
+                evidence={"cookie": cookie_str[:120]},
+                recommendation="Add HttpOnly flag to all session cookies.",
+                tags=["Cookie", "XSS"],
+            ))
+        if "secure" not in cookie_lower:
+            findings.append(HeaderFinding(
+                "Cookie Missing Secure Flag",
+                "Medium",
+                f"Cookie '{cookie_name}' is transmitted over HTTP — susceptible to interception.",
+                evidence={"cookie": cookie_str[:120]},
+                recommendation="Add Secure flag to all session cookies.",
+                tags=["Cookie", "TLS"],
+            ))
+        samesite_match = re.search(r"samesite\s*=\s*(strict|lax|none)", cookie_lower)
+        if not samesite_match:
+            findings.append(HeaderFinding(
+                "Cookie Missing SameSite Attribute",
+                "Low",
+                f"Cookie '{cookie_name}' has no SameSite — vulnerable to CSRF in some contexts.",
+                evidence={"cookie": cookie_str[:120]},
+                recommendation="Set SameSite=Lax or SameSite=Strict.",
+                tags=["Cookie", "CSRF"],
+            ))
+        elif samesite_match.group(1) == "none" and "secure" not in cookie_lower:
+            findings.append(HeaderFinding(
+                "Cookie SameSite=None Without Secure",
+                "High",
+                f"Cookie '{cookie_name}' SameSite=None requires Secure flag.",
+                evidence={"cookie": cookie_str[:120]},
+                tags=["Cookie"],
+            ))
+
+    # ── Referrer-Policy Analysis ────────────────────────────────────────────
+    referrer = _header(resp, "Referrer-Policy")
+    if referrer:
+        if referrer.lower() in ("unsafe-url", "no-referrer-when-downgrade", ""):
+            findings.append(HeaderFinding(
+                "Weak Referrer-Policy",
+                "Low",
+                f"Referrer-Policy '{referrer}' may leak full URL to third parties.",
+                evidence={"Referrer-Policy": referrer},
+                recommendation="Use 'strict-origin-when-cross-origin' or stricter.",
+                tags=["Privacy", "Headers"],
+            ))
+    else:
+        findings.append(HeaderFinding(
+            "Missing Referrer-Policy",
+            "Low",
+            "No Referrer-Policy — browser defaults may leak origin to cross-origin requests.",
+            recommendation="Set Referrer-Policy: strict-origin-when-cross-origin.",
+            tags=["Privacy", "Headers"],
+        ))
 
     return cov, findings, pocs
 
@@ -262,43 +372,56 @@ class CertificateReport:
     fingerprint_sha256: t.Optional[str] = None
     self_signed: t.Optional[bool] = None
 
-def _extract_cert_details(der_data: bytes) -> dict:
-    """Parses DER data using cryptography library to extract detailed info."""
-    if not _HAS_CRYPTO or not der_data:
+def _extract_cert_details_from_obj(cert) -> dict:
+    """Extract certificate details from a cryptography cert object."""
+    if not _HAS_CRYPTO or cert is None:
         return {}
-    
     try:
-        cert = x509.load_der_x509_certificate(der_data, default_backend())
-        
-        # Subject
         def _get_name(name, oid):
-            # helper to get common name or organization
             att = name.get_attributes_for_oid(oid)
             return att[0].value if att else None
-        
+
         sub_cn = _get_name(cert.subject, x509.NameOID.COMMON_NAME)
         iss_cn = _get_name(cert.issuer, x509.NameOID.COMMON_NAME)
-        iss_o = _get_name(cert.issuer, x509.NameOID.ORGANIZATION_NAME)
-        
-        # Dates
-        nb = cert.not_valid_before_utc if hasattr(cert, 'not_valid_before_utc') else cert.not_valid_before
-        na = cert.not_valid_after_utc if hasattr(cert, 'not_valid_after_utc') else cert.not_valid_after
-        
-        # Serial & Fingerprint
-        serial = str(cert.serial_number)
+        iss_o  = _get_name(cert.issuer, x509.NameOID.ORGANIZATION_NAME)
+
+        nb = cert.not_valid_before_utc if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before
+        na = cert.not_valid_after_utc  if hasattr(cert, "not_valid_after_utc")  else cert.not_valid_after
+
         fp = cert.fingerprint(hashlib.sha256()).hex()
-        
+
+        # Subject Alternative Names
+        san_list: t.List[str] = []
+        try:
+            san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+            san_list = san_ext.value.get_values_for_type(x509.DNSName)
+        except x509.ExtensionNotFound:
+            pass
+
         return {
-            "subject_CN": sub_cn,
-            "issuer_CN": iss_cn,
-            "issuer_O": iss_o,
-            "not_before": nb.isoformat(),
-            "not_after": na.isoformat(),
-            "serial": serial,
-            "fingerprint": fp
+            "subject_CN":  sub_cn,
+            "issuer_CN":   iss_cn,
+            "issuer_O":    iss_o,
+            "not_before":  nb.isoformat(),
+            "not_after":   na.isoformat(),
+            "serial":      str(cert.serial_number),
+            "fingerprint": fp,
+            "san":         list(san_list),
         }
     except Exception as e:
         _logger.warning(f"Cert parsing error: {e}")
+        return {}
+
+
+def _extract_cert_details(der_data: bytes) -> dict:
+    """Parses DER bytes using cryptography library to extract detailed info."""
+    if not _HAS_CRYPTO or not der_data:
+        return {}
+    try:
+        cert = x509.load_der_x509_certificate(der_data, default_backend())
+        return _extract_cert_details_from_obj(cert)
+    except Exception as e:
+        _logger.warning(f"DER cert parsing error: {e}")
         return {}
 
 def _normalize_host(url: str) -> t.Tuple[str, int, str]:
@@ -353,25 +476,21 @@ class PySSLCertChecker:
             # Hata durumunda hemen pes etme, alternatif yöntemi dene
             problems.append(f"Socket connection error: {e}")
 
-        # 2. Deneme: ssl.get_server_certificate (PEM döner) - Eğer binary alamazsak
+        # 2. Fallback: ssl.get_server_certificate returns PEM string
         if not der:
-             try:
-                 pem = pyssl.get_server_certificate((host, port), timeout=timeout)
-                 if pem:
-                     # PEM'i DER'e çevirmek için basit bir yol yoksa text parse edilebilir
-                     # Ancak cryptography varsa PEM yükleyebiliriz
-                     if _HAS_CRYPTO:
-                         try:
-                             cert = x509.load_pem_x509_certificate(pem.encode('utf-8'), default_backend())
-                             der = cert.public_bytes(serialization=lambda: None) # Dummy, we just need cert obj usually. 
-                             # Wait, load_pem returns a cert object directly. _extract_cert_details expects DER bytes?
-                             # Let's verify _extract_cert_details. It calls x509.load_der...
-                             # We can modify _extract to handle PEM or convert PEM->DER here.
-                             der = cert.public_bytes(encoding=getattr(x509.Encoding, 'DER', None) or 0)
-                         except Exception as ex:
-                             problems.append(f"PEM parsing error: {ex}")
-             except Exception as e:
-                 problems.append(f"Alternative fetch failed: {e}")
+            try:
+                pem = pyssl.get_server_certificate((host, port), timeout=timeout)
+                if pem and _HAS_CRYPTO:
+                    try:
+                        _pem_cert = x509.load_pem_x509_certificate(
+                            pem.encode("utf-8"), default_backend()
+                        )
+                        # Convert PEM cert to DER bytes for _extract_cert_details
+                        der = _pem_cert.public_bytes(_CryptoEncoding.DER)
+                    except Exception as ex:
+                        problems.append(f"PEM parsing error: {ex}")
+            except Exception as e:
+                problems.append(f"Alternative cert fetch failed: {e}")
 
         # Detayları çıkar
         details = {}
@@ -401,14 +520,17 @@ class PySSLCertChecker:
             
         nb = details.get("not_before", "")
         na = details.get("not_after", "")
-        
+
         days = 0
         if na:
-             try:
-                 dt_na = datetime.fromisoformat(na).replace(tzinfo=None)
-                 delta = dt_na - datetime.utcnow()
-                 days = delta.days
-             except: pass
+            try:
+                from datetime import timezone
+                dt_na = datetime.fromisoformat(na)
+                if dt_na.tzinfo is None:
+                    dt_na = dt_na.replace(tzinfo=timezone.utc)
+                days = (dt_na - datetime.now(timezone.utc)).days
+            except Exception:
+                pass
 
         return CertificateReport(
             host=host, port=port, scheme=scheme,
@@ -418,13 +540,13 @@ class PySSLCertChecker:
             not_before=nb,
             not_after=na,
             days_remaining=days,
-            san=[], 
+            san=details.get("san", []),      # extracted from SAN extension
             problems=problems,
             valid=valid,
             tls_version=ver,
             alpn=alpn,
             fingerprint_sha256=details.get("fingerprint"),
-            self_signed=not valid
+            self_signed=not valid,
         )
 
 # ============================================================================
@@ -457,13 +579,30 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
             s = session or requests.Session()
             r = s.head("https://" + host, timeout=5, verify=False)
             hsts_on = "strict-transport-security" in r.headers.keys() or "Strict-Transport-Security" in r.headers
-        except:
+        except Exception:
             pass            
             
+    # TLS version weakness
+    tls_warnings: t.List[str] = []
+    if rep.tls_version in ("TLSv1", "TLSv1.1", "SSLv3", "SSLv2"):
+        tls_warnings.append(f"Weak TLS version negotiated: {rep.tls_version} — upgrade to TLS 1.2+")
+        problems.append(f"Weak TLS: {rep.tls_version}")
+
+    # Certificate expiry warning
+    if rep.days_remaining < 0:
+        problems.append("Certificate is EXPIRED")
+    elif rep.days_remaining < 30:
+        tls_warnings.append(f"Certificate expires in {rep.days_remaining} days")
+
+    # Self-signed
+    if rep.self_signed:
+        tls_warnings.append("Certificate appears self-signed — browser will show security warning")
+
     return {
         "host": host, "port": port, "scheme": sch,
         "valid": rep.valid and not problems,
         "problems": problems,
+        "warnings": tls_warnings,
         "hsts": hsts_on,
         "tls_version": rep.tls_version,
         "fingerprint": rep.fingerprint_sha256,
@@ -472,7 +611,9 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
         "issuer_O": rep.issuer_O,
         "not_before": rep.not_before,
         "not_after": rep.not_after,
-        "days_remaining": rep.days_remaining
+        "days_remaining": rep.days_remaining,
+        "san": rep.san,
+        "self_signed": rep.self_signed,
     }
 
 def scan_tls(url: str, *, results=None, session=None, config=None, debug=False) -> t.Dict[str, t.Any]:

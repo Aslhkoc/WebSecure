@@ -1,154 +1,340 @@
-from typing import Any, Dict, List, Optional
-import requests
+from __future__ import annotations
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-# Module-level logger
+from .base import BaseScanner
+from websecure.core.reporting import add_result
+
 logger = logging.getLogger(__name__)
 
-# Common sensitive fields to probe for Mass Assignment / Auto-Binding
-SENSITIVE_KEYS = [
-    "is_admin", "isAdmin", "admin", "role", "roles", 
-    "account_type", "type", "is_superuser", "superuser",
-    "permissions", "perms", "group", "groups",
-    "balance", "credit", "is_verified", "verified"
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+SENSITIVE_KEYS: List[str] = [
+    # Privilege escalation
+    "is_admin", "isAdmin", "admin", "role", "roles",
+    "account_type", "accountType", "type", "is_superuser", "isSuperUser",
+    "permissions", "perms", "group", "groups", "privilege", "privileges",
+    "access_level", "accessLevel", "user_type", "userType", "staff",
+    # Financial manipulation
+    "balance", "credit", "credits", "discount", "price", "amount",
+    # Account status bypass
+    "is_verified", "verified", "is_active", "active", "status",
+    "email_verified", "emailVerified", "phone_verified", "phoneVerified",
+    # Security bypass fields
+    "is_banned", "banned", "suspended", "is_locked", "locked",
+    "two_factor_enabled", "twoFactorEnabled", "mfa_enabled", "mfaEnabled",
 ]
 
-SENSITIVE_VALUES = [
-    True, "admin", "administrator", "superuser", "root", 999999
+ESCALATION_VALUES: List[Any] = [
+    True, 1, "admin", "administrator", "superuser", "root", "staff", "owner",
 ]
 
-def run(url: str, session=None, debug: bool = False, auth_ctx=None) -> List[Dict[str, Any]]:
+_NESTED_WRAPPERS = ["user", "profile", "account", "data", "payload"]
+_NESTED_KEYS = ["role", "is_admin", "admin", "permissions", "type", "account_type"]
+
+_COMMON_API_PATHS = [
+    "/api/user", "/api/users/me", "/api/v1/user", "/api/v1/users/me",
+    "/api/profile", "/api/account", "/api/me",
+    "/user/update", "/users/update", "/profile/update",
+    "/api/v2/user", "/api/v2/profile",
+]
+
+
+class MassAssignmentScanner(BaseScanner):
     """
-    Scans for Mass Assignment vulnerabilities by attempting to inject sensitive 
-    parameters into POST/PUT requests and observing reflections or state changes.
+    Mass Assignment / Over-Posting Vulnerability Scanner.
+
+    Techniques:
+    - Direct field injection in JSON body: {"is_admin": true}
+    - Nested field injection: {"user": {"role": "admin"}}
+    - Form-based (urlencoded) mass assignment
+    - Field discovery via API endpoint probing
+    - Two-phase verification: GET after injection to check persistence
+    - Tests POST / PUT / PATCH methods
+    - Parallel testing with ThreadPoolExecutor
     """
-    results = []
-    
-    if not session:
-        session = requests.Session()
 
-    # Pre-flight: Identify if this looks like an API/Form endpoint
-    # Note: In a real flow, 'run' might be called with a specific context (like a previously discovered form).
-    # Since we are just given a URL, we will try to probe it effectively if it supports POST/PUT.
+    name = "mass_assignment"
+    MAX_WORKERS = 4
 
-    # 1. Probe for POST behavior with a dummy payload to see baseline
-    try:
-        # Check specific HTTP methods that are state-changing
-        methods_to_test = ["POST", "PUT", "PATCH"]
-        
-        for method in methods_to_test:
-            _scan_method(url, session, method, results, debug)
+    def run(self, url: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
 
-    except Exception as e:
-        logger.debug(f"Mass assignment scan error on {url}: {e}")
-        if debug:
-            logger.exception("Mass assignment detailed error")
+        endpoints: List[str] = kwargs.get("endpoints") or []
+        if not endpoints:
+            endpoints = self._discover_api_endpoints(url)
+        if url not in endpoints:
+            endpoints.insert(0, url)
 
-    return results
+        logger.info(f"[MassAssign] Scanning {len(endpoints)} endpoints")
 
-def _scan_method(url: str, session, method: str, results: list, debug: bool):
-    """
-    Helper to execute mass assignment checks for a specific HTTP method.
-    """
-    # Baseline request (empty or valid-looking small payload)
-    baseline_payload = {"user": "test", "name": "test"}
-    
-    try:
-        if method == "POST":
-            resp_base = session.post(url, json=baseline_payload, timeout=5)
-        elif method == "PUT":
-            resp_base = session.put(url, json=baseline_payload, timeout=5)
-        elif method == "PATCH":
-            resp_base = session.patch(url, json=baseline_payload, timeout=5)
-        else:
-            return
+        for ep in endpoints:
+            self._scan_endpoint(ep, bucket)
 
-        # If 404 Not Found or 405 Method Not Allowed, skip
-        if resp_base.status_code in (404, 405):
-            return
+        return self.results
 
-    except requests.RequestException:
-        # Connection failed or so, skip
-        return
+    # -------------------------------------------------------------------------
+    # Endpoint discovery
+    # -------------------------------------------------------------------------
 
-    # 2. Injection Phase
-    # We will try to send a payload that includes SENSITIVE_KEYS and see if the response
-    # differs significantly or reflects the key.
-    
-    for key in SENSITIVE_KEYS:
-        for val in SENSITIVE_VALUES:
-            attack_payload = baseline_payload.copy()
-            attack_payload[key] = val
-            
+    def _discover_api_endpoints(self, base_url: str) -> List[str]:
+        parsed = urlparse(base_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        found: List[str] = []
+        for path in _COMMON_API_PATHS:
+            target = base + path
             try:
-                if method == "POST":
-                    resp_attack = session.post(url, json=attack_payload, timeout=5)
-                elif method == "PUT":
-                    resp_attack = session.put(url, json=attack_payload, timeout=5)
-                elif method == "PATCH":
-                    resp_attack = session.patch(url, json=attack_payload, timeout=5)
-                else:
-                    continue
+                r = self.session.get(target, timeout=4)
+                if r.status_code not in (404, 405, 501):
+                    found.append(target)
+            except Exception:
+                pass
+        return found
 
-                # Analysis Phase
-                analyze_response(url, method, key, val, resp_base, resp_attack, results)
+    # -------------------------------------------------------------------------
+    # Per-endpoint scan
+    # -------------------------------------------------------------------------
 
-            except requests.RequestException:
-                continue
+    def _scan_endpoint(self, url: str, bucket: str):
+        working_methods = self._probe_methods(url)
+        if not working_methods:
+            return
 
-def analyze_response(url: str, method: str, key: str, val: Any, base_resp, attack_resp, results: list):
-    """
-    Compares baseline response vs attack response to decide if Mass Assignment happened.
-    """
-    # 1. Reflection Check (Fastest)
-    # If the response is JSON, and it contains our injected key AND value, 
-    # and the baseline did NOT contain that key (or contained a default), it's a strong lead.
-    
-    if attack_resp.status_code >= 500:
-        # Skip server errors generally, unless we want to flag fragility
-        return
+        baseline = {"name": "test", "email": "test@test.com", "username": "testuser"}
 
-    try:
-        base_json = base_resp.json()
-    except:
-        base_json = {}
+        for method_fn, method_name in working_methods:
+            self._probe_flat_injection(url, method_fn, method_name, baseline, bucket)
+            self._probe_nested_injection(url, method_fn, method_name, baseline, bucket)
+            self._probe_form_injection(url, method_name, baseline, bucket)
 
-    try:
-        attack_json = attack_resp.json()
-    except:
-        # If not JSON, maybe just grep text
-        attack_json = None
+    def _probe_methods(self, url: str) -> List[Tuple]:
+        working = []
+        for method_name, method_fn in [
+            ("POST",  self.session.post),
+            ("PUT",   self.session.put),
+            ("PATCH", self.session.patch),
+        ]:
+            try:
+                r = method_fn(url, json={"__probe__": True}, timeout=4)
+                if r.status_code not in (404, 405, 501):
+                    working.append((method_fn, method_name))
+            except Exception:
+                pass
+        return working
 
-    if isinstance(attack_json, dict):
-        # Structured check
-        if key in attack_json:
-            reflected_val = attack_json[key]
-            # Normalization for strict checking
-            if str(reflected_val).lower() == str(val).lower():
-                # We found the value! Was it in baseline?
-                if key not in base_json or str(base_json[key]).lower() != str(val).lower():
-                    # It was NOT in baseline (or different), so we successfully injected it into the response.
-                    # This implies Mass Assignment / Auto-Binding success.
-                    results.append({
-                        "type": "mass_assignment",
-                        "severity": "high",
-                        "url": url,
-                        "method": method,
-                        "message": f"Possible Mass Assignment: Parameter '{key}' was successfully reflected with value '{val}'.",
-                        "details": f"Injected '{key}': '{val}' and server returned it in JSON response. Verify if this persists."
-                    })
-    else:
-        # Text check fallback
-        if str(val) in attack_resp.text and key in attack_resp.text:
-            # Weaker signal, but worth noting if baseline didn't have it
-            if str(val) not in base_resp.text:
-                results.append({
-                    "type": "mass_assignment",
-                    "severity": "medium",
-                    "url": url,
-                    "method": method,
-                    "message": f"Potential Mass Assignment (Text Reflection): '{key}' appeared in response.",
-                    "details": f"Response text contained injected value '{val}' for key '{key}'."
-                })
+    # -------------------------------------------------------------------------
+    # Flat field injection: {"is_admin": true}
+    # -------------------------------------------------------------------------
+
+    def _probe_flat_injection(
+        self, url: str, method_fn, method_name: str, baseline: Dict, bucket: str
+    ):
+        try:
+            base_resp = method_fn(url, json=baseline, timeout=5)
+        except Exception:
+            return
+
+        def test_one(key: str, val: Any) -> Optional[Dict]:
+            attack = {**baseline, key: val}
+            try:
+                r = method_fn(url, json=attack, timeout=5)
+                return self._analyze(url, method_name, key, val, base_resp, r, "flat")
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(test_one, k, v): (k, v)
+                for k in SENSITIVE_KEYS
+                for v in ESCALATION_VALUES
+            }
+            for f in as_completed(futures):
+                result = f.result()
+                if result:
+                    self.add(bucket, result)
+                    add_result("offensive", result)
+                    self._verify_persistence(url, result["field"], result["injected_value"], bucket)
+
+    # -------------------------------------------------------------------------
+    # Nested field injection: {"user": {"role": "admin"}}
+    # -------------------------------------------------------------------------
+
+    def _probe_nested_injection(
+        self, url: str, method_fn, method_name: str, baseline: Dict, bucket: str
+    ):
+        try:
+            base_resp = method_fn(url, json=baseline, timeout=5)
+        except Exception:
+            return
+
+        for wrapper in _NESTED_WRAPPERS:
+            for key in _NESTED_KEYS:
+                for val in ESCALATION_VALUES[:4]:
+                    attack = {**baseline, wrapper: {key: val}}
+                    try:
+                        r = method_fn(url, json=attack, timeout=5)
+                        result = self._analyze(
+                            url, method_name, f"{wrapper}.{key}", val, base_resp, r, "nested"
+                        )
+                        if result:
+                            self.add(bucket, result)
+                            add_result("offensive", result)
+                    except Exception:
+                        pass
+
+    # -------------------------------------------------------------------------
+    # Form-based injection (urlencoded)
+    # -------------------------------------------------------------------------
+
+    def _probe_form_injection(
+        self, url: str, method_name: str, baseline: Dict, bucket: str
+    ):
+        try:
+            base_resp = self.session.request(method_name, url, data=baseline, timeout=5)
+            if base_resp.status_code in (404, 405):
+                return
+        except Exception:
+            return
+
+        for key in SENSITIVE_KEYS[:12]:       # top-priority fields only
+            for val in ESCALATION_VALUES[:4]:
+                attack = {**baseline, key: str(val)}
+                try:
+                    r = self.session.request(method_name, url, data=attack, timeout=5)
+                    result = self._analyze(url, method_name, key, val, base_resp, r, "form_urlencoded")
+                    if result:
+                        self.add(bucket, result)
+                        add_result("offensive", result)
+                except Exception:
+                    pass
+
+    # -------------------------------------------------------------------------
+    # Response comparison
+    # -------------------------------------------------------------------------
+
+    def _analyze(
+        self,
+        url: str, method: str, key: str, val: Any,
+        base_resp, attack_resp,
+        injection_type: str,
+    ) -> Optional[Dict]:
+        if attack_resp.status_code >= 500:
+            return None
+
+        try:
+            base_json = base_resp.json()
+        except (ValueError, TypeError, AttributeError):
+            base_json = {}
+
+        try:
+            attack_json = attack_resp.json()
+        except (ValueError, TypeError, AttributeError):
+            attack_json = None
+
+        str_val = str(val).lower()
+
+        # ── Access control bypass ──────────────────────────────────────────
+        if base_resp.status_code == 403 and attack_resp.status_code == 200:
+            return {
+                "type": "Mass Assignment — Access Control Bypass",
+                "severity": "Critical",
+                "url": url, "method": method,
+                "injection_type": injection_type,
+                "field": key, "injected_value": val,
+                "details": f"Injecting '{key}={val}' changed response from 403 to 200",
+            }
+
+        # ── JSON key reflection ────────────────────────────────────────────
+        if isinstance(attack_json, dict):
+            # Check top-level and nested under "data", "user", "profile"
+            for container in [attack_json,
+                               attack_json.get("data") if isinstance(attack_json.get("data"), dict) else {},
+                               attack_json.get("user") if isinstance(attack_json.get("user"), dict) else {}]:
+                reflected = (container or {}).get(key)
+                if reflected is not None and str(reflected).lower() == str_val:
+                    baseline_val = base_json.get(key)
+                    if baseline_val is None or str(baseline_val).lower() != str_val:
+                        return {
+                            "type": "Mass Assignment — Field Reflected in Response",
+                            "severity": "High",
+                            "url": url, "method": method,
+                            "injection_type": injection_type,
+                            "field": key, "injected_value": val,
+                            "details": (
+                                f"Field '{key}={val}' injected and reflected back — "
+                                "verify if this persists in account state"
+                            ),
+                        }
+
+        # ── Text-based reflection fallback ────────────────────────────────
+        elif (attack_resp.status_code == 200
+              and key in (attack_resp.text or "")
+              and str_val in (attack_resp.text or "").lower()
+              and str_val not in (base_resp.text or "").lower()):
+            return {
+                "type": "Mass Assignment — Value Reflected (Text)",
+                "severity": "Medium",
+                "url": url, "method": method,
+                "injection_type": injection_type,
+                "field": key, "injected_value": val,
+                "details": f"Injected value '{val}' appeared in response text",
+            }
+
+        return None
+
+    # -------------------------------------------------------------------------
+    # Persistence verification (GET after injection)
+    # -------------------------------------------------------------------------
+
+    def _verify_persistence(self, url: str, key: str, val: Any, bucket: str):
+        try:
+            r = self.session.get(url, timeout=5)
+            if r.status_code != 200:
+                return
+            try:
+                data = r.json()
+            except (ValueError, TypeError):
+                return
+            str_val = str(val).lower()
+            for obj in [data,
+                        data.get("data") if isinstance(data.get("data"), dict) else {},
+                        data.get("user") if isinstance(data.get("user"), dict) else {},
+                        data.get("profile") if isinstance(data.get("profile"), dict) else {}]:
+                if isinstance(obj, dict) and obj.get(key) is not None:
+                    if str(obj[key]).lower() == str_val:
+                        self.add(bucket, {
+                            "type": "Mass Assignment — Persisted (Confirmed RCE-Level)",
+                            "severity": "Critical",
+                            "url": url,
+                            "field": key,
+                            "persisted_value": val,
+                            "details": (
+                                f"Injected '{key}={val}' persisted in GET response — "
+                                "mass assignment is confirmed, account state was modified"
+                            ),
+                        })
+                        return
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Module-level adapter (backward-compatible)
+# ---------------------------------------------------------------------------
+
+def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
+    import requests as _req
+    scanner = MassAssignmentScanner(
+        session=session or _req.Session(),
+        results={},
+        debug=debug,
+    )
+    endpoints = kwargs.get("endpoints") or []
+    scanner.run(url, endpoints=endpoints)
+    return scanner.results.get("mass_assignment", [])

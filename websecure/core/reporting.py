@@ -309,7 +309,7 @@ def add_session(user: str, cookies: dict, headers: dict = None, origin_url: str 
             r = s.head(origin_url, cookies=cookies, timeout=3, allow_redirects=True)
             if r.status_code < 400:
                 verified = True
-        except:
+        except Exception:
             pass
             
     entry = {
@@ -1277,8 +1277,10 @@ def _render_ports(results: Dict) -> str:
 
 
 def _render_ssl_table(results: Dict) -> str:
-    """Renders SSL/TLS certificate details if available."""
+    """Renders SSL/TLS certificate details including SAN, warnings, and self-signed status."""
     tls = results.get("tls") or {}
+    if isinstance(tls, list):
+        tls = next((x for x in tls if isinstance(x, dict) and "certificate" in x), {})
     cert = tls.get("certificate") or {}
     if not cert:
         return ""
@@ -1286,35 +1288,60 @@ def _render_ssl_table(results: Dict) -> str:
     out = []
     out.append("## SSL/TLS Yapılandırma Detayları")
     out.append("")
-    # Main table
     out.append("| Özellik | Değer |")
     out.append("|-|-|")
-    
-    valid_icon = "✅ Geçerli" if cert.get("valid") else "❌ Geçersiz"
+
+    # Status
+    if cert.get("self_signed"):
+        valid_icon = "⚠️ Self-Signed (Güvensiz)"
+    elif cert.get("valid"):
+        valid_icon = "✅ Geçerli"
+    else:
+        valid_icon = "❌ Geçersiz"
     out.append(f"| Durum | {valid_icon} |")
-    
-    # Common Name & Issues
+
+    # HSTS
+    hsts = "✅ Aktif" if (cert.get("hsts") or tls.get("hsts")) else "❌ Eksik"
+    out.append(f"| HSTS | {hsts} |")
+
+    # Certificate fields
     out.append(f"| Subject CN | `{cert.get('subject_CN') or 'Unknown'}` |")
     out.append(f"| Issuer CN | `{cert.get('issuer_CN') or 'Unknown'}` |")
     out.append(f"| Issuer Org | `{cert.get('issuer_O') or '-'}` |")
-    
-    # Dates
-    out.append(f"| Başlangıç (Not Before) | `{cert.get('not_before') or '-'}` |")
-    out.append(f"| Bitiş (Not After) | `{cert.get('not_after') or '-'}` |")
-    
+    out.append(f"| Geçerlilik Başlangıcı | `{cert.get('not_before') or '-'}` |")
+    out.append(f"| Geçerlilik Bitişi | `{cert.get('not_after') or '-'}` |")
+
     days = cert.get("days_remaining")
-    days_str = f"{days} gün" if isinstance(days, int) else "-"
+    if isinstance(days, int):
+        if days < 0:
+            days_str = f"❌ **Süresi Dolmuş** ({abs(days)} gün önce)"
+        elif days < 30:
+            days_str = f"⚠️ {days} gün (Kritik — Yakında Doluyor)"
+        else:
+            days_str = f"{days} gün"
+    else:
+        days_str = "-"
     out.append(f"| Kalan Süre | {days_str} |")
-    
-    # Technical
-    out.append(f"| TLS Sürümü | `{cert.get('tls_version') or '-'}` |")
-    out.append(f"| Parmak İzi (SHA256) | `{cert.get('fingerprint') or '-'}` |")
-    
-    # Problems if any
+
+    out.append(f"| TLS Versiyonu | `{cert.get('tls_version') or '-'}` |")
+    out.append(f"| SHA-256 Parmak İzi | `{cert.get('fingerprint') or '-'}` |")
+
+    # SAN — domain/subdomain names in certificate
+    san_list = cert.get("san") or []
+    if san_list:
+        san_str = ", ".join(f"`{s}`" for s in san_list)
+        out.append(f"| Alt Adlar (SAN) | {san_str} |")
+
+    # Problems
     probs = cert.get("problems") or []
     if probs:
-        out.append(f"| **Problemler** | {'<br>'.join(probs)} |")
-        
+        out.append(f"| **Problemler** | {' / '.join(probs)} |")
+
+    # Warnings (TLS version weakness, expiry, self-signed)
+    warnings = cert.get("warnings") or []
+    if warnings:
+        out.append(f"| **Uyarılar** | {' / '.join(warnings)} |")
+
     out.append("")
     return "\n".join(out)
 
@@ -3475,7 +3502,7 @@ def render_html_dashboard(results: dict) -> str:
     # Aggregate findings from ALL known buckets
     all_buckets = [
         "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
-        "ssrf", "graphql", "file_upload", "auth", "auth_matrix",
+        "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
         "headers", "rate_limit", "request_smuggling", "session_hunter",
         "mass_assignment", "ws_fuzz", "infrastructure",
         "sqlmap", "feroxbuster", "ffuf", "discovery", "passive",
@@ -3654,7 +3681,7 @@ def render_html_dashboard(results: dict) -> str:
 
     # --- Ports Data Prep ---
     ports_html = ""
-    nmap_data = results.get("nmap") or results.get("ports") or []
+    nmap_data = results.get("nmap") or results.get("port_scan") or results.get("ports") or []
     if isinstance(nmap_data, list) and nmap_data:
         rows = []
         for p in nmap_data:
@@ -3761,24 +3788,54 @@ def render_html_dashboard(results: dict) -> str:
     cert = tls_data.get("certificate") or {}
     if cert:
         valid_icon = "✅ Valid" if cert.get("valid") else "❌ Invalid"
+        if cert.get("self_signed"):
+            valid_icon = "⚠️ Self-Signed"
+
         probs = cert.get("problems") or []
-        probs_html = f"<br><span style='color:var(--sev-critical)'>{'<br>'.join(probs)}</span>" if probs else ""
-        
+        probs_html = (
+            "<br><span style='color:var(--sev-critical)'>" + "<br>".join(_escape(p) for p in probs) + "</span>"
+            if probs else ""
+        )
+
+        warnings = cert.get("warnings") or []
+        warnings_html = (
+            "<br><span style='color:var(--sev-high)'>" + "<br>".join(_escape(w) for w in warnings) + "</span>"
+            if warnings else ""
+        )
+
         days = cert.get("days_remaining")
-        expiry_color = "var(--text-main)"
-        if isinstance(days, int) and days < 30: expiry_color = "var(--sev-high)"
-        
+        expiry_color = "var(--sev-critical)" if isinstance(days, int) and days < 0 else (
+            "var(--sev-high)" if isinstance(days, int) and days < 30 else "var(--text-main)"
+        )
+        days_label = f"{days} days" if isinstance(days, int) else "-"
+
+        # SAN (Subject Alternative Names = domain/subdomain list)
+        san_list = cert.get("san") or []
+        san_html = ""
+        if san_list:
+            san_items = "".join(
+                f"<span style='display:inline-block; background:var(--bg-body); border:1px solid var(--border); "
+                f"border-radius:3px; padding:2px 8px; margin:2px; font-family:monospace; font-size:0.85rem;'>"
+                f"{_escape(s)}</span>"
+                for s in san_list
+            )
+            san_html = f"<div class='label'>Alt Names (SAN)</div><div>{san_items}</div>"
+
+        hsts_icon = "✅" if (cert.get("hsts") or tls_data.get("hsts")) else "❌"
+
         ssl_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">🔒 SSL/TLS Configuration</h3>
+            <h3 style="margin-top:0;">🔒 SSL/TLS Certificate</h3>
             <div class="kv-grid" style="grid-template-columns: 200px 1fr; gap:0.5rem; margin-bottom:0;">
-                <div class="label">Status</div> <div>{valid_icon} {probs_html}</div>
-                <div class="label">Subject</div> <div><code>{_escape(cert.get('subject_CN') or '-')}</code></div>
-                <div class="label">Issuer</div> <div>{_escape(cert.get('issuer_CN') or '-')} ({_escape(cert.get('issuer_O') or '-')})</div>
-                <div class="label">Validity</div> <div>{_escape(cert.get('not_before'))} &mdash; {_escape(cert.get('not_after'))}</div>
-                <div class="label">Expires In</div> <div style="color:{expiry_color}"><strong>{days} days</strong></div>
-                <div class="label">Protocol</div> <div>{_escape(cert.get('tls_version') or '-')}</div>
-                <div class="label">Fingerprint</div> <div style="font-family:monospace; font-size:0.85rem;">{_escape(cert.get('fingerprint') or '-')}</div>
+                <div class="label">Status</div>     <div>{valid_icon} {probs_html}{warnings_html}</div>
+                <div class="label">HSTS</div>        <div>{hsts_icon} Strict-Transport-Security</div>
+                <div class="label">Subject CN</div>  <div><code>{_escape(cert.get('subject_CN') or '-')}</code></div>
+                <div class="label">Issuer</div>      <div>{_escape(cert.get('issuer_CN') or '-')} ({_escape(cert.get('issuer_O') or '-')})</div>
+                <div class="label">Validity</div>    <div>{_escape(str(cert.get('not_before') or ''))} &mdash; {_escape(str(cert.get('not_after') or ''))}</div>
+                <div class="label">Expires In</div>  <div style="color:{expiry_color}"><strong>{days_label}</strong></div>
+                <div class="label">Protocol</div>    <div>{_escape(cert.get('tls_version') or '-')}</div>
+                <div class="label">Fingerprint</div> <div style="font-family:monospace; font-size:0.82rem; word-break:break-all;">{_escape(cert.get('fingerprint') or '-')}</div>
+                {san_html}
             </div>
         </div>
         """

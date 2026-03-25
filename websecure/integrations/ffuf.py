@@ -116,7 +116,7 @@ class FFUFWrapper:
             if os.path.exists(temp_output):
                 try:
                     os.remove(temp_output)
-                except:
+                except OSError:
                     pass
 
         return findings
@@ -207,5 +207,5 @@ class FeroxbusterWrapper:
             if os.path.exists(temp_output):
                 try:
                     os.remove(temp_output)
-                except:
+                except OSError:
                     pass

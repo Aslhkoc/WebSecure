@@ -13,7 +13,6 @@ if _pkg_root not in sys.path:
 from websecure.core.http import verify_for_phase
 from websecure.core.utils import current_identity
 import inspect
-import importlib.util
 from websecure.core.auth_flow import run_auto_signup, run_device_code_flow, smart_login, attach_auth_meta
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
@@ -44,27 +43,23 @@ from websecure.core.reporting import (
 
 
 import logging as _logging
-import sys as _sys, pathlib as _pathlib
 from urllib.parse import urlparse, urljoin, urldefrag
 from time import sleep
 import asyncio
 import shutil
 import subprocess
-import importlib.util as _ilu_patch
-import os as _ab_os
 from pathlib import Path as _P
+import importlib
 import importlib as _im
 import importlib.util as _iul
 from websecure.core.utils import ensure_wordlists as _ensure_wl
 from concurrent.futures import ThreadPoolExecutor
 import time as _t
-import sys as _ws_sys_path_guard, os as _ws_os_path_guard
-import sys as _sys, os as _os  # restored legacy aliases
-_ws_pkg_dir = _ws_os_path_guard.path.dirname(_ws_os_path_guard.path.abspath(__file__))
+import sys as _sys, os as _os
 
 _logger = _logging.getLogger(__name__)
 
-_req_mod = importlib.import_module('requests') if _iul.find_spec('requests') is not None else None
+_req_mod = _im.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
 
 # [UI] MSF-Style Banner (inlined from banner.py)
@@ -883,8 +878,7 @@ if crawl_website is None:
         return None
 
 # --- Güvenlik başlıkları ---
-# [WS12_RULE] scanner modül adı ≡ dosya adı (headers.py)
-from websecure.scanners.headers import get_security_headers as scan_security_headers
+from websecure.scanners.infrastructure import get_security_headers as scan_security_headers
 
 
 # --- GraphQL ---
@@ -1833,10 +1827,10 @@ def _public_surface_seeds(base_url: str) -> list[str]:
     return [base + p for p in candidates]
 
 # --- Raporlama Entegrasyonu ---
-if _ilu_patch.find_spec("websecure.core.reporting") is not None:
+if _iul.find_spec("websecure.core.reporting") is not None:
     _rmod = _im.import_module("websecure.core.reporting")
     _phase_rec = getattr(_rmod, "_phase_rec", None)
-elif _ilu_patch.find_spec('reporting') is not None:
+elif _iul.find_spec('reporting') is not None:
     from websecure.core.reporting import (
     configure_logging,
     perform_reporting,
@@ -3292,14 +3286,16 @@ O====|_______________________________________________________>  1   1 0
 
 
         # 1. NoSQL Injection
-        if callable(globals().get("run_nosqli_scan")) and (cfg.get("scanners") or {}).get("nosqli"):
+        _nosqli_fn = getattr(nosqli, "run_nosqli_scan", None) if nosqli else None
+        if callable(_nosqli_fn) and (cfg.get("scanners") or {}).get("nosqli"):
             print("[•] NoSQL Enjeksiyon taraması…")
-            _safe_call(run_nosqli_scan, ctx=ctx)
+            _safe_call(_nosqli_fn, ctx=ctx)
 
         # 2. SSRF / XXE
-        if callable(globals().get("run_ssrf_xxe_scan")) and (cfg.get("scanners") or {}).get("ssrf_xxe"):
+        _ssrf_fn = getattr(_ssrf_mod, "run_ssrf_xxe_scan", None) if _ssrf_mod else None
+        if callable(_ssrf_fn) and (cfg.get("scanners") or {}).get("ssrf_xxe"):
             print("[•] SSRF & XXE taraması…")
-            _safe_call(run_ssrf_xxe_scan, ctx=ctx)
+            _safe_call(_ssrf_fn, ctx=ctx)
 
         merged_eps = list(set(endpoints + (ctx.results.get("discovery", {}).get("query") or [])))
         # Filter valid URLs
@@ -3525,14 +3521,14 @@ if __name__ == "__main__":
     # Success Alert
     try:
         AlertManager.play_success()
-    except:
+    except Exception:
         pass
 
     # Keep window open
 
     try:
         input("\n[i] Çıkmak için Enter'a basın...")
-    except:
+    except (EOFError, KeyboardInterrupt):
         pass
 
 

@@ -4,7 +4,7 @@ import logging
 from ..core.http import hardened_session
 from ..core.reporting import add_result, redact_sensitive
 from ..core.payloads import get_payloads
-from ..core.input_analyzer import InputContext
+from ..core.analysis import InputContext
 
 
 class BaseScanner:
