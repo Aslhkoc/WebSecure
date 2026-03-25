@@ -1,189 +1,372 @@
+"""
+websecure.scanners.session_hunter
+----------------------------------
+Session Security Scanner.
 
-# -*- coding: utf-8 -*-
-import time
-import random
-import string
+Techniques:
+- Live cookie analysis: entropy measurement, format fingerprinting
+- Session fixation: set-before-login persistence check
+- Predictability detection: sequential IDs, timestamp-based hashes
+- Weak/common value brute-force (dictionary attack)
+- Token format detection: UUID, JWT, MD5, SHA256, Base64, sequential
+- Cookie attribute audit: HttpOnly, Secure, SameSite
+"""
+from __future__ import annotations
+
+import base64
 import hashlib
-import urllib.parse
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any, Optional
+import math
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
-# Link to core if needed (for helper functions)
+from .base import BaseScanner
+from websecure.core.reporting import add_result
+
+logger = logging.getLogger(__name__)
+
 try:
     from websecure.core.auth_flow import _looks_authenticated
 except ImportError:
-    def _looks_authenticated(text, resp=None, hints=None): return False
+    def _looks_authenticated(text, resp=None, hints=None):
+        text_lower = (text or "").lower()
+        return any(k in text_lower for k in ("dashboard", "logout", "sign out", "my account", "welcome"))
 
-_logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Token format patterns
+# ---------------------------------------------------------------------------
+_TOKEN_FORMATS = [
+    ("JWT",         re.compile(r'^eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]*$')),
+    ("UUID v4",     re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.I)),
+    ("MD5 hex",     re.compile(r'^[0-9a-f]{32}$', re.I)),
+    ("SHA1 hex",    re.compile(r'^[0-9a-f]{40}$', re.I)),
+    ("SHA256 hex",  re.compile(r'^[0-9a-f]{64}$', re.I)),
+    ("Hex",         re.compile(r'^[0-9a-f]{16,}$', re.I)),
+    ("Base64",      re.compile(r'^[A-Za-z0-9+/\-_]{16,}=*$')),
+    ("Sequential",  re.compile(r'^\d{1,10}$')),
+]
 
-class SessionHunter:
+# Session cookie names to analyze
+_SESSION_NAMES = [
+    "PHPSESSID", "JSESSIONID", "session", "sess", "sid",
+    "connect.sid", "ASP.NET_SessionId", "ASPSESSIONID",
+    "auth", "token", "access_token", "remember_me", "_session",
+]
+
+# Weak/common values to brute-force
+_WEAK_VALUES = [
+    "admin", "administrator", "user", "guest", "test", "demo",
+    "root", "debug", "trace", "token", "auth", "session", "cookie",
+    "abc123", "123456", "password", "qwerty", "0", "1", "true",
+    "false", "", "null", "undefined",
+]
+
+
+# ---------------------------------------------------------------------------
+# SessionHunter
+# ---------------------------------------------------------------------------
+
+class SessionHunter(BaseScanner):
     """
-    Implements Session Prediction and Brute-Force logic provided by the user.
+    Session Security Scanner — entropy, fixation, prediction, brute-force.
+    Inherits BaseScanner for standardized reporting and session management.
     """
-    def __init__(self, target_url: str, session: requests.Session, threads: int = 10):
-        self.target_url = target_url
-        self.session_obj = session # Use the main session for consistency/proxies
-        self.threads = threads
-        self.captured = []
-        
-    def _test_cookie(self, cookie_str: str) -> bool:
-        """Tests if a cookie grants access."""
-        # Create a temp session to avoid polluting the main one immediately
-        # checking verification status from main session
-        verify = getattr(self.session_obj, 'verify', True)
-        proxies = getattr(self.session_obj, 'proxies', {})
-        
-        headers = {
-            'Cookie': cookie_str,
-            'User-Agent': self.session_obj.headers.get('User-Agent', 'Mozilla/5.0'),
-            'Accept': '*/*',
-        }
-        
+
+    name = "session_hunter"
+    MAX_WORKERS = 8
+
+    def run(self, target: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+
+        # 1. Analyze live cookies
+        self._analyze_live_cookies(target, bucket)
+
+        # 2. Session fixation
+        self._check_session_fixation(target, bucket)
+
+        # 3. Dictionary attack on common weak values
+        self._brute_common(target, bucket)
+
+        # 4. Timestamp-seed prediction
+        self._predict_timestamp_sessions(target, bucket)
+
+        return self.results
+
+    # -------------------------------------------------------------------------
+    # Live cookie analysis
+    # -------------------------------------------------------------------------
+
+    def _analyze_live_cookies(self, url: str, bucket: str):
+        """Fetch the target and analyze all session cookies for weaknesses."""
         try:
-            # Short timeout for brute force
-            resp = requests.get(
-                self.target_url, 
-                headers=headers, 
-                timeout=5, 
-                verify=verify, 
-                proxies=proxies
+            resp = self.session.get(url, timeout=8)
+        except Exception:
+            return
+
+        for cookie in resp.cookies:
+            name = cookie.name
+            value = cookie.value or ""
+
+            # Only analyze session-like cookies
+            is_session = (
+                any(n.lower() in name.lower() for n in _SESSION_NAMES)
+                or len(value) >= 8
             )
-            
-            # Use WebSecure's robust authentication check
-            if _looks_authenticated(resp.text, resp):
-                return True
-            
-            # Fallback simple check (User's logic)
-            valid_indicators = [
-                'dashboard', 'admin', 'profile', 'welcome', 'logged in', 
-                'sign out', 'log out', 'my account'
-            ]
-            content_lower = resp.text.lower()
-            if any(ind in content_lower for ind in valid_indicators):
-                return True
-                
-        except Exception as e:
-            # _logger.debug(f"Session probe failed for {cookie_str}: {e}")
-            pass
-        return False
+            if not is_session or not value:
+                continue
 
-    def brute_force_common(self) -> List[Dict[str, Any]]:
-        """Dictionary attack on session IDs."""
-        common = [
-            'abc12345', 'admin', 'administrator', 'user', 'guest', 'test', 'demo',
-            '123456', 'password', 'root', 'qwerty', 'session', 'cookie', 
-            'auth', 'token', 'debug', 'trace'
+            entropy = _shannon_entropy(value)
+            fmt = _detect_token_format(value)
+            issues: List[str] = []
+
+            # Entropy check
+            if entropy < 3.5 and len(value) >= 8:
+                issues.append(f"Low entropy ({entropy:.2f} bits/char) — token may be guessable")
+
+            # Sequential integer — trivially enumerable
+            if re.match(r'^\d{1,8}$', value):
+                issues.append("Sequential integer session ID — trivially enumerable (IDOR/session hijack risk)")
+
+            # Timestamp-embedded
+            ts_hint = _detect_timestamp(value)
+            if ts_hint:
+                issues.append(f"Session ID encodes a Unix timestamp ({ts_hint}) — predictable generation")
+
+            # JWT with no signature
+            if fmt == "JWT":
+                parts = value.split(".")
+                if len(parts) == 3 and parts[2] == "":
+                    issues.append("JWT with empty signature — alg:none bypass risk")
+
+            # Very short token
+            if len(value) < 16:
+                issues.append(f"Very short session token ({len(value)} chars) — small key space")
+
+            # Cookie flags
+            secure = getattr(cookie, "secure", False)
+            rest = getattr(cookie, "_rest", {}) or {}
+            http_only = "httponly" in {k.lower() for k in rest} or rest.get("HttpOnly") is not None
+
+            if not http_only:
+                issues.append("Missing HttpOnly — XSS can steal this cookie")
+            if not secure and url.startswith("https://"):
+                issues.append("Missing Secure flag — cookie transmitted over HTTP")
+            if "SameSite" not in {k for k in rest}:
+                issues.append("Missing SameSite — CSRF risk")
+
+            if issues:
+                sev = "High" if any("enumerable" in i or "JWT" in i or "entropy" in i for i in issues) else "Medium"
+                finding = self.create_finding(
+                    type="Session Token Weakness",
+                    url=url,
+                    severity=sev,
+                    details="; ".join(issues),
+                    evidence={
+                        "cookie_name": name,
+                        "format": fmt or "unknown",
+                        "entropy_bits": round(entropy, 2),
+                        "token_length": len(value),
+                        "sample": value[:12] + "..." if len(value) > 12 else value,
+                    },
+                )
+                self.add(bucket, finding)
+                add_result("offensive", finding)
+
+    # -------------------------------------------------------------------------
+    # Session fixation
+    # -------------------------------------------------------------------------
+
+    def _check_session_fixation(self, url: str, bucket: str):
+        """
+        Send a known session ID to the login endpoint.
+        If the server reuses it post-auth, session fixation is confirmed.
+        """
+        FIXED = "WEBSECURE_FIXED_9x7z3q"
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        candidates = [
+            base + "/login", base + "/signin",
+            base + "/auth/login", base + "/api/login",
+            base + "/user/login",
         ]
-        
-        found = []
-        
-        def _check(val):
-            # Try different cookie names
-            for name in ["PHPSESSID", "JSESSIONID", "session", "sid", "connect.sid"]:
-                c_str = f"{name}={val}"
-                if self._test_cookie(c_str):
-                    return {"cookie": c_str, "type": "common_guess", "value": val}
-            return None
 
-        # Limited threading for safety
-        with ThreadPoolExecutor(max_workers=self.threads) as exe:
-            futures = [exe.submit(_check, c) for c in common]
-            for f in futures:
-                res = f.result()
-                if res:
-                    found.append(res)
-        return found
-
-    def predict_advanced_patterns(self) -> List[Dict[str, Any]]:
-        """
-        User Code #3 'Galaxy Brain': Generates complex timestamp-based hashes.
-        Includes MD5, SHA256, and Base64 formatted session IDs.
-        """
-        found = []
-        now = int(time.time())
-        # Check last 1 hour
-        timestamps = [now - random.randint(0, 3600) for _ in range(50)] 
-        
-        def _check(ts):
-            candidates = []
-            ts_str = str(ts)
-            
-            # 1. MD5 (Standard)
-            candidates.append(hashlib.md5(ts_str.encode()).hexdigest())
-            
-            # 2. SHA256 (Apocalypse)
-            candidates.append(hashlib.sha256(f"session:{ts}".encode()).hexdigest())
-            
-            # 3. Base64 Timestamp (Apocalypse) e.g. "MTcw..."
+        for login_url in candidates:
             try:
-                b64 = base64.urlsafe_b64encode(f"{ts}".encode()).decode().rstrip('=')
-                candidates.append(b64)
-            except: pass
-            
-            # 4. UID emulation (1..1000) + TS
-            uid = random.randint(1, 1000)
-            candidates.append(hashlib.md5(f"{uid}:{ts}".encode()).hexdigest())
+                resp = self.session.get(
+                    login_url,
+                    cookies={"PHPSESSID": FIXED, "session": FIXED, "sid": FIXED},
+                    timeout=5,
+                    allow_redirects=True,
+                )
+                if resp.status_code == 404:
+                    continue
 
-            for val in candidates:
-                # Try variations
-                vals = [val, val[:26], val[:32]] # PHP sessids are often 26 or 32
-                for v in vals:
-                    for name in ["PHPSESSID", "JSESSIONID", "session", "sid"]:
-                        c_str = f"{name}={v}"
-                        if self._test_cookie(c_str):
-                            return {"cookie": c_str, "type": "galaxy_pattern", "src": v}
+                # If server echoes our fixed value back in Set-Cookie
+                for c in resp.cookies:
+                    if c.value == FIXED:
+                        finding = self.create_finding(
+                            type="Session Fixation",
+                            url=login_url,
+                            severity="High",
+                            details=(
+                                f"Server preserved attacker-supplied session ID. "
+                                f"Cookie '{c.name}' was set to the attacker-controlled value."
+                            ),
+                            evidence={"cookie": c.name, "fixed_value": FIXED},
+                        )
+                        self.add(bucket, finding)
+                        add_result("offensive", finding)
+                        return
+            except Exception:
+                continue
+
+    # -------------------------------------------------------------------------
+    # Common value brute-force
+    # -------------------------------------------------------------------------
+
+    def _brute_common(self, url: str, bucket: str):
+        """Dictionary attack: try well-known weak session ID values."""
+        ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
+
+        def check_one(name: str, value: str) -> Optional[Dict]:
+            try:
+                resp = requests.get(
+                    url,
+                    headers={"Cookie": f"{name}={value}", "User-Agent": ua},
+                    timeout=5,
+                    verify=False,
+                )
+                if _looks_authenticated(resp.text, resp):
+                    return self.create_finding(
+                        type="Weak Session ID — Dictionary Attack",
+                        url=url,
+                        severity="Critical",
+                        details=f"Access gained with trivial session: {name}={value!r}",
+                        evidence={"cookie": f"{name}={value}", "status": resp.status_code},
+                    )
+            except Exception:
+                pass
             return None
 
-        total_checks = len(timestamps)
-        done_checks = 0
-        print(f"[*] Session Hunter: Analyzing {total_checks} timestamp seeds for prediction variants...")
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(check_one, name, val): (name, val)
+                for name in _SESSION_NAMES[:6]
+                for val in _WEAK_VALUES
+            }
+            for f in as_completed(futures):
+                result = f.result()
+                if result:
+                    self.add(bucket, result)
+                    add_result("offensive", result)
 
-        with ThreadPoolExecutor(max_workers=self.threads) as exe:
-            futures = [exe.submit(_check, ts) for ts in timestamps]
-            for i, f in enumerate(futures):
-                res = f.result()
-                done_checks += 1
-                if done_checks % 5 == 0:
-                    print(f"    [Trace] Prediction logic: {done_checks}/{total_checks} seeds processed...", end="\r")
-                if res:
-                    found.append(res)
-        print("                                                                                ", end="\r") # Clean line
-        return found
+    # -------------------------------------------------------------------------
+    # Timestamp-seed prediction
+    # -------------------------------------------------------------------------
 
-    def run(self) -> List[Dict[str, Any]]:
-        print(f"[*] Session Hunter: Testing {self.target_url} with {self.threads} threads...")
-        
-        results = []
-        # 1. Common
-        res_common = self.brute_force_common()
-        if res_common:
-            print(f"[+] Session Hunter: Found {len(res_common)} weak common sessions!")
-            results.extend(res_common)
-            
-        # 2. Advanced Prediction (Apocalypse Engine)
-        res_pred = self.predict_advanced_patterns()
-        if res_pred:
-             print(f"[+] Session Hunter: PREDICTED {len(res_pred)} advanced/generated sessions!")
-             results.extend(res_pred)
-             
-        # Log to Kill Cam if found
-        for item in results:
-             c = item.get("cookie")
-             print("\n" + "="*60)
-             print(" [KILL CAM] SESSION HIJACKED (HUNTER) ")
-             print("="*60)
-             print(f" [+] Method:   {item.get('type')}")
-             print(f" [+] Cookie:   {c}")
-             print("="*60 + "\n")
-             
-        return results
+    def _predict_timestamp_sessions(self, url: str, bucket: str):
+        """
+        Generate candidate session IDs from Unix timestamps (last 30 min).
+        Covers MD5/SHA256/base64/uid-hash variants used by weak generators.
+        """
+        now = int(time.time())
+        seeds = list(range(now - 1800, now, 15))  # every 15s over 30 min
+        ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
 
-def run_session_hunter(url: str, session: requests.Session, **kwargs):
-    hunter = SessionHunter(url, session)
-    return hunter.run()
+        logger.info(f"[SessionHunter] Testing {len(seeds)} timestamp seeds against {url}")
+
+        def test_seed(ts: int) -> Optional[Dict]:
+            ts_str = str(ts)
+            candidates = [
+                hashlib.md5(ts_str.encode()).hexdigest(),
+                hashlib.md5(ts_str.encode()).hexdigest()[:26],       # PHP 26-char style
+                hashlib.sha256(f"session:{ts}".encode()).hexdigest()[:32],
+                base64.urlsafe_b64encode(ts_str.encode()).decode().rstrip("="),
+                hashlib.md5(f"user:1:{ts}".encode()).hexdigest(),
+                hashlib.sha1(ts_str.encode()).hexdigest(),
+            ]
+            for val in candidates:
+                for name in _SESSION_NAMES[:5]:
+                    try:
+                        resp = requests.get(
+                            url,
+                            headers={"Cookie": f"{name}={val}", "User-Agent": ua},
+                            timeout=4,
+                            verify=False,
+                        )
+                        if _looks_authenticated(resp.text, resp):
+                            return self.create_finding(
+                                type="Predictable Session ID — Timestamp Seed",
+                                url=url,
+                                severity="Critical",
+                                details=(
+                                    f"Session derived from Unix timestamp {ts} was accepted. "
+                                    "Server uses time-based session generation — trivially brute-forceable."
+                                ),
+                                evidence={"seed_timestamp": ts, "cookie": f"{name}={val}"},
+                            )
+                    except Exception:
+                        pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
+            futures = {pool.submit(test_seed, ts): ts for ts in seeds}
+            for f in as_completed(futures):
+                result = f.result()
+                if result:
+                    self.add(bucket, result)
+                    add_result("offensive", result)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    freq = {c: s.count(c) / len(s) for c in set(s)}
+    return -sum(p * math.log2(p) for p in freq.values())
+
+
+def _detect_token_format(value: str) -> Optional[str]:
+    for name, pattern in _TOKEN_FORMATS:
+        if pattern.match(value):
+            return name
+    return None
+
+
+def _detect_timestamp(value: str) -> Optional[str]:
+    """Return a hint string if value encodes a plausible Unix timestamp (2020–2030)."""
+    if re.match(r'^\d{10}$', value):
+        ts = int(value)
+        if 1577836800 < ts < 1893456000:
+            return value
+    m = re.search(r'(\d{10})', value)
+    if m:
+        ts = int(m.group(1))
+        if 1577836800 < ts < 1893456000:
+            return m.group(1)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Legacy entry points (backward compatible)
+# ---------------------------------------------------------------------------
+
+def run_session_hunter(url: str, session=None, results: Dict = None, **kwargs) -> List[Dict]:
+    hunter = SessionHunter(
+        session=session or requests.Session(),
+        results=results or {},
+    )
+    hunter.run(url)
+    return hunter.results.get("session_hunter", [])
+
 
 run = run_session_hunter
-
