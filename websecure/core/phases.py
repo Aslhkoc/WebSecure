@@ -607,11 +607,24 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     old_hook = getattr(threading, "excepthook", None)
     threading.excepthook = _hook  # type: ignore[assignment]
 
+    # Per-phase timeout prevents any single phase from blocking forever
+    _PHASE_TIMEOUT = 240  # 4 minutes max per phase
+
     t = threading.Thread(target=fn, name=f"phase::{phase_id}", daemon=True)
     t.start()
-    t.join()
+    t.join(timeout=_PHASE_TIMEOUT)
 
     threading.excepthook = old_hook  # restore
+
+    if t.is_alive():
+        _logger.warning(
+            f"[phases] Phase '{phase_id}' exceeded {_PHASE_TIMEOUT}s — skipped to prevent hang"
+        )
+        add_result("errors", {
+            "type": "phase_timeout",
+            "phase": phase_id,
+            "timeout_secs": _PHASE_TIMEOUT,
+        })
 
     if err:
         add_result("errors", {
@@ -2093,8 +2106,146 @@ def run_discovery_extended(ctx) -> None:
                 current_res[k] = v
         
         ctx.results = current_res
-        
+
+    # ── Endpoint Seeding: probe parameterized paths when crawler found few ──
+    _seed_parameterized_endpoints(ctx)
+
     add_result("meta", {"stage": "discovery_extended", "count": len(getattr(ctx, "results", {}).get("endpoints", []))})
+
+
+# Common parameterized path templates to probe when crawler finds too little.
+# {val} is replaced with a safe canary string; {id} with integers.
+_PARAM_PROBE_TEMPLATES = [
+    # Generic query params (high XSS/SQLi surface)
+    "/?q={val}",
+    "/?search={val}",
+    "/?id=1",
+    "/?page=1",
+    "/?category=1",
+    "/?s={val}",
+    "/?keyword={val}",
+    # Common REST API paths
+    "/api/products?id=1",
+    "/api/users?id=1",
+    "/api/items?id=1",
+    "/api/search?q={val}",
+    "/api/v1/products?id=1",
+    "/api/v2/products?id=1",
+    # Juice Shop / OWASP style REST
+    "/rest/products/search?q={val}",
+    "/rest/user/whoami",
+    "/rest/products?category=Fruit",
+    # Common web app paths
+    "/search?q={val}",
+    "/search?query={val}",
+    "/products?id=1",
+    "/product?id=1",
+    "/item?id=1",
+    "/user?id=1",
+    "/profile?id=1",
+    "/post?id=1",
+    "/blog?id=1&category=1",
+    "/news?id=1",
+    "/article?id=1",
+    "/category?id=1",
+    "/shop?category=1",
+    # Redirect params (open redirect surface)
+    "/login?redirect=/",
+    "/login?next=/",
+    "/logout?redirect=/",
+    "/redirect?url=/",
+    "/go?url=/",
+    # File/download params (path traversal surface)
+    "/download?file=test",
+    "/file?name=test.txt",
+    "/image?src=test.jpg",
+    "/view?page=index",
+    # Admin / debug paths
+    "/admin?id=1",
+    "/dashboard?id=1",
+    # Language / locale
+    "/?lang=en",
+    "/?locale=en",
+]
+
+_PARAM_CANARY = "ws_probe"
+
+
+def _seed_parameterized_endpoints(ctx) -> None:
+    """
+    After crawler runs, probe common parameterized paths.
+    Adds any that return non-404 to ctx.results["endpoints"].
+    This feeds XSS, SQLi, CMDI, Open Redirect scanners with real targets.
+    """
+    base_url = (getattr(ctx, "base_url", None)
+                or getattr(ctx, "url", None)
+                or getattr(ctx, "target", None) or "")
+    if not base_url:
+        return
+
+    current_res = getattr(ctx, "results", {}) or {}
+    existing_eps = current_res.get("endpoints", [])
+
+    # Count how many existing endpoints already have query params
+    param_eps = [u for u in existing_eps if "?" in u]
+
+    # Only seed if we have fewer than 10 parameterized URLs
+    if len(param_eps) >= 10:
+        _logger.info(f"[seed] {len(param_eps)} parameterized endpoints already found, skipping probe")
+        return
+
+    sess = getattr(ctx, "session", None)
+    if sess is None:
+        try:
+            import requests as _r
+            sess = _r.Session()
+            sess.headers["User-Agent"] = "Mozilla/5.0 (WebSecure Scanner)"
+        except ImportError:
+            return
+
+    from urllib.parse import urlparse as _up
+    parsed = _up(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    new_eps: List[str] = []
+    _logger.info(f"[seed] Probing {len(_PARAM_PROBE_TEMPLATES)} parameterized paths on {origin}...")
+
+    def _probe(template: str):
+        path = template.replace("{val}", _PARAM_CANARY).replace("{id}", "1")
+        full_url = origin + path
+        try:
+            r = sess.get(full_url, timeout=5, verify=False, allow_redirects=True)
+            if r.status_code not in (404, 410, 501, 502, 503):
+                return full_url
+        except Exception:
+            pass
+        return None
+
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+    try:
+        import urllib3 as _u3
+        _u3.disable_warnings()
+    except Exception:
+        pass
+
+    with _TPE(max_workers=10) as pool:
+        futs = {pool.submit(_probe, t): t for t in _PARAM_PROBE_TEMPLATES}
+        for f in _asc(futs, timeout=30):
+            result = f.result()
+            if result and result not in existing_eps and result not in new_eps:
+                new_eps.append(result)
+
+    if new_eps:
+        _logger.info(f"[seed] Added {len(new_eps)} parameterized endpoint(s) to scan target list")
+        existing = set(existing_eps)
+        existing.update(new_eps)
+        current_res["endpoints"] = list(existing)
+        ctx.results = current_res
+        add_result("meta", {
+            "stage": "endpoint_seeding",
+            "new_endpoints": len(new_eps),
+            "sample": new_eps[:5],
+        })
 
 
 def _prioritize_urls(urls: List[str]) -> List[str]:
