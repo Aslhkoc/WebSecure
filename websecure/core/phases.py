@@ -2113,69 +2113,309 @@ def run_discovery_extended(ctx) -> None:
     add_result("meta", {"stage": "discovery_extended", "count": len(getattr(ctx, "results", {}).get("endpoints", []))})
 
 
-# Common parameterized path templates to probe when crawler finds too little.
-# {val} is replaced with a safe canary string; {id} with integers.
-_PARAM_PROBE_TEMPLATES = [
-    # Generic query params (high XSS/SQLi surface)
+# ---------------------------------------------------------------------------
+# Universal Endpoint Seeder
+# Covers ALL major web frameworks, CMS systems, REST/GraphQL APIs worldwide.
+# Technology-specific paths are selected dynamically based on detected stack.
+# ---------------------------------------------------------------------------
+
+# ── Generic (works on any web app) ──────────────────────────────────────────
+_GENERIC_PARAM_TEMPLATES: List[str] = [
+    # Root-level search / query params — ubiquitous SQLi/XSS surface
     "/?q={val}",
-    "/?search={val}",
-    "/?id=1",
-    "/?page=1",
-    "/?category=1",
     "/?s={val}",
+    "/?search={val}",
+    "/?query={val}",
     "/?keyword={val}",
-    # Common REST API paths
-    "/api/products?id=1",
-    "/api/users?id=1",
-    "/api/items?id=1",
-    "/api/search?q={val}",
-    "/api/v1/products?id=1",
-    "/api/v2/products?id=1",
-    # Juice Shop / OWASP style REST
-    "/rest/products/search?q={val}",
-    "/rest/user/whoami",
-    "/rest/products?category=Fruit",
-    # Common web app paths
-    "/search?q={val}",
-    "/search?query={val}",
-    "/products?id=1",
-    "/product?id=1",
-    "/item?id=1",
-    "/user?id=1",
-    "/profile?id=1",
-    "/post?id=1",
-    "/blog?id=1&category=1",
-    "/news?id=1",
-    "/article?id=1",
-    "/category?id=1",
-    "/shop?category=1",
-    # Redirect params (open redirect surface)
+    "/?term={val}",
+    "/?text={val}",
+    # ID-based object access — ubiquitous IDOR/SQLi surface
+    "/?id=1",
+    "/?id=2",
+    "/?pid=1",
+    "/?uid=1",
+    "/?user_id=1",
+    "/?product_id=1",
+    "/?item_id=1",
+    "/?record_id=1",
+    "/?object_id=1",
+    # Pagination / ordering — SQLi surface
+    "/?page=1",
+    "/?page=1&per_page=10",
+    "/?offset=0&limit=10",
+    "/?sort=id&order=asc",
+    "/?start=0&count=10",
+    # Category / filter — SQLi/XSS surface
+    "/?category=1",
+    "/?cat=1",
+    "/?type=1",
+    "/?filter={val}",
+    "/?tag={val}",
+    # Redirect / return URL — Open Redirect surface
     "/login?redirect=/",
     "/login?next=/",
+    "/login?return=/",
+    "/login?return_to=/",
     "/logout?redirect=/",
+    "/logout?next=/",
+    "/signin?redirect=/",
+    "/auth/login?next=/",
     "/redirect?url=/",
     "/go?url=/",
-    # File/download params (path traversal surface)
+    "/out?url=/",
+    "/link?url=/",
+    "/jump?url=/",
+    "/?url=/",
+    "/?next=/",
+    # File / resource — Path traversal / LFI surface
     "/download?file=test",
+    "/download?filename=test.txt",
     "/file?name=test.txt",
+    "/file?path=test",
     "/image?src=test.jpg",
+    "/img?url=test.jpg",
     "/view?page=index",
-    # Admin / debug paths
-    "/admin?id=1",
-    "/dashboard?id=1",
-    # Language / locale
+    "/include?file=index",
+    "/load?template=main",
+    "/render?view=index",
+    # Language / locale — sometimes XSS
     "/?lang=en",
     "/?locale=en",
+    "/?language=en",
+    # Callback / JSONP — XSS surface
+    "/?callback={val}",
+    "/?jsonp={val}",
+    # Debug / format toggles
+    "/?debug=1",
+    "/?format=json",
+    "/?output=json",
+    "/?_format=json",
 ]
 
-_PARAM_CANARY = "ws_probe"
+# ── REST API (version-agnostic) ──────────────────────────────────────────────
+_REST_API_TEMPLATES: List[str] = [
+    # Core CRUD resources — IDOR/SQLi/Mass Assignment surface
+    "/api/users?id=1",
+    "/api/users/1",
+    "/api/user?id=1",
+    "/api/products?id=1",
+    "/api/products/1",
+    "/api/product?id=1",
+    "/api/items?id=1",
+    "/api/items/1",
+    "/api/orders?id=1",
+    "/api/orders/1",
+    "/api/posts?id=1",
+    "/api/posts/1",
+    "/api/comments?id=1",
+    "/api/categories?id=1",
+    "/api/search?q={val}",
+    "/api/search?query={val}",
+    # Versioned APIs
+    "/api/v1/users?id=1",
+    "/api/v1/users/1",
+    "/api/v1/products?id=1",
+    "/api/v1/search?q={val}",
+    "/api/v2/users?id=1",
+    "/api/v2/users/1",
+    "/api/v2/products?id=1",
+    "/api/v2/search?q={val}",
+    "/api/v3/users?id=1",
+    # Auth endpoints
+    "/api/login",
+    "/api/auth/login",
+    "/api/auth/token",
+    "/api/register",
+    "/api/me",
+    "/api/profile?id=1",
+    # Admin / management
+    "/api/admin/users?id=1",
+    "/api/admin/dashboard",
+    # Schema discovery
+    "/api/swagger.json",
+    "/api/openapi.json",
+    "/swagger.json",
+    "/swagger/v1/swagger.json",
+    "/openapi.json",
+    "/api-docs",
+    "/api/docs",
+]
+
+# ── GraphQL ──────────────────────────────────────────────────────────────────
+_GRAPHQL_TEMPLATES: List[str] = [
+    "/graphql?query={val}",
+    "/graphql/v1?query={val}",
+    "/api/graphql?query={val}",
+    "/gql?query={val}",
+    "/query?query={val}",
+]
+
+# ── WordPress ────────────────────────────────────────────────────────────────
+_WORDPRESS_TEMPLATES: List[str] = [
+    "/?p=1",
+    "/?page_id=1",
+    "/?cat=1",
+    "/?tag={val}",
+    "/?s={val}",
+    "/?author=1",
+    "/?attachment_id=1",
+    "/wp-json/wp/v2/posts?id=1",
+    "/wp-json/wp/v2/users",
+    "/wp-json/wp/v2/pages?id=1",
+    "/wp-json/wp/v2/media?id=1",
+    "/?feed=rss2",
+    "/xmlrpc.php",
+    "/wp-login.php?redirect_to=/",
+    "/wp-admin/admin-ajax.php?action=test",
+]
+
+# ── Laravel / PHP frameworks ──────────────────────────────────────────────────
+_LARAVEL_TEMPLATES: List[str] = [
+    "/api/user?id=1",
+    "/api/posts?id=1",
+    "/api/products?id=1",
+    "/api/orders?id=1",
+    "/storage/app/public/test",
+    "/telescope/requests",
+    "/horizon/dashboard",
+    "/nova/api/users?page=1",
+]
+
+# ── Django / Python frameworks ────────────────────────────────────────────────
+_DJANGO_TEMPLATES: List[str] = [
+    "/api/?format=json",
+    "/api/users/?format=json",
+    "/api/users/1/?format=json",
+    "/api/products/?format=json",
+    "/api/posts/?format=json",
+    "/admin/",
+    "/__debug__/",
+    "/silk/requests/",
+]
+
+# ── Ruby on Rails ─────────────────────────────────────────────────────────────
+_RAILS_TEMPLATES: List[str] = [
+    "/users/1",
+    "/users/1.json",
+    "/products/1",
+    "/products/1.json",
+    "/posts/1",
+    "/posts/1.json",
+    "/orders/1",
+    "/articles/1",
+    "/comments/1",
+    "/search?q={val}",
+    "/rails/info/properties",
+]
+
+# ── ASP.NET / .NET Core ───────────────────────────────────────────────────────
+_ASPNET_TEMPLATES: List[str] = [
+    "/api/values?id=1",
+    "/api/product/1",
+    "/api/user/1",
+    "/api/order/1",
+    "/swagger/index.html",
+    "/healthz",
+    "/health",
+    "/.well-known/health",
+    "/elmah.axd",
+    "/trace.axd",
+]
+
+# ── Spring Boot / Java ────────────────────────────────────────────────────────
+_SPRING_TEMPLATES: List[str] = [
+    "/api/v1/users?id=1",
+    "/api/v1/products?id=1",
+    "/actuator",
+    "/actuator/health",
+    "/actuator/env",
+    "/actuator/mappings",
+    "/actuator/beans",
+    "/actuator/metrics",
+    "/v2/api-docs",
+    "/v3/api-docs",
+    "/swagger-ui.html",
+    "/swagger-ui/index.html",
+]
+
+# ── Node.js / Express ─────────────────────────────────────────────────────────
+_NODE_TEMPLATES: List[str] = [
+    "/api/users?id=1",
+    "/api/posts?id=1",
+    "/api/products?id=1",
+    "/graphql",
+    "/socket.io/",
+    "/.well-known/security.txt",
+]
+
+# ── Generic CMS / eCommerce ───────────────────────────────────────────────────
+_CMS_TEMPLATES: List[str] = [
+    # Magento
+    "/index.php/catalog/product/view/id/1",
+    "/rest/V1/products/1",
+    # Drupal
+    "/node/1",
+    "/node/1?_format=json",
+    "/user/1",
+    "/jsonapi/node/article?filter[id]=1",
+    # Joomla
+    "/index.php?option=com_content&view=article&id=1",
+    "/index.php?option=com_users&view=login&return={val}",
+    # PrestaShop
+    "/index.php?id_product=1&controller=product",
+    "/api/products/1?ws_key=",
+    # OpenCart
+    "/index.php?route=product/product&product_id=1",
+    "/index.php?route=account/login&redirect={val}",
+    # Shopify apps
+    "/products/test?variant=1",
+    "/collections/all?sort_by=best-selling",
+    # WooCommerce
+    "/?product=test",
+    "/?add-to-cart=1",
+]
+
+# Technology → additional template list mapping
+_TECH_TEMPLATE_MAP: Dict[str, List[str]] = {
+    "wordpress":   _WORDPRESS_TEMPLATES,
+    "drupal":      _CMS_TEMPLATES,
+    "joomla":      _CMS_TEMPLATES,
+    "laravel":     _LARAVEL_TEMPLATES,
+    "php":         _LARAVEL_TEMPLATES,
+    "django":      _DJANGO_TEMPLATES,
+    "python":      _DJANGO_TEMPLATES,
+    "rails":       _RAILS_TEMPLATES,
+    "ruby":        _RAILS_TEMPLATES,
+    "aspnet":      _ASPNET_TEMPLATES,
+    "dotnet":      _ASPNET_TEMPLATES,
+    "spring":      _SPRING_TEMPLATES,
+    "java":        _SPRING_TEMPLATES,
+    "node":        _NODE_TEMPLATES,
+    "express":     _NODE_TEMPLATES,
+    "graphql":     _GRAPHQL_TEMPLATES,
+    "rest_api":    _REST_API_TEMPLATES,
+    "magento":     _CMS_TEMPLATES,
+    "prestashop":  _CMS_TEMPLATES,
+    "opencart":    _CMS_TEMPLATES,
+    "shopify":     _CMS_TEMPLATES,
+}
+
+_PARAM_CANARY = "wstest"
 
 
 def _seed_parameterized_endpoints(ctx) -> None:
     """
-    After crawler runs, probe common parameterized paths.
-    Adds any that return non-404 to ctx.results["endpoints"].
-    This feeds XSS, SQLi, CMDI, Open Redirect scanners with real targets.
+    Universal endpoint seeder — works on any web application worldwide.
+
+    Strategy:
+    1. Always probe the generic parameter templates (search, id, redirect, file, etc.)
+    2. Detect technology stack from ctx.technologies and add tech-specific paths
+    3. Always add REST API paths (most modern apps have /api/...)
+    4. Probe with HEAD then GET to minimize bandwidth
+    5. Add all non-404 responses to ctx.results["endpoints"]
+
+    This ensures XSS, SQLi, CMDI, Open Redirect, IDOR, Path Traversal scanners
+    all receive real parameterized URLs to test — not just the base URL.
     """
     base_url = (getattr(ctx, "base_url", None)
                 or getattr(ctx, "url", None)
@@ -2185,13 +2425,11 @@ def _seed_parameterized_endpoints(ctx) -> None:
 
     current_res = getattr(ctx, "results", {}) or {}
     existing_eps = current_res.get("endpoints", [])
-
-    # Count how many existing endpoints already have query params
     param_eps = [u for u in existing_eps if "?" in u]
 
-    # Only seed if we have fewer than 10 parameterized URLs
-    if len(param_eps) >= 10:
-        _logger.info(f"[seed] {len(param_eps)} parameterized endpoints already found, skipping probe")
+    # Only seed if we have fewer than 15 parameterized URLs
+    if len(param_eps) >= 15:
+        _logger.info(f"[seed] {len(param_eps)} parameterized endpoints already present — skip")
         return
 
     sess = getattr(ctx, "session", None)
@@ -2199,7 +2437,11 @@ def _seed_parameterized_endpoints(ctx) -> None:
         try:
             import requests as _r
             sess = _r.Session()
-            sess.headers["User-Agent"] = "Mozilla/5.0 (WebSecure Scanner)"
+            sess.verify = False
+            sess.headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
         except ImportError:
             return
 
@@ -2207,19 +2449,18 @@ def _seed_parameterized_endpoints(ctx) -> None:
     parsed = _up(base_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
 
-    new_eps: List[str] = []
-    _logger.info(f"[seed] Probing {len(_PARAM_PROBE_TEMPLATES)} parameterized paths on {origin}...")
+    # Build template list: generic + tech-specific + REST API (always)
+    techs = set(t.lower() for t in (getattr(ctx, "technologies", []) or []))
+    templates: List[str] = list(_GENERIC_PARAM_TEMPLATES) + list(_REST_API_TEMPLATES)
 
-    def _probe(template: str):
-        path = template.replace("{val}", _PARAM_CANARY).replace("{id}", "1")
-        full_url = origin + path
-        try:
-            r = sess.get(full_url, timeout=5, verify=False, allow_redirects=True)
-            if r.status_code not in (404, 410, 501, 502, 503):
-                return full_url
-        except Exception:
-            pass
-        return None
+    for tech, extra in _TECH_TEMPLATE_MAP.items():
+        if tech in techs:
+            _logger.info(f"[seed] Tech '{tech}' detected — adding {len(extra)} specific templates")
+            templates.extend(extra)
+
+    # Deduplicate templates
+    templates = list(dict.fromkeys(templates))
+    _logger.info(f"[seed] Probing {len(templates)} endpoint templates on {origin} ...")
 
     from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
     try:
@@ -2228,24 +2469,51 @@ def _seed_parameterized_endpoints(ctx) -> None:
     except Exception:
         pass
 
-    with _TPE(max_workers=10) as pool:
-        futs = {pool.submit(_probe, t): t for t in _PARAM_PROBE_TEMPLATES}
-        for f in _asc(futs, timeout=30):
-            result = f.result()
-            if result and result not in existing_eps and result not in new_eps:
-                new_eps.append(result)
+    _SKIP_CODES = {404, 405, 410, 501, 502, 503, 504}
+
+    def _probe(template: str):
+        path = (template
+                .replace("{val}", _PARAM_CANARY)
+                .replace("{id}", "1"))
+        full_url = origin + path
+        try:
+            # HEAD first (faster), fallback to GET
+            try:
+                r = sess.head(full_url, timeout=4, allow_redirects=True)
+            except Exception:
+                r = sess.get(full_url, timeout=4, allow_redirects=True)
+            if r.status_code not in _SKIP_CODES:
+                return full_url
+        except Exception:
+            pass
+        return None
+
+    new_eps: List[str] = []
+    existing_set = set(existing_eps)
+
+    with _TPE(max_workers=15) as pool:
+        futs = {pool.submit(_probe, t): t for t in templates}
+        try:
+            for f in _asc(futs, timeout=45):
+                result = f.result()
+                if result and result not in existing_set and result not in new_eps:
+                    new_eps.append(result)
+        except Exception:
+            _logger.debug("[seed] Probe phase timed out — partial results collected")
 
     if new_eps:
-        _logger.info(f"[seed] Added {len(new_eps)} parameterized endpoint(s) to scan target list")
-        existing = set(existing_eps)
-        existing.update(new_eps)
-        current_res["endpoints"] = list(existing)
+        _logger.info(f"[seed] Added {len(new_eps)} endpoint(s) to offensive scan list")
+        existing_set.update(new_eps)
+        current_res["endpoints"] = list(existing_set)
         ctx.results = current_res
         add_result("meta", {
             "stage": "endpoint_seeding",
             "new_endpoints": len(new_eps),
-            "sample": new_eps[:5],
+            "tech_templates_used": sorted(techs & set(_TECH_TEMPLATE_MAP)),
+            "sample": new_eps[:8],
         })
+    else:
+        _logger.info("[seed] No additional endpoints found via probing")
 
 
 def _prioritize_urls(urls: List[str]) -> List[str]:
