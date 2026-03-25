@@ -784,10 +784,17 @@ class LiveMonitor:
     def summary(self) -> None:
         """Tarama sonu özet satırını yazar."""
         c = self._counters
+        # Also read global HTTP counter (covers hardened + plain sessions)
+        try:
+            from websecure.core.reporting import _counters as _gc
+            global_reqs = int(_gc.get("http_requests", 0))
+        except Exception:
+            global_reqs = 0
+        total_reqs = max(c["requests"], global_reqs)
         self._print(
             f"\n{self._B}{self._G}"
             f"[SCAN COMPLETE]  "
-            f"Requests: {c['requests']}  "
+            f"Requests: {total_reqs}  "
             f"Findings: {c['findings']}  "
             f"IP Rotations: {c['rotations']}"
             f"{self._RS}\n"
@@ -1173,9 +1180,14 @@ def _dedupe_findings(items: List[Dict]) -> List[Dict]:
             it_sp = list(it.get("similar_params") or [])
             cur["similar_params"] = list(dict.fromkeys(cur_sp + it_sp))
 
-        # evidence: sözlük birleştirme
-        if it.get("evidence"):
-            cur.setdefault("evidence", {}).update(it.get("evidence") or {})
+        # evidence: merge only when both sides are dicts
+        ev_new = it.get("evidence")
+        if ev_new is not None:
+            cur_ev = cur.get("evidence")
+            if isinstance(cur_ev, dict) and isinstance(ev_new, dict):
+                cur_ev.update(ev_new)
+            elif cur_ev is None:
+                cur["evidence"] = ev_new
 
         # poc: kısa gösterimde daha “zengin” olanı al
         cur_poc_short = _short_poc(cur.get("poc") or "")
