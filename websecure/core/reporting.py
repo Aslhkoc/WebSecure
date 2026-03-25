@@ -2421,7 +2421,10 @@ def get_plan_logs():
 def attach_oast_evidence(result: dict, events):
     if not events:
         return result
-    ev = result.setdefault("evidence", {})
+    # Guard: ensure evidence is always a dict before updating
+    if not isinstance(result.get("evidence"), dict):
+        result["evidence"] = {}
+    ev = result["evidence"]
     ev["oast_events"] = events
     return result
 

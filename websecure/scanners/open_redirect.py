@@ -28,9 +28,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Sabitler
 # ---------------------------------------------------------------------------
-MAX_WORKERS       = 12    # paralel thread sayısı
-REQUEST_TIMEOUT   = 5     # saniye (8'den düşürüldü)
-MAX_PROBE_REQUESTS = 600  # probe fazında maksimum istek (sonsuz döngü koruması)
+MAX_WORKERS        = 8    # paralel thread sayısı
+REQUEST_TIMEOUT    = 4    # saniye per-request
+MAX_PROBE_REQUESTS = 120  # probe fazında maksimum istek
+PROBE_PHASE_TIMEOUT = 45  # saniye — toplam probe fazı için deadline
 
 _CANARY = "evil.websecure.internal"
 
@@ -274,18 +275,21 @@ class OpenRedirectScanner:
             if len(probe_tasks) >= MAX_PROBE_REQUESTS:
                 break
 
-        logger.info(f"[OpenRedirect] {len(probe_tasks)} probe isteği paralel gönderiliyor...")
+        logger.info(f"[OpenRedirect] {len(probe_tasks)} probe isteği paralel gönderiliyor (timeout={PROBE_PHASE_TIMEOUT}s)...")
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             futures = {
                 pool.submit(self._probe, sess, tu, p, pl, ou): (tu, p, pl, ou)
                 for tu, p, pl, ou in probe_tasks
             }
-            for f in as_completed(futures):
-                result = f.result()
-                if result:
-                    findings.append(result)
-                    logger.info(f"[OpenRedirect] BULUNDU (probe): {result['url']} param={result['parameter']}")
+            try:
+                for f in as_completed(futures, timeout=PROBE_PHASE_TIMEOUT):
+                    result = f.result()
+                    if result:
+                        findings.append(result)
+                        logger.info(f"[OpenRedirect] BULUNDU (probe): {result['url']} param={result['parameter']}")
+            except Exception:
+                logger.info("[OpenRedirect] Probe fazı zaman aşımı — mevcut bulgularla devam ediliyor")
 
         logger.info(f"[OpenRedirect] Tamamlandı: {len(findings)} bulgu")
         return findings
