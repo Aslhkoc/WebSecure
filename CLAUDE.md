@@ -10,7 +10,8 @@
 
 ## Git / Push Kuralları
 
-- **Her değişikten sonra direkt push yap** — silme, ekleme, geliştirme, bug fix fark etmez
-- Önce `master` branch'ine merge et (worktree'deysen ana repoya git)
-- Sonra `git push origin master`
-- Kullanıcı `git pull` ile çeker, PR bekleme
+- **Her değişiklikten sonra otomatik olarak commit et ve push yap** — kullanıcının hatırlatmasına gerek yok
+- Worktree'deysen: ana repoya (`C:\Users\Acer\PycharmProjects\WebSecure`) geç, `master`'a merge et, `git push origin master`
+- Silme, ekleme, geliştirme, bug fix, refactor — her türlü değişiklik push edilmeli
+- PR açma, onay bekleme — direkt `master`'a push
+- Kullanıcının hiçbir git komutu çalıştırmasına gerek kalmamalı
