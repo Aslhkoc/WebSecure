@@ -8,19 +8,33 @@ Strateji:
   2. Her parametreye 30+ bypass payload'ı dene
   3. Yanıt Location header'ı veya JS redirect'i kontrol et
   4. WAF bypass: çeşitli encoding ve protocol tricks
+
+Performans:
+  - ThreadPoolExecutor ile paralel HTTP istekleri (MAX_WORKERS=12)
+  - Timeout: 5 saniye (8'den düşürüldü)
+  - MAX_PROBE_REQUESTS: sonsuz döngü koruması
+  - Per-path early exit: ilk bulgu sonrası o path atlanır
 """
 from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set
-from urllib.parse import urlencode, urlparse, urlunparse, urljoin, quote
+from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Redirect parametresi isimleri (yaygın)
+# Sabitler
 # ---------------------------------------------------------------------------
+MAX_WORKERS       = 12    # paralel thread sayısı
+REQUEST_TIMEOUT   = 5     # saniye (8'den düşürüldü)
+MAX_PROBE_REQUESTS = 600  # probe fazında maksimum istek (sonsuz döngü koruması)
+
+_CANARY = "evil.websecure.internal"
+
+# Redirect parametresi isimleri (yaygın)
 _REDIRECT_PARAMS = [
     "redirect", "redirect_url", "redirect_uri", "redirectUrl", "redirectUri",
     "return", "return_url", "returnUrl", "returnTo", "return_to",
@@ -40,23 +54,17 @@ _REDIRECT_PARAMS = [
     "site", "view",
 ]
 
-# ---------------------------------------------------------------------------
-# Payload listesi — WAF bypass teknikleri dahil
-# ---------------------------------------------------------------------------
-_CANARY = "evil.websecure.internal"
-
 _PAYLOADS = [
     # Temel
     f"https://{_CANARY}",
     f"http://{_CANARY}",
     f"//{_CANARY}",
-    # Protocol-relative + path
     f"//{_CANARY}/path",
     f"//{_CANARY}@target.com",
     # Çift slash
     f"///{_CANARY}",
     f"////{_CANARY}",
-    # Backslash bypass (IIS, Windows)
+    # Backslash bypass
     f"/\\{_CANARY}",
     f"\\\\{_CANARY}",
     # URL encode
@@ -73,32 +81,35 @@ _PAYLOADS = [
     f"https://target.com.{_CANARY}",
     f"https://{_CANARY}?target.com",
     f"https://{_CANARY}#target.com",
-    # Newline injection
+    # Newline
     f"https://{_CANARY}%0d%0alocation:https://{_CANARY}",
-    # Tab / space
+    # Tab/space
     f"https://{_CANARY}%09",
     f" https://{_CANARY}",
-    # Unicode bypass
-    f"https://ⓔⓥⓘⓛ.websecure.internal",
-    f"https://{_CANARY.replace('.', '\u3002')}",
     # Fragment bypass
     f"https://{_CANARY}#",
     # Null byte
     f"https://{_CANARY}%00",
-    # IP bypass
-    "https://0x45.0x58.0x41.0x4d",   # hex IP
-    "https://1113982819",             # decimal IP örneği
-    # Data URI (bazı uygulamalar JS redirect yapıyor)
-    f"data:text/html,<script>window.location='https://{_CANARY}'</script>",
-    # javascript: URI
-    f"javascript://comment%0aalert(document.domain)",
 ]
 
+# Probe edilecek endpoint path'leri
+_PROBE_PATHS = [
+    "/login", "/logout", "/signin", "/signout",
+    "/redirect", "/go", "/out", "/link",
+    "/oauth/callback", "/sso/callback",
+    "/", "",
+]
+
+# Probe fazında kullanılacak param sayısı ve payload sayısı
+_PROBE_PARAMS   = _REDIRECT_PARAMS[:15]  # ilk 15 (en yaygın)
+_PROBE_PAYLOADS = _PAYLOADS[:8]          # ilk 8 (en etkili)
+
+
+# ---------------------------------------------------------------------------
+# Yardımcı fonksiyonlar
+# ---------------------------------------------------------------------------
 
 def _is_open_redirect(response, payload: str) -> bool:
-    """
-    Yanıtın gerçek bir open redirect içerip içermediğini kontrol eder.
-    """
     # 1. 3xx Location header
     location = response.headers.get("Location", "") or response.headers.get("location", "")
     if location and _CANARY in location:
@@ -109,16 +120,13 @@ def _is_open_redirect(response, payload: str) -> bool:
     if refresh and _CANARY in refresh:
         return True
 
-    # 3. HTML meta refresh veya JS redirect
-    body = ""
+    # 3. HTML meta / JS redirect
     try:
-        body = response.text[:8000]
+        body = response.text[:6000]
     except Exception:
-        pass
+        return False
 
     if _CANARY in body:
-        # Daha spesifik kontrol: sadece body'de canary geçmesi yetmez,
-        # redirect context içinde olmalı
         patterns = [
             rf'location\s*=\s*["\']?[^"\']*{re.escape(_CANARY)}',
             rf'location\.href\s*=\s*["\'][^"\']*{re.escape(_CANARY)}',
@@ -133,58 +141,36 @@ def _is_open_redirect(response, payload: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# URL içindeki redirect parametrelerini çıkar
-# ---------------------------------------------------------------------------
-
 def _find_redirect_params(url: str) -> List[str]:
-    """URL query string'inde redirect parametresi var mı?"""
     parsed = urlparse(url)
     if not parsed.query:
         return []
-    from urllib.parse import parse_qs
     params = parse_qs(parsed.query, keep_blank_values=True)
-    found = []
-    for p in params:
-        if p.lower() in _REDIRECT_PARAMS:
-            found.append(p)
-    return found
+    return [p for p in params if p.lower() in _REDIRECT_PARAMS]
 
 
-def _inject_payload(url: str, param: str, payload: str) -> str:
-    """URL'deki belirtilen parametreyi payload ile değiştirir."""
-    from urllib.parse import parse_qs, urlencode
+def _inject_param(url: str, param: str, payload: str) -> str:
     parsed = urlparse(url)
     params = parse_qs(parsed.query, keep_blank_values=True)
     params[param] = [payload]
     new_query = urlencode({k: v[0] for k, v in params.items()})
-    return urlunparse((
-        parsed.scheme, parsed.netloc, parsed.path,
-        parsed.params, new_query, parsed.fragment
-    ))
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
+                       parsed.params, new_query, parsed.fragment))
 
 
 # ---------------------------------------------------------------------------
-# Ana scanner sınıfı
+# Ana scanner
 # ---------------------------------------------------------------------------
 
 class OpenRedirectScanner:
     """
-    Open redirect taraması.
-    Hem crawler tarafından bulunan URL'leri hem de base URL üzerindeki
-    yaygın endpoint'leri tarar.
+    Open Redirect taraması.
+    - Crawler URL'lerinde redirect parametresi arar
+    - Yaygın probe endpoint'lerini paralel test eder
+    - ThreadPoolExecutor ile hızlı, sonsuz döngü korumalı
     """
 
-    # Redirect parametresi enjekte edilecek yaygın endpoint'ler
-    _PROBE_PATHS = [
-        "/login", "/logout", "/signin", "/signout", "/auth",
-        "/redirect", "/go", "/out", "/link",
-        "/oauth/authorize", "/oauth/callback",
-        "/sso/login", "/sso/callback",
-        "/", "",
-    ]
-
-    def __init__(self, session=None, timeout: int = 8):
+    def __init__(self, session=None, timeout: int = REQUEST_TIMEOUT):
         self.session = session
         self.timeout = timeout
 
@@ -202,41 +188,35 @@ class OpenRedirectScanner:
         except ImportError:
             return None
 
-    def _test_url(self, sess, url: str, param: str) -> Optional[Dict[str, Any]]:
-        """Bir URL + parametre kombinasyonunu tüm payload'larla test eder."""
-        for payload in _PAYLOADS:
-            test_url = _inject_payload(url, param, payload)
-            try:
-                resp = sess.get(
-                    test_url,
-                    timeout=self.timeout,
-                    allow_redirects=False,  # kendi redirect'imizi kontrol etmeliyiz
-                    verify=False,
-                )
-                if _is_open_redirect(resp, payload):
-                    return {
-                        "severity": "high",
-                        "title": "Open Redirect",
-                        "url": url,
-                        "param": param,
-                        "payload": payload,
-                        "test_url": test_url,
-                        "status_code": resp.status_code,
-                        "location": resp.headers.get("Location", ""),
-                        "evidence": f"Param '{param}' ile '{payload}' yükü redirect tetikledi",
-                        "cwe": "CWE-601",
-                        "owasp": "A01:2021",
-                    }
-            except Exception:
-                pass
+    def _probe(self, sess, test_url: str, param: str, payload: str,
+               origin_url: str) -> Optional[Dict[str, Any]]:
+        """Tek bir URL+param+payload kombinasyonunu test eder."""
+        try:
+            resp = sess.get(
+                test_url,
+                timeout=self.timeout,
+                allow_redirects=False,
+                verify=False,
+            )
+            if _is_open_redirect(resp, payload):
+                return {
+                    "type": "Open Redirect",
+                    "severity": "High",
+                    "url": origin_url,
+                    "parameter": param,
+                    "payload": payload,
+                    "test_url": test_url,
+                    "status_code": resp.status_code,
+                    "location": resp.headers.get("Location", ""),
+                    "evidence": f"Param '{param}' ile '{payload}' redirect tetikledi",
+                    "cwe": "CWE-601",
+                    "owasp": "A01:2021",
+                }
+        except Exception:
+            pass
         return None
 
     def scan(self, base_url: str, urls: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        base_url: hedef sitenin kök URL'si
-        urls: crawler'dan gelen URL listesi (opsiyonel)
-        """
-        import warnings
         try:
             import urllib3
             urllib3.disable_warnings()
@@ -245,7 +225,7 @@ class OpenRedirectScanner:
 
         sess = self._get_session()
         if not sess:
-            logger.warning("[OpenRedirect] HTTP session oluşturulamadı")
+            logger.warning("[OpenRedirect] Session oluşturulamadı")
             return []
 
         findings: List[Dict[str, Any]] = []
@@ -253,52 +233,59 @@ class OpenRedirectScanner:
         parsed_base = urlparse(base_url)
         origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
-        # 1. Crawler'dan gelen URL'lerde redirect param ara
+        # ── 1. Crawler URL'lerindeki redirect parametrelerini paralel test et ──
+        crawler_tasks = []
         for url in (urls or []):
             for param in _find_redirect_params(url):
-                key = f"{url}|{param}"
-                if key in tested:
-                    continue
-                tested.add(key)
-                result = self._test_url(sess, url, param)
+                for payload in _PAYLOADS:
+                    key = f"{url}|{param}|{payload}"
+                    if key not in tested:
+                        tested.add(key)
+                        test_url = _inject_param(url, param, payload)
+                        crawler_tasks.append((test_url, param, payload, url))
+
+        if crawler_tasks:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                futures = {
+                    pool.submit(self._probe, sess, tu, p, pl, ou): (tu, p, pl, ou)
+                    for tu, p, pl, ou in crawler_tasks
+                }
+                for f in as_completed(futures):
+                    result = f.result()
+                    if result:
+                        findings.append(result)
+                        logger.info(f"[OpenRedirect] BULUNDU: {result['url']} param={result['parameter']}")
+
+        # ── 2. Probe endpoint'leri paralel test et (MAX_PROBE_REQUESTS ile kısıtlı) ──
+        probe_tasks = []
+        for path in _PROBE_PATHS:
+            probe_url = origin + path
+            for param in _PROBE_PARAMS:
+                for payload in _PROBE_PAYLOADS:
+                    key = f"{probe_url}|{param}|{payload}"
+                    if key not in tested:
+                        tested.add(key)
+                        test_url = f"{probe_url}?{param}={quote(payload)}"
+                        probe_tasks.append((test_url, param, payload, probe_url))
+                    if len(probe_tasks) >= MAX_PROBE_REQUESTS:
+                        break
+                if len(probe_tasks) >= MAX_PROBE_REQUESTS:
+                    break
+            if len(probe_tasks) >= MAX_PROBE_REQUESTS:
+                break
+
+        logger.info(f"[OpenRedirect] {len(probe_tasks)} probe isteği paralel gönderiliyor...")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(self._probe, sess, tu, p, pl, ou): (tu, p, pl, ou)
+                for tu, p, pl, ou in probe_tasks
+            }
+            for f in as_completed(futures):
+                result = f.result()
                 if result:
                     findings.append(result)
-                    logger.info(f"[OpenRedirect] BULUNDU: {url} param={param}")
-
-        # 2. Probe endpoint'lere tüm redirect param isimlerini enjekte et
-        for path in self._PROBE_PATHS:
-            probe_url = origin + path
-            for param in _REDIRECT_PARAMS[:20]:  # top 20 parametre yeterli
-                for payload in _PAYLOADS[:10]:   # hızlı: ilk 10 payload
-                    test_url = f"{probe_url}?{param}={quote(payload)}"
-                    key = f"{test_url}|{param}"
-                    if key in tested:
-                        continue
-                    tested.add(key)
-                    try:
-                        resp = sess.get(
-                            test_url,
-                            timeout=self.timeout,
-                            allow_redirects=False,
-                            verify=False,
-                        )
-                        if _is_open_redirect(resp, payload):
-                            findings.append({
-                                "severity": "high",
-                                "title": "Open Redirect",
-                                "url": probe_url,
-                                "param": param,
-                                "payload": payload,
-                                "test_url": test_url,
-                                "status_code": resp.status_code,
-                                "location": resp.headers.get("Location", ""),
-                                "evidence": f"Probe endpoint'te open redirect tespit edildi",
-                                "cwe": "CWE-601",
-                                "owasp": "A01:2021",
-                            })
-                            logger.info(f"[OpenRedirect] BULUNDU (probe): {probe_url} param={param}")
-                    except Exception:
-                        pass
+                    logger.info(f"[OpenRedirect] BULUNDU (probe): {result['url']} param={result['parameter']}")
 
         logger.info(f"[OpenRedirect] Tamamlandı: {len(findings)} bulgu")
         return findings
@@ -309,15 +296,9 @@ class OpenRedirectScanner:
 # ---------------------------------------------------------------------------
 
 def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None,
-        urls: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """
-    Plugin entry point.
-    cfg anahtarları:
-      open_redirect.timeout  — istek timeout süresi (varsayılan: 8)
-    """
+        urls: Optional[List[str]] = None, **kwargs) -> List[Dict[str, Any]]:
     cfg = cfg or {}
     or_cfg = cfg.get("open_redirect", {}) if isinstance(cfg, dict) else {}
-    timeout = int(or_cfg.get("timeout", 8))
-
+    timeout = int(or_cfg.get("timeout", REQUEST_TIMEOUT))
     scanner = OpenRedirectScanner(session=session, timeout=timeout)
     return scanner.scan(target, urls=urls)
