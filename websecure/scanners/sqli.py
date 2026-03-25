@@ -135,6 +135,40 @@ class SQLInjectionScanner(BaseScanner):
         p = payload.upper()
         return any(kw in p for kw in ("SLEEP", "WAITFOR", "PG_SLEEP"))
 
+    # Boolean-blind payloads: (true_payload, false_payload)
+    _BOOL_PAIRS: List[Tuple[str, str]] = [
+        ("' AND 1=1--",   "' AND 1=2--"),
+        ("' AND 'a'='a",  "' AND 'a'='b"),
+        ("\" AND 1=1--",  "\" AND 1=2--"),
+        ("1 AND 1=1",     "1 AND 1=2"),
+        ("' OR 1=1--",    "' OR 1=2--"),
+    ]
+    _BOOL_DIFF_THRESHOLD = 0.12  # 12% content-length change flags as vuln
+
+    def _is_boolean_blind(self, url: str, param: str,
+                          baseline_len: int) -> Optional[Tuple[str, str]]:
+        """Compare TRUE vs FALSE condition response lengths. Returns (payload, evidence) if vuln."""
+        for true_pl, false_pl in self._BOOL_PAIRS:
+            try:
+                true_url  = self._inject_param(url, param, true_pl)
+                false_url = self._inject_param(url, param, false_pl)
+                r_true  = self.session.get(true_url,  timeout=10)
+                r_false = self.session.get(false_url, timeout=10)
+                len_true  = len(r_true.text)
+                len_false = len(r_false.text)
+                # Must differ from each other but true should resemble baseline
+                diff_tf = abs(len_true - len_false)
+                if baseline_len > 0 and diff_tf / max(baseline_len, 1) >= self._BOOL_DIFF_THRESHOLD:
+                    evidence = (
+                        f"Boolean-blind: TRUE response={len_true}B "
+                        f"FALSE response={len_false}B diff={diff_tf}B "
+                        f"({diff_tf/max(baseline_len,1)*100:.1f}% change)"
+                    )
+                    return true_pl, evidence
+            except Exception:
+                continue
+        return None
+
     def run(self, url, **kwargs):
         urls = url if isinstance(url, list) else [url]
         for u in urls:
@@ -169,12 +203,21 @@ class SQLInjectionScanner(BaseScanner):
 
         time_threshold = baseline_time + self.TIME_DELTA
 
+        baseline_len = len(baseline.text) if baseline.text else 0
+
         for param_name, _ in params:
             found = self._test_param_parallel(
                 url, param_name, baseline_errors, time_threshold
             )
             if found:
                 break  # one confirmed vuln per URL is sufficient
+
+            # Boolean-blind fallback (runs only if error/time checks found nothing)
+            bool_result = self._is_boolean_blind(url, param_name, baseline_len)
+            if bool_result:
+                payload, evidence = bool_result
+                self._report_vuln("SQL Injection (Boolean-Blind)", url, param_name, payload, evidence)
+                break
 
     def _test_param_parallel(
         self,

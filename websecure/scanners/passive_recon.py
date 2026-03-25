@@ -279,6 +279,125 @@ class ContentDiscoveryScanner(BaseScanner):
                 pass
         return findings
 
+class APISchemaDiscovery(BaseScanner):
+    """
+    Discovers OpenAPI/Swagger schema endpoints and parses them to extract
+    parameterized API paths for active scanner seeding.
+    """
+
+    _SCHEMA_PATHS = [
+        "/swagger.json", "/swagger.yaml", "/swagger/v1/swagger.json",
+        "/api-docs", "/api-docs.json", "/api/api-docs",
+        "/v1/api-docs", "/v2/api-docs", "/v3/api-docs",
+        "/openapi.json", "/openapi.yaml", "/openapi/v3/api-docs",
+        "/api/swagger.json", "/api/openapi.json",
+        "/swagger-ui/swagger.json",
+        "/.well-known/openapi",
+        "/rest/swagger.json", "/graphql/schema",
+        "/api/schema", "/api/schema.json", "/api/schema.yaml",
+        "/spec", "/spec.json", "/spec.yaml",
+        "/api/v1/swagger.json", "/api/v2/swagger.json",
+    ]
+
+    def scan(self, base_url: str) -> List[Dict[str, Any]]:
+        findings = []
+        parsed_base = urlparse(base_url)
+        origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+        for path in self._SCHEMA_PATHS:
+            schema_url = origin + path
+            try:
+                resp = self.session.get(schema_url, timeout=5, allow_redirects=True)
+                if resp.status_code != 200:
+                    continue
+                content_type = resp.headers.get("Content-Type", "")
+                body = resp.text
+
+                # Must look like a schema
+                if not any(k in body for k in ("swagger", "openapi", "paths", "info")):
+                    continue
+
+                logger.info(f"[APISchema] Found schema at {schema_url}")
+
+                # Try to parse as JSON
+                schema = None
+                if "json" in content_type or body.strip().startswith("{"):
+                    try:
+                        schema = resp.json()
+                    except Exception:
+                        pass
+
+                endpoints = []
+                if schema:
+                    endpoints = self._extract_endpoints(schema, origin)
+
+                findings.append(self.create_finding(
+                    type="API Schema Exposed",
+                    url=schema_url,
+                    severity="Medium",
+                    details=f"API schema publicly accessible — {len(endpoints)} endpoints extracted",
+                    evidence={"endpoints": endpoints[:30]},
+                ))
+
+                # Seed extracted endpoints into results for active scanners
+                if endpoints and isinstance(self.results, dict):
+                    existing = self.results.setdefault("endpoints", [])
+                    for ep in endpoints:
+                        if ep not in existing:
+                            existing.append(ep)
+                    logger.info(f"[APISchema] Seeded {len(endpoints)} endpoints from {schema_url}")
+
+            except Exception as e:
+                logger.debug(f"[APISchema] {schema_url}: {e}")
+
+        return findings
+
+    def _extract_endpoints(self, schema: Dict, origin: str) -> List[str]:
+        """Parse OpenAPI 2/3 schema, return fully qualified parameterized URLs."""
+        paths = schema.get("paths") or {}
+        base_path = schema.get("basePath", "")  # OAS2
+        # OAS3 servers list
+        servers = schema.get("servers", [])
+        server_url = ""
+        if servers:
+            server_url = (servers[0].get("url") or "").rstrip("/")
+            if server_url.startswith("/"):
+                server_url = origin + server_url
+            elif not server_url.startswith("http"):
+                server_url = origin + "/" + server_url
+
+        results = []
+        for path, methods in paths.items():
+            # Collect query parameters defined for this path
+            query_params = set()
+            for method_data in methods.values():
+                if not isinstance(method_data, dict):
+                    continue
+                for param in method_data.get("parameters", []):
+                    if isinstance(param, dict) and param.get("in") == "query":
+                        name = param.get("name")
+                        if name:
+                            query_params.add(name)
+                # OAS3 requestBody schema keys
+                rb = method_data.get("requestBody", {})
+                content = rb.get("content", {}) if isinstance(rb, dict) else {}
+                for ct_data in content.values():
+                    schema_obj = ct_data.get("schema", {}) if isinstance(ct_data, dict) else {}
+                    for prop in (schema_obj.get("properties") or {}).keys():
+                        query_params.add(prop)
+
+            # Build URL
+            full_path = (server_url or origin + base_path) + path
+            # Replace OAS path params like {id} with 1
+            full_path = re.sub(r"\{[^}]+\}", "1", full_path)
+            if query_params:
+                qs = "&".join(f"{p}=1" for p in list(query_params)[:5])
+                full_path = f"{full_path}?{qs}"
+            results.append(full_path)
+
+        return results
+
+
 def run(target: str, session=None, results=None, **kwargs):
     if results is None:
         results = {}
@@ -288,6 +407,11 @@ def run(target: str, session=None, results=None, **kwargs):
     cd_scanner = ContentDiscoveryScanner(session, results)
     findings_cd = cd_scanner.scan(target)
     results["passive"].extend(findings_cd)
+
+    # 1b. API Schema Discovery (OpenAPI / Swagger)
+    api_scanner = APISchemaDiscovery(session, results)
+    findings_api = api_scanner.scan(target)
+    results["passive"].extend(findings_api)
 
     # 2. JS Secret & Endpoint Scan
     # Collect JS URLs from: discovery results, explicit kwarg, and page crawl

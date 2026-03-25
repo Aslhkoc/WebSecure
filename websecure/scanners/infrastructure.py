@@ -328,18 +328,29 @@ class HeaderScanner:
         self.session = session
         self.timeout = timeout
         self.verify_tls = verify_tls
-        
-    def scan_url(self, url: str, origin_for_cors: str = None, do_preflight: bool = False) -> t.Dict[str, t.Any]:
-        # Simple GET
+
+    def _do_get(self, url: str, headers: t.Optional[t.Dict] = None) -> t.Any:
+        h = headers or {}
         if self.session:
-            resp = self.session.get(url, headers={"Origin": origin_for_cors} if origin_for_cors else None, timeout=self.timeout)
+            return self.session.get(url, headers=h, timeout=self.timeout)
         elif _HAS_HTTPX and httpx:
             with httpx.Client(verify=self.verify_tls) as c:
-                resp = c.get(url, headers={"Origin": origin_for_cors} if origin_for_cors else None, timeout=self.timeout)
+                return c.get(url, headers=h, timeout=self.timeout)
         else:
-            resp = requests.get(url, headers={"Origin": origin_for_cors} if origin_for_cors else None, timeout=self.timeout, verify=self.verify_tls)
-            
+            return requests.get(url, headers=h, timeout=self.timeout, verify=self.verify_tls)
+
+    def scan_url(self, url: str, origin_for_cors: str = None, do_preflight: bool = False) -> t.Dict[str, t.Any]:
+        h = {"Origin": origin_for_cors} if origin_for_cors else None
+        resp = self._do_get(url, h)
+
         cov, fnds, pocs = analyze_response_headers(resp, origin_for_cors)
+
+        # Host Header Injection
+        fnds.extend(self._test_host_header_injection(url))
+
+        # Cache Poisoning / Forwarded-Host reflection
+        fnds.extend(self._test_cache_poisoning(url))
+
         return {
             "url": url,
             "status": getattr(resp, "status_code", 0),
@@ -348,6 +359,129 @@ class HeaderScanner:
             "findings": [f.__dict__ for f in fnds],
             "pocs": pocs
         }
+
+    # ------------------------------------------------------------------
+    # Host Header Injection
+    # ------------------------------------------------------------------
+    _EVIL_HOST = "evil.websecure.internal"
+
+    def _test_host_header_injection(self, url: str) -> t.List[HeaderFinding]:
+        findings = []
+        parsed = urlparse(url)
+        real_host = parsed.netloc
+
+        test_headers_list = [
+            {"Host": self._EVIL_HOST},
+            {"Host": f"{real_host}.{self._EVIL_HOST}"},
+            {"Host": real_host, "X-Forwarded-Host": self._EVIL_HOST},
+            {"Host": real_host, "X-Host": self._EVIL_HOST},
+        ]
+
+        for inject_headers in test_headers_list:
+            try:
+                resp = self._do_get(url, inject_headers)
+                body = (getattr(resp, "text", "") or "")[:8000]
+                resp_headers = dict(getattr(resp, "headers", {}))
+
+                # Check reflection in body or Location header
+                location = resp_headers.get("Location", "")
+                if self._EVIL_HOST in body or self._EVIL_HOST in location:
+                    injected_header = next(
+                        k for k, v in inject_headers.items() if self._EVIL_HOST in v
+                    )
+                    findings.append(HeaderFinding(
+                        title="Host Header Injection",
+                        severity="High",
+                        description=(
+                            f"Server reflects injected '{injected_header}: {self._EVIL_HOST}' "
+                            "in response body or Location header — password-reset link hijacking, "
+                            "cache poisoning, and SSRF are possible."
+                        ),
+                        evidence={
+                            "injected_header": injected_header,
+                            "injected_value": inject_headers[injected_header],
+                            "location": location,
+                            "body_snippet": body[:300],
+                        },
+                        recommendation=(
+                            "Validate the Host header against a server-side whitelist. "
+                            "Never use the Host header to construct URLs in responses."
+                        ),
+                        tags=["Host-Header", "Cache-Poisoning", "SSRF"],
+                    ))
+                    add_result("offensive", {
+                        "type": "Host Header Injection",
+                        "severity": "High",
+                        "url": url,
+                        "parameter": injected_header,
+                        "payload": inject_headers[injected_header],
+                        "evidence": body[:300],
+                        "cwe": "CWE-20",
+                        "owasp": "A03:2021",
+                    })
+                    break  # one confirmed finding per URL is enough
+            except Exception:
+                continue
+        return findings
+
+    # ------------------------------------------------------------------
+    # Cache Poisoning (X-Forwarded-Host / X-Forwarded-Scheme reflection)
+    # ------------------------------------------------------------------
+    _CACHE_POISON_HEADERS = [
+        "X-Forwarded-Host",
+        "X-Forwarded-Scheme",
+        "X-Original-URL",
+        "X-Rewrite-URL",
+        "X-Forwarded-Proto",
+        "X-Forwarded-For",
+    ]
+
+    def _test_cache_poisoning(self, url: str) -> t.List[HeaderFinding]:
+        findings = []
+        canary = "cachepoisontest.websecure.internal"
+
+        for header_name in self._CACHE_POISON_HEADERS:
+            try:
+                resp = self._do_get(url, {header_name: canary})
+                body = (getattr(resp, "text", "") or "")[:8000]
+                resp_headers = dict(getattr(resp, "headers", {}))
+                location = resp_headers.get("Location", "")
+
+                if canary in body or canary in location:
+                    findings.append(HeaderFinding(
+                        title="Cache Poisoning via Header Reflection",
+                        severity="High",
+                        description=(
+                            f"Server reflects '{header_name}: {canary}' into response body "
+                            "or Location — if the response is cached, an attacker can "
+                            "poison the cache for all users."
+                        ),
+                        evidence={
+                            "header": header_name,
+                            "value": canary,
+                            "body_snippet": body[:300],
+                            "location": location,
+                        },
+                        recommendation=(
+                            "Strip or validate untrusted forwarding headers at the reverse-proxy "
+                            "layer. Ensure cache keys include all headers that influence response content."
+                        ),
+                        tags=["Cache-Poisoning", "Headers"],
+                    ))
+                    add_result("offensive", {
+                        "type": "Cache Poisoning",
+                        "severity": "High",
+                        "url": url,
+                        "parameter": header_name,
+                        "payload": canary,
+                        "evidence": body[:300],
+                        "cwe": "CWE-444",
+                        "owasp": "A05:2021",
+                    })
+                    break
+            except Exception:
+                continue
+        return findings
 
 # ============================================================================
 # SECTION 2: TLS SCANNER (formerly tls.py)
