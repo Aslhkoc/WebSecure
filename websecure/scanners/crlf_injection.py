@@ -131,7 +131,7 @@ def _split_response_detected(resp) -> bool:
     try:
         text = resp.text[:2000]
         return bool(re.search(r"HTTP/\d\.\d\s+\d{3}", text))
-    except Exception:
+    except (AttributeError, UnicodeDecodeError):
         return False
 
 

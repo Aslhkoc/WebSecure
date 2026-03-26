@@ -49,7 +49,7 @@ class AuthenticatedSession:
         target = urljoin(self.base_url + "/", self.login_path.lstrip("/"))
         try:
             r = self.session.get(target, timeout=15)
-        except Exception:
+        except (requests.exceptions.RequestException, OSError):
             return False
 
         data = {"username": username, "password": password}
@@ -60,7 +60,7 @@ class AuthenticatedSession:
 
         try:
             r2 = self.session.post(r.url, data=data, timeout=20)
-        except Exception:
+        except requests.exceptions.RequestException:
             return False
 
         if r2.status_code < 400:
@@ -71,7 +71,7 @@ class AuthenticatedSession:
                 try:
                     j = r2.json()
                     tok = j.get("token") or j.get("access_token")
-                except Exception:
+                except (ValueError, KeyError):
                     pass
             self.ctx.token = tok
             return True
@@ -136,7 +136,7 @@ def compare_roles(url: str, sessions: Dict[str, requests.Session]) -> List[Dict[
         try:
             r = s.get(url, timeout=10)
             responses[name] = r
-        except Exception:
+        except requests.exceptions.RequestException:
             responses[name] = None
 
     r_anon = responses.get("anonymous")
@@ -180,8 +180,8 @@ def check_idor(sessions: Dict[str, requests.Session], url: str) -> List[Dict[str
                     "severity": "High",
                     "detail": f"User '{user_role}' accessed ID {new_id}"
                 })
-    except Exception:
-        pass
+    except requests.exceptions.RequestException as exc:
+        _logger.debug(f"[Auth] IDOR probe failed for {new_url}: {exc!r}")
 
     return findings
 
@@ -201,8 +201,8 @@ def probe_auth_only(session: requests.Session, method: str, url: str) -> Optiona
                 "severity": "Info",
                 "detail": "Resource requires authentication."
             }
-    except Exception:
-        pass
+    except requests.exceptions.RequestException as exc:
+        _logger.debug(f"[Auth] probe_auth_only failed for {url}: {exc!r}")
     return None
 
 

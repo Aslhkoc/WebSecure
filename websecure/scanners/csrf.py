@@ -15,6 +15,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from urllib.parse import urljoin, urlparse
 
+import requests
 from websecure.core.reporting import add_result
 
 _logger = logging.getLogger(__name__)
@@ -81,9 +82,10 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
     
     try:
         r = session.get(url, timeout=10)
-    except Exception as e:
+    except requests.exceptions.RequestException as exc:
+        _logger.debug(f"[CSRF] GET failed for {url}: {exc!r}")
         if debug:
-            findings.append({"status": "error", "message": str(e), "severity": "Info"})
+            findings.append({"status": "error", "message": str(exc), "severity": "Info"})
         # Even on error, we might have results if partial
         return
 

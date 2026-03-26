@@ -76,8 +76,8 @@ class DOMXSSScanner(BaseScanner):
             loop = asyncio.new_event_loop()
             loop.run_until_complete(self._async_scan_all(endpoints))
             loop.close()
-        except Exception as e:
-            _logger.error(f"[DOMXSSScanner] Error: {e}")
+        except Exception as exc:
+            _logger.warning(f"[DOMXSSScanner] Event loop error: {exc!r}")
 
     async def _async_scan_all(self, endpoints: List[str]):
         async with async_playwright() as pw:
@@ -167,8 +167,8 @@ class DOMXSSScanner(BaseScanner):
             if post_check:
                 return "postMessage handler reflects canary"
 
-        except Exception as e:
-            _logger.debug(f"[DOMXSSScanner] Navigate error on {url}: {e}")
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSScanner] Navigate error on {url}: {exc!r}")
         finally:
             page.remove_listener("console", on_console)
 
