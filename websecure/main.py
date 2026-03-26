@@ -500,26 +500,8 @@ else:
 
 
 
-def ensure_session(cfg):
-    if _ws_spec('websecure.core.http') is not None:
-        from websecure.core.http import hardened_session, instrument_requests_session  # type: ignore
-        http_cfg = {}
-        if isinstance(cfg, dict):
-            http_cfg = dict(cfg.get("http") or {})
-            # Backward-compat: allow passing http keys at top-level too
-            for k in ("headers","proxies","verify","timeout","pool_maxsize","retries","rate_limit","idempotent_first","default_headers","identity_pools"):
-                if k in cfg and k not in http_cfg:
-                    http_cfg[k] = cfg[k]
-        s = hardened_session(http_cfg)
-        instrument_requests_session(s, cfg or {})
-        return s
-    import requests
-    s = requests.Session()
-    return s
-
-    import requests
-    s = requests.Session()
-    return s
+# FAZ 4.2: ensure_session core/session_factory.py'e taşındı — re-export için import
+from websecure.core.session_factory import ensure_session  # noqa: F811
 
 
 
