@@ -427,7 +427,7 @@ class HeaderScanner(BaseScanner):
                         "owasp": "A03:2021",
                     })
                     break  # one confirmed finding per URL is enough
-            except Exception:
+            except Exception as exc:
                 continue
         return findings
 
@@ -486,7 +486,7 @@ class HeaderScanner(BaseScanner):
                         "owasp": "A05:2021",
                     })
                     break
-            except Exception:
+            except Exception as exc:
                 continue
         return findings
 
@@ -656,7 +656,7 @@ class PySSLCertChecker:
         except requests.exceptions.SSLError:
             valid = False
             problems.append("Certificate validation failed (Self-signed or expired).")
-        except Exception:
+        except Exception as exc:
             valid = False
             
         nb = details.get("not_before", "")
@@ -670,7 +670,7 @@ class PySSLCertChecker:
                 if dt_na.tzinfo is None:
                     dt_na = dt_na.replace(tzinfo=timezone.utc)
                 days = (dt_na - datetime.now(timezone.utc)).days
-            except Exception:
+            except Exception as exc:
                 pass
 
         return CertificateReport(
@@ -720,7 +720,7 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
             s = session or requests.Session()
             r = s.head("https://" + host, timeout=5, verify=False)
             hsts_on = "strict-transport-security" in r.headers.keys() or "Strict-Transport-Security" in r.headers
-        except Exception:
+        except Exception as exc:
             pass            
             
     # TLS version weakness

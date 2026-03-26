@@ -84,7 +84,7 @@ class SQLMapClient:
         try:
             requests.get(f"{api_url}/admin/list", timeout=3)
             return True
-        except Exception:
+        except Exception as exc:
             return False
 
 class SQLMapWrapper:
@@ -185,7 +185,7 @@ class SQLMapWrapper:
                             if r.get("parameter") not in seen:
                                 results.append(r)
                                 seen.add(r.get("parameter"))
-                    except Exception:
+                    except Exception as exc:
                         pass
 
             return results
@@ -199,7 +199,7 @@ class SQLMapWrapper:
         finally:
             try:
                 shutil.rmtree(out_dir)
-            except Exception:
+            except Exception as exc:
                 pass
 
 

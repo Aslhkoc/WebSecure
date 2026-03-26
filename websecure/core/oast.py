@@ -280,7 +280,7 @@ class GenericOSATClient(_BaseOSAT, IOSATClient):
                 data = r.json() or {}
                 for ev in (data.get("events") or []):
                     if str(ev.get("token", "")) in tokens: found.append(ev)
-        except Exception:
+        except Exception as exc:
             pass
         return found
 
@@ -478,7 +478,7 @@ def poll_events_sync(client: IOSATClient, tokens: Sequence[str], timeout: Option
         if timeout: coro = asyncio.wait_for(coro, timeout)
         try:
             return loop.run_until_complete(coro)
-        except Exception:
+        except Exception as exc:
             return []
         finally:
             loop.close()
@@ -526,7 +526,8 @@ def run_oast_on_target(
                 try:
                     _req.get(inj_url, headers=(headers or None), cookies=(cookies or None), timeout=6, verify=True)
                     attempted.append({"url": url, "param": k, "injected": val, "oast_token": tok})
-                except Exception: pass
+                except Exception as exc:
+                    _logger.debug("[oast] Suppressed exception: %r", exc)
     
     # Run async injection sync
     with ThreadPoolExecutor(max_workers=1) as ex:

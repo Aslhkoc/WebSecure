@@ -77,7 +77,7 @@ class EmailOtpProvider:
             if conn:
                 try:
                     conn.logout()
-                except Exception:
+                except Exception as exc:
                     pass
         return None
 
@@ -105,7 +105,7 @@ class EmailOtpProvider:
                 typ, data = conn.uid("search", None, *criteria)
                 if typ == "OK" and data and data[0]:
                     return data[0].split()
-            except Exception:
+            except Exception as exc:
                 pass
         return []
 
@@ -132,7 +132,7 @@ class EmailOtpProvider:
             m = self.body_re.search(body)
             if m:
                 return m.group(1)
-        except Exception:
+        except Exception as exc:
             pass
         return None
 

@@ -117,7 +117,7 @@ def _send_and_receive(sock, payload_head: bytes, payload_last: bytes) -> Tuple[i
     try:
         sock.sendall(payload_head)
         return sock, True
-    except Exception:
+    except Exception as exc:
         return sock, False
 
 

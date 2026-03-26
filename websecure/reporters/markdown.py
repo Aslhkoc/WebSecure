@@ -35,7 +35,7 @@ def _sev_rank(s: str | None) -> int:
     m = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
     try:
         return m.get(_norm_sev_en(s or ""), 0)
-    except Exception:
+    except Exception as exc:
         return 0
 
 def _dedupe_findings(items: List[Dict]) -> List[Dict]:

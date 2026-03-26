@@ -216,7 +216,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
         try:
             from websecure.core.utils import apply_active_profile
             return apply_active_profile
-        except Exception:
+        except Exception as exc:
             return lambda c: c
 
     while True:
@@ -328,7 +328,7 @@ def _choose_mode_from_config(config: dict | None) -> str:
     # Import ScanMode lazily to avoid circular imports
     try:
         from websecure.core.phases import ScanMode  # type: ignore
-    except Exception:
+    except Exception as exc:
         ScanMode = None  # type: ignore
 
     def _normal():

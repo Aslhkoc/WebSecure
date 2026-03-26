@@ -94,7 +94,7 @@ def _status_code(raw: bytes) -> Optional[int]:
     try:
         line = raw.split(b"\r\n", 1)[0]
         return int(line.split(b" ", 2)[1])
-    except Exception:
+    except Exception as exc:
         return None
 
 

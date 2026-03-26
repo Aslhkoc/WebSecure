@@ -12,8 +12,11 @@ Geriye dönük uyumluluk: reporting.py bu modülden import edip re-export eder.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Dict
+
+_logger = logging.getLogger(__name__)
 
 
 class LiveMonitor:
@@ -188,7 +191,7 @@ class LiveMonitor:
         try:
             from websecure.core.reporting import _counters as _gc
             global_reqs = int(_gc.get("http_requests", 0))
-        except Exception:
+        except Exception as exc:
             global_reqs = 0
         total_reqs = max(c["requests"], global_reqs)
         self._print(

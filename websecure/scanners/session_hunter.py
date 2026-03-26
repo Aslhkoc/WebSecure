@@ -106,7 +106,7 @@ class SessionHunter(BaseScanner):
         """Fetch the target and analyze all session cookies for weaknesses."""
         try:
             resp = self.session.get(url, timeout=8)
-        except Exception:
+        except Exception as exc:
             return
 
         for cookie in resp.cookies:
@@ -223,7 +223,7 @@ class SessionHunter(BaseScanner):
                         self.add(bucket, finding)
                         add_result("offensive", finding)
                         return
-            except Exception:
+            except Exception as exc:
                 continue
 
     # -------------------------------------------------------------------------
@@ -250,7 +250,7 @@ class SessionHunter(BaseScanner):
                         details=f"Access gained with trivial session: {name}={value!r}",
                         evidence={"cookie": f"{name}={value}", "status": resp.status_code},
                     )
-            except Exception:
+            except Exception as exc:
                 pass
             return None
 
@@ -311,7 +311,7 @@ class SessionHunter(BaseScanner):
                                 ),
                                 evidence={"seed_timestamp": ts, "cookie": f"{name}={val}"},
                             )
-                    except Exception:
+                    except Exception as exc:
                         pass
             return None
 

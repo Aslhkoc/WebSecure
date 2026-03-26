@@ -101,7 +101,7 @@ def _canary_in_response(resp, canary: str) -> bool:
     try:
         text = resp.text if hasattr(resp, "text") else resp.content.decode("utf-8", "replace")
         return canary in text
-    except Exception:
+    except Exception as exc:
         return False
 
 

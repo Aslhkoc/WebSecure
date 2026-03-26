@@ -8,6 +8,8 @@ import logging
 from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode, urlsplit
 from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
 
+_logger = logging.getLogger(__name__)
+
 try:
     import requests
 except ImportError:
@@ -41,7 +43,7 @@ def _tcp_open(host: str, port: int, timeout: int) -> bool:
         code = sock.connect_ex((host, port))
         sock.close()
         return code == 0
-    except Exception:
+    except Exception as exc:
         return False
 
 class SchemeDetectionResult:
@@ -68,7 +70,7 @@ def detect_canonical_scheme(u: str, timeout: int = 6) -> SchemeDetectionResult:
             r = requests.head(target, timeout=timeout, verify=False, allow_redirects=True)
             if r.status_code < 400:
                 return SchemeDetectionResult("https", r.url, "HTTPS Accessible")
-    except Exception:
+    except Exception as exc:
         pass
 
     # Try HTTP (Head)
@@ -80,7 +82,7 @@ def detect_canonical_scheme(u: str, timeout: int = 6) -> SchemeDetectionResult:
                 if urlparse(r.url).scheme == "https":
                     return SchemeDetectionResult("https", r.url, "HTTP Redirects to HTTPS")
                 return SchemeDetectionResult("http", r.url, "HTTP Accessible")
-    except Exception:
+    except Exception as exc:
         pass
         
     return SchemeDetectionResult("http", f"http://{host}{path}", "Fallback")
@@ -156,7 +158,7 @@ def same_origin(url_a: str, url_b: str) -> bool:
         pa_port = pa.port or (443 if pa.scheme == "https" else 80)
         pb_port = pb.port or (443 if pb.scheme == "https" else 80)
         return (pa.scheme, pa.hostname, pa_port) == (pb.scheme, pb.hostname, pb_port)
-    except Exception:
+    except Exception as exc:
         return False
 
 def is_static_asset(url: str) -> bool:
@@ -206,5 +208,5 @@ def validate_url(url: str) -> Tuple[bool, Optional[str], Optional[str]]:
         if p.scheme and p.netloc:
             return True, url, p.scheme
         return False, None, None
-    except Exception:
+    except Exception as exc:
         return False, None, None

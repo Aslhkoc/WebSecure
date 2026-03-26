@@ -1,3 +1,4 @@
+import logging
 import sys
 import threading
 import time
@@ -6,6 +7,8 @@ try:
     import winsound
 except ImportError:
     winsound = None
+
+_logger = logging.getLogger(__name__)
 
 class AlertManager:
     """
@@ -18,7 +21,7 @@ class AlertManager:
         if winsound:
             try:
                 winsound.Beep(freq, dur)
-            except Exception:
+            except Exception as exc:
                 pass
 
     @staticmethod

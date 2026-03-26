@@ -984,7 +984,7 @@ class LoginAuditor:
         try:
             with open(self.wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
                 passwords = [l.strip() for l in f if l.strip()]
-        except Exception:
+        except Exception as exc:
             passwords = ["admin", "123456", "password", "admin123"] # Fallback
             
         # Limit
@@ -1094,7 +1094,7 @@ class LoginAuditor:
                 return self.session.post(form['url'], data=data, headers=headers, allow_redirects=False)
             else:
                 return self.session.get(form['url'], params=data, headers=headers, allow_redirects=False)
-        except Exception:
+        except Exception as exc:
             # dummy obj
             class Dummy:
                 status_code = 999

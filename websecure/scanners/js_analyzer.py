@@ -145,7 +145,7 @@ class JSAnalyzer:
                 r = self.session.head(candidate, timeout=5, allow_redirects=True)
                 if r.status_code == 200:
                     js_urls.add(candidate)
-            except Exception:
+            except Exception as exc:
                 pass
 
         return js_urls

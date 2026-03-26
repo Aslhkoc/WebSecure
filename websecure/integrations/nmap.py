@@ -110,7 +110,7 @@ class NmapWrapper:
             if os.path.exists(temp_output):
                 try:
                     os.remove(temp_output)
-                except Exception:
+                except Exception as exc:
                     pass
 
     @staticmethod

@@ -1,7 +1,10 @@
 from __future__ import annotations
+import logging
 import os, json, re, subprocess, shlex, time
 from pathlib import Path
 from typing import List, Iterable, Dict, Any, Tuple, Set
+
+_logger = logging.getLogger(__name__)
 
 
 def _to_path_or_none(v):
@@ -207,7 +210,7 @@ def sync_wordlists(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if root.exists() and _is_git_repo(root):
             try:
                 code, out = _run("git pull --ff-only", cwd=root, timeout=60)
-            except Exception:
+            except Exception as exc:
                 code, out = 1, "Skipped pull due to timeout/error"
             report[name] = {"action": "pull", "code": code, "out": (out or "")[-2000:]}
         elif (not root.exists() or not any(root.iterdir() if root.exists() else [])) and url:

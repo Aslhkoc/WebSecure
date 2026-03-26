@@ -197,7 +197,7 @@ def _setup_session_from_config(config: dict):
     try:
         from websecure.core.utils import current_identity
         ident = current_identity()
-    except Exception:
+    except Exception as exc:
         ident = {}
     ident = ident if isinstance(ident, dict) else {}
 

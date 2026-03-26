@@ -182,7 +182,7 @@ class ContentDiscoveryScanner(BaseScanner):
                         evidence={"subdomains": list(subs)}
                     ))
 
-        except Exception:
+        except Exception as exc:
             pass
         return findings
 
@@ -212,7 +212,7 @@ class ContentDiscoveryScanner(BaseScanner):
                         details=f"Found {len(subs)} subdomains in sitemap.xml",
                         evidence={"subdomains": list(subs)}
                     ))
-        except Exception:
+        except Exception as exc:
             pass
         return findings
 
@@ -235,7 +235,7 @@ class ContentDiscoveryScanner(BaseScanner):
                 domain = urlparse(u).netloc
                 if domain and domain.endswith(root_domain) and domain != base_domain:
                     subdomains.add(domain)
-        except Exception:
+        except Exception as exc:
             pass
         return subdomains
 
@@ -275,7 +275,7 @@ class ContentDiscoveryScanner(BaseScanner):
                     details=details,
                     evidence={"content_snippet": content[:300]},
                 ))
-            except Exception:
+            except Exception as exc:
                 pass
         return findings
 
@@ -324,7 +324,7 @@ class APISchemaDiscovery(BaseScanner):
                 if "json" in content_type or body.strip().startswith("{"):
                     try:
                         schema = resp.json()
-                    except Exception:
+                    except Exception as exc:
                         pass
 
                 endpoints = []

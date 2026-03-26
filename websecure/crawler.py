@@ -397,7 +397,7 @@ class WebCrawler:
                 "queued": set(data.get("queued") or []),
                 "pages_crawled": int(data.get("pages_crawled") or 0),
             }
-        except Exception:
+        except Exception as exc:
             return None
 
     def start(self) -> Dict[str, Any]:
@@ -421,7 +421,7 @@ class WebCrawler:
                     from websecure.core.reporting import get_live_monitor
                     first_url = cp["queue"][0][0] if cp["queue"] else self.root
                     get_live_monitor().log_resume(pages_crawled, first_url)
-                except Exception:
+                except Exception as exc:
                     pass
 
         # Robots & Sitemap
@@ -741,7 +741,7 @@ def _parse_sitemap_xml(session, url: str, base_url: str, limit: int = 500):
                 urls.append(u)
                 if len(urls) >= limit: break
         return urls
-    except Exception:
+    except Exception as exc:
         return []
 
 def harvest_js_keys(session, cfg: dict, urls: list[str], source_tag: str | None = None) -> list[dict]:
@@ -860,7 +860,7 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                         try:
                             page.wait_for_load_state("networkidle", timeout=timeout_ms)
                             time.sleep(3) # Explicit fallback for heavy SPAs
-                        except Exception:
+                        except Exception as exc:
                             time.sleep(5) # Hard wait if state fails
                             page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
                         
@@ -1008,12 +1008,12 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
             if driver:
                 try:
                     driver.quit()
-                except Exception:
+                except Exception as exc:
                     pass
             if tmp_profile and os.path.exists(tmp_profile):
                 try:
                     shutil.rmtree(tmp_profile, ignore_errors=True)
-                except Exception:
+                except Exception as exc:
                     pass
 
         return endpoints, None
@@ -1118,6 +1118,6 @@ def discovery_enrich(url: str, results: dict, open_ports: dict = None, detailed:
                     
                     banner = s.recv(1024).decode('utf-8', 'ignore').strip()
                     services[port] = banner[:50] if banner else "Open (no banner)"
-            except Exception:
+            except Exception as exc:
                 services[port] = "Open"
         results['discovery']['services'] = services

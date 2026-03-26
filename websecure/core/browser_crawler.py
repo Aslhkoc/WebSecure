@@ -246,9 +246,9 @@ class BrowserCrawler:
                     result = await page.evaluate(f"() => {{ try {{ return {expr}; }} catch(e) {{ return false; }} }}")
                     if result:
                         detected.append(framework)
-                except Exception:
+                except Exception as exc:
                     pass
-        except Exception:
+        except Exception as exc:
             pass
         return detected
 

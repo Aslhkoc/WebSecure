@@ -4,6 +4,7 @@ websecure.core.utils.helpers
 Combined text utilities, auth helpers, and TTL cache.
 (Merged from text.py + cache.py)
 """
+import logging
 import inspect
 import re
 import random
@@ -11,6 +12,8 @@ import string
 import time
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 from urllib.parse import urlparse
+
+_logger = logging.getLogger(__name__)
 
 # ========================== Strings & Redaction ==========================
 _SENSITIVE_KEYS = {"password", "token", "secret", "key", "auth", "credential", "jwt"}
@@ -57,7 +60,7 @@ def normalize_idn_host(host: str) -> tuple:
     """Simple IDN normalization wrapper."""
     try:
         return host.encode("idna").decode("ascii"), []
-    except Exception:
+    except Exception as exc:
         return host, ["IDN normalization failed"]
 
 # ========================== TTL Cache ==========================

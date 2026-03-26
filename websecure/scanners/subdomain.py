@@ -112,7 +112,7 @@ class DNSBruteForce:
                         words = [line.strip() for line in f if line.strip()]
                     logger.info(f"[Subdomain] SecLists DNS listesi bulundu: {len(words)} kelime")
                     return words
-                except Exception:
+                except Exception as exc:
                     pass
 
         logger.info(f"[Subdomain] Dahili liste kullanılıyor ({len(self._BUILTIN)} kelime)")
@@ -138,7 +138,7 @@ class DNSBruteForce:
                     if res:
                         found.append(res)
                         logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} → {res['ip']}")
-                except Exception:
+                except Exception as exc:
                     pass
 
         logger.info(f"[Subdomain] DNS brute-force tamamlandı: {len(found)} subdomain")
@@ -204,7 +204,7 @@ class SubfinderWrapper:
         finally:
             try:
                 os.remove(tmp)
-            except Exception:
+            except Exception as exc:
                 pass
 
 
@@ -268,7 +268,7 @@ class AmassWrapper:
         finally:
             try:
                 os.remove(tmp)
-            except Exception:
+            except Exception as exc:
                 pass
 
 

@@ -27,6 +27,7 @@ a convenient call-through API.
 """
 from __future__ import annotations
 
+import logging
 import io
 import random
 import re
@@ -34,6 +35,7 @@ import urllib.parse as _up
 from itertools import permutations
 from typing import Dict, Iterable, List, Optional, Tuple
 
+_logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ChunkedBodyBuilder
@@ -386,7 +388,7 @@ class EncodingChain:
         for t in single:
             try:
                 variants.add(self.apply(payload, [t]))
-            except Exception:
+            except Exception as exc:
                 pass
 
         if depth >= 2:
@@ -395,7 +397,7 @@ class EncodingChain:
                     if t1 != t2:
                         try:
                             variants.add(self.apply(payload, [t1, t2]))
-                        except Exception:
+                        except Exception as exc:
                             pass
 
         return sorted(variants, key=len)

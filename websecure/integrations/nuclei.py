@@ -166,7 +166,7 @@ class NucleiWrapper:
         finally:
             try:
                 os.remove(output_file)
-            except Exception:
+            except Exception as exc:
                 pass
 
     def _parse_output(self, file_path: str) -> List[Dict[str, Any]]:
@@ -228,7 +228,7 @@ class NucleiWrapper:
                 "confidence": "high",
                 "source": "nuclei",
             }
-        except Exception:
+        except Exception as exc:
             return None
 
 

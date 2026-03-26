@@ -5,6 +5,8 @@ from websecure.core.reporting import add_result
 import requests
 import logging
 from urllib.parse import urlparse, urljoin
+
+_logger = logging.getLogger(__name__)
 import random
 import time
 from typing import Dict, Any, Optional, List, Tuple
@@ -697,7 +699,7 @@ def run_nuclei_signatures(
         proc.terminate()
         try:
             proc.wait(timeout=2)
-        except Exception:
+        except Exception as exc:
             # burada ekstra try kullanmıyoruz; terminate sonrası bekleyememe durumunda işlem üst katmana zaten görünür
             pass
 

@@ -291,9 +291,9 @@ class JWTScanner(BaseScanner):
                             keys.append(n_bytes)
                     if keys:
                         break
-                except Exception:
+                except Exception as exc:
                     pass
-        except Exception:
+        except Exception as exc:
             pass
         return keys
 
@@ -441,7 +441,7 @@ class JWTScanner(BaseScanner):
                 return False
             lower = r.text.lower()
             return not any(kw in lower for kw in _AUTH_ERROR_KEYWORDS)
-        except Exception:
+        except Exception as exc:
             return False
 
     # -------------------------------------------------------------------------
