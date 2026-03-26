@@ -409,21 +409,16 @@ _lock = threading.RLock()
 _buckets: Dict[str, List[Dict[str, Any]]] = {}
 _logger: logging.Logger | None = None
 
-# -------------------- Maskeleme / Redaction --------------------
+# -------------------- Maskeleme / Redaction (FAZ 4.1 — ayrı modül) --------------------
 _ENFORCE_REDACT = True
-_MASK = "<redacted>"
 
-REDACT_KEYS = {
-    "password", "passwd", "token", "authorization", "auth", "secret",
-    "api_key", "apikey", "access_token", "refresh_token", "session",
-    "cookie", "set-cookie", "csrf", "csrf_token", "xsrf"
-}
-
-_JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\b")
-_BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9_\-\.]{20,}\b", re.I)
-_HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
-_EMAIL_RE = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
-_RE_COOKIE = re.compile(r"(?i)(?:^|;\s*)([A-Za-z0-9_\-]{1,64})=([^;]+)")
+from websecure.core.redaction import (  # noqa: E402
+    REDACT_KEYS,
+    redact_sensitive,
+    RedactFilter,
+    _redact_str,
+    _MASK,
+)
 
 
 def _now_iso() -> str:
@@ -434,49 +429,6 @@ def _safe_host_for_filename(url: str) -> str:
     host = urlparse(url).hostname or "report"
     safe = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in host)
     return safe[:100] or "report"
-
-
-def _redact_str(s: str) -> str:
-    if not s: return s
-    t = s
-    t = _JWT_RE.sub(_MASK, t)
-    t = _BEARER_RE.sub("Bearer " + _MASK, t)
-    t = _HEX_RE.sub(_MASK, t)
-    t = _EMAIL_RE.sub(_MASK, t)
-    t = _RE_COOKIE.sub(lambda m: f"{m.group(1)}={_MASK}", t)
-    for k in REDACT_KEYS:
-        t = re.sub(fr'("{k}"\s*:\s*")([^"]+)"', fr'\1{_MASK}"', t, flags=re.IGNORECASE)
-        t = re.sub(fr'({k})=([^\s;&]+)', fr'\1=' + _MASK, t, flags=re.IGNORECASE)
-    return t
-
-
-def redact_sensitive(val: Any, _depth: int = 0, _max: int = 6) -> Any:
-    if _depth > _max:
-        return _MASK
-    if isinstance(val, dict):
-        out: Dict[str, Any] = {}
-        for k, v in val.items():
-            if str(k).lower() in REDACT_KEYS:
-                out[k] = _MASK
-            else:
-                out[k] = redact_sensitive(v, _depth + 1, _max)
-        return out
-    if isinstance(val, (list, tuple, set)):
-        typ = type(val)
-        return typ(redact_sensitive(x, _depth + 1, _max) for x in val)
-    if isinstance(val, (bytes, str)):
-        s = val.decode("utf-8", "ignore") if isinstance(val, bytes) else val
-        return _redact_str(s)
-    return val
-
-
-class RedactFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.args, tuple) and record.args:
-            record.args = tuple(redact_sensitive(a) for a in record.args)
-        if isinstance(record.msg, str):
-            record.msg = _redact_str(record.msg)
-        return True
 
 
 # -------------------- Logging --------------------
@@ -606,9 +558,33 @@ def add_result(bucket: str, item: Any) -> None:
 
 # ===========================================================================
 # LiveMonitor — real-time terminal output for scan progress
+# FAZ 4.1: Ayrı modüle taşındı (core/live_monitor.py). Backward compat için import.
 # ===========================================================================
+from websecure.core.live_monitor import (  # noqa: E402
+    LiveMonitor,
+    get_live_monitor,
+    console_alert as _console_alert_new,
+)
 
-class LiveMonitor:
+# _console_alert backward compat alias
+def _console_alert(bucket, item):  # noqa: E302
+    _console_alert_new(bucket, item)
+
+
+# Module-level singleton re-exported for callers that do:
+#   from websecure.core.reporting import get_live_monitor
+# This is already covered by the import above.
+
+
+# ---------------------------------------------------------------------------
+# LEGACY INLINE DEFINITION (kept as dead-code reference only — DO NOT USE)
+# The actual implementation now lives in core/live_monitor.py
+# ---------------------------------------------------------------------------
+class _LiveMonitorLegacy:  # noqa: F811 — intentional stub to mark removal boundary
+    """Legacy stub — replaced by core/live_monitor.LiveMonitor."""
+
+    # ANSI renk kodları
+    _R  = "\033[91m"   # kırmızı  — critical
     """
     Gerçek zamanlı terminal monitörü.
 
@@ -801,63 +777,11 @@ class LiveMonitor:
         )
 
 
-# Module-level singleton
-_live_monitor: "LiveMonitor | None" = None
-
-
-def get_live_monitor(verbose: bool = True) -> LiveMonitor:
-    """Global LiveMonitor singleton'ını döner, gerekirse oluşturur."""
-    global _live_monitor
-    if _live_monitor is None:
-        _live_monitor = LiveMonitor(verbose=verbose)
-    return _live_monitor
-
-
-def _console_alert(bucket: str, item: Dict[str, Any]) -> None:
-    """Print a real-time 'Kill Cam' style alert to the terminal."""
-    sev = str(item.get("severity") or "Info").lower()
-    
-    # Only alert on Medium or higher (avoid noise)
-    important = ["critical", "kritik", "high", "yüksek", "yuksek", "medium", "orta"]
-    if not any(s in sev for s in important):
-        return
-
-    # Colors (ANSI)
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    CYAN = "\033[96m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    
-    color = YELLOW
-    if "critical" in sev or "kritik" in sev:
-        color = RED
-    elif "high" in sev or "yüksek" in sev:
-        color = RED
-    elif "medium" in sev:
-        color = YELLOW
-        
-    icon = "[!]"
-    if "critical" in sev: icon = "[⚡]"
-    elif "high" in sev: icon = "[🔥]"
-    elif "medium" in sev: icon = "[⚠️]"
-
-    title = item.get("type") or item.get("title") or "Vulnerability"
-    url = item.get("url") or item.get("target") or "N/A"
-    payload = item.get("payload") or "N/A"
-    
-    # Forensic Data
-    evidence = item.get("evidence")
-    if isinstance(evidence, dict):
-        # Extract response snippet if available
-        # logic to extract specific evidence if needed
-        pass
-
-    print(f"\n{color}{BOLD}{icon} {title.upper()} DETECTED!{RESET}")
-    print(f"{color} ├─ Target:  {url}{RESET}")
-    print(f"{color} ├─ Payload: {payload}{RESET}")
-    print(f"{color} └─ Severity: {sev.upper()}{RESET}\n")
+# Module-level singleton + _console_alert:
+# FAZ 4.1 — Gerçek implementasyon core/live_monitor.py'de.
+# get_live_monitor ve _console_alert core/live_monitor.py'deki
+# importlardan gelir (yukarıda import edildi). Bu satırlar artık boş bırakıldı.
+# Eski satırlar silinmeden önce backward-compat kontrolü yapılmalıydı — tamamlandı.
 
 
 

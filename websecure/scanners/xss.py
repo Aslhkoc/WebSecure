@@ -2,15 +2,15 @@ import logging
 import random
 import re
 import string
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import List, Dict, Optional, Tuple
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+from urllib.parse import urlparse, parse_qsl
+
+import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
-from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class XSSScanner(BaseScanner):
     - Reflected XSS detection via canary with baseline comparison
     - Context-aware payload selection
     - WAF Evasion/Polyglot support
-    - Parallel payload testing via ThreadPoolExecutor
+    - Parallel payload testing via BaseScanner.run_parallel_probes()
     """
 
     name = "xss"
@@ -67,25 +67,28 @@ class XSSScanner(BaseScanner):
 
         logger.info(f"[XSS] Scanning URL params: {url}")
 
-        # Baseline: capture page content without injection
-        try:
-            baseline_res = self.session.get(url, timeout=8)
-            baseline_text = baseline_res.text
-        except Exception:
-            baseline_text = ""
+        # Baseline — uses BaseScanner.fetch_baseline() (proper error logging)
+        baseline_resp = self.fetch_baseline(url, timeout=8)
+        baseline_text = baseline_resp.text if baseline_resp else ""
 
         for param_name, _ in params:
-            # Canary reflection check — skip if canary already in page
             canary = self._gen_canary()
             if canary in baseline_text:
                 continue
 
-            invoked = self._inject_param(url, param_name, canary)
+            invoked = self.inject_param(url, param_name, canary)
             try:
                 probe_res = self.session.get(invoked, timeout=8)
                 if canary not in probe_res.text:
                     continue  # param not reflected, no point fuzzing
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[XSS] Canary probe timed out for {invoked}: {exc!r}")
+                continue
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[XSS] Canary probe connection error for {invoked}: {exc!r}")
+                continue
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[XSS] Canary probe failed for {invoked}: {exc!r}")
                 continue
 
             # Parameter reflects input — fuzz with payloads
@@ -105,40 +108,41 @@ class XSSScanner(BaseScanner):
         if len(payloads) > self.MAX_URL_PAYLOADS:
             payloads = random.sample(payloads, self.MAX_URL_PAYLOADS)
 
-        def probe(payload: str):
+        def probe(payload: str) -> Optional[Dict]:
             actual = payload
             if random.random() < 0.2:
                 mutated = Mutator.mutate_xss(payload)
                 actual = random.choice(mutated) if mutated else payload
 
-            invoked = self._inject_param(url, param_name, actual)
+            invoked = self.inject_param(url, param_name, actual)
             try:
                 res = self.session.get(invoked, timeout=8)
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[XSS] Probe timed out for {invoked}: {exc!r}")
+                return None
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[XSS] Probe connection error for {invoked}: {exc!r}")
+                return None
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[XSS] Probe request failed for {invoked}: {exc!r}")
                 return None
 
-            # Only flag if payload appears in response but NOT in baseline
             if actual in res.text and actual not in baseline_text:
-                return ("Reflected XSS", url, param_name, actual)
+                return {
+                    "vuln_type": "Reflected XSS",
+                    "url": url,
+                    "param": param_name,
+                    "payload": actual,
+                }
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
-            futures = {exe.submit(probe, p): p for p in payloads}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    self._report_vuln(*result)
-                    for f in futures:
-                        f.cancel()
-                    return
-
-    def _inject_param(self, url: str, param_name: str, value: str) -> str:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        params[param_name] = value
-        new_query = urlencode(params)
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
-                           parsed.params, new_query, parsed.fragment))
+        hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
+        for hit in hits:
+            self.report_finding(
+                severity="High",
+                evidence="Payload reflected in response (not in baseline)",
+                **hit,
+            )
 
     def scan_forms(self, forms: List[Dict]):
         logger.info(f"[XSS] Scanning {len(forms)} forms...")
@@ -152,17 +156,10 @@ class XSSScanner(BaseScanner):
             skipped = {"submit", "button", "image", "reset", "file", "checkbox", "radio"}
             fuzzable = [i for i in inputs if i.get("type", "text") not in skipped]
 
-            # Baseline for form
-            baseline_text = ""
-            try:
-                base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
-                if method == "POST":
-                    br = self.session.post(action, data=base_data, timeout=8)
-                else:
-                    br = self.session.get(action, params=base_data, timeout=8)
-                baseline_text = br.text
-            except Exception:
-                pass
+            # Form baseline — uses fetch_baseline() with proper logging
+            base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
+            baseline_resp = self.fetch_baseline(action, method=method, data=base_data, timeout=8)
+            baseline_text = baseline_resp.text if baseline_resp else ""
 
             for inp in fuzzable:
                 p_name = inp.get("name")
@@ -186,44 +183,45 @@ class XSSScanner(BaseScanner):
         payloads = payloads[:self.MAX_FORM_PAYLOADS]
         base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
 
-        def probe(payload: str):
+        def probe(payload: str) -> Optional[Dict]:
             form_data = dict(base_data)
             form_data[p_name] = payload
             req_kw = self.prepare_injection(action, p_name, payload, method, data=form_data)
             try:
                 if method == "POST":
-                    res = self.session.post(req_kw.get("url", action),
-                                            data=req_kw.get("data"), timeout=8)
+                    res = self.session.post(
+                        req_kw.get("url", action),
+                        data=req_kw.get("data"),
+                        timeout=8,
+                    )
                 else:
                     res = self.session.get(req_kw.get("url", action), timeout=8)
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[XSS] Form probe timed out for {action}: {exc!r}")
+                return None
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[XSS] Form probe connection error for {action}: {exc!r}")
+                return None
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[XSS] Form probe failed for {action}: {exc!r}")
                 return None
 
             if payload in res.text and payload not in baseline_text:
-                return ("Reflected XSS (Form)", action, p_name, payload)
+                return {
+                    "vuln_type": "Reflected XSS (Form)",
+                    "url": action,
+                    "param": p_name,
+                    "payload": payload,
+                }
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
-            futures = {exe.submit(probe, p): p for p in payloads}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    self._report_vuln(*result)
-                    for f in futures:
-                        f.cancel()
-                    return
-
-    def _report_vuln(self, title: str, url: str, param: str, payload: str):
-        entry = {
-            "type": title,
-            "severity": "High",
-            "url": url,
-            "parameter": param,
-            "payload": payload,
-            "proof": "Payload reflected in response (not in baseline)",
-        }
-        self.add("offensive", entry)
-        logger.warning(f"[XSS] {title} FOUND: {url} (param={param})")
+        hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
+        for hit in hits:
+            self.report_finding(
+                severity="High",
+                evidence="Payload reflected in form response (not in baseline)",
+                **hit,
+            )
 
 
 def run(url, session=None, results=None, debug=False, **kwargs):
@@ -235,13 +233,13 @@ def run(url, session=None, results=None, debug=False, **kwargs):
 # MERGED FROM: websecure/core/reflection.py
 # Adaptive Reflection Analyzer — context-aware XSS payload selection
 # ===========================================================================
-# -*- coding: utf-8 -*-
 """
 Adaptive Reflection Analyzer for WebSecure (Level 3)
 
 Bu modül, bir input'un HTTP yanıtında nereye yansıdığını (HTML Body, Attribute, Script vb.) analiz eder.
 Bu sayede "context-aware" payload seçimi yapılabilir.
 """
+
 
 class ReflectionType(Enum):
     NONE = auto()                   # Yansıma yok
@@ -261,102 +259,73 @@ class ReflectionPoints:
     raw_response: str = ""
 
 
-# =============================================================================
-# REFLECTION ANALYSIS LOGIC
-# =============================================================================
-
 def analyze_reflection(response_text: str, canary: str) -> ReflectionPoints:
     """
     Verilen canary değerinin response içindeki konumlarını analiz eder.
-    Basit regex-tabanlı parser kullanır (hız için).
     """
     if not response_text or canary not in response_text:
         return ReflectionPoints(canary, [ReflectionType.NONE], response_text)
 
     contexts = []
-    
-    # 1. Script Block Detection
-    # Basitçe <script> tagleri arasını bulup orada var mı bakarız
+
     script_blocks = re.findall(r'<script[^>]*>(.*?)</script>', response_text, re.DOTALL | re.IGNORECASE)
     in_script = False
     for block in script_blocks:
         if canary in block:
             in_script = True
-            # Script içinde quote durumuna bak (basit heuristik)
-            # "canary" veya 'canary'
             if f'"{canary}"' in block or f"'{canary}'" in block:
                 contexts.append(ReflectionType.SCRIPT_QUOTED)
             else:
                 contexts.append(ReflectionType.SCRIPT_BLOCK)
-            break # Genelde 1 script yansıması yeterlidr
-            
+            break
+
     if not in_script:
-        # 2. Attribute Detection
-        # class="canary" gibi
-        # (["'])[^"']*?canary[^"']*?\1
-        
-        # Double Quote
         if re.search(f'="[^"]*{canary}[^"]*"', response_text):
             contexts.append(ReflectionType.HTML_ATTR_DOUBLE)
-        # Single Quote
         elif re.search(f"='[^']*{canary}[^']*'", response_text):
             contexts.append(ReflectionType.HTML_ATTR_SINGLE)
-        # Unquoted (zor ama deneyelim) - <div id=canary>
         elif re.search(f'=[^"\'\\s>]*{canary}[^"\'\\s>]*', response_text):
-             contexts.append(ReflectionType.HTML_ATTR_UNQUOTED)
-        
-        # 3. Comment Detection
+            contexts.append(ReflectionType.HTML_ATTR_UNQUOTED)
         elif re.search(f'<!--.*{canary}.*-->', response_text, re.DOTALL):
             contexts.append(ReflectionType.COMMENT)
-            
-        # 4. Fallback: HTML Text
         else:
             contexts.append(ReflectionType.HTML_TEXT)
 
     return ReflectionPoints(canary, list(set(contexts)), response_text)
 
 
-# =============================================================================
-# PAYLOAD SELECTION
-# =============================================================================
-
 def get_payloads_for_context(ctx: ReflectionType) -> List[str]:
-    """
-    Bulunan bağlama göre en etkili (Sniper) payload'ları döndürür.
-    """
+    """Bulunan bağlama göre en etkili payload'ları döndürür."""
     if ctx == ReflectionType.HTML_TEXT:
         return [
             "<script>alert(1)</script>",
             "<img src=x onerror=alert(1)>",
-            "<svg/onload=alert(1)>"
+            "<svg/onload=alert(1)>",
         ]
     elif ctx == ReflectionType.HTML_ATTR_DOUBLE:
         return [
             '"><script>alert(1)</script>',
             '" onmouseover="alert(1)',
-            '" autofocus onfocus="alert(1)'
+            '" autofocus onfocus="alert(1)',
         ]
     elif ctx == ReflectionType.HTML_ATTR_SINGLE:
         return [
             "'><script>alert(1)</script>",
             "' onmouseover='alert(1)",
-            "' autofocus onfocus='alert(1)"
+            "' autofocus onfocus='alert(1)",
         ]
     elif ctx == ReflectionType.SCRIPT_BLOCK:
         return [
             ";alert(1);//",
             "alert(1);",
-            "</script><script>alert(1)</script>" # Break out
+            "</script><script>alert(1)</script>",
         ]
     elif ctx == ReflectionType.SCRIPT_QUOTED:
         return [
             "';alert(1);//",
             '";alert(1);//',
-            "\\';alert(1);//" # Escape escape?
+            "\\';alert(1);//",
         ]
     elif ctx == ReflectionType.COMMENT:
-        return [
-            "--> <script>alert(1)</script>"
-        ]
-        
-    return [] # None
+        return ["--> <script>alert(1)</script>"]
+    return []

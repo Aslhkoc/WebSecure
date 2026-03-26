@@ -10,8 +10,8 @@ Strateji:
   4. WAF bypass: çeşitli encoding ve protocol tricks
 
 Performans:
-  - ThreadPoolExecutor ile paralel HTTP istekleri (MAX_WORKERS=12)
-  - Timeout: 5 saniye (8'den düşürüldü)
+  - BaseScanner.run_parallel_probes() ile paralel HTTP istekleri (MAX_WORKERS=8)
+  - Timeout: 4 saniye per-request
   - MAX_PROBE_REQUESTS: sonsuz döngü koruması
   - Per-path early exit: ilk bulgu sonrası o path atlanır
 """
@@ -19,9 +19,14 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import TimeoutError as _FuturesTimeout
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
+
+import requests as _requests
+
+from websecure.scanners.base import BaseScanner
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +106,6 @@ _PROBE_PATHS = [
     "/", "",
 ]
 
-# Probe fazında kullanılacak param sayısı ve payload sayısı
 _PROBE_PARAMS   = _REDIRECT_PARAMS[:15]  # ilk 15 (en yaygın)
 _PROBE_PAYLOADS = _PAYLOADS[:8]          # ilk 8 (en etkili)
 
@@ -111,20 +115,18 @@ _PROBE_PAYLOADS = _PAYLOADS[:8]          # ilk 8 (en etkili)
 # ---------------------------------------------------------------------------
 
 def _is_open_redirect(response, payload: str) -> bool:
-    # 1. 3xx Location header
     location = response.headers.get("Location", "") or response.headers.get("location", "")
     if location and _CANARY in location:
         return True
 
-    # 2. Refresh header
     refresh = response.headers.get("Refresh", "") or response.headers.get("refresh", "")
     if refresh and _CANARY in refresh:
         return True
 
-    # 3. HTML meta / JS redirect
     try:
         body = response.text[:6000]
-    except Exception:
+    except (AttributeError, UnicodeDecodeError) as exc:
+        logger.debug(f"[OpenRedirect] Body decode failed: {exc!r}")
         return False
 
     if _CANARY in body:
@@ -150,50 +152,37 @@ def _find_redirect_params(url: str) -> List[str]:
     return [p for p in params if p.lower() in _REDIRECT_PARAMS]
 
 
-def _inject_param(url: str, param: str, payload: str) -> str:
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query, keep_blank_values=True)
-    params[param] = [payload]
-    new_query = urlencode({k: v[0] for k, v in params.items()})
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
-                       parsed.params, new_query, parsed.fragment))
-
-
 # ---------------------------------------------------------------------------
-# Ana scanner
+# Ana scanner — BaseScanner'dan türetildi (FAZ 3.2)
 # ---------------------------------------------------------------------------
 
-class OpenRedirectScanner:
+class OpenRedirectScanner(BaseScanner):
     """
     Open Redirect taraması.
     - Crawler URL'lerinde redirect parametresi arar
     - Yaygın probe endpoint'lerini paralel test eder
-    - ThreadPoolExecutor ile hızlı, sonsuz döngü korumalı
+    - BaseScanner.run_parallel_probes() ile hızlı, sonsuz döngü korumalı
+    - BaseScanner.report_finding() ile merkezi raporlama
     """
 
-    def __init__(self, session=None, timeout: int = REQUEST_TIMEOUT):
-        self.session = session
+    name = "open_redirect"
+    phase = "offensive"
+
+    def __init__(self, session=None, results: Dict = None, debug: bool = False,
+                 timeout: int = REQUEST_TIMEOUT):
+        super().__init__(session, results, debug)
         self.timeout = timeout
 
-    def _get_session(self):
-        if self.session:
-            return self.session
-        try:
-            import requests
-            s = requests.Session()
-            s.headers["User-Agent"] = (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
-            )
-            return s
-        except ImportError:
-            return None
+    def run(self, target: str, **kwargs) -> None:
+        """BaseScanner interface — delegates to scan()."""
+        urls = kwargs.get("urls") or kwargs.get("endpoints") or []
+        self.scan(target, urls=urls)
 
-    def _probe(self, sess, test_url: str, param: str, payload: str,
-               origin_url: str) -> Optional[Dict[str, Any]]:
-        """Tek bir URL+param+payload kombinasyonunu test eder."""
+    def _probe_task(self, task: Tuple) -> Optional[Dict[str, Any]]:
+        """Tek bir (test_url, param, payload, origin_url) kombinasyonunu test eder."""
+        test_url, param, payload, origin_url = task
         try:
-            resp = sess.get(
+            resp = self.session.get(
                 test_url,
                 timeout=self.timeout,
                 allow_redirects=False,
@@ -201,33 +190,38 @@ class OpenRedirectScanner:
             )
             if _is_open_redirect(resp, payload):
                 return {
-                    "type": "Open Redirect",
-                    "severity": "High",
+                    "vuln_type": "Open Redirect",
                     "url": origin_url,
-                    "parameter": param,
+                    "param": param,
                     "payload": payload,
-                    "test_url": test_url,
-                    "status_code": resp.status_code,
-                    "location": resp.headers.get("Location", ""),
+                    "severity": "High",
                     "evidence": f"Param '{param}' ile '{payload}' redirect tetikledi",
-                    "cwe": "CWE-601",
-                    "owasp": "A01:2021",
+                    "extra": {
+                        "test_url": test_url,
+                        "status_code": resp.status_code,
+                        "location": resp.headers.get("Location", ""),
+                        "cwe": "CWE-601",
+                        "owasp": "A01:2021",
+                    },
                 }
-        except Exception:
-            pass
+        except _requests.exceptions.Timeout as exc:
+            logger.debug(f"[OpenRedirect] Probe timed out for {test_url}: {exc!r}")
+        except _requests.exceptions.ConnectionError as exc:
+            logger.debug(f"[OpenRedirect] Probe connection error for {test_url}: {exc!r}")
+        except _requests.exceptions.RequestException as exc:
+            logger.warning(f"[OpenRedirect] Probe request failed for {test_url}: {exc!r}")
         return None
 
     def scan(self, base_url: str, urls: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Tam Open Redirect taraması. BaseScanner.run() tarafından çağrılır.
+        Bulgular hem merkezi raporlamaya (self.report_finding) hem de dönüş değerine eklenir.
+        """
         try:
             import urllib3
             urllib3.disable_warnings()
-        except Exception:
+        except ImportError:
             pass
-
-        sess = self._get_session()
-        if not sess:
-            logger.warning("[OpenRedirect] Session oluşturulamadı")
-            return []
 
         findings: List[Dict[str, Any]] = []
         tested: Set[str] = set()
@@ -235,30 +229,29 @@ class OpenRedirectScanner:
         origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
         # ── 1. Crawler URL'lerindeki redirect parametrelerini paralel test et ──
-        crawler_tasks = []
+        crawler_tasks: List[Tuple] = []
         for url in (urls or []):
             for param in _find_redirect_params(url):
                 for payload in _PAYLOADS:
                     key = f"{url}|{param}|{payload}"
                     if key not in tested:
                         tested.add(key)
-                        test_url = _inject_param(url, param, payload)
+                        test_url = self.inject_param(url, param, payload)
                         crawler_tasks.append((test_url, param, payload, url))
 
         if crawler_tasks:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-                futures = {
-                    pool.submit(self._probe, sess, tu, p, pl, ou): (tu, p, pl, ou)
-                    for tu, p, pl, ou in crawler_tasks
-                }
-                for f in as_completed(futures):
-                    result = f.result()
-                    if result:
-                        findings.append(result)
-                        logger.info(f"[OpenRedirect] BULUNDU: {result['url']} param={result['parameter']}")
+            hits = self.run_parallel_probes(
+                self._probe_task, crawler_tasks,
+                max_workers=MAX_WORKERS, stop_on_first=False,
+            )
+            for hit in hits:
+                extra = hit.pop("extra", None)
+                self.report_finding(**hit, extra=extra)
+                findings.append(hit)
+                logger.info(f"[OpenRedirect] BULUNDU: {hit['url']} param={hit['param']}")
 
         # ── 2. Probe endpoint'leri paralel test et (MAX_PROBE_REQUESTS ile kısıtlı) ──
-        probe_tasks = []
+        probe_tasks: List[Tuple] = []
         for path in _PROBE_PATHS:
             probe_url = origin + path
             for param in _PROBE_PARAMS:
@@ -275,21 +268,32 @@ class OpenRedirectScanner:
             if len(probe_tasks) >= MAX_PROBE_REQUESTS:
                 break
 
-        logger.info(f"[OpenRedirect] {len(probe_tasks)} probe isteği paralel gönderiliyor (timeout={PROBE_PHASE_TIMEOUT}s)...")
+        logger.info(
+            f"[OpenRedirect] {len(probe_tasks)} probe isteği paralel gönderiliyor "
+            f"(timeout={PROBE_PHASE_TIMEOUT}s)..."
+        )
 
+        # Probe fazı: ThreadPoolExecutor directly (PROBE_PHASE_TIMEOUT gerektiriyor)
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             futures = {
-                pool.submit(self._probe, sess, tu, p, pl, ou): (tu, p, pl, ou)
-                for tu, p, pl, ou in probe_tasks
+                pool.submit(self._probe_task, task): task
+                for task in probe_tasks
             }
             try:
                 for f in as_completed(futures, timeout=PROBE_PHASE_TIMEOUT):
                     result = f.result()
                     if result:
+                        extra = result.pop("extra", None)
+                        self.report_finding(**result, extra=extra)
                         findings.append(result)
-                        logger.info(f"[OpenRedirect] BULUNDU (probe): {result['url']} param={result['parameter']}")
-            except Exception:
-                logger.info("[OpenRedirect] Probe fazı zaman aşımı — mevcut bulgularla devam ediliyor")
+                        logger.info(
+                            f"[OpenRedirect] BULUNDU (probe): "
+                            f"{result['url']} param={result['param']}"
+                        )
+            except _FuturesTimeout:
+                logger.info(
+                    "[OpenRedirect] Probe fazı zaman aşımı — mevcut bulgularla devam ediliyor"
+                )
 
         logger.info(f"[OpenRedirect] Tamamlandı: {len(findings)} bulgu")
         return findings
@@ -300,9 +304,9 @@ class OpenRedirectScanner:
 # ---------------------------------------------------------------------------
 
 def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None,
-        urls: Optional[List[str]] = None, **kwargs) -> List[Dict[str, Any]]:
+        urls: Optional[List[str]] = None, results=None, **kwargs) -> List[Dict[str, Any]]:
     cfg = cfg or {}
     or_cfg = cfg.get("open_redirect", {}) if isinstance(cfg, dict) else {}
     timeout = int(or_cfg.get("timeout", REQUEST_TIMEOUT))
-    scanner = OpenRedirectScanner(session=session, timeout=timeout)
+    scanner = OpenRedirectScanner(session=session, results=results, timeout=timeout)
     return scanner.scan(target, urls=urls)

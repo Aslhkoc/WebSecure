@@ -5,13 +5,15 @@ Insecure Direct Object Reference (IDOR) scanner.
 Dual-role comparison (high confidence) + sequential enumeration (medium confidence).
 """
 from __future__ import annotations
+
 import logging
 import re
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
-from websecure.core.reporting import add_result
+import requests as _requests
+
 from websecure.scanners.base import BaseScanner
 
 _logger = logging.getLogger(__name__)
@@ -60,7 +62,6 @@ class IDORScanner(BaseScanner):
         endpoints = kwargs.get("endpoints") or [target]
         sessions = kwargs.get("role_sessions") or {}
 
-        # session_b can come from kwargs or role_sessions
         if not self.session_b and sessions:
             sessions_list = list(sessions.values())
             if len(sessions_list) >= 2:
@@ -74,7 +75,7 @@ class IDORScanner(BaseScanner):
     def _dual_role_test(self, url: str):
         """
         Compare responses: session A vs session B for same URL.
-        If A sees more data → IDOR (A can access B's resources or vice-versa).
+        If A sees more data → IDOR.
         """
         body_a = self._fetch(url, self.session)
         body_b = self._fetch(url, self.session_b)
@@ -84,22 +85,21 @@ class IDORScanner(BaseScanner):
 
         sim = _similarity(body_a, body_b)
 
-        # High similarity but different sessions = IDOR
         if sim > 0.70 and body_a != body_b:
             sensitive = _contains_sensitive(body_b)
             if sensitive:
-                finding = {
-                    "type": "IDOR",
-                    "severity": "High",
-                    "url": url,
-                    "evidence": f"Session B sees sensitive data ({sensitive}) with {sim:.0%} response similarity to Session A",
-                    "confidence": "high",
-                    "verified": True,
-                    "similarity_score": round(sim, 3),
-                }
-                self.add("offensive", finding)
-                add_result("offensive", finding)
-                _logger.warning(f"[IDOR] Dual-role IDOR: {url} ({sensitive})")
+                self.report_finding(
+                    vuln_type="IDOR",
+                    url=url,
+                    param="",
+                    payload="",
+                    severity="High",
+                    evidence=(
+                        f"Session B sees sensitive data ({sensitive}) with "
+                        f"{sim:.0%} response similarity to Session A"
+                    ),
+                    extra={"confidence": "high", "verified": True, "similarity_score": round(sim, 3)},
+                )
 
     def _sequential_enum(self, url: str):
         """
@@ -131,22 +131,22 @@ class IDORScanner(BaseScanner):
                 sensitive = _contains_sensitive(body)
                 if sensitive:
                     sim = _similarity(original_body, body)
-                    finding = {
-                        "type": "IDOR",
-                        "severity": "Medium",
-                        "url": test_url,
-                        "parameter": param_name,
-                        "original_id": base_id,
-                        "tested_id": test_id,
-                        "evidence": f"Sequential enumeration revealed {sensitive} in response",
-                        "confidence": "medium",
-                        "similarity_score": round(sim, 3),
-                    }
-                    self.add("offensive", finding)
-                    add_result("offensive", finding)
-                    _logger.warning(f"[IDOR] Sequential IDOR: {test_url} param={param_name} ({sensitive})")
+                    self.report_finding(
+                        vuln_type="IDOR",
+                        url=test_url,
+                        param=param_name,
+                        payload=str(test_id),
+                        severity="Medium",
+                        evidence=f"Sequential enumeration revealed {sensitive} in response",
+                        extra={
+                            "confidence": "medium",
+                            "original_id": base_id,
+                            "tested_id": test_id,
+                            "similarity_score": round(sim, 3),
+                        },
+                    )
 
-        # Also check path-based IDs: /api/user/123 → /api/user/124
+        # Path-based IDs: /api/user/123 → /api/user/124
         path_parts = parsed.path.split("/")
         for i, part in enumerate(path_parts):
             if re.match(r"^\d+$", part):
@@ -164,31 +164,30 @@ class IDORScanner(BaseScanner):
                         continue
                     sensitive = _contains_sensitive(body)
                     if sensitive:
-                        finding = {
-                            "type": "IDOR",
-                            "severity": "Medium",
-                            "url": test_url,
-                            "parameter": f"path[{i}]",
-                            "original_id": base_id,
-                            "tested_id": test_id,
-                            "evidence": f"Path-based IDOR revealed {sensitive}",
-                            "confidence": "medium",
-                        }
-                        self.add("offensive", finding)
-                        add_result("offensive", finding)
-                        _logger.warning(f"[IDOR] Path IDOR: {test_url} ({sensitive})")
+                        self.report_finding(
+                            vuln_type="IDOR",
+                            url=test_url,
+                            param=f"path[{i}]",
+                            payload=str(test_id),
+                            severity="Medium",
+                            evidence=f"Path-based IDOR revealed {sensitive}",
+                            extra={"confidence": "medium", "original_id": base_id, "tested_id": test_id},
+                        )
 
     def _fetch(self, url: str, session) -> Optional[str]:
         try:
             if session:
                 resp = session.get(url, timeout=self.timeout, allow_redirects=True)
             else:
-                import requests as _req
-                resp = _req.get(url, timeout=self.timeout, allow_redirects=True)
+                resp = _requests.get(url, timeout=self.timeout, allow_redirects=True)
             if resp.status_code < 400:
                 return resp.text
-        except Exception as e:
-            _logger.debug(f"[IDOR] Fetch error {url}: {e}")
+        except _requests.exceptions.Timeout as exc:
+            _logger.warning(f"[IDOR] Fetch timed out for {url}: {exc!r}")
+        except _requests.exceptions.ConnectionError as exc:
+            _logger.warning(f"[IDOR] Fetch connection error for {url}: {exc!r}")
+        except _requests.exceptions.RequestException as exc:
+            _logger.error(f"[IDOR] Fetch failed for {url}: {exc!r}")
         return None
 
 

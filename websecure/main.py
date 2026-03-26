@@ -903,52 +903,12 @@ if run_owasp_and_nuclei is None:
         return {}
 
 
-def _call_scanner_if_available(mod_name: str, url, session=None, debug=False, auth_ctx=None):
-    spec = _ws_spec(mod_name)
-    mod = None
-    if spec is not None:
-        mod = importlib.import_module(mod_name)
-    else:
-        # Fallback: if module is like "scanners.xxx", try top-level "xxx"
-        if "." in mod_name:
-            fallback = mod_name.split(".", 1)[1]
-            if _ws_spec(fallback) is not None:
-                mod = importlib.import_module(fallback)
-    if mod is None:
-        return None
-
-    run = getattr(mod, "run", None)
-    if not callable(run):
-        return None
-
-    sig = inspect.signature(run)
-    params = sig.parameters
-    kw = {}
-    if "url" in params:
-        kw["url"] = url
-    if "session" in params:
-        kw["session"] = session
-    if "debug" in params:
-        kw["debug"] = debug
-    if "auth_ctx" in params:
-        kw["auth_ctx"] = auth_ctx
-    return run(**kw)
-
-
-def _bind_offensive(modname: str, fallback_name: str):
-    fn = None
-    if _ws_spec(modname) is not None:
-        _m = importlib.import_module(modname)
-        _r = getattr(_m, "run", None)
-        if callable(_r):
-            fn = _r
-    if fn is None:
-        def _fallback(*a, **k):
-            return None
-
-        _fallback.__name__ = fallback_name
-        return _fallback
-    return fn
+# FAZ 4.2: _call_scanner_if_available ve _bind_offensive core/scan_runner.py'e taşındı.
+# Geriye dönük uyumluluk için buradan re-export edilir.
+from websecure.core.scan_runner import (
+    _call_scanner_if_available,
+    _bind_offensive,
+)
 
 
 offensive_request_smuggling = _bind_offensive("websecure.scanners.request_smuggling", "offensive_request_smuggling")

@@ -6,14 +6,14 @@ Three-tier approach: polyglot probe → engine fingerprinting → PoC evidence.
 Attack surfaces: URL params, POST form data, JSON body, HTTP headers, cookies.
 """
 from __future__ import annotations
-import json
+
 import logging
 import re
-import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
-from websecure.core.reporting import add_result
+import requests as _requests
+
 from websecure.scanners.base import BaseScanner
 
 _logger = logging.getLogger(__name__)
@@ -22,7 +22,6 @@ _logger = logging.getLogger(__name__)
 # Tier 1: Polyglot probes — trigger math evaluation across multiple engines
 # ---------------------------------------------------------------------------
 _TIER1_PROBES: List[Tuple[str, str]] = [
-    # (payload, expected_result_regex)
     ("{{7*7}}", r"49"),
     ("${7*7}", r"49"),
     ("#{7*7}", r"49"),
@@ -121,7 +120,6 @@ class SSTIScanner(BaseScanner):
             self._scan_url(url)
             self._scan_headers(url)
 
-        # Scan forms (POST/GET form data)
         for form in forms:
             action = form.get("action") or target
             method = (form.get("method") or "GET").upper()
@@ -134,8 +132,7 @@ class SSTIScanner(BaseScanner):
         if not params:
             return
 
-        for param_name, original_value in params:
-            # Tier 1: Polyglot
+        for param_name, _ in params:
             tier1_hit = self._tier1_probe(url, parsed, params, param_name)
             if not tier1_hit:
                 continue
@@ -143,15 +140,13 @@ class SSTIScanner(BaseScanner):
             payload, evidence = tier1_hit
             _logger.info(f"[SSTI] Tier1 hit: {url} param={param_name}")
 
-            # Tier 2: Engine fingerprint
             engine = self._tier2_fingerprint(url, parsed, params, param_name)
 
-            # Tier 3: PoC evidence
             poc_evidence = None
             if engine:
                 poc_evidence = self._tier3_poc(url, parsed, params, param_name, engine)
 
-            self._report_finding(url, param_name, payload, evidence, engine, poc_evidence)
+            self._emit_finding(url, param_name, payload, evidence, engine, poc_evidence)
 
     def _tier1_probe(self, url: str, parsed, params: List, param_name: str
                      ) -> Optional[Tuple[str, str]]:
@@ -185,7 +180,6 @@ class SSTIScanner(BaseScanner):
             test_url = self._build_url(parsed, new_params)
             body = self._get(test_url)
             if body and len(body.strip()) > 10:
-                # Look for interesting content (class names, env vars, etc.)
                 if re.search(r'object|class|module|environ|subprocess|os\.', body, re.I):
                     return body[:300]
         return None
@@ -202,7 +196,7 @@ class SSTIScanner(BaseScanner):
                 continue
             payload, evidence = tier1_hit
             _logger.info(f"[SSTI] Header hit: {url} header={header_name}")
-            self._report_finding(url, f"header:{header_name}", payload, evidence, None, None)
+            self._emit_finding(url, f"header:{header_name}", payload, evidence, None, None)
 
     def _tier1_probe_header(self, url: str, header_name: str) -> Optional[Tuple[str, str]]:
         for payload, expected_re in _TIER1_PROBES:
@@ -214,13 +208,16 @@ class SSTIScanner(BaseScanner):
     def _request_with_header(self, url: str, header_name: str, payload: str) -> Optional[str]:
         try:
             headers = {header_name: payload}
-            if self.session:
-                resp = self.session.get(url, headers=headers, timeout=self.timeout)
-            else:
-                import requests as _req
-                resp = _req.get(url, headers=headers, timeout=self.timeout)
+            resp = self.session.get(url, headers=headers, timeout=self.timeout)
             return resp.text
-        except Exception:
+        except _requests.exceptions.Timeout as exc:
+            _logger.debug(f"[SSTI] Header probe timed out for {url} [{header_name}]: {exc!r}")
+            return None
+        except _requests.exceptions.ConnectionError as exc:
+            _logger.debug(f"[SSTI] Header probe connection error for {url}: {exc!r}")
+            return None
+        except _requests.exceptions.RequestException as exc:
+            _logger.warning(f"[SSTI] Header probe failed for {url}: {exc!r}")
             return None
 
     # ------------------------------------------------------------------
@@ -243,10 +240,9 @@ class SSTIScanner(BaseScanner):
                 body = self._submit_form(action, method, form_data)
                 if body and re.search(expected_re, body):
                     _logger.info(f"[SSTI] Form hit: {action} field={p_name}")
-                    self._report_finding(action, p_name, payload, body[:200], None, None)
+                    self._emit_finding(action, p_name, payload, body[:200], None, None)
                     break  # one confirmed vuln per field
 
-        # Also try JSON body if form looks like an API endpoint
         if method == "POST":
             self._scan_json_body(action, fuzzable, base_data)
 
@@ -262,71 +258,77 @@ class SSTIScanner(BaseScanner):
                 body = self._post_json(url, json_data)
                 if body and re.search(expected_re, body):
                     _logger.info(f"[SSTI] JSON body hit: {url} field={p_name}")
-                    self._report_finding(url, f"json:{p_name}", payload, body[:200], None, None)
+                    self._emit_finding(url, f"json:{p_name}", payload, body[:200], None, None)
                     break
 
     def _submit_form(self, action: str, method: str, data: Dict) -> Optional[str]:
         try:
-            if self.session:
-                if method == "POST":
-                    resp = self.session.post(action, data=data, timeout=self.timeout)
-                else:
-                    resp = self.session.get(action, params=data, timeout=self.timeout)
+            if method == "POST":
+                resp = self.session.post(action, data=data, timeout=self.timeout)
             else:
-                import requests as _req
-                if method == "POST":
-                    resp = _req.post(action, data=data, timeout=self.timeout)
-                else:
-                    resp = _req.get(action, params=data, timeout=self.timeout)
+                resp = self.session.get(action, params=data, timeout=self.timeout)
             return resp.text
-        except Exception:
+        except _requests.exceptions.Timeout as exc:
+            _logger.debug(f"[SSTI] Form submit timed out for {action}: {exc!r}")
+            return None
+        except _requests.exceptions.ConnectionError as exc:
+            _logger.debug(f"[SSTI] Form submit connection error for {action}: {exc!r}")
+            return None
+        except _requests.exceptions.RequestException as exc:
+            _logger.warning(f"[SSTI] Form submit failed for {action}: {exc!r}")
             return None
 
     def _post_json(self, url: str, data: Dict) -> Optional[str]:
         try:
             headers = {"Content-Type": "application/json"}
-            if self.session:
-                resp = self.session.post(url, json=data, headers=headers, timeout=self.timeout)
-            else:
-                import requests as _req
-                resp = _req.post(url, json=data, headers=headers, timeout=self.timeout)
+            resp = self.session.post(url, json=data, headers=headers, timeout=self.timeout)
             return resp.text
-        except Exception:
+        except _requests.exceptions.Timeout as exc:
+            _logger.debug(f"[SSTI] JSON POST timed out for {url}: {exc!r}")
+            return None
+        except _requests.exceptions.ConnectionError as exc:
+            _logger.debug(f"[SSTI] JSON POST connection error for {url}: {exc!r}")
+            return None
+        except _requests.exceptions.RequestException as exc:
+            _logger.warning(f"[SSTI] JSON POST failed for {url}: {exc!r}")
             return None
 
     def _get(self, url: str) -> Optional[str]:
         try:
-            if self.session:
-                resp = self.session.get(url, timeout=self.timeout)
-            else:
-                import requests as _req
-                resp = _req.get(url, timeout=self.timeout)
+            resp = self.session.get(url, timeout=self.timeout)
             return resp.text
-        except Exception as e:
-            _logger.debug(f"[SSTI] GET failed for {url}: {e}")
+        except _requests.exceptions.Timeout as exc:
+            _logger.debug(f"[SSTI] GET timed out for {url}: {exc!r}")
+            return None
+        except _requests.exceptions.ConnectionError as exc:
+            _logger.debug(f"[SSTI] GET connection error for {url}: {exc!r}")
+            return None
+        except _requests.exceptions.RequestException as exc:
+            _logger.warning(f"[SSTI] GET failed for {url}: {exc!r}")
             return None
 
     def _build_url(self, parsed, params: Dict) -> str:
         return urlunparse(parsed._replace(query=urlencode(params)))
 
-    def _report_finding(self, url: str, param: str, payload: str, evidence: str,
-                        engine: Optional[str], poc: Optional[str]):
-        finding = {
-            "type": "SSTI",
-            "severity": "Critical",
-            "url": url,
-            "parameter": param,
-            "payload": payload,
-            "evidence": evidence,
+    def _emit_finding(self, url: str, param: str, payload: str, evidence: str,
+                      engine: Optional[str], poc: Optional[str]):
+        """Emit SSTI finding via BaseScanner.report_finding() (single reporting path)."""
+        extra: Dict = {
             "engine": engine or "unknown",
             "verified": True,
             "confidence": "high",
         }
         if poc:
-            finding["poc_evidence"] = poc[:300]
-        self.add("offensive", finding)
-        add_result("offensive", finding)
-        _logger.warning(f"[SSTI] Critical finding: {url} param={param} engine={engine}")
+            extra["poc_evidence"] = poc[:300]
+        self.report_finding(
+            vuln_type="SSTI",
+            url=url,
+            param=param,
+            payload=payload,
+            severity="Critical",
+            evidence=evidence,
+            extra=extra,
+        )
 
 
 def run(target: str, session=None, results=None, debug=False, **kwargs):
