@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
 from websecure.core.reporting import add_result
+from websecure.core.payloads import get_payloads
 from websecure.scanners.base import BaseScanner
 
 _logger = logging.getLogger(__name__)
@@ -36,7 +37,8 @@ _DOM_SINK_PATTERNS = [
     "location.assign",
 ]
 
-_DOM_PAYLOADS = [
+# DOM-specific canary payloads (used when get_payloads returns nothing)
+_DOM_PAYLOADS_FALLBACK = [
     "<img src=x onerror=console.error('DOMXSS_{CANARY}')>",
     "<svg onload=console.error('DOMXSS_{CANARY}')>",
     "javascript:console.error('DOMXSS_{CANARY}')",
@@ -44,6 +46,21 @@ _DOM_PAYLOADS = [
     "\"><script>console.error('DOMXSS_{CANARY}')</script>",
     "{{CANARY}}",  # Angular/Vue template injection
 ]
+
+
+def _get_dom_payloads(canary: str) -> List[str]:
+    """Return XSS payloads from the central payload store, with canary injected."""
+    base = list(get_payloads("xss") or [])
+    if not base:
+        base = list(_DOM_PAYLOADS_FALLBACK)
+    # Inject canary marker into each payload where possible
+    result = []
+    for p in base:
+        if "{CANARY}" in p:
+            result.append(p.replace("{CANARY}", canary))
+        else:
+            result.append(p)
+    return result
 
 
 def _gen_canary() -> str:
@@ -99,7 +116,8 @@ class DOMXSSScanner(BaseScanner):
 
         for param_name, _ in params:
             canary = _gen_canary()
-            payload = random.choice(_DOM_PAYLOADS).replace("{CANARY}", canary)
+            dom_payloads = _get_dom_payloads(canary)
+            payload = random.choice(dom_payloads)
 
             # Build injected URL
             new_params = dict(params)

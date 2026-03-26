@@ -137,10 +137,10 @@ class WAFBypassAdapter(HTTPAdapter):
                         try:
                             from websecure.core.reporting import get_live_monitor
                             get_live_monitor().log_rotation(sess._req_counter, proxy_str)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except (ImportError, AttributeError) as exc:
+                            logger.debug(f"[WAFBypass] Live monitor log_rotation failed: {exc!r}")
+                except Exception as exc:
+                    logger.debug(f"[WAFBypass] Proxy rotation failed: {exc!r}")
 
         # 1. Rotate User-Agent
         if "User-Agent" not in request.headers or "python-requests" in request.headers["User-Agent"]:
@@ -205,8 +205,8 @@ class WAFBypassAdapter(HTTPAdapter):
                 parsed.scheme, parsed.netloc, path,
                 parsed.params, parsed.query, parsed.fragment
             ))
-        except Exception:
-            pass
+        except (ValueError, AttributeError) as exc:
+            logger.debug(f"[WAFBypass] Path mutation failed: {exc!r}")
 
         # 4. Header Modification (Junk)
         if random.random() < 0.3:
@@ -240,8 +240,8 @@ class WAFBypassAdapter(HTTPAdapter):
                 else:
                     junk_param = f"_={random.randint(1000, 9999)}"
                     request.url += "?" + junk_param
-            except Exception:
-                pass
+            except (ValueError, AttributeError) as exc:
+                logger.debug(f"[WAFBypass] HPP mutation failed: {exc!r}")
 
         # 7. Chunked body encoding (_evasion_chunked flag)
         if self._get_flag("_evasion_chunked") and request.body:
@@ -257,8 +257,8 @@ class WAFBypassAdapter(HTTPAdapter):
                 request.body = ChunkedBodyBuilder().build(body, min_chunk=min_c, max_chunk=max_c)
                 request.headers.pop("Content-Length", None)
                 request.headers["Transfer-Encoding"] = "chunked"
-            except Exception:
-                pass
+            except (ImportError, AttributeError, TypeError) as exc:
+                logger.debug(f"[WAFBypass] Chunked encoding failed: {exc!r}")
 
         # 8. JSON unicode escape (_evasion_json_escape flag)
         if self._get_flag("_evasion_json_escape") and request.body:
@@ -274,8 +274,8 @@ class WAFBypassAdapter(HTTPAdapter):
                     request.body = JSONUnicodeEscaper().escape_json(body_s).encode("utf-8")
                     if "Content-Length" in request.headers:
                         request.headers["Content-Length"] = str(len(request.body))
-            except Exception:
-                pass
+            except (ImportError, AttributeError, UnicodeDecodeError) as exc:
+                logger.debug(f"[WAFBypass] JSON unicode escape failed: {exc!r}")
 
         # 9. Overlong UTF-8 path encoding (_evasion_overlong flag)
         if self._get_flag("_evasion_overlong"):
@@ -285,8 +285,8 @@ class WAFBypassAdapter(HTTPAdapter):
                 parts    = urlsplit(request.url)
                 new_path = OverlongUTF8Encoder().partial_encode(parts.path, "/<>\"'()")
                 request.url = urlunsplit(parts._replace(path=new_path))
-            except Exception:
-                pass
+            except (ImportError, AttributeError, ValueError) as exc:
+                logger.debug(f"[WAFBypass] Overlong UTF-8 encoding failed: {exc!r}")
 
         # 10. Parameter fragmentation (_evasion_param_frag flag)
         if self._get_flag("_evasion_param_frag"):
@@ -304,8 +304,8 @@ class WAFBypassAdapter(HTTPAdapter):
                         else:
                             new_params.append((k, v))
                     request.url = urlunsplit(parts._replace(query=urlencode(new_params)))
-            except Exception:
-                pass
+            except (ImportError, AttributeError, ValueError) as exc:
+                logger.debug(f"[WAFBypass] Param fragmentation failed: {exc!r}")
 
         # 11. CRLF / newline injection in query string (_evasion_newline flag)
         if self._get_flag("_evasion_newline"):
@@ -320,8 +320,8 @@ class WAFBypassAdapter(HTTPAdapter):
                         # Inject a benign newline-encoded string to probe WAF parsing
                         params[0] = (k, v + CRLFInjector.CRLF_SEQS[0] + "X-Waf-Test: 1")
                         request.url = urlunsplit(parts._replace(query=urlencode(params)))
-            except Exception:
-                pass
+            except (ImportError, AttributeError, ValueError) as exc:
+                logger.debug(f"[WAFBypass] CRLF injection failed: {exc!r}")
 
         return super().send(request, **kwargs)
 
@@ -496,8 +496,8 @@ def _s_tls(session):
             session._use_curl_cffi = True
             session._curl_cffi_profile = _resolve_profile("chrome_124")
             return
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        logger.debug(f"[WAFBypass] TLS fingerprint (curl_cffi) setup failed: {exc!r}")
 
     # 2. tls-client fallback
     try:
@@ -581,8 +581,8 @@ def _s_http2_pseudo(session):
         if _CURL_CFFI_AVAILABLE:
             session._use_curl_cffi     = True
             session._curl_cffi_profile = _resolve_profile("chrome_124")
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        logger.debug(f"[WAFBypass] HTTP/2 pseudo-header curl_cffi setup failed: {exc!r}")
 
 
 _DEFAULT_BYPASS_STRATEGIES = [
@@ -690,7 +690,8 @@ class CffiResponse:
     def text(self) -> str:
         try:
             return self._raw.text
-        except Exception:
+        except (AttributeError, UnicodeDecodeError) as exc:
+            logger.debug(f"[WAFBypass] CffiResponse.text decode failed: {exc!r}")
             return ""
 
     @property
@@ -823,8 +824,8 @@ class CurlCffiDriver:
         if self._session is not None:
             try:
                 self._session.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug(f"[TLSDriver] Session close failed: {exc!r}")
             self._session = None
 
 
@@ -1256,7 +1257,8 @@ class ResidentialProxyPool:
                 ip = ""
                 try:
                     ip = r.json().get("ip", r.text.strip()[:20])
-                except Exception:
+                except (ValueError, AttributeError) as exc:
+                    _logger.debug(f"[ProxyPool] JSON parse for IP failed: {exc!r}")
                     ip = r.text.strip()[:20]
                 return entry.url, {"ok": True, "ip": ip, "latency_ms": latency, "error": None}
             except Exception as exc:
@@ -1485,7 +1487,8 @@ class EgressManager:
         try:
             # ResidentialProxyPool defined in this module (merged from proxy_pool.py)
             self._pool: Optional[ResidentialProxyPool] = ResidentialProxyPool(cfg)
-        except Exception:
+        except Exception as exc:
+            _logger.debug(f"[EgressManager] ResidentialProxyPool init failed: {exc!r}")
             self._pool = None
 
         # Tor kontrolcüsü (opsiyonel — Tor kuruluysa)
@@ -1561,7 +1564,7 @@ class EgressManager:
         try:
             with socket.create_connection(("127.0.0.1", self._tor_socks_port), timeout=1):
                 return True
-        except Exception:
+        except OSError:
             return False
 
     def proxy_pool_stats(self) -> dict:
@@ -1612,8 +1615,8 @@ def get_tor_proxy() -> Optional[Dict[str, str]]:
         with _sock.create_connection(("127.0.0.1", 9050), timeout=0.5):
             tor_url = "socks5h://127.0.0.1:9050"
             return {"http": tor_url, "https": tor_url}
-    except Exception:
-        pass
+    except (OSError, ImportError) as exc:
+        _logger.debug(f"[WAFBypass] Tor SOCKS5 probe failed: {exc!r}")
     return None
 
 

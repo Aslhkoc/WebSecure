@@ -1,22 +1,23 @@
 from __future__ import annotations
 from websecure.core.utils import _ws_import_any, _ws_maybe_import_any
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import logging as _logging
 import importlib
 import importlib.util as _iul
-import traceback
 import inspect
+import json
+import os
+import socket
+import ssl
 import threading
+import time as _t
+import traceback
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from websecure.core.reporting import _phase_rec
-import socket, importlib, os
-from typing import List, Tuple, Callable
 from .http import hardened_session
 from .reporting import add_result
-import socket, ssl, json, importlib, importlib.util as _iul
-import logging as _logging
-import time as _t
 # Safe imports for optional scanners
 _rs = _ma = _jwt = _nq = _ws = _sx = _gqa = _gqr = _fu = None
 
@@ -130,8 +131,8 @@ def _detect_technologies(resp) -> set:
     body = ""
     try:
         body = (resp.text or "").lower()
-    except Exception:
-        pass
+    except (AttributeError, UnicodeDecodeError) as exc:
+        _logger.debug(f"[phases] Response body decode skipped: {exc!r}")
     cookies_str = " ".join(headers.get("set-cookie", "").lower().split())
 
     # --- Server header ---
@@ -264,8 +265,8 @@ def phase_waf_detect(ctx: dict):
             try:
                 from websecure.core.waf_bypass import build_bypass_session
                 ctx["bypass_session"] = build_bypass_session(profile)
-            except Exception:
-                pass
+            except (ImportError, AttributeError) as exc:
+                _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
         add_result("waf_detection", {
             "vendor": profile.vendor,
             "confidence": profile.confidence,
@@ -681,8 +682,8 @@ def flush(ctx=None):
     try:
         from websecure.core.reporting import flush as _rf
         return _rf()
-    except Exception:
-        pass
+    except (ImportError, OSError) as exc:
+        _logger.debug(f"[phases] flush skipped: {exc!r}")
 
 
 def _runner_discovery(ctx) -> None:
@@ -1594,8 +1595,8 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
     if not getattr(ctx, "technologies", None):
         try:
             _quick_tech_probe(ctx)
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug(f"[phases] Quick tech probe failed: {exc!r}")
     base: List[Phase] = []
     existing = getattr(ctx, "base_plan", None)
     if isinstance(existing, list):
@@ -1699,8 +1700,8 @@ def run_discovery(ctx):
                 _resp = _hs({}).get(url, timeout=8, allow_redirects=True)
                 techs |= _detect_technologies(_resp)
                 ctx._tech_probe_done = True
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug(f"[phases] Header tech probe failed for {url}: {exc!r}")
 
         ctx.technologies = list(techs)
         if techs:
@@ -1903,8 +1904,8 @@ def run_plan_if_needed(ctx: dict):
                 try:
                     from websecure.core.reporting import get_live_monitor
                     get_live_monitor().log_phase(phase_title)
-                except Exception:
-                    pass
+                except (ImportError, AttributeError) as exc:
+                    _logger.debug(f"[phases] LiveMonitor log_phase unavailable: {exc!r}")
             
             # Run safely
             start_t = _t.time()
@@ -1927,8 +1928,8 @@ def run_plan_if_needed(ctx: dict):
     try:
         from websecure.core.reporting import get_live_monitor
         get_live_monitor().summary()
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        _logger.debug(f"[phases] LiveMonitor summary unavailable: {exc!r}")
 
 
 # ===========================================================================
@@ -2475,8 +2476,8 @@ def _seed_parameterized_endpoints(ctx) -> None:
     try:
         import urllib3 as _u3
         _u3.disable_warnings()
-    except Exception:
-        pass
+    except ImportError as exc:
+        _logger.debug(f"[phases] urllib3 not available, warnings not suppressed: {exc!r}")
 
     _SKIP_CODES = {404, 405, 410, 501, 502, 503, 504}
 
@@ -2489,12 +2490,13 @@ def _seed_parameterized_endpoints(ctx) -> None:
             # HEAD first (faster), fallback to GET
             try:
                 r = sess.head(full_url, timeout=4, allow_redirects=True)
-            except Exception:
+            except Exception as exc:
+                _logger.debug(f"[seed] HEAD failed for {full_url}, falling back to GET: {exc!r}")
                 r = sess.get(full_url, timeout=4, allow_redirects=True)
             if r.status_code not in _SKIP_CODES:
                 return full_url
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug(f"[seed] Probe failed for {full_url}: {exc!r}")
         return None
 
     new_eps: List[str] = []
@@ -2507,8 +2509,8 @@ def _seed_parameterized_endpoints(ctx) -> None:
                 result = f.result()
                 if result and result not in existing_set and result not in new_eps:
                     new_eps.append(result)
-        except Exception:
-            _logger.debug("[seed] Probe phase timed out — partial results collected")
+        except Exception as exc:
+            _logger.debug(f"[seed] Probe phase timed out — partial results collected: {exc!r}")
 
     if new_eps:
         _logger.info(f"[seed] Added {len(new_eps)} endpoint(s) to offensive scan list")
@@ -2792,8 +2794,8 @@ def run_ffuf_scan(ctx) -> None:
                     try:
                         resp = getattr(ctx, "session").get(l_url, timeout=10)
                         auditor.discover_forms(resp.text, l_url)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.debug(f"[Login-Audit] Form discovery failed for {l_url}: {exc!r}")
                         
                 results = auditor.run_audit()
                 for res in results:

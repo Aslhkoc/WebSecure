@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -93,8 +94,8 @@ class MassAssignmentScanner(BaseScanner):
                 r = self.session.get(target, timeout=4)
                 if r.status_code not in (404, 405, 501):
                     found.append(target)
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[MassAssign] Endpoint discovery probe failed for {target!r}: {exc!r}")
         return found
 
     # -------------------------------------------------------------------------
@@ -124,8 +125,8 @@ class MassAssignmentScanner(BaseScanner):
                 r = method_fn(url, json={"__probe__": True}, timeout=4)
                 if r.status_code not in (404, 405, 501):
                     working.append((method_fn, method_name))
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[MassAssign] Method probe {method_name} failed for {url!r}: {exc!r}")
         return working
 
     # -------------------------------------------------------------------------
@@ -137,7 +138,8 @@ class MassAssignmentScanner(BaseScanner):
     ):
         try:
             base_resp = method_fn(url, json=baseline, timeout=5)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[MassAssign] Flat injection baseline request failed for {url!r}: {exc!r}")
             return
 
         def test_one(key: str, val: Any) -> Optional[Dict]:
@@ -145,7 +147,8 @@ class MassAssignmentScanner(BaseScanner):
             try:
                 r = method_fn(url, json=attack, timeout=5)
                 return self._analyze(url, method_name, key, val, base_resp, r, "flat")
-            except Exception:
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[MassAssign] Flat injection request failed for key={key!r}: {exc!r}")
                 return None
 
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
@@ -170,7 +173,8 @@ class MassAssignmentScanner(BaseScanner):
     ):
         try:
             base_resp = method_fn(url, json=baseline, timeout=5)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[MassAssign] Nested injection baseline request failed for {url!r}: {exc!r}")
             return
 
         for wrapper in _NESTED_WRAPPERS:
@@ -185,8 +189,8 @@ class MassAssignmentScanner(BaseScanner):
                         if result:
                             self.add(bucket, result)
                             add_result("offensive", result)
-                    except Exception:
-                        pass
+                    except requests.exceptions.RequestException as exc:
+                        logger.debug(f"[MassAssign] Nested injection request failed for {wrapper}.{key!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Form-based injection (urlencoded)
@@ -199,7 +203,8 @@ class MassAssignmentScanner(BaseScanner):
             base_resp = self.session.request(method_name, url, data=baseline, timeout=5)
             if base_resp.status_code in (404, 405):
                 return
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[MassAssign] Form injection baseline request failed for {url!r}: {exc!r}")
             return
 
         for key in SENSITIVE_KEYS[:12]:       # top-priority fields only
@@ -211,8 +216,8 @@ class MassAssignmentScanner(BaseScanner):
                     if result:
                         self.add(bucket, result)
                         add_result("offensive", result)
-                except Exception:
-                    pass
+                except requests.exceptions.RequestException as exc:
+                    logger.debug(f"[MassAssign] Form injection request failed for key={key!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Response comparison
@@ -320,8 +325,8 @@ class MassAssignmentScanner(BaseScanner):
                             ),
                         })
                         return
-        except Exception:
-            pass
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[MassAssign] Persistence verification request failed for {url!r}: {exc!r}")
 
 
 # ---------------------------------------------------------------------------

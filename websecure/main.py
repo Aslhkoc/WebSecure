@@ -88,8 +88,8 @@ try:
     from websecure.core.utils import collect_all_wordlists
     _wd = collect_all_wordlists()
     print(f"       =[ Wordlists: {_wd.get('count',0)} files connected (~{_wd.get('total_lines_est',0)} lines)")
-except Exception:
-    pass
+except (ImportError, AttributeError, OSError) as exc:
+    _logger.debug(f"[main] Wordlist yüklenemedi: {exc!r}")
 
 # [WS3-ANCHOR] New Module Imports
 try:
@@ -381,8 +381,8 @@ else:
                                 found.append(h2)
                             if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
                                 q.append(h2)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.debug(f"[main] WebDriver link extract hatası: {exc!r}")
                 steps += 1
                 if steps % 5 == 0:
                     sleep(0.05)  
@@ -2693,8 +2693,8 @@ if __name__ == "__main__":
     # Success Alert
     try:
         AlertManager.play_success()
-    except Exception:
-        pass
+    except (AttributeError, OSError, Exception) as exc:
+        _logger.debug(f"[main] AlertManager.play_success hatası: {exc!r}")
 
     # Keep window open
 

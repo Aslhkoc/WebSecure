@@ -131,8 +131,8 @@ def _read_response(sock: socket.socket, timeout: float = 5.0) -> Tuple[int, str]
             if not chunk:
                 break
             chunks.append(chunk)
-    except Exception:
-        pass
+    except OSError as exc:
+        logger.debug("[Race] Socket recv error: %s", exc)
     raw = b"".join(chunks)
     status = 0
     body   = ""
@@ -142,8 +142,8 @@ def _read_response(sock: socket.socket, timeout: float = 5.0) -> Tuple[int, str]
         sep_idx = raw.find(b"\r\n\r\n")
         if sep_idx != -1:
             body = raw[sep_idx + 4 : sep_idx + 500].decode("utf-8", "replace")
-    except Exception:
-        pass
+    except (ValueError, IndexError) as exc:
+        logger.debug("[Race] Response parse error: %s", exc)
     return status, body
 
 
@@ -183,8 +183,8 @@ def _race_burst(
     for s in sockets:
         try:
             s.sendall(payload_head)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("[Race] sendall payload_head error: %s", exc)
 
     # Brief pause to let all sockets buffer their data
     time.sleep(LAST_BYTE_SYNC_SLEEP)
@@ -196,8 +196,8 @@ def _race_burst(
         barrier.wait()
         try:
             s.sendall(payload_tail)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("[Race] sendall payload_tail error: %s", exc)
 
     threads = [threading.Thread(target=_fire, args=(s,), daemon=True) for s in sockets]
     for t in threads:
@@ -213,14 +213,15 @@ def _race_burst(
         for fut in as_completed(futures):
             try:
                 results.append(fut.result())
-            except Exception:
+            except Exception as exc:
+                logger.debug("[Race] Future result error: %s", exc)
                 results.append((0, ""))
 
     for s in sockets:
         try:
             s.close()
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("[Race] Socket close error: %s", exc)
 
     return results
 

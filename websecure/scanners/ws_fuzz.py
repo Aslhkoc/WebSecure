@@ -171,7 +171,8 @@ def _read_frame(sock: socket.socket, timeout: float = 3.0) -> Optional[str]:
             data += chunk
 
         return data.decode("utf-8", errors="replace")
-    except Exception:
+    except (OSError, ssl.SSLError, struct.error) as exc:
+        logger.debug(f"[WSFuzz] Frame read error: {exc!r}")
         return None
 
 
@@ -233,7 +234,8 @@ class _RawWSConn:
         try:
             self._sock.sendall(_make_frame(text))
             return True
-        except Exception:
+        except OSError as exc:
+            logger.debug(f"[WSFuzz] Send error: {exc!r}")
             return False
 
     def recv(self, timeout: float = 3.0) -> Optional[str]:
@@ -244,8 +246,8 @@ class _RawWSConn:
             try:
                 self._sock.sendall(_make_frame("", opcode=0x8))
                 self._sock.close()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug(f"[WSFuzz] Close error: {exc!r}")
             self._sock = None
         self.connected = False
 
@@ -319,7 +321,8 @@ class WebSocketFuzzer(BaseScanner):
         conn = _RawWSConn(ws_url, timeout=4.0)
         try:
             return conn.connect()
-        except Exception:
+        except (OSError, ssl.SSLError) as exc:
+            logger.debug(f"[WSFuzz] Endpoint probe failed for {ws_url!r}: {exc!r}")
             return False
         finally:
             conn.close()
@@ -369,8 +372,8 @@ class WebSocketFuzzer(BaseScanner):
                         severity=sev,
                         details=f"Connection accepted with Origin: {origin!r}",
                     ))
-            except Exception:
-                pass
+            except (OSError, ssl.SSLError) as exc:
+                logger.debug(f"[WSFuzz] Origin bypass test error for origin={origin!r}: {exc!r}")
             finally:
                 conn.close()
 
@@ -396,8 +399,8 @@ class WebSocketFuzzer(BaseScanner):
                                     details=f"{desc}: {vuln_desc}",
                                     evidence={"payload": payload[:120], "response": resp[:300]},
                                 )
-                except Exception:
-                    pass
+                except (OSError, ssl.SSLError) as exc:
+                    logger.debug(f"[WSFuzz] Payload test error for payload={payload[:40]!r}: {exc!r}")
             return None
 
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
@@ -438,8 +441,8 @@ class WebSocketFuzzer(BaseScanner):
                             details="Sensitive fields returned without auth token",
                         ))
                         break
-        except Exception:
-            pass
+        except (OSError, ssl.SSLError) as exc:
+            logger.debug(f"[WSFuzz] Unauthenticated access test error for {ws_url!r}: {exc!r}")
         finally:
             conn.close()
 
@@ -454,7 +457,8 @@ class WebSocketFuzzer(BaseScanner):
                 return None
             conn.send(message)
             return conn.recv(timeout)
-        except Exception:
+        except (OSError, ssl.SSLError) as exc:
+            logger.debug(f"[WSFuzz] send/recv error for {ws_url!r}: {exc!r}")
             return None
         finally:
             conn.close()

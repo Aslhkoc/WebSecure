@@ -4,6 +4,7 @@ import time
 import json
 import logging
 import re
+import requests
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin
@@ -287,8 +288,8 @@ class SSRFScanner(BaseScanner):
                     })
                     logger.warning(f"[SSRF] Cloud metadata ({cloud}) via {url} param={param}")
                     return  # one confirmed finding per param is sufficient
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[SSRF] Cloud metadata probe failed for {meta_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # URL scheme abuse
@@ -326,8 +327,8 @@ class SSRFScanner(BaseScanner):
                         "evidence": text[:200],
                     })
                     return
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[SSRF] Scheme abuse probe failed for {payload!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Internal port scanning via timing
@@ -347,7 +348,8 @@ class SSRFScanner(BaseScanner):
             t0 = time.time()
             self.session.get(url, timeout=5)
             baseline = time.time() - t0
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[SSRF] Baseline request failed for {url!r}: {exc!r}")
             baseline = 1.0
 
         for ip in ["127.0.0.1", "localhost"]:
@@ -379,8 +381,8 @@ class SSRFScanner(BaseScanner):
                             "payload": probe_url,
                             "evidence": f"Request took {elapsed:.2f}s (baseline {baseline:.2f}s)",
                         })
-                except Exception:
-                    pass
+                except requests.exceptions.RequestException as exc:
+                    logger.debug(f"[SSRF] Internal port probe failed for {probe_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Body-based SSRF
@@ -403,8 +405,8 @@ class SSRFScanner(BaseScanner):
                                 "evidence": resp.text[:300],
                             })
                             return
-                    except Exception:
-                        pass
+                    except requests.exceptions.RequestException as exc:
+                        logger.debug(f"[SSRF] Body SSRF probe failed for key={key!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # OAST DNS callback
@@ -434,8 +436,8 @@ class SSRFScanner(BaseScanner):
                     "note": "Confirm OOB DNS resolution in your OAST server logs",
                 })
                 logger.info(f"[SSRF] OAST callback sent for param={param}, token={token}")
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[SSRF] OAST DNS callback failed for param={param!r}: {exc!r}")
 
 
 # =============================================================================
@@ -517,8 +519,8 @@ class XXEScanner(BaseScanner):
                         "evidence": "Server references DOCTYPE in error — XXE processing likely enabled",
                     })
                     return
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[XXE] XML POST probe failed for {target_file!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # XXE via SVG upload
@@ -545,8 +547,8 @@ class XXEScanner(BaseScanner):
                     })
                     logger.warning(f"[XXE] SVG XXE confirmed at {url} reading {target_file}")
                     return
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[XXE] SVG upload probe failed for {target_file!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Blind XXE via OAST DNS callback
@@ -569,8 +571,8 @@ class XXEScanner(BaseScanner):
                 "evidence": f"Check OAST DNS logs for {token}.{domain}",
                 "note": "Confirm OOB DNS resolution in your OAST server logs",
             })
-        except Exception:
-            pass
+        except requests.exceptions.RequestException as exc:
+            logger.debug(f"[XXE] Blind OOB DNS probe failed for {url!r}: {exc!r}")
 
 
 # =============================================================================

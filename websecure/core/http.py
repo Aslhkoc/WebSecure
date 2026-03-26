@@ -15,7 +15,7 @@ from typing import Optional
 
 try:
     import requests
-except Exception:  # fallback friendly
+except ImportError:  # fallback friendly
     requests = None
 
 try:
@@ -40,7 +40,7 @@ def is_open(host: str, port: int, timeout: float = 0.4) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
-    except Exception:
+    except OSError:
         return False
 
 # END:### WEBSECURE FLOW FIX PACK
@@ -185,8 +185,8 @@ def _try_rotate_identity(session_obj) -> bool:
     except ImportError:
         # Fallback if module missing
         pass
-    except Exception as e:
-        print(f"[Autopilot] Rotation failed: {e}")
+    except Exception as exc:
+        _logger.debug(f"[Autopilot] Rotation failed: {exc!r}")
     return False
 
 def _maybe_recover_from_backoff() -> None:
@@ -262,8 +262,8 @@ def _smart_request(self, method, url, **kwargs):
                     payload=_payload_hint,
                     param=_param_hint,
                 )
-            except Exception:
-                pass
+            except (ImportError, AttributeError) as exc:
+                _logger.debug(f"[HTTP] Live monitor log_request failed: {exc!r}")
 
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
@@ -277,8 +277,8 @@ def _smart_request(self, method, url, **kwargs):
                 try:
                     from websecure.core.reporting import get_live_monitor
                     get_live_monitor().log_ban_detected(status, url)
-                except Exception:
-                    pass
+                except (ImportError, AttributeError) as exc:
+                    _logger.debug(f"[HTTP] Live monitor log_ban_detected failed: {exc!r}")
 
                 if attempt <= max_retries:
                     rotated = _try_rotate_identity(self)
@@ -354,6 +354,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry as Urllib3Retry
 _HTTPX_AVAILABLE = _impspec.find_spec("httpx") is not None
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # CAPTCHA middleware (lazy — only active when config sets a solver provider)
@@ -371,8 +372,8 @@ def install_captcha_config(cfg_dict: dict) -> None:
         cap_cfg = read_captcha_config(cfg_dict)
         if cap_cfg.provider != "none":
             _CAPTCHA_MIDDLEWARE = CaptchaBypassMiddleware(cap_cfg)
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        _logger.debug(f"[HTTP] install_captcha_config failed: {exc!r}")
 
 def _get_captcha_middleware():
     return _CAPTCHA_MIDDLEWARE
@@ -422,15 +423,16 @@ def hpm_current_policy() -> dict:
     try:
         from websecure.core.phases import hpm_current_policy as _hpm_pol
         return _hpm_pol()
-    except Exception:
+    except (ImportError, AttributeError) as exc:
+        _logger.debug(f"[HTTP] hpm_current_policy import failed: {exc!r}")
         return {"rps": 0.0}
 
 def hpm_record_status(status_code: int) -> None:
     try:
         from websecure.core.phases import hpm_record_status as _hpm_rec
         _hpm_rec(int(status_code))
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        _logger.debug(f"[HTTP] hpm_record_status import failed: {exc!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -966,7 +968,8 @@ class _RequestsDriver:
                 from websecure.core.waf_bypass import get_egress_manager as _gem
                 em = _gem()
                 proxy_url = em.get_next_egress() if em else None
-            except Exception:
+            except (ImportError, AttributeError) as exc:
+                _logger.debug(f"[HTTP] Egress manager lookup failed: {exc!r}")
                 proxy_url = None
             if proxy_url:
                 kw["proxies"] = {"http": proxy_url, "https": proxy_url}
@@ -1025,7 +1028,7 @@ class _HttpxDriver:
         __rt_ms = int((time.time() - __t0) * 1000)
         try:
             __clen = len(getattr(resp, 'content', b'') or b'')
-        except Exception:
+        except (TypeError, AttributeError):
             __clen = 0
         st = int(getattr(resp, 'status_code', 0) or 0)
         record_timing_ms(__rt_ms, st, content_bytes=__clen)
@@ -1151,7 +1154,8 @@ class HttpClient:
                 else:
                     self.driver_name = "requests"
                     self._driver = _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
-            except Exception:
+            except Exception as exc:
+                _logger.debug(f"[HTTP] curl_cffi driver init failed, falling back to requests: {exc!r}")
                 self.driver_name = "requests"
                 self._driver = _RequestsDriver(http_cfg=http_cfg, verify=self.verify, timeout_pair=self._timeout_pair)
         elif self.driver_name == "httpx":
@@ -1268,8 +1272,8 @@ class HttpClient:
                 if em:
                     new_proxy = em.get_next_egress()
                     self._driver.update_proxy(new_proxy)
-            except Exception:
-                pass
+            except (ImportError, AttributeError) as exc:
+                _logger.debug(f"[HTTP] Proxy rotation for curl_cffi driver failed: {exc!r}")
 
         # curl-impersonate subprocess modu (curl_cffi yokken fallback)
         imp_cfg = (self.cfg.get("privacy") or {}).get("impersonation") if isinstance(self.cfg, dict) else None

@@ -280,7 +280,8 @@ def _load_cfg() -> Dict[str, Any]:
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (ValueError, OSError) as exc:
+            _logger.debug(f"[Analysis] Config load failed from {path}: {exc!r}")
             return {}
     return {}
 
@@ -567,8 +568,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
                     return d.get("request")
                 if d.get("request") == "ERROR_CAPTCHA_UNSOLVABLE":
                     return None
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                _logger.debug(f"[CaptchaSolver] Poll request failed: {exc!r}")
         return None
 
     def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
@@ -590,7 +591,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
             if d.get("status") != 1:
                 return None
             return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CaptchaSolver] Image captcha solve request failed: {exc!r}")
             return None
 
     def solve_recaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
@@ -613,7 +615,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
             if d.get("status") != 1:
                 return None
             return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CaptchaSolver] reCAPTCHA v2 solve request failed: {exc!r}")
             return None
 
     def solve_recaptcha_v3(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
@@ -637,7 +640,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
             if d.get("status") != 1:
                 return None
             return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CaptchaSolver] reCAPTCHA v3 solve request failed: {exc!r}")
             return None
 
     def solve_hcaptcha(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
@@ -657,7 +661,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
             if d.get("status") != 1:
                 return None
             return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CaptchaSolver] hCaptcha solve request failed: {exc!r}")
             return None
 
     def solve_turnstile(self, site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
@@ -677,7 +682,8 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
             if d.get("status") != 1:
                 return None
             return self._poll_result(cfg.api_key, str(d["request"]), cfg, cfg.two_captcha_base)
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CaptchaSolver] Turnstile solve request failed: {exc!r}")
             return None
 
 
@@ -714,7 +720,8 @@ class CapSolverProvider(ImageCaptchaSolver):
             if d.get("errorId", 1) != 0:
                 return None
             return str(d.get("taskId", ""))
-        except Exception:
+        except requests.exceptions.RequestException as exc:
+            _logger.debug(f"[CapSolver] createTask request failed: {exc!r}")
             return None
 
     def _get_result(self, cfg: CaptchaConfig, task_id: str) -> Optional[Dict[str, Any]]:
@@ -733,8 +740,8 @@ class CapSolverProvider(ImageCaptchaSolver):
                     return None
                 if d.get("status") == "ready":
                     return d.get("solution") or {}
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                _logger.debug(f"[CapSolver] getTaskResult request failed: {exc!r}")
         return None
 
     def solve(self, img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
@@ -1118,8 +1125,8 @@ class LoginDiscovery:
                     sc = self.score_page(r.text, url)
                     if sc > 0:
                         results.append((url, sc))
-            except Exception:
-                pass
+            except requests.exceptions.RequestException as exc:
+                _logger.debug(f"[LoginDiscovery] Request failed for {url!r}: {exc!r}")
                 
         # 3. Report
         add_result("login_discovery", {
@@ -1320,7 +1327,7 @@ def _is_base64(s: str) -> bool:
     try:
         base64.b64decode(s, validate=True)
         return True
-    except Exception:
+    except (ValueError, binascii.Error):
         return False
 
 # =============================================================================
