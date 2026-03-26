@@ -69,7 +69,8 @@ class GraphQLClient:
             )
             dt = _t.time() - t0
             return r.status_code, self._maybe_json(r.text, r.headers), r.text, dt
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"[GraphQL] POST request failed for {url}: {exc!r}")
             return 0, {}, "", 0.0
 
     def get(self, url: str, query: str, headers: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any], str, float]:
@@ -81,7 +82,8 @@ class GraphQLClient:
             )
             dt = _t.time() - t0
             return r.status_code, self._maybe_json(r.text, r.headers), r.text, dt
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"[GraphQL] GET request failed for {url}: {exc!r}")
             return 0, {}, "", 0.0
 
 @dataclass
@@ -129,8 +131,8 @@ class BatchProbe:
             dt = _t.time() - t0
             if r.status_code == 200 and (r.text or "").strip().startswith("["):
                 return [Finding(url, "Batch Queries Supported", "Medium", {"len": len(arr_payload)}, r.status_code, dt)]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"[GraphQL] Batch probe request failed for {url}: {exc!r}")
         return []
 
 class AliasProbe:
@@ -404,8 +406,8 @@ class GraphQLScanner(BaseScanner):
                 elif r_post.status_code == 400 and "graphql" in r_post.text.lower():
                     # If it says "Bad Request: GraphQL query missing", it's an endpoint!
                     found.append(target)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[GraphQL] Endpoint discovery request failed for {target}: {exc!r}")
         return list(set(found))
 
 

@@ -396,8 +396,8 @@ class FileUploadScanner(BaseScanner):
                 resp = self.session.get(url, timeout=10)
                 if _looks_like_upload_form(resp.text):
                     upload_forms.extend(_parse_upload_forms(url, resp.text))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[FileUpload] Crawl fetch/parse error for {url}: {exc!r}")
 
         if not upload_forms:
             logger.info("[FileUpload] No forms found via crawl — probing common paths")
@@ -490,8 +490,8 @@ class FileUploadScanner(BaseScanner):
                             if "html" not in ct and "svg" not in ct:
                                 is_vuln = False  # served as attachment, not exploitable
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"[FileUpload] Execution verification fetch failed for {uploaded_url}: {exc!r}")
         elif name_reflected and check == "rce":
             # Upload succeeded but we can't verify execution — still flag as Medium
             is_vuln = True

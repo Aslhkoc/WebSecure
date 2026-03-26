@@ -1225,7 +1225,9 @@ class HttpClient:
                     try:
                         from websecure.core.waf_bypass import rotate_tor_identity
                         rotate_tor_identity()
-                    except: pass
+                    except (ImportError, OSError, Exception) as _exc:
+                        import logging as _lg
+                        _lg.getLogger(__name__).debug(f"[HTTP] Tor rotation attempt failed: {_exc!r}")
                     
                 if self._consecutive_blocks >= 5:
                     # [PANIK MODU] 5 kere üst üste bloklandık -> SİSTEM DURUYOR

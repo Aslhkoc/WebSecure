@@ -2082,7 +2082,9 @@ def run_discovery_extended(ctx) -> None:
                   try:
                        rr = ctx.session.get(url, timeout=10)
                        t_html = rr.text
-                  except: pass
+                  except Exception as exc:
+                      import logging as _lg
+                      _lg.getLogger(__name__).debug(f"[Phases] Form fetch failed for {url}: {exc!r}")
              
              if t_html:
                   new_forms = extract_all_forms(t_html, url)
