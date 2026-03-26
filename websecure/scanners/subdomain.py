@@ -28,6 +28,8 @@ try:
 except ImportError:
     _requests = None  # type: ignore
 
+from websecure.scanners.base import BaseScanner
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -307,25 +309,34 @@ def _crtsh_enum(domain: str, timeout: int = 30) -> List[Dict[str, Any]]:
 # Ana Scanner sınıfı
 # ---------------------------------------------------------------------------
 
-class SubdomainScanner:
+class SubdomainScanner(BaseScanner):
     """
     Tüm subdomain enumeration yöntemlerini birleştirir:
     DNS brute-force + Subfinder + Amass + crt.sh
     """
+    name: str = "subdomain"
 
     def __init__(self,
+                 session=None,
+                 results=None,
+                 debug=False,
                  wordlist_path: Optional[str] = None,
                  threads: int = 50,
                  use_subfinder: bool = True,
                  use_amass: bool = True,
                  use_crtsh: bool = True,
                  passive_only: bool = True):
+        super().__init__(session=session, results=results, debug=debug)
         self.wordlist_path = wordlist_path
         self.threads = threads
         self.use_subfinder = use_subfinder
         self.use_amass = use_amass
         self.use_crtsh = use_crtsh
         self.passive_only = passive_only
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        """BaseScanner interface — delegates to scan."""
+        return self.scan(target)
 
     def scan(self, target: str) -> List[Dict[str, Any]]:
         domain = _extract_domain(target)

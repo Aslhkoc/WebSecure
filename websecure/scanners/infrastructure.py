@@ -31,6 +31,7 @@ except ImportError:
 import requests
 from websecure.core.http import hardened_session, verify_for_phase, classify_access_block
 from websecure.core.reporting import add_result
+from websecure.scanners.base import BaseScanner
 
 _logger = logging.getLogger(__name__)
 
@@ -323,11 +324,17 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
 
     return cov, findings, pocs
 
-class HeaderScanner:
-    def __init__(self, session=None, timeout=15.0, verify_tls=True):
-        self.session = session
+class HeaderScanner(BaseScanner):
+    name: str = "headers"
+
+    def __init__(self, session=None, results=None, debug=False, timeout=15.0, verify_tls=True):
+        super().__init__(session=session, results=results, debug=debug)
         self.timeout = timeout
         self.verify_tls = verify_tls
+
+    def run(self, target: str, **kwargs) -> t.Dict[str, t.Any]:
+        """BaseScanner interface — delegates to scan_url."""
+        return self.scan_url(target, **kwargs)
 
     def _do_get(self, url: str, headers: t.Optional[t.Dict] = None) -> t.Any:
         h = headers or {}

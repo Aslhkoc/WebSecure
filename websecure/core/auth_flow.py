@@ -822,6 +822,7 @@ def run_auto_signup(session, cfg: Dict[str, Any]) -> bool:
     return getattr(vresp, "status_code", 500) < 400
 
 def run_device_code_flow(session, cfg: Dict[str, Any]) -> bool:
+    """Delegates to DeviceCodeAuth from websecure.core.auth.flows."""
     assisted = ((cfg or {}).get("auth") or {}).get("assisted") or {}
     if not assisted.get("enabled"):
         return False
@@ -830,35 +831,28 @@ def run_device_code_flow(session, cfg: Dict[str, Any]) -> bool:
     token_url = (dcfg.get("token_url") or "").strip()
     client_id = dcfg.get("client_id")
     scope = dcfg.get("scope") or "openid profile email"
+    client_secret = dcfg.get("client_secret")
     if not (_is_http_url(device_url) and _is_http_url(token_url) and client_id):
         return False
 
-    r = requests.post(device_url, data={"client_id": client_id, "scope": scope}, timeout=10)
-    if r.status_code // 100 != 2:
-        return False
-    payload = r.json()
-    user_code = payload.get("user_code")
-    verify_uri = payload.get("verification_uri") or payload.get("verification_uri_complete")
-    interval = int(payload.get("interval", 5))
-    device_code = payload.get("device_code")
-    if not (user_code and verify_uri and device_code):
+    try:
+        from websecure.core.auth.flows import DeviceCodeAuth
+    except ImportError:
+        logging.getLogger(__name__).debug("[auth_flow] DeviceCodeAuth unavailable, skipping device code flow")
         return False
 
-    print(f"[Assisted Auth] Doğrulayın: {verify_uri}  Kod: {user_code}")
-    while True:
-        tr = requests.post(token_url, data={
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "device_code": device_code, "client_id": client_id}, timeout=10)
-        if tr.status_code == 200:
-            tok = tr.json().get("access_token")
-            if tok:
-                session.headers.update({"Authorization": f"Bearer {tok}"})
-                return True
-        elif tr.status_code in (400, 428):
-            time.sleep(interval)
-            continue
-        else:
-            return False
+    auth = DeviceCodeAuth(
+        client_id=client_id,
+        device_auth_url=device_url,
+        token_url=token_url,
+        scope=scope,
+        client_secret=client_secret,
+    )
+    result = auth.authenticate()
+    if result and result.get("access_token"):
+        session.headers.update({"Authorization": f"Bearer {result['access_token']}"})
+        return True
+    return False
 
 # -----------------------------------------------------------------------------
 # Yardımcı: perform_login (opsiyonel importlar korumalı)

@@ -11,13 +11,11 @@ if _pkg_root not in sys.path:
     sys.path.insert(0, _pkg_root)
 
 from websecure.core.http import verify_for_phase
-from websecure.core.utils import current_identity
 import inspect
-from websecure.core.auth_flow import run_auto_signup, run_device_code_flow, smart_login, attach_auth_meta
+from websecure.core.auth_flow import run_auto_signup, run_device_code_flow, smart_login
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
-from websecure.core.flows import run_business_logic_flows
-from websecure.core.bl_concurrency import run_race_conditions
+# run_business_logic_flows and run_race_conditions are loaded dynamically below (line ~884)
 import re as _re_urlnorm
 from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
 import argparse, json, time, socket, ssl
@@ -43,7 +41,7 @@ from websecure.core.reporting import (
 
 
 import logging as _logging
-from urllib.parse import urlparse, urljoin, urldefrag
+from urllib.parse import urlparse, urldefrag
 from time import sleep
 import asyncio
 import shutil
@@ -165,9 +163,7 @@ _ws_imp_util = _iul
 def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
     _rmod = None
     if _iul.find_spec('websecure.core.reporting') is not None:
-        _rmod = importlib.import_module('websecure.core.reporting')
-    elif _iul.find_spec('websecure.core.reporting') is not None:
-        _rmod = importlib.import_module('websecure.core.reporting')
+        _rmod = _im.import_module('websecure.core.reporting')
     if _rmod is not None and hasattr(_rmod, 'add_result'):
         _rmod.add_result(
             "errors",
@@ -196,7 +192,7 @@ def _ws_import_any(*names: str):
             continue
         try:
             if _ws_imp_util.find_spec(n) is not None:
-                return importlib.import_module(n)
+                return _im.import_module(n)
         except _BOUNDARY_EXC as e:
             _logger.error('phase error [main]', exc_info=True)
             _report_phase_error('main', 'main.py', e)
@@ -229,16 +225,6 @@ if __package__ is None or __package__ == "":
     if _parent not in _sys.path:
         _sys.path.insert(0, _parent)
     __package__ = "websecure"
-def _guess_host_from_url(url: str) -> str:
-    try:
-        from urllib.parse import urlparse
-        h = urlparse(url).hostname or ""
-        return h
-    except _BOUNDARY_EXC as e:
-        _logger.error('phase error [main]', exc_info=True)
-        _report_phase_error('main', 'main.py', e)
-        return ""
-
 def _load_config(p: str) -> dict:
     if not p or not os.path.exists(p):
         return {}
@@ -445,7 +431,7 @@ else:
 
 _det_spec = _ws_spec("websecure.core.detect")
 if _det_spec is not None:
-    _det = importlib.import_module('websecure.core.detect')
+    _det = _im.import_module('websecure.core.detect')
     _classify_cb = getattr(_det, 'classify_access_block', None)
     if callable(_classify_cb):
         classify_access_block = _classify_cb  # re-export locally
@@ -507,14 +493,12 @@ else:
 
 
     _rep_spec = _ws_spec("websecure.core.reporting")
-    reporting_addendum = importlib.import_module("websecure.core.reporting") if _rep_spec is not None else None
+    reporting_addendum = _im.import_module("websecure.core.reporting") if _rep_spec is not None else None
 
-
-from contextlib import suppress
 
 _plan_spec = _ws_spec("websecure.core.phases")
 if _plan_spec is not None:
-    _phases = importlib.import_module("websecure.core.phases")
+    _phases = _im.import_module("websecure.core.phases")
     build_plan = getattr(_phases, "build_plan", None)
 else:
     build_plan = None
@@ -530,7 +514,7 @@ def _get_resolve_canonical_base():
         mod_name = "utils"
 
     if mod_name is not None:
-        mod = importlib.import_module(mod_name)
+        mod = _im.import_module(mod_name)
         func = getattr(mod, "resolve_canonical_base", None)
         if callable(func):
             return func
@@ -611,7 +595,7 @@ def _get_resolve_canonical_base():
 
 _scan_spec = _ws_spec("websecure.core.phases")
 if _scan_spec is not None:
-    _scan_mod = importlib.import_module("websecure.core.phases")
+    _scan_mod = _im.import_module("websecure.core.phases")
     ScanContext = getattr(_scan_mod, "ScanContext", None)
     ScanMode = getattr(_scan_mod, "ScanMode", None)
     run_mode = getattr(_scan_mod, "run_mode", None)
@@ -629,7 +613,7 @@ else:
 # --- TLS ---
 _tls_spec = _ws_spec("websecure.scanners.tls")
 if _tls_spec is not None:
-    _tls_mod = importlib.import_module('websecure.scanners.tls')
+    _tls_mod = _im.import_module('websecure.scanners.tls')
     _check = getattr(_tls_mod, "check_ssl_certificate", None)
     if callable(_check):
         check_ssl_certificate = _check
@@ -743,12 +727,12 @@ else:
         'websecure.crawler',
     ]:
         if _m and _ws_spec(_m) is not None:
-            importlib.import_module(_m)
+            _im.import_module(_m)
 
 
 # --- Crawler ---
 # --- Crawler ---
-_crawl_mod = importlib.import_module('websecure.crawler') if _ws_spec('websecure.crawler') is not None else None
+_crawl_mod = _im.import_module('websecure.crawler') if _ws_spec('websecure.crawler') is not None else None
 if _crawl_mod is None:
     # Fallback: try relative from core or root if simple import fails
     try:
@@ -766,13 +750,14 @@ if crawl_website is None:
         return None
 
 # --- Güvenlik başlıkları ---
-from websecure.scanners.infrastructure import get_security_headers as scan_security_headers
-
+_infra_mod = _im.import_module('websecure.scanners.infrastructure') if _ws_spec('websecure.scanners.infrastructure') is not None else None
+scan_security_headers = getattr(_infra_mod, 'get_security_headers', None) if _infra_mod else None
 
 # --- GraphQL ---
-from websecure.scanners.graphql import GraphQLScanner
+_gql_mod = _im.import_module('websecure.scanners.graphql') if _ws_spec('websecure.scanners.graphql') is not None else None
+GraphQLScanner = getattr(_gql_mod, 'GraphQLScanner', None) if _gql_mod else None
 # --- SSRF/XXE ---
-_ssrf_mod = importlib.import_module('websecure.scanners.ssrf_xxe') if _ws_spec('websecure.scanners.ssrf_xxe') is not None else None
+_ssrf_mod = _im.import_module('websecure.scanners.ssrf_xxe') if _ws_spec('websecure.scanners.ssrf_xxe') is not None else None
 ssrf_xxe_scan = getattr(_ssrf_mod, 'scan', None) if _ssrf_mod else None
 if ssrf_xxe_scan is None:
     def ssrf_xxe_scan(*a, **k):
@@ -781,9 +766,9 @@ if ssrf_xxe_scan is None:
 # --- OWASP / Nuclei (yeni entegrasyon) ---
 _owasp_mod = None
 if _ws_spec("websecure.scanners.owasp") is not None:
-    _owasp_mod = importlib.import_module("websecure.scanners.owasp")
+    _owasp_mod = _im.import_module("websecure.scanners.owasp")
 elif _ws_spec('owasp') is not None:
-    _owasp_mod = importlib.import_module('owasp')
+    _owasp_mod = _im.import_module('owasp')
 
 run_owasp_and_nuclei = getattr(_owasp_mod, 'run_owasp_and_nuclei', None) if _owasp_mod else None
 if run_owasp_and_nuclei is None:
@@ -818,7 +803,7 @@ if _ws_spec("websecure.scanners.ws_fuzz") is None:
 
 # --- Authorization ---
 # --- Authorization ---
-_authz = importlib.import_module("websecure.scanners.auth_scanners") if _ws_spec(
+_authz = _im.import_module("websecure.scanners.auth_scanners") if _ws_spec(
     "websecure.scanners.auth_scanners") is not None else None
 RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
 RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
@@ -854,7 +839,7 @@ if probe_auth_only is None:
         return None
 
 # --- Fuzzing / OAST ---
-_pf = importlib.import_module("websecure.core.fuzzer") if _ws_spec("websecure.core.fuzzer") is not None else None
+_pf = _im.import_module("websecure.core.fuzzer") if _ws_spec("websecure.core.fuzzer") is not None else None
 discover_params_from_crawl = getattr(_pf, 'discover_params_from_crawl', None) if _pf else None
 fuzz_endpoint = getattr(_pf, 'fuzz_endpoint', None) if _pf else None
 guess_additional_params = getattr(_pf, 'guess_additional_params', None) if _pf else None
@@ -869,7 +854,7 @@ if fuzz_endpoint is None:
     def fuzz_endpoint(*a, **k):
         return None
 
-_oast = importlib.import_module("websecure.core.oast") if _ws_spec("websecure.core.oast") is not None else None
+_oast = _im.import_module("websecure.core.oast") if _ws_spec("websecure.core.oast") is not None else None
 OASTClient = getattr(_oast, 'OASTClient', None) if _oast else None
 run_oast_on_target = getattr(_oast, 'run_oast_on_target', None) if _oast else None
 
@@ -882,16 +867,16 @@ if run_oast_on_target is None:
         return []
 
 # --- Business Logic & Advanced Scanners ---
-_flows_mod = importlib.import_module("websecure.core.flows") if _ws_spec("websecure.core.flows") is not None else None
+_flows_mod = _im.import_module("websecure.core.flows") if _ws_spec("websecure.core.flows") is not None else None
 run_business_logic_flows = getattr(_flows_mod, "run_business_logic_flows", None) if _flows_mod else None
 
-_bl_mod = importlib.import_module("websecure.core.bl_concurrency") if _ws_spec("websecure.core.bl_concurrency") is not None else None
+_bl_mod = _im.import_module("websecure.core.bl_concurrency") if _ws_spec("websecure.core.bl_concurrency") is not None else None
 run_race_conditions = getattr(_bl_mod, "run_race_conditions", None) if _bl_mod else None
 
-_gqa_mod = importlib.import_module("websecure.scanners.graphql_attacks") if _ws_spec("websecure.scanners.graphql_attacks") is not None else None
+_gqa_mod = _im.import_module("websecure.scanners.graphql_attacks") if _ws_spec("websecure.scanners.graphql_attacks") is not None else None
 graphql_attack_scan = getattr(_gqa_mod, "run", None) if _gqa_mod else None
 
-_fu_mod = importlib.import_module("websecure.scanners.file_upload") if _ws_spec("websecure.scanners.file_upload") is not None else None
+_fu_mod = _im.import_module("websecure.scanners.file_upload") if _ws_spec("websecure.scanners.file_upload") is not None else None
 file_upload_scan = getattr(_fu_mod, "run", None) if _fu_mod else None
 
 
@@ -1112,14 +1097,30 @@ else:
     _phase_rec = None
 
 
-# --- Parametre imza filtresi yardımcıları (erken tanım) ---
-def _sig_params(fn) -> set[str]:
-    return set(inspect.signature(fn).parameters.keys()) if callable(fn) else set()
+# --- Parametre imza filtresi yardımcıları — websecure.core.utils'ten al ---
+try:
+    from websecure.core.utils import sig_params as _sig_params_util, kw_filter as _kw_filter_util, guess_host_from_url as _guess_host_from_url
 
+    def _sig_params(fn):
+        return _sig_params_util(fn)
 
-def _kw_filter(fn, **kw):
-    ps = _sig_params(fn)
-    return {k: v for k, v in kw.items() if k in ps}
+    def _kw_filter(fn, **kw):
+        return _kw_filter_util(fn, **kw)
+
+except (ImportError, AttributeError):
+    def _sig_params(fn) -> set:
+        return set(inspect.signature(fn).parameters.keys()) if callable(fn) else set()
+
+    def _kw_filter(fn, **kw):
+        ps = _sig_params(fn)
+        return {k: v for k, v in kw.items() if k in ps}
+
+    def _guess_host_from_url(url: str) -> str:
+        try:
+            from urllib.parse import urlparse
+            return urlparse(url).hostname or ""
+        except (ValueError, AttributeError):
+            return ""
 
 
 def _passive_js_analyze(session: requests.Session, js_urls: list[str], results: dict) -> None:
