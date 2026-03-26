@@ -560,7 +560,10 @@ def record_timing_ms(ms: int, status: int, *, content_bytes: int = 0) -> None:
 def get_http_metrics() -> dict:
     total = int(HTTP_METRICS.get("total", 0))
     forb = int(HTTP_METRICS.get("403", 0))
-    metrics = {k:int(v) for k,v in HTTP_METRICS.items()}
+    metrics = {
+        k: (len(v) if isinstance(v, list) else int(v) if v is not None else 0)
+        for k, v in HTTP_METRICS.items()
+    }
     metrics["403_ratio"] = (forb / total) if total else 0.0
     return {
         "counters": metrics,
