@@ -2,46 +2,15 @@ import time
 import logging
 import random
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
+import requests as _requests
+
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
-from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# OS Command Injection payloads and detection patterns
-# ---------------------------------------------------------------------------
-_CMDI_PAYLOADS: List[Tuple[str, str]] = [
-    # (payload, technique)
-    ("; echo CMDI_UNIX_$(id)",            "unix_echo"),
-    ("| echo CMDI_UNIX_$(id)",            "unix_pipe"),
-    ("`echo CMDI_UNIX_$(whoami)`",        "unix_backtick"),
-    ("$(echo CMDI_UNIX_$(id))",           "unix_subshell"),
-    ("' ; echo CMDI_UNIX_$(id) #",        "unix_quote_escape"),
-    ("\" ; echo CMDI_UNIX_$(id) #",       "unix_dquote_escape"),
-    ("& echo CMDI_WIN_%USERNAME%",        "windows_amp"),
-    ("| echo CMDI_WIN_%COMPUTERNAME%",    "windows_pipe"),
-    ("; sleep 5",                         "unix_time"),
-    ("| sleep 5",                         "unix_time_pipe"),
-    ("& timeout /T 5 /NOBREAK",           "windows_time"),
-    ("; cat /etc/passwd",                 "unix_file_read"),
-    ("| cat /etc/passwd",                 "unix_file_read_pipe"),
-    ("& type C:\\Windows\\win.ini",       "windows_file_read"),
-]
-
-_CMDI_SUCCESS_PATTERNS: List[Tuple[str, str]] = [
-    (r"uid=\d+\(.*?\)\s+gid=\d+",         "Unix id output — command execution confirmed"),
-    (r"root:.*:0:0:",                       "/etc/passwd read — LFI/CMDI confirmed"),
-    (r"CMDI_UNIX_",                         "Echo marker reflected — command injection confirmed"),
-    (r"\[extensions\].*for 16\-bit app",   "Windows win.ini read — CMDI confirmed"),
-    (r"CMDI_WIN_\S+",                       "Windows env variable reflected — CMDI confirmed"),
-    (r"(?i)(cannot run program|execvp|/bin/sh|cmd\.exe)", "Shell execution error leak"),
-]
-
 
 class SQLInjectionScanner(BaseScanner):
     """
@@ -51,13 +20,12 @@ class SQLInjectionScanner(BaseScanner):
     - Boolean-based blind detection (content length/hash comparison)
     - Time-based blind detection with dynamic threshold (baseline + delta)
     - WAF Evasion integration via Mutator
-    - Parallel payload testing via ThreadPoolExecutor
+    - Parallel payload testing via BaseScanner.run_parallel_probes()
     """
 
     name = "sqli"
     phase = "offensive"
 
-    # Configurable limits
     MAX_WORKERS = 5          # parallel threads for payload testing
     TIME_DELTA = 3.0         # seconds above baseline to flag time-based
     MAX_FORM_PAYLOADS = 12   # payload cap per form input
@@ -109,8 +77,8 @@ class SQLInjectionScanner(BaseScanner):
             loaded = get_payloads("sqli")
             if loaded:
                 return loaded
-        except Exception:
-            pass
+        except (ImportError, OSError, ValueError) as exc:
+            logger.warning(f"[SQLi] Could not load external payloads, using built-in: {exc!r}")
         return [
             "'", '"', "')", '");',
             "' OR '1'='1", '" OR "1"="1',
@@ -150,13 +118,12 @@ class SQLInjectionScanner(BaseScanner):
         """Compare TRUE vs FALSE condition response lengths. Returns (payload, evidence) if vuln."""
         for true_pl, false_pl in self._BOOL_PAIRS:
             try:
-                true_url  = self._inject_param(url, param, true_pl)
-                false_url = self._inject_param(url, param, false_pl)
+                true_url  = self.inject_param(url, param, true_pl)
+                false_url = self.inject_param(url, param, false_pl)
                 r_true  = self.session.get(true_url,  timeout=10)
                 r_false = self.session.get(false_url, timeout=10)
                 len_true  = len(r_true.text)
                 len_false = len(r_false.text)
-                # Must differ from each other but true should resemble baseline
                 diff_tf = abs(len_true - len_false)
                 if baseline_len > 0 and diff_tf / max(baseline_len, 1) >= self._BOOL_DIFF_THRESHOLD:
                     evidence = (
@@ -165,7 +132,14 @@ class SQLInjectionScanner(BaseScanner):
                         f"({diff_tf/max(baseline_len,1)*100:.1f}% change)"
                     )
                     return true_pl, evidence
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[SQLi] Boolean-blind probe timed out for {url}: {exc!r}")
+                continue
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[SQLi] Boolean-blind probe connection error for {url}: {exc!r}")
+                continue
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[SQLi] Boolean-blind probe failed for {url}: {exc!r}")
                 continue
         return None
 
@@ -192,31 +166,35 @@ class SQLInjectionScanner(BaseScanner):
 
         logger.info(f"[SQLi] Scanning URL params: {url}")
 
-        # Establish baseline — captures response time and error fingerprint
-        try:
-            t0 = time.time()
-            baseline = self.session.get(url, timeout=10)
-            baseline_time = time.time() - t0
-            baseline_errors = self._extract_error_fingerprints(baseline.text)
-        except Exception:
+        # Baseline — proper error handling via fetch_baseline()
+        t0 = time.time()
+        baseline_resp = self.fetch_baseline(url, timeout=10)
+        if not baseline_resp:
             return
-
+        baseline_time = time.time() - t0
+        baseline_errors = self._extract_error_fingerprints(baseline_resp.text)
         time_threshold = baseline_time + self.TIME_DELTA
-
-        baseline_len = len(baseline.text) if baseline.text else 0
+        baseline_len = len(baseline_resp.text) if baseline_resp.text else 0
 
         for param_name, _ in params:
             found = self._test_param_parallel(
                 url, param_name, baseline_errors, time_threshold
             )
             if found:
-                break  # one confirmed vuln per URL is sufficient
+                break
 
-            # Boolean-blind fallback (runs only if error/time checks found nothing)
+            # Boolean-blind fallback
             bool_result = self._is_boolean_blind(url, param_name, baseline_len)
             if bool_result:
                 payload, evidence = bool_result
-                self._report_vuln("SQL Injection (Boolean-Blind)", url, param_name, payload, evidence)
+                self.report_finding(
+                    vuln_type="SQL Injection (Boolean-Blind)",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity="Critical",
+                    evidence=evidence,
+                )
                 break
 
     def _test_param_parallel(
@@ -227,47 +205,55 @@ class SQLInjectionScanner(BaseScanner):
         time_threshold: float,
     ) -> bool:
         """Tests all payloads for one parameter using a thread pool. Returns True if vuln found."""
-        def probe(payload: str):
-            # Optionally mutate for WAF evasion
+        def probe(payload: str) -> Optional[Dict]:
             if random.random() < 0.3:
                 mutated = Mutator.mutate_sql(payload)
                 curr = random.choice(mutated) if mutated else payload
             else:
                 curr = payload
 
-            injected = self._inject_param(url, param_name, curr)
+            injected = self.inject_param(url, param_name, curr)
             t0 = time.time()
             try:
                 res = self.session.get(injected, timeout=12)
                 elapsed = time.time() - t0
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[SQLi] Probe timed out for {injected}: {exc!r}")
+                return None
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[SQLi] Probe connection error for {injected}: {exc!r}")
+                return None
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[SQLi] Probe request failed for {injected}: {exc!r}")
                 return None
 
             # Error-based: only flag NEW errors not seen in baseline
             new_errors = self._extract_error_fingerprints(res.text) - baseline_errors
             if new_errors:
                 db = next(iter(new_errors))[0]
-                return ("SQL Injection (Error)", url, param_name, curr,
-                        f"DB: {db} — new error signature in response")
+                return {
+                    "vuln_type": "SQL Injection (Error)",
+                    "url": url,
+                    "param": param_name,
+                    "payload": curr,
+                    "evidence": f"DB: {db} — new error signature in response",
+                }
 
             # Time-based
             if self._is_time_payload(curr) and elapsed > time_threshold:
-                return ("SQL Injection (Time-Based)", url, param_name, curr,
-                        f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s")
-
+                return {
+                    "vuln_type": "SQL Injection (Time-Based)",
+                    "url": url,
+                    "param": param_name,
+                    "payload": curr,
+                    "evidence": f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s",
+                }
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
-            futures = {exe.submit(probe, p): p for p in self.payloads}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    self._report_vuln(*result)
-                    # Cancel remaining futures
-                    for f in futures:
-                        f.cancel()
-                    return True
-        return False
+        hits = self.run_parallel_probes(probe, self.payloads, max_workers=self.MAX_WORKERS)
+        for hit in hits:
+            self.report_finding(severity="Critical", **hit)
+        return bool(hits)
 
     def scan_forms(self, forms: List[Dict]):
         logger.info(f"[SQLi] Scanning {len(forms)} forms...")
@@ -281,20 +267,14 @@ class SQLInjectionScanner(BaseScanner):
             skipped = {"submit", "button", "image", "reset", "file", "checkbox", "radio"}
             fuzzable = [i for i in inputs if i.get("type", "text") not in skipped]
 
-            # Establish form baseline for error comparison
+            # Form baseline
+            base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
+            t0 = time.time()
+            baseline_resp = self.fetch_baseline(action, method=method, data=base_data, timeout=10)
+            baseline_time = time.time() - t0
             baseline_errors: set = set()
-            baseline_time = 0.0
-            try:
-                base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
-                t0 = time.time()
-                if method == "POST":
-                    br = self.session.post(action, data=base_data, timeout=10)
-                else:
-                    br = self.session.get(action, params=base_data, timeout=10)
-                baseline_time = time.time() - t0
-                baseline_errors = self._extract_error_fingerprints(br.text)
-            except Exception:
-                pass
+            if baseline_resp:
+                baseline_errors = self._extract_error_fingerprints(baseline_resp.text)
 
             time_threshold = baseline_time + self.TIME_DELTA
             payloads = self.payloads[:self.MAX_FORM_PAYLOADS]
@@ -303,7 +283,6 @@ class SQLInjectionScanner(BaseScanner):
                 p_name = inp.get("name")
                 if not p_name:
                     continue
-
                 found = self._test_form_param_parallel(
                     action, method, inputs, p_name, payloads,
                     baseline_errors, time_threshold
@@ -323,7 +302,7 @@ class SQLInjectionScanner(BaseScanner):
     ) -> bool:
         base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
 
-        def probe(payload: str):
+        def probe(payload: str) -> Optional[Dict]:
             form_data = dict(base_data)
             form_data[p_name] = payload
             t0 = time.time()
@@ -333,119 +312,63 @@ class SQLInjectionScanner(BaseScanner):
                 else:
                     res = self.session.get(action, params=form_data, timeout=12)
                 elapsed = time.time() - t0
-            except Exception:
+            except _requests.exceptions.Timeout as exc:
+                logger.debug(f"[SQLi] Form probe timed out for {action}: {exc!r}")
+                return None
+            except _requests.exceptions.ConnectionError as exc:
+                logger.debug(f"[SQLi] Form probe connection error for {action}: {exc!r}")
+                return None
+            except _requests.exceptions.RequestException as exc:
+                logger.warning(f"[SQLi] Form probe failed for {action}: {exc!r}")
                 return None
 
             new_errors = self._extract_error_fingerprints(res.text) - baseline_errors
             if new_errors:
                 db = next(iter(new_errors))[0]
-                return ("SQLi (Form/Error)", action, p_name, payload, f"DB: {db}")
+                return {
+                    "vuln_type": "SQLi (Form/Error)",
+                    "url": action,
+                    "param": p_name,
+                    "payload": payload,
+                    "evidence": f"DB: {db}",
+                }
 
             if self._is_time_payload(payload) and elapsed > time_threshold:
-                return ("SQLi (Form/Time)", action, p_name, payload,
-                        f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s")
-
+                return {
+                    "vuln_type": "SQLi (Form/Time)",
+                    "url": action,
+                    "param": p_name,
+                    "payload": payload,
+                    "evidence": f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s",
+                }
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
-            futures = {exe.submit(probe, p): p for p in payloads}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    self._report_vuln(*result)
-                    for f in futures:
-                        f.cancel()
-                    return True
-        return False
-
-    def _inject_param(self, url: str, key: str, val: str) -> str:
-        parsed = urlparse(url)
-        params = dict(parse_qsl(parsed.query))
-        params[key] = val
-        new_query = urlencode(params)
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path,
-                           parsed.params, new_query, parsed.fragment))
+        hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
+        for hit in hits:
+            self.report_finding(severity="Critical", **hit)
+        return bool(hits)
 
     # -------------------------------------------------------------------------
-    # OS Command Injection
+    # OS Command Injection — FAZ 6.1: CmdiScanner'a delege edildi
     # -------------------------------------------------------------------------
 
-    def scan_cmdi_url(self, url: str):
-        """Test URL parameters for OS command injection (error + time-based)."""
-        parsed = urlparse(url)
-        params = parse_qsl(parsed.query)
-        if not params:
-            return
-
-        logger.info(f"[CMDI] Scanning URL params: {url}")
-
+    def scan_cmdi_url(self, url: str) -> bool:
+        """
+        OS Command Injection taraması.
+        FAZ 6.1'de logic websecure.scanners.cmdi.CmdiScanner'a taşındı.
+        Geriye dönük uyumluluk için bu metod hâlâ çağrılabilir.
+        """
         try:
-            t0 = time.time()
-            baseline = self.session.get(url, timeout=10)
-            baseline_time = time.time() - t0
-            baseline_text = baseline.text or ""
-        except Exception:
-            return
-
-        time_threshold = baseline_time + self.TIME_DELTA
-
-        for param_name, _ in params:
-            if self._test_cmdi_param(url, params, param_name, baseline_text, time_threshold):
-                break
-
-    def _test_cmdi_param(
-        self, url: str, qs: list, param_name: str,
-        baseline_text: str, time_threshold: float,
-    ) -> bool:
-        parsed = urlparse(url)
-
-        def probe(payload: str, technique: str):
-            new_qs = [(p, v + payload if p == param_name else v) for p, v in qs]
-            t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
-            t0 = time.time()
-            try:
-                resp = self.session.get(t_url, timeout=12)
-                elapsed = time.time() - t0
-            except Exception:
-                return None
-
-            atk_text = resp.text or ""
-
-            # Error/reflection-based
-            for pattern, description in _CMDI_SUCCESS_PATTERNS:
-                if re.search(pattern, atk_text, re.I | re.S):
-                    if not re.search(pattern, baseline_text, re.I | re.S):
-                        return ("OS Command Injection", url, param_name, payload,
-                                f"{description} (technique: {technique})")
-
-            # Time-based (blind)
-            if "time" in technique and elapsed > time_threshold:
-                return ("OS Command Injection (Time-Based)", url, param_name, payload,
-                        f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s")
-
-            return None
-
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as exe:
-            futures = {exe.submit(probe, p, t): (p, t) for p, t in _CMDI_PAYLOADS}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    self._report_vuln(*result)
-                    for f in futures:
-                        f.cancel()
-                    return True
-        return False
-
-    def _report_vuln(self, title: str, url: str, param: str, payload: str, info: str):
-        add_result("offensive", {
-            "type": title,
-            "severity": "Critical",
-            "url": url,
-            "parameter": param,
-            "payload": payload,
-            "info": info,
-        })
-        logger.warning(f"[SQLi/CMDI] {title} FOUND: {url} (param={param})")
+            from websecure.scanners.cmdi import CmdiScanner
+            cmdi = CmdiScanner(
+                session=self.session,
+                results=self.results,
+                debug=self.debug,
+            )
+            return cmdi.scan_url(url)
+        except ImportError:
+            logger.warning("[SQLi] cmdi modülü yüklenemedi, CMDI taraması atlanıyor")
+            return False
 
 
 def run(url, session=None, results=None, debug=False, **kwargs):
