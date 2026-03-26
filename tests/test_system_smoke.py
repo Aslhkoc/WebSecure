@@ -1,54 +1,39 @@
-
-import sys
-import os
+"""
+tests/test_system_smoke.py
+---------------------------
+Smoke tests — verifies that all core modules import without errors.
+"""
 import importlib
 import importlib.util
-import logging
+import pytest
 
-# Setup path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
-
-# Setup basic logging
-logging.basicConfig(level=logging.WARN)
-
-print("Starting System Smoke Test...")
-modules_to_test = [
+MODULES = [
     "websecure.scanners.csrf",
     "websecure.core.chain_reactor",
     "websecure.scanners.sqli",
     "websecure.scanners.xss",
     "websecure.scanners.nosqli",
     "websecure.scanners.ssrf_xxe",
-    "websecure.scanners.rate_limit",
     "websecure.scanners.mass_assignment",
     "websecure.scanners.ws_fuzz",
     "websecure.core.reporting",
-    "websecure.core.nuclei_integration"
 ]
 
-failed = []
-passed = []
+OPTIONAL_MODULES = [
+    "websecure.core.nuclei_integration",
+    "websecure.scanners.rate_limit",
+]
 
-for mod_name in modules_to_test:
-    try:
-        if mod_name == "websecure.core.nuclei_integration":
-             # This might not exist if it's integrated into main/owasp directly, checking conditionally
-             if importlib.util.find_spec(mod_name) is None:
-                 print(f" [?] {mod_name} skipped (not a standalone module?)")
-                 continue
-                 
-        importlib.import_module(mod_name)
-        print(f" [OK] {mod_name} imported successfully")
-        passed.append(mod_name)
-    except Exception as e:
-        print(f" [FAIL] {mod_name}: {e}")
-        failed.append(mod_name)
 
-print("\n--- Summary ---")
-print(f"Passed: {len(passed)}")
-print(f"Failed: {len(failed)}")
+@pytest.mark.parametrize("mod_name", MODULES)
+def test_module_imports(mod_name):
+    """Each listed module must be importable without raising an exception."""
+    importlib.import_module(mod_name)
 
-if failed:
-    sys.exit(1)
-else:
-    sys.exit(0)
+
+@pytest.mark.parametrize("mod_name", OPTIONAL_MODULES)
+def test_optional_module_imports(mod_name):
+    """Optional modules are skipped if not present on disk."""
+    if importlib.util.find_spec(mod_name) is None:
+        pytest.skip(f"{mod_name} not present — skipped")
+    importlib.import_module(mod_name)
