@@ -1,4 +1,13 @@
 from __future__ import annotations
+
+# Sub-module re-exports (extracted from this monolith for future incremental splitting)
+from websecure.core.phases._context import ScanMode, ScanContext  # noqa: F401
+from websecure.core.phases._hprofile import (  # noqa: F401
+    HProfilePolicy, HProfileManager,
+    hpm, hpm_init_from_config, hpm_bootstrap_from_file,
+    hpm_record_status, hpm_current_policy,
+)
+
 from websecure.core.utils import _ws_import_any, _ws_maybe_import_any
 import logging
 import logging as _logging
@@ -16,8 +25,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from websecure.core.reporting import _phase_rec
-from .http import hardened_session
-from .reporting import add_result
+from websecure.core.http import hardened_session
+from websecure.core.reporting import add_result
 # Safe imports for optional scanners
 _rs = _ma = _jwt = _nq = _ws = _sx = _gqa = _gqr = _fu = None
 
