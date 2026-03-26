@@ -638,7 +638,9 @@ class OASTPollerThread:
 
 
 # Global singleton - started/stopped by flow_runner
+# Lock ensures thread-safe start/stop when multiple threads reach this simultaneously.
 _GLOBAL_OAST_POLLER: Optional[OASTPollerThread] = None
+_OAST_POLLER_LOCK = threading.Lock()
 
 
 def start_global_oast_poller(cfg: dict = None) -> Optional[OASTPollerThread]:
@@ -647,37 +649,40 @@ def start_global_oast_poller(cfg: dict = None) -> Optional[OASTPollerThread]:
     cfg = cfg or {}
     oast_cfg = cfg.get("oast", {})
     poll_interval = float(oast_cfg.get("poll_interval", 5.0))
-    try:
-        # OSATConfig üzerinden InteractshClient oluştur (constructor imzası sabit)
-        osat_cfg = OSATConfig.from_dict({
-            "provider": oast_cfg.get("provider", "interactsh"),
-            "interact_base": oast_cfg.get("interact_base", "https://interact.sh"),
-            "interact_register_path": oast_cfg.get("interact_register_path", "/register"),
-            "interact_poll_path": oast_cfg.get("interact_poll_path", "/poll"),
-            "root_domain": oast_cfg.get("root_domain", ""),
-            "dns_domain": oast_cfg.get("dns_domain", ""),
-            "api_key": oast_cfg.get("api_key", ""),
-            "enable_dns": oast_cfg.get("enable_dns", True),
-            "enable_http": oast_cfg.get("enable_http", True),
-            "enable_bxss": oast_cfg.get("enable_bxss", False),
-            "payload_prefix": oast_cfg.get("payload_prefix", "ws"),
-        })
-        client = InteractshClient(osat_cfg)
-        _GLOBAL_OAST_POLLER = OASTPollerThread(client, poll_interval=poll_interval)
-        _GLOBAL_OAST_POLLER.start()
-        _logger.info("[OAST] Global poller başlatıldı.")
-        return _GLOBAL_OAST_POLLER
-    except Exception as e:
-        _logger.warning(f"[OAST] Could not start poller: {e}")
-        return None
+    with _OAST_POLLER_LOCK:
+        if _GLOBAL_OAST_POLLER is not None:
+            return _GLOBAL_OAST_POLLER
+        try:
+            osat_cfg = OSATConfig.from_dict({
+                "provider": oast_cfg.get("provider", "interactsh"),
+                "interact_base": oast_cfg.get("interact_base", "https://interact.sh"),
+                "interact_register_path": oast_cfg.get("interact_register_path", "/register"),
+                "interact_poll_path": oast_cfg.get("interact_poll_path", "/poll"),
+                "root_domain": oast_cfg.get("root_domain", ""),
+                "dns_domain": oast_cfg.get("dns_domain", ""),
+                "api_key": oast_cfg.get("api_key", ""),
+                "enable_dns": oast_cfg.get("enable_dns", True),
+                "enable_http": oast_cfg.get("enable_http", True),
+                "enable_bxss": oast_cfg.get("enable_bxss", False),
+                "payload_prefix": oast_cfg.get("payload_prefix", "ws"),
+            })
+            client = InteractshClient(osat_cfg)
+            _GLOBAL_OAST_POLLER = OASTPollerThread(client, poll_interval=poll_interval)
+            _GLOBAL_OAST_POLLER.start()
+            _logger.info("[OAST] Global poller başlatıldı.")
+            return _GLOBAL_OAST_POLLER
+        except Exception as e:
+            _logger.warning(f"[OAST] Could not start poller: {e}")
+            return None
 
 
 def stop_global_oast_poller() -> None:
     """Stop the global OAST polling thread. Call at scan end."""
     global _GLOBAL_OAST_POLLER
-    if _GLOBAL_OAST_POLLER:
-        _GLOBAL_OAST_POLLER.stop()
-        _GLOBAL_OAST_POLLER = None
+    with _OAST_POLLER_LOCK:
+        if _GLOBAL_OAST_POLLER:
+            _GLOBAL_OAST_POLLER.stop()
+            _GLOBAL_OAST_POLLER = None
 
 
 def get_oast_poller() -> Optional[OASTPollerThread]:

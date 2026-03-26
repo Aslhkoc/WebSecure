@@ -2,7 +2,8 @@ import os
 import sys
 import logging
 import importlib.util
-from typing import Optional, Any
+import threading
+from typing import Any, Dict, Optional
 
 # ========================== Import Helpers ==========================
 def _ws_import_any(module_name: str, package: str = None) -> Optional[Any]:
@@ -94,8 +95,18 @@ def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
-_CURRENT_IDENTITY = {}
-def current_identity(config: Optional[dict] = None):
-    # If config provided, we could theoretically update identity from it,
-    # but for now just return the global identity to satisfy the call signature.
-    return _CURRENT_IDENTITY
+_CURRENT_IDENTITY: Dict[str, Any] = {}
+_IDENTITY_LOCK = threading.Lock()
+
+
+def current_identity(config: Optional[dict] = None) -> Dict[str, Any]:
+    """Return the current identity dict (thread-safe read)."""
+    with _IDENTITY_LOCK:
+        return dict(_CURRENT_IDENTITY)
+
+
+def set_identity(identity: Dict[str, Any]) -> None:
+    """Replace the current identity (thread-safe write)."""
+    with _IDENTITY_LOCK:
+        _CURRENT_IDENTITY.clear()
+        _CURRENT_IDENTITY.update(identity)

@@ -615,7 +615,7 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
         err["trace"] = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))[-2000:]
 
     old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]
+    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
 
     # Per-phase timeout prevents any single phase from blocking forever
     _PHASE_TIMEOUT = 240  # 4 minutes max per phase
@@ -859,7 +859,7 @@ def _runner_scanners_request_smuggling(ctx) -> None:
         })
 
     old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]
+    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
     ts: List[threading.Thread] = []
 
     for meth in probe_names:
@@ -1141,7 +1141,7 @@ def _runner_graphql(ctx) -> None:
         })
 
     old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]
+    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
 
     ts: List[threading.Thread] = []
     findings_acc: List[Dict[str, Any]] = []
@@ -1667,7 +1667,7 @@ def run_discovery(ctx):
 
     if not isinstance(getattr(ctx, "results", None), dict):
         setattr(ctx, "results", {})
-    results = ctx.results  # type: ignore[attr-defined]
+    results = ctx.results  # type: ignore[attr-defined]  # ctx shape varies (dict or ScanContext)
 
     if url:
         from websecure.crawler import WebCrawler
@@ -3220,7 +3220,7 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
                 _logger.error('phase error [scan_modes]', exc_info=True)
                 _report_phase_error('scan_modes', 'scan_modes.py', e)
                 # Fallback tiny context
-                class _SC:  # type: ignore
+                class _SC:  # type: ignore[no-untyped-def]  # inline fallback, does not match ScanContext protocol
                     def __init__(self, url, session, config, logger):
                         self.url, self.session, self.config, self.logger = url, session, (config or {}), logger
                         self.results = {}
@@ -3235,7 +3235,7 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
             _logger.error('phase error [scan_modes]', exc_info=True)
             _report_phase_error('scan_modes', 'scan_modes.py', e)
             # ultimate fallback: empty plan
-            def _build_plan(_ctx): return []  # type: ignore
+            def _build_plan(_ctx): return []  # type: ignore[misc]  # emergency fallback stub
 
         phases = getattr(context, "phases", None) or _build_plan(context)
         # normalize phases if they are dicts from build_plan
@@ -3380,40 +3380,7 @@ _reporting = _opt_import("websecure.core.reporting")
 _requests = _opt_import("requests")
 
 
-class ScanMode:
-    NORMAL = "normal"
-    DETAILED = "detailed"
-    AUTHENTICATED = "authenticated"
-    DEEP = "deep"  # eklendi
-    # Aliases
-    STEALTH = NORMAL
-    AGGRESSIVE = DEEP
-
-
-@dataclass
-class ScanContext:
-    url: str = ""
-    scheme: str = ""
-    config: Dict[str, Any] | None = None
-    driver: Any = None
-    session: Any = None
-    results: Dict[str, Any] | None = None
-    detailed: bool = False
-    save_report: bool = False
-    debug: bool = False
-    logger: Any = None
-
-    def __post_init__(self):
-        if self.config is None:
-            self.config = {}
-        if self.results is None:
-            self.results = {}
-
-    @property
-    def endpoints(self):
-        return self.results.get("endpoints", [])
-
-
+# ScanMode + ScanContext → extracted to websecure.core.phases._context (imported at top)
 
 # ------------------------- Raporlama köprüleri -------------------------
 def _report(bucket: str, item: Dict[str, Any]) -> None:
@@ -3506,313 +3473,7 @@ def incremental_targets(all_links: list[str], previous: list[str] | None = None)
     return [u for u in (all_links or []) if u not in prev]
 
 
-from dataclasses import dataclass
-from typing import Dict, Any, List, Set
-import time
-
-from websecure.core.reporting import add_result
-
-
-@dataclass(frozen=True)
-class HProfilePolicy:
-    name: str
-    rps: float
-    concurrency: int
-    allow_categories: Set[str]
-    idempotent_only: bool
-    oast: bool
-    heavy_modules: bool
-    robots_respect: bool
-    politeness_ms: int
-    # Geçiş eşikleri
-    obs_seconds: int
-    min_req: int
-    up_when_block_rate_below: float  # 0.01 => %1
-    down_when_block_rate_above: float  # 0.05 => %5
-
-
-class HProfileManager:
-
-    def __init__(self, profiles: Dict[str, Any] | None = None, active: str = "normal"):
-        # Policy set + active profile
-        self._policies: Dict[str, HProfilePolicy] = self._load_policies(profiles or {})
-        act = str(active or "normal").strip().lower()
-        self._active: str = act if act in self._policies else "normal"
-        # Runtime stats for adaptive switching
-        self._timeline: List[Dict[str, Any]] = []
-        self._req_count: int = 0
-        self._blocked_count: int = 0
-        import time as _t
-        self._window_start: float = _t.monotonic()
-        # ... (sınıfın diğer kısımları aynen)
-
-    @staticmethod
-    def _as_bool(x: Any, default: bool) -> bool:
-        if isinstance(x, bool):
-            return x
-        if isinstance(x, str):
-            lx = x.strip().lower()
-            if lx in ('1', 'true', 'yes', 'on'):
-                return True
-            if lx in ('0', 'false', 'no', 'off'):
-                return False
-        return default
-
-    @staticmethod
-    def _as_set(xs: Any) -> Set[str]:
-        if isinstance(xs, (list, tuple, set)):
-            return {str(x).strip().lower() for x in xs if str(x).strip()}
-        return set()
-
-    @staticmethod
-    def _num(x, default: float) -> float:
-        # Safe numeric converter without try/except
-        if isinstance(x, (int, float)):
-            return float(x)
-        if isinstance(x, str):
-            s = x.strip()
-            # Accept simple ints/floats and scientific notation
-            if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', s):
-                return float(s)
-        return float(default)
-
-    def _load_policies(self, cfg: Dict[str, Any]) -> Dict[str, HProfilePolicy]:
-        pols: Dict[str, HProfilePolicy] = {}
-        
-        # Tam kapsamlı tarama olduğunu belirten profil adları
-        _FULL_SCOPE = {'aggressive', 'deep', 'nightmare', 'safe_full', 'smart'}
-        _ALL_CATS = ['xss', 'sqli', 'ssrf', 'xxe', 'rce', 'nosqli', 'ssti', 'open_redirect', 'prototype_pollution', 'deserialization', 'ldap', 'xpath', 'crlf']
-
-        def build(name: str, node: Dict[str, Any]) -> HProfilePolicy:
-            # Profil tipini belirle
-            is_full = name in _FULL_SCOPE or '*' in (node.get('modules') or [])
-            is_stealth = name in ('stealth', 'safe_full')
-            
-            # Parametreleri çek (Config yoksa mantıklı varsayılanlar kullan)
-            # RPS: Stealth/Safe=2-5, Normal=12-20, Aggressive/Deep=50+, Nightmare=100
-            def_rps = 2.0 if is_stealth else (60.0 if name in ('aggressive', 'nightmare') else 15.0)
-            rps = self._num(node.get('rps'), def_rps)
-            
-            # Concurrency: Stealth=2-10, Normal=20, Aggressive=60+
-            def_conc = 5 if is_stealth else (60 if name in ('aggressive', 'nightmare') else 25)
-            conc = int(node.get('concurrency') or def_conc)
-            
-            # Kategoriler: Full profiller için hepsi, aksi halde kısıtlı
-            if node.get('allow_categories'):
-                allow_cats = self._as_set(node.get('allow_categories'))
-            else:
-                allow_cats = set(_ALL_CATS) if is_full else {'xss', 'sqli', 'ssrf', 'ssti', 'open_redirect'}
-                
-            idem = self._as_bool(node.get('idempotent_only'), is_stealth and name != 'safe_full') # Safe full runs everything
-            
-            # OAST: Aggressive/Safe_full/Deep needs it
-            oast = self._as_bool(node.get('oast', node.get('oast_enabled', False)), is_full)
-            
-            # Heavy: Aggressive/Safe_full
-            heavy = self._as_bool(node.get('heavy_modules'), is_full)
-            
-            # Robots: Stealth/Normal respects, Aggressive/Nightmare ignores
-            # Safe_full usually respects? Let's say respect for safe_full unless disabled manually
-            def_robots = True
-            if name in ('aggressive', 'nightmare'): def_robots = False
-            robots = self._as_bool(node.get('robots_respect'), def_robots)
-            
-            # Politeness
-            def_polite = 1500 if name == 'safe_full' else (800 if name == 'stealth' else (0 if name in ('aggressive', 'nightmare') else 300))
-            polite = int(node.get('politeness_ms') or def_polite)
-            
-            obs = int(node.get('obs_seconds') or 60)
-            min_req = int(node.get('min_req') or 40)
-            
-            # Adaptive Blocking Thresholds
-            up_below = self._num(node.get('up_when_block_rate_below'), 0.01 if is_stealth else 0.005)
-            down_above = self._num(node.get('down_when_block_rate_above'), 0.05 if name in ('aggressive', 'nightmare') else 0.03)
-            
-            return HProfilePolicy(name, rps, conc, allow_cats, idem, oast, heavy, robots, polite, obs, min_req,
-                                  up_below, down_above)
-
-        # Tüm tanımlı profilleri yükle
-        for k, node in cfg.items():
-            if isinstance(node, dict):
-                pols[k] = build(k, node)
-                
-        # Eğer 'normal' profil yoksa backup oluştur
-        if 'normal' not in pols:
-            pols['normal'] = build('normal', {})
-            
-        return pols
-
-    # Timeline
-    def _emit_event(self, etype: str, data: Dict[str, Any]) -> None:
-        evt = {'t': time.time(), 'type': etype, **data}
-        self._timeline.append(evt)
-        add_result('profile_event', evt)
-
-    def policy(self) -> HProfilePolicy:
-        return self._policies[self._active]
-
-    def name(self) -> str:
-        return self._active
-
-    # HTTP sinyalleri
-    def record_status(self, status_code: int) -> None:
-        self._req_count += 1
-        if status_code in (429, 403):
-            self._blocked_count += 1
-        self._maybe_rotate()
-
-    def _reset_window(self) -> None:
-        self._req_count = 0
-        self._blocked_count = 0
-        self._window_start = time.monotonic()
-
-    def _maybe_rotate(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._window_start
-        pol = self.policy()
-        if elapsed < float(pol.obs_seconds):
-            return
-        if self._req_count < pol.min_req:
-            self._reset_window()
-            return
-        rate = 0.0 if self._req_count <= 0 else (self._blocked_count / float(self._req_count))
-
-        # Geçiş kuralları:
-        # AGGRESSIVE → NORMAL: blok oranı üst eşiğin üzerinde
-        # NORMAL → STEALTH: blok oranı üst eşiğin üzerinde
-        # STEALTH → NORMAL: blok oranı alt eşiğin altında
-        # NORMAL → AGGRESSIVE: blok oranı çok düşük
-        cur = self._active
-        nxt = cur
-        if cur == 'aggressive' and rate >= pol.down_when_block_rate_above:
-            nxt = 'normal'
-        elif cur == 'normal' and rate >= pol.down_when_block_rate_above:
-            nxt = 'stealth'
-        elif cur == 'stealth' and rate <= pol.up_when_block_rate_below:
-            nxt = 'normal'
-        elif cur == 'normal' and rate <= pol.up_when_block_rate_below:
-            nxt = 'aggressive'
-
-        if nxt != cur:
-            old_pol = self.policy()
-            self._active = nxt
-            new_pol = self.policy()
-            self._emit_event('profile_switch', {
-                'from': cur,
-                'to': nxt,
-                'window_seconds': pol.obs_seconds,
-                'req': self._req_count,
-                'blocked': self._blocked_count,
-                'block_rate': rate,
-                'old_rps': old_pol.rps,
-                'new_rps': new_pol.rps,
-                'old_conc': old_pol.concurrency,
-                'new_conc': new_pol.concurrency,
-            })
-
-        self._reset_window()
-
-
-# ---- Global Tekil ----
-_HPM: HProfileManager | None = None
-
-
-def hpm_bootstrap_from_file(path: str) -> None:
-    import json, os
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    hpm_init_from_config(data)
-
-
-def hpm() -> HProfileManager:
-    if _HPM is None:
-        # Varsayılan boş yapı; kullanıcı init etmemişse minimum profille ayağa kalkar
-        hpm_init_from_config({'settings': {'profiles': {}, 'scan_profile': 'normal'}})
-    return _HPM  # type: ignore
-
-
-# ==== HPM Tekil Yönetici (imza-tabanlı başlatma; try/except yok) ====
-import inspect as _inspect
-from typing import Dict as _Dict, Any as _Any
-
-_HPM: "HProfileManager | None" = globals().get("_HPM", None)
-
-
-def _set_attr_if_present(obj, name: str, value) -> None:
-    if hasattr(obj, name):
-        setattr(obj, name, value)
-
-
-def hpm_init_from_config(cfg: _Dict[str, _Any] | None) -> None:
-    global _HPM
-    settings = (cfg or {}).get("settings") or {}
-    profiles = settings.get("profiles") or {}
-    initial = str(settings.get("scan_profile") or "normal")
-
-    sig = _inspect.signature(HProfileManager)
-    params = [p for p in sig.parameters.values() if p.name != "self"]
-    names = [p.name for p in params]
-
-    if len(params) >= 2 or ({"profiles", "active"} <= set(names)):
-        _HPM = HProfileManager(profiles, initial)  # type: ignore[arg-type]
-        return
-
-    if len(params) == 1 or ("profiles" in names and "active" not in names):
-        _HPM = HProfileManager(profiles)  # type: ignore[arg-type]
-        if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
-            _HPM.set_active(initial)  # type: ignore[attr-defined]
-        else:
-            _set_attr_if_present(_HPM, "active", initial)
-            _set_attr_if_present(_HPM, "_active", initial)
-        return
-
-    _HPM = HProfileManager()  # type: ignore[call-arg]
-    if hasattr(_HPM, "load_profiles") and callable(getattr(_HPM, "load_profiles")):
-        _HPM.load_profiles(profiles)  # type: ignore[attr-defined]
-    else:
-        _set_attr_if_present(_HPM, "_policies", profiles)
-        _set_attr_if_present(_HPM, "policies", profiles)
-    if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
-        _HPM.set_active(initial)  # type: ignore[attr-defined]
-    else:
-        _set_attr_if_present(_HPM, "_active", initial)
-        _set_attr_if_present(_HPM, "active", initial)
-
-
-def hpm_record_status(status_code: int) -> None:
-    mgr = hpm()
-    if hasattr(mgr, "record_status") and callable(getattr(mgr, "record_status")):
-        mgr.record_status(int(status_code))  # type: ignore[attr-defined]
-
-
-def hpm_current_policy() -> _Dict[str, _Any]:
-    mgr = hpm()
-    pol = None
-    if hasattr(mgr, "policy") and callable(getattr(mgr, "policy")):
-        pol = mgr.policy()  # type: ignore[attr-defined]
-
-    def _get(obj, name: str, default):
-        if obj is None:
-            return default
-        if isinstance(obj, dict):
-            return obj.get(name, default)
-        return getattr(obj, name, default)
-
-    allow = _get(pol, "allow_categories", []) or []
-    if not isinstance(allow, list):
-        allow = list(allow)
-
-    return {
-        "name": _get(pol, "name", "normal"),
-        "rps": _get(pol, "rps", 10.0),
-        "concurrency": _get(pol, "concurrency", 10),
-        "allow_categories": sorted(set(allow)),
-        "idempotent_only": bool(_get(pol, "idempotent_only", True)),
-        "oast": bool(_get(pol, "oast", False)),
-        "heavy_modules": bool(_get(pol, "heavy_modules", False)),
-        "robots_respect": bool(_get(pol, "robots_respect", True)),
-        "politeness_ms": int(_get(pol, "politeness_ms", 300)),
-    }
+# HProfilePolicy + HProfileManager + hpm_* → extracted to websecure.core.phases._hprofile (imported at top)
 
 def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
     """

@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Type, TYPE_CHECKING
 
@@ -156,22 +157,27 @@ class PluginRegistry:
                 _logger.warning(f"[PluginRegistry] Failed to register {module_path}: {e}")
 
 
-# Global singleton
+# Global singleton — protected by a lock so concurrent callers don't create duplicates.
 _REGISTRY: Optional[PluginRegistry] = None
+_REGISTRY_LOCK = threading.Lock()
 
 
 def get_registry(auto_discover: bool = True) -> PluginRegistry:
-    """Get the global plugin registry, initializing if needed."""
+    """Get the global plugin registry, initializing if needed (thread-safe)."""
     global _REGISTRY
-    if _REGISTRY is None:
-        _REGISTRY = PluginRegistry()
-        if auto_discover:
-            _REGISTRY.register_builtins()
-            _REGISTRY.discover_entry_points()
+    if _REGISTRY is not None:
+        return _REGISTRY
+    with _REGISTRY_LOCK:
+        if _REGISTRY is None:
+            _REGISTRY = PluginRegistry()
+            if auto_discover:
+                _REGISTRY.register_builtins()
+                _REGISTRY.discover_entry_points()
     return _REGISTRY
 
 
 def reset_registry() -> None:
     """Reset the global registry (mainly for testing)."""
     global _REGISTRY
-    _REGISTRY = None
+    with _REGISTRY_LOCK:
+        _REGISTRY = None

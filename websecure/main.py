@@ -397,8 +397,7 @@ else:
 
 
 
-# FAZ 4.2: ensure_session core/session_factory.py'e taşındı — re-export için import
-from websecure.core.session_factory import ensure_session  # noqa: F811
+# ensure_session imported below alongside other session_factory symbols (line ~897)
 
 
 
@@ -893,8 +892,9 @@ from websecure.core.scan_profile import (
 )
 
 
-# FAZ-EK: Proxy/session helpers → core/session_factory.py'e taşındı
+# FAZ-EK: Proxy/session helpers + ensure_session → core/session_factory.py'e taşındı
 from websecure.core.session_factory import (
+    ensure_session,
     _parse_host_port_from_proxy,
     _tcp_port_open,
     _proxy_alive,

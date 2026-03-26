@@ -20,6 +20,7 @@ import inspect as _inspect
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set
@@ -213,6 +214,7 @@ class HProfileManager:
 # ---------------------------------------------------------------------------
 
 _HPM: HProfileManager | None = None
+_HPM_LOCK = threading.Lock()
 
 
 def hpm_bootstrap_from_file(path: str) -> None:
@@ -224,8 +226,10 @@ def hpm_bootstrap_from_file(path: str) -> None:
 def hpm() -> HProfileManager:
     global _HPM
     if _HPM is None:
-        hpm_init_from_config({'settings': {'profiles': {}, 'scan_profile': 'normal'}})
-    return _HPM  # type: ignore
+        with _HPM_LOCK:
+            if _HPM is None:
+                hpm_init_from_config({'settings': {'profiles': {}, 'scan_profile': 'normal'}})
+    return _HPM  # type: ignore[return-value]
 
 
 def _set_attr_if_present(obj, name: str, value) -> None:
@@ -235,38 +239,39 @@ def _set_attr_if_present(obj, name: str, value) -> None:
 
 def hpm_init_from_config(cfg: Dict[str, Any] | None) -> None:
     global _HPM
-    settings = (cfg or {}).get("settings") or {}
-    profiles = settings.get("profiles") or {}
-    initial = str(settings.get("scan_profile") or "normal")
+    with _HPM_LOCK:
+        settings = (cfg or {}).get("settings") or {}
+        profiles = settings.get("profiles") or {}
+        initial = str(settings.get("scan_profile") or "normal")
 
-    sig = _inspect.signature(HProfileManager)
-    params = [p for p in sig.parameters.values() if p.name != "self"]
-    names = [p.name for p in params]
+        sig = _inspect.signature(HProfileManager)
+        params = [p for p in sig.parameters.values() if p.name != "self"]
+        names = [p.name for p in params]
 
-    if len(params) >= 2 or ({"profiles", "active"} <= set(names)):
-        _HPM = HProfileManager(profiles, initial)
-        return
+        if len(params) >= 2 or ({"profiles", "active"} <= set(names)):
+            _HPM = HProfileManager(profiles, initial)
+            return
 
-    if len(params) == 1 or ("profiles" in names and "active" not in names):
-        _HPM = HProfileManager(profiles)
+        if len(params) == 1 or ("profiles" in names and "active" not in names):
+            _HPM = HProfileManager(profiles)
+            if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
+                _HPM.set_active(initial)
+            else:
+                _set_attr_if_present(_HPM, "active", initial)
+                _set_attr_if_present(_HPM, "_active", initial)
+            return
+
+        _HPM = HProfileManager()
+        if hasattr(_HPM, "load_profiles") and callable(getattr(_HPM, "load_profiles")):
+            _HPM.load_profiles(profiles)
+        else:
+            _set_attr_if_present(_HPM, "_policies", profiles)
+            _set_attr_if_present(_HPM, "policies", profiles)
         if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
             _HPM.set_active(initial)
         else:
-            _set_attr_if_present(_HPM, "active", initial)
             _set_attr_if_present(_HPM, "_active", initial)
-        return
-
-    _HPM = HProfileManager()
-    if hasattr(_HPM, "load_profiles") and callable(getattr(_HPM, "load_profiles")):
-        _HPM.load_profiles(profiles)
-    else:
-        _set_attr_if_present(_HPM, "_policies", profiles)
-        _set_attr_if_present(_HPM, "policies", profiles)
-    if hasattr(_HPM, "set_active") and callable(getattr(_HPM, "set_active")):
-        _HPM.set_active(initial)
-    else:
-        _set_attr_if_present(_HPM, "_active", initial)
-        _set_attr_if_present(_HPM, "active", initial)
+            _set_attr_if_present(_HPM, "active", initial)
 
 
 def hpm_record_status(status_code: int) -> None:

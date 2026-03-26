@@ -1329,7 +1329,7 @@ class ResidentialProxyPool:
 # ---------------------------------------------------------------------------
 # İzole tip import (stats Dict içinde Any kullanıldı)
 # ---------------------------------------------------------------------------
-from typing import Any  # noqa: E402 — döngüsel import önlemi için altta
+# Any already imported at module top (line 11)
 
 
 # ===========================================================================

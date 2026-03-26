@@ -325,11 +325,11 @@ def _choose_mode_from_config(config: dict | None) -> str:
     """Mode seçimi: sadece kullanıcı açıkça AUTHENTICATED seçerse auth moduna geç.
     Otomatik şarta (auth.enabled/username/token) bakarak asla AUTHENTICATED seçme.
     Aksi halde NORMAL/DETAILED/DEEP mantığı korunur."""
-    # Import ScanMode lazily to avoid circular imports
+    # Lazy import avoids circular: scan_profile ← phases ← scan_profile
     try:
-        from websecure.core.phases import ScanMode  # type: ignore
-    except Exception as exc:
-        ScanMode = None  # type: ignore
+        from websecure.core.phases._context import ScanMode
+    except ImportError:
+        ScanMode = None
 
     def _normal():
         return ScanMode.NORMAL if ScanMode else "normal"

@@ -20,7 +20,7 @@ import requests
 
 _AIOHTTP = bool(find_spec("aiohttp"))
 if _AIOHTTP:
-    import aiohttp  # type: ignore
+    import aiohttp  # type: ignore[import-untyped]  # aiohttp has no bundled stubs
 
 
 # =======================
@@ -29,8 +29,8 @@ if _AIOHTTP:
 
 def _load_add_result() -> Callable[..., None]:
     if find_spec("websecure.core.reporting"):
-        from websecure.core.reporting import add_result  # type: ignore
-        return add_result  # type: ignore
+        from websecure.core.reporting import add_result
+        return add_result
     # Görünür fallback: log’a yaz, susturma yok
     def _fallback(*a, **k):
         if a:
