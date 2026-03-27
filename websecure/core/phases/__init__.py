@@ -1916,18 +1916,13 @@ def run_plan_if_needed(ctx: dict):
                 except (ImportError, AttributeError) as exc:
                     _logger.debug(f"[phases] LiveMonitor log_phase unavailable: {exc!r}")
             
-            # Run safely
+            # Run with timeout protection — _safe() enforces 240s max per phase
             start_t = _t.time()
-            try:
-                runner(ctx)
-            except Exception as e:
-                _logger.error(f"Phase {pid} failed: {e}", exc_info=True)
-                add_result("errors", {"phase": pid, "error": str(e)})
-            finally:
-                dur = _t.time() - start_t
-                _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
-                if _d:
-                    print(f"    -> {pid} finished in {dur:.2f}s")
+            _safe(ctx, lambda: runner(ctx), pid)
+            dur = _t.time() - start_t
+            _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
+            if _d:
+                print(f"    -> {pid} finished in {dur:.2f}s")
         else:
             _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
             if _d:
