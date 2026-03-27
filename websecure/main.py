@@ -1,3 +1,4 @@
+#bismillahirrahmanirrahim
 from __future__ import annotations
 import sys
 import pathlib
@@ -1334,6 +1335,12 @@ O====|_______________________________________________________>  1   1 0
     print("")
     cfg = load_config()
 
+    # Install Ctrl+C handler — sets cancel event instead of crashing mid-scan
+    try:
+        from websecure.core.phases import _install_sigint_handler
+        _install_sigint_handler()
+    except (ImportError, Exception):
+        pass
 
     try_prime = True
 

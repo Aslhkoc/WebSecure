@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import ssl
+import signal
 import threading
 import time as _t
 import traceback
@@ -25,6 +26,21 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from websecure.core.reporting import _phase_rec
+
+# Global cancel event — set by SIGINT handler or external callers to stop the scan
+_SCAN_CANCEL = threading.Event()
+
+def _install_sigint_handler():
+    """Install SIGINT handler that sets _SCAN_CANCEL instead of crashing."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        def _handler(signum, frame):
+            print("\n[!] Ctrl+C algılandı — tarama durduruluyor, rapor hazırlanıyor...")
+            _SCAN_CANCEL.set()
+        signal.signal(signal.SIGINT, _handler)
+    except (OSError, ValueError):
+        pass  # not in main thread or signal not supported
 from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result
 # Safe imports for optional scanners
@@ -622,19 +638,29 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
 
     t = threading.Thread(target=fn, name=f"phase::{phase_id}", daemon=True)
     t.start()
-    t.join(timeout=_PHASE_TIMEOUT)
+
+    # Poll in 1s increments so Ctrl+C (_SCAN_CANCEL) is checked frequently
+    elapsed = 0.0
+    while t.is_alive() and elapsed < _PHASE_TIMEOUT:
+        t.join(timeout=1.0)
+        elapsed += 1.0
+        if _SCAN_CANCEL.is_set():
+            break
 
     threading.excepthook = old_hook  # restore
 
     if t.is_alive():
-        _logger.warning(
-            f"[phases] Phase '{phase_id}' exceeded {_PHASE_TIMEOUT}s — skipped to prevent hang"
-        )
-        add_result("errors", {
-            "type": "phase_timeout",
-            "phase": phase_id,
-            "timeout_secs": _PHASE_TIMEOUT,
-        })
+        if _SCAN_CANCEL.is_set():
+            _logger.info("[phases] Phase '%s' cancelled by user (Ctrl+C)", phase_id)
+        else:
+            _logger.warning(
+                "[phases] Phase '%s' exceeded %ds — skipped to prevent hang", phase_id, _PHASE_TIMEOUT
+            )
+            add_result("errors", {
+                "type": "phase_timeout",
+                "phase": phase_id,
+                "timeout_secs": _PHASE_TIMEOUT,
+            })
 
     if err:
         add_result("errors", {
@@ -1902,10 +1928,14 @@ def run_plan_if_needed(ctx: dict):
     results.setdefault("meta", {})["scan_start"] = _t.time()
 
     for item in plan:
+        if _SCAN_CANCEL.is_set():
+            _logger.info("[phases] Scan cancelled — stopping plan execution")
+            break
+
         pid = item.get("id")
         runner = item.get("runner")
         enabled = item.get("enabled", False)
-        
+
         if enabled and callable(runner):
             if item.get("visible", True):
                 phase_title = item.get('title', pid)
@@ -1914,8 +1944,8 @@ def run_plan_if_needed(ctx: dict):
                     from websecure.core.reporting import get_live_monitor
                     get_live_monitor().log_phase(phase_title)
                 except (ImportError, AttributeError) as exc:
-                    _logger.debug(f"[phases] LiveMonitor log_phase unavailable: {exc!r}")
-            
+                    _logger.debug("[phases] LiveMonitor log_phase unavailable: %r", exc)
+
             # Run with timeout protection — _safe() enforces 240s max per phase
             start_t = _t.time()
             _safe(ctx, lambda: runner(ctx), pid)
@@ -1926,7 +1956,7 @@ def run_plan_if_needed(ctx: dict):
         else:
             _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
             if _d:
-                _logger.debug(f"Skipping phase {pid} (enabled={enabled})")
+                _logger.debug("Skipping phase %s (enabled=%s)", pid, enabled)
 
     results["meta"]["scan_end"] = _t.time()
     try:
