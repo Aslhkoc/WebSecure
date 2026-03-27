@@ -2678,18 +2678,27 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
     finally:
-        # [FIX] Emergency Report Save
+        # Emergency Report Save — works even on Ctrl+C or mid-scan crash
         print("\n[!] Raporlama süreci (Safety Net)...")
         _res = globals().get("results")
         _cfg = globals().get("cfg")
         if _res and _cfg:
             try:
-                # Ensure reporting module is loaded
                 import websecure.core.reporting as _rep_safe
-                _rep_safe.perform_reporting(None, _cfg, _res)
+                # Merge bucket results (findings added during scan) into the payload
+                try:
+                    from websecure.core.reporting import get_bucket_results
+                    _bucket_data = get_bucket_results()
+                except Exception:
+                    _bucket_data = {}
+                _payload = dict(_res)
+                if _bucket_data:
+                    _payload.update(_bucket_data)
+                _payload.setdefault("meta", {})["interrupted"] = True
+                _rep_safe.perform_reporting(None, _cfg, _payload)
                 print("[+] Raporlar başarıyla kaydedildi.")
-            except Exception as re:
-                print(f"[!] Rapor kaydetme hatası: {re}")
+            except Exception as _re:
+                print(f"[!] Rapor kaydetme hatası: {_re}")
     
     # Success Alert
     try:
