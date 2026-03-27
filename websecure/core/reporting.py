@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import os
+import pathlib
 import re
 import json
 import html
@@ -2501,7 +2502,11 @@ def _e_table_oast(results: Dict[str, Any]) -> str:
     items = results.get("final") or []
     rows = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         ev = it.get("evidence") or {}
+        if not isinstance(ev, dict):
+            ev = {}
         cb = ev.get("callback_type") or it.get("callback_type")
         if cb:
             rows.append([str(cb), str(it.get("type") or ""), str(it.get("url") or ""), str(it.get("param") or "")])
