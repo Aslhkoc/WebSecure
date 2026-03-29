@@ -23,9 +23,6 @@
     "scan_profile": "safe_full",
     "wordlists": {
       "root": "./websecure/wordlists",
-      "custom": "./websecure/wordlists_custom/custom",
-      "seclists": "./websecure/wordlists/seclists",
-      "payloadsallthethings": "./websecure/wordlists/PayloadsAllTheThings",
       "defaults": [
         "./websecure/wordlists/common.txt",
         "./websecure/wordlists/dirs.txt",
@@ -489,7 +486,7 @@
     ],
     "learning": {
       "enabled": true,
-      "learned_words_file": "./websecure/wordlists_custom/custom/learned.txt"
+      "learned_words_file": "./websecure/wordlists/learned.txt"
     }
   },
   "file_upload": {
@@ -653,22 +650,10 @@
   },
   "payloads": {
     "providers": [
-      "bundled",
-      "seclists",
-      "pattt",
-      "wordlists_custom"
+      "bundled"
     ],
     "dedup": true,
     "max_per_category": 3000,
-    "seclists": {
-      "root": "./websecure/wordlists/seclists"
-    },
-    "pattt": {
-      "root": "./websecure/wordlists/PayloadsAllTheThings"
-    },
-    "custom": {
-      "root": "./websecure/wordlists_custom/custom"
-    },
     "mutators": {
       "urlencode": true,
       "double_urlencode": true,
@@ -717,9 +702,6 @@
       "http://[::1]/",
       "http://127.0.0.1:80/"
     ],
-    "wordlists_custom": {
-      "root": "./wordlists_custom/custom"
-    }
   },
   "waf": {
     "enabled": true,
@@ -1295,8 +1277,20 @@
     ]
   },
   "wordlists": {
-    "xss": "./wordlists_custom/custom/xss.txt",
-    "sqli": "./wordlists_custom/custom/sqli.txt"
+    "xss":           "./websecure/wordlists/xss.txt",
+    "sqli":          "./websecure/wordlists/sqli.txt",
+    "lfi":           "./websecure/wordlists/lfi.txt",
+    "ssrf":          "./websecure/wordlists/ssrf.txt",
+    "ssti":          "./websecure/wordlists/ssti.txt",
+    "nosqli":        "./websecure/wordlists/nosqli.txt",
+    "cmdi":          "./websecure/wordlists/cmdi.txt",
+    "xxe":           "./websecure/wordlists/xxe.txt",
+    "open_redirect": "./websecure/wordlists/open_redirect.txt",
+    "dirs":          "./websecure/wordlists/dirs.txt",
+    "files":         "./websecure/wordlists/files.txt",
+    "params":        "./websecure/wordlists/params.txt",
+    "passwords":     "./websecure/wordlists/passwords_top1000.txt",
+    "jwt_secrets":   "./websecure/wordlists/jwt_secrets.txt"
   },
   "proxy": {
     "enabled": true,

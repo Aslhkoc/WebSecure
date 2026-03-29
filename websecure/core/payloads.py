@@ -102,86 +102,39 @@ def _get_package_root() -> Path:
 _PKG_ROOT = _get_package_root()
 
 _DEFAULTS = {
-    "seclists": {
-        "root": _PKG_ROOT / "wordlists/seclists",
-        "git": "https://github.com/danielmiessler/SecLists.git",
-        "xss": ["**/Fuzzing/XSS/*.txt", "**/Fuzzing/XSS/*/*.txt", "**/Fuzzing/xss.txt", "**/*xss*.txt"],
-        "sqli": ["**/Fuzzing/SQLi/*.txt", "**/*sqli*.txt", "**/*sql-injection*.txt"],
-        "nosqli": ["**/Fuzzing/NoSQL/*.txt", "**/*nosql*.txt"],
-        "rce": ["**/Fuzzing/Command Injection/*.txt", "**/*cmdi*.txt", "**/*command*injection*.txt", "**/*rce*.txt"],
-        "jwt_secrets": ["**/Passwords/jwt_secrets.txt", "**/Passwords/Common-Credentials/10k-most-common.txt", "**/*jwt*.txt"],
-        "graphql": ["**/Discovery/Web-Content/graphql*.txt", "**/*graphql*.txt"],
-    },
-    "pattt": {
-        "root": _PKG_ROOT / "wordlists/PayloadsAllTheThings",
-        "git": "https://github.com/swisskyrepo/PayloadsAllTheThings.git",
-        "xss": ["**/XSS/**/*.txt"],
-        "sqli": ["**/SQL Injection/**/*.txt"],
-        "rce": ["**/Command Injection/**/*.txt", "**/RCE/**/*.txt"],
-    },
-    "wordlists_custom": {
-        "root": _PKG_ROOT / "wordlists_custom/custom",
-        "git": None,
-        "xss": ["xss.txt", "xss/*.txt"],
-        "sqli": ["sqli.txt", "sqli/*.txt"],
-        "rce": ["rce.txt", "rce/*.txt", "cmdi.txt", "cmdi/*.txt"],
-    },
-    # Bundled high-quality wordlists (always available, no external dependency)
+    # Bundled high-quality wordlists — sole source, always available, no external dependency
     "bundled": {
         "root": _PKG_ROOT / "websecure" / "wordlists",
         "git": None,
-        "xss": ["xss.txt"],
-        "sqli": ["sqli.txt"],
-        "lfi": ["lfi.txt"],
+        # Injection payloads
+        "xss":            ["xss.txt"],
+        "sqli":           ["sqli.txt"],
+        "lfi":            ["lfi.txt"],
         "path_traversal": ["lfi.txt"],
-        "ssrf": ["ssrf.txt"],
-        "xxe": ["xxe.txt"],
-        "ssti": ["ssti.txt"],
-        "nosqli": ["nosqli.txt"],
-        "cmdi": ["cmdi.txt"],
-        "rce": ["cmdi.txt"],
-        "open_redirect": ["open_redirect.txt"],
+        "ssrf":           ["ssrf.txt"],
+        "xxe":            ["xxe.txt"],
+        "ssti":           ["ssti.txt"],
+        "nosqli":         ["nosqli.txt"],
+        "cmdi":           ["cmdi.txt"],
+        "rce":            ["cmdi.txt"],
+        "open_redirect":  ["open_redirect.txt"],
+        "redirect":       ["open_redirect.txt"],
+        # Discovery / fuzzing
+        "dirs":           ["dirs.txt", "common.txt", "raft-small-words.txt"],
+        "files":          ["files.txt"],
+        "common":         ["common.txt"],
+        "wordlist":       ["dirs.txt", "common.txt"],
+        # Parameter / value fuzzing
+        "params":         ["params.txt", "learned.txt"],
+        "values":         ["values.txt"],
+        "fuzz":           ["params.txt", "values.txt"],
+        # Auth
+        "passwords":      ["passwords_top1000.txt"],
+        "jwt_secrets":    ["jwt_secrets.txt"],
+        "jwt":            ["jwt_secrets.txt"],
     },
 }
 
-def _provider_roots(cfg_section: dict) -> dict:
-    out = {}
-    alias_map = {'custom': 'wordlists_custom'}
-    if isinstance(cfg_section, dict):
-        for a,b in alias_map.items():
-            if a in cfg_section and b not in cfg_section:
-                cfg_section[b] = cfg_section[a]
-    
-    # [FIX] Force correct relative paths from project root if absolute path check fails
-    project_root = _PKG_ROOT 
-    
-    for prov in ["seclists", "pattt", "wordlists_custom"]:
-        sec = cfg_section.get(prov, {}) if isinstance(cfg_section, dict) else {}
-        
-        # Determine path
-        configured_path = sec.get("root")
-        default_path = _DEFAULTS[prov]["root"]
-        
-        root = Path(configured_path if configured_path else default_path)
-        
-        # If relative, anchor to project root
-        if not root.is_absolute():
-            root = project_root / root
-            
-        # Robust fallback for wordlists_custom if it doesn't exist at default location
-        if prov == "wordlists_custom" and not root.exists():
-             alt = project_root / "wordlists_custom" / "custom"
-             if alt.exists():
-                 root = alt
-
-        out[prov] = {
-            "root": root,
-            "git": sec.get("git", _DEFAULTS[prov]["git"]),
-            "xss": sec.get("xss") or _DEFAULTS[prov]["xss"],
-            "sqli": sec.get("sqli") or _DEFAULTS[prov]["sqli"],
-            "rce": sec.get("rce") or _DEFAULTS[prov]["rce"],
-        }
-    return out
 
 # --- External sync (git clone/pull) ----------------------------------------
 
@@ -315,12 +268,7 @@ def filter_by_technology(payloads: list[str], category: str, tech_tags: Iterable
 
 def _provider_roots(cfg_section: dict) -> dict:
     out = {}
-    alias_map = {'custom': 'wordlists_custom'}
-    if isinstance(cfg_section, dict):
-        for a, b in alias_map.items():
-            if a in cfg_section and b not in cfg_section:
-                cfg_section[b] = cfg_section[a]
-    for prov in ["bundled", "seclists", "pattt", "wordlists_custom"]:
+    for prov in ["bundled"]:
         defaults = _DEFAULTS.get(prov, {})
         sec = cfg_section.get(prov, {}) if isinstance(cfg_section, dict) else {}
         root = Path(sec.get("root") or defaults.get("root") or _PKG_ROOT / "wordlists")
@@ -349,24 +297,8 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
     if pl_cfg is False or not isinstance(pl_cfg, dict):
         return []
 
-    # enabled providers order — bundled first (always available), then external, then custom
-    providers = pl_cfg.get("providers") or ["bundled", "seclists", "pattt", "wordlists_custom"]
-    if isinstance(providers, dict):
-        providers = list(providers.keys())
-
-    # alias normalizasyonu
-    prov_map = {"custom": "wordlists_custom", "builtin": None}
-    norm, seen = [], set()
-    for p in providers:
-        q = prov_map.get(p, p)
-        if not q:
-            continue
-        if q in ("bundled", "wordlists_custom", "seclists", "pattt") and q not in seen:
-            norm.append(q)
-            seen.add(q)
-    if "bundled" not in seen:
-        norm = ["bundled"] + norm
-    providers = norm
+    # Tek provider: bundled (tüm wordlistler websecure/wordlists/ altında)
+    providers = ["bundled"]
 
     roots = _provider_roots(pl_cfg)
 
@@ -402,7 +334,7 @@ def get_payloads(
     """
     Yüksek seviye API:
       - do_sync True ise wordlist kaynaklarını git üzerinden senkronize eder.
-      - dış payloadları yükler (Sağlayıcılar örn: SecLists, PATTT, wordlists_custom).
+      - dış payloadları yükler (Sağlayıcı: bundled — websecure/wordlists/).
       - technology-aware filtre uygular.
       - dedup & limit uygular (yükleme fonksiyonu içinde).
       - Aynı process içinde tekrar çağrılarda basit cache kullanır.
@@ -447,59 +379,11 @@ ALLOWED_CATEGORIES = {
     "open_redirect",
 }
 
-# Varsayılan pattern genişletmeleri (mevcut sağlayıcılardaki klasör isimlerine göre)
-_DEFAULTS["seclists"].update({
-    "nosqli": ["**/*nosql*.txt"],
-    "ssti": ["**/*ssti*.txt"],
-    "redirect": ["**/*open*redirect*.txt", "**/*redirect*.txt"],
-    "cmdi": ["**/Fuzzing/Command Injection/*.txt", "**/*cmdi*.txt"],
-    "lfi": ["**/*lfi*.txt", "**/*path*traversal*.txt"],
-    "path_traversal": ["**/*traversal*.txt", "**/*path*traversal*.txt"],
-    "ssrf": ["**/*ssrf*.txt", "**/SSRF/**/*.txt"],
-})
-
-_DEFAULTS["pattt"].update({
-    "nosqli": ["**/NoSQL Injection/**/*.txt"],
-    "ssti": ["**/Server Side Template Injection/**/*.txt"],
-    "redirect": ["**/Open Redirect/**/*.txt"],
-    "cmdi": ["**/Command Injection/**/*.txt"],
-    "lfi": ["**/LFI/**/*.txt", "**/Path Traversal/**/*.txt"],
-    "path_traversal": ["**/Path Traversal/**/*.txt"],
-    "ssrf": ["**/SSRF/**/*.txt"],
-})
-
-_DEFAULTS["wordlists_custom"].update({
-    "nosqli": ["nosqli.txt", "nosqli/*.txt"],
-    "ssti": ["ssti.txt", "ssti/*.txt"],
-    "redirect": ["redirect.txt", "redirect/*.txt", "open_redirect.txt", "open_redirect/*.txt"],
-    "cmdi": ["cmdi.txt", "cmdi/*.txt"],
-    "lfi": ["lfi.txt", "lfi/*.txt", "path_traversal.txt", "path_traversal/*.txt"],
-    "path_traversal": ["path_traversal.txt", "path_traversal/*.txt"],
-    "ssrf": ["ssrf.txt", "ssrf/*.txt"],
-})
-
 _PAYLOAD_CACHE: dict[tuple[str, str | None, tuple[str, None] | None], list[str]] = {}
 
 def _cache_key(category: str, marker: str | None, tech_tags: Iterable[str] | None) -> tuple[
     str, str | None, tuple[str, None] | None]:
     return (category, marker, tuple(sorted([t for t in (tech_tags or []) if t])) or None)
-
-# --- PATCH: extend category patterns (LFI/Traversal/SSRF) ---
-_DEFAULTS["seclists"].update({
-    "lfi": ["**/*lfi*.txt", "**/*path*traversal*.txt"],
-    "path_traversal": ["**/*traversal*.txt", "**/*path*traversal*.txt"],
-    "ssrf": ["**/*ssrf*.txt", "**/SSRF/**/*.txt"],
-})
-_DEFAULTS["pattt"].update({
-    "lfi": ["**/LFI/**/*.txt", "**/Path Traversal/**/*.txt"],
-    "path_traversal": ["**/Path Traversal/**/*.txt"],
-    "ssrf": ["**/SSRF/**/*.txt"],
-})
-_DEFAULTS["wordlists_custom"].update({
-    "lfi": ["lfi.txt", "lfi/*.txt", "path_traversal.txt", "path_traversal/*.txt"],
-    "path_traversal": ["path_traversal.txt", "path_traversal/*.txt"],
-    "ssrf": ["ssrf.txt", "ssrf/*.txt"],
-})
 
 def url_encode_twice(s: str) -> str:
     from urllib.parse import quote
