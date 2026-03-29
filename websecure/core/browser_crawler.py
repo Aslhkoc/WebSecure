@@ -168,7 +168,15 @@ class BrowserCrawler:
                 page_count += 1
 
                 try:
-                    await page.goto(url, timeout=self.config.timeout_ms, wait_until="networkidle")
+                    try:
+                        await page.goto(url, timeout=self.config.timeout_ms, wait_until="networkidle")
+                    except Exception:
+                        # networkidle can timeout on SPAs — fall back to domcontentloaded
+                        try:
+                            await page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
+                        except Exception as nav_err:
+                            _logger.debug(f"[BrowserCrawler] Navigation failed for {url}: {nav_err}")
+                            continue
                     await page.wait_for_timeout(self.config.wait_after_load_ms)
 
                     # Scroll to trigger lazy loading

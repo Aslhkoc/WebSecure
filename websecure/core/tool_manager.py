@@ -34,48 +34,61 @@ class ToolManager:
 
     def ask_user_interactive(self) -> Dict[str, bool]:
         """
-        Interactively asks the user which tools to enable.
+        Automatically enables all available tools and reports status.
         Returns a dict of tool_name -> enabled status.
         """
+        import shutil
+
         print("\n" + "="*50)
         print("  HARİCİ ARAÇ YÖNETİMİ (EXTERNAL TOOLS)")
         print("="*50)
-        print("Harici araçları (FFUF, SQLMap, Feroxbuster) kullanmak ister misiniz?")
-        print("Bu araçlar tarama yeteneklerini artırır.")
-        
-        choice = input("Araçları etkinleştir? [E/h]: ").lower().strip()
-        if choice == 'h':
-            print("❌ Harici araçlar devre dışı bırakıldı.")
-            return {}
 
         results = {}
-        
+
         # SQLMap
-        if (self.tools_dir / "sqlmap").exists() or (self.tools_dir / "sqlmapproject-sqlmap-4a40101").exists():
+        sqlmap_available = (
+            (self.tools_dir / "sqlmap").exists()
+            or (self.tools_dir / "sqlmapproject-sqlmap-4a40101").exists()
+        )
+        if sqlmap_available:
             print("\n[SQLMap] SQL Enjeksiyon doğrulama motoru.")
-            use_sqlmap = input("  -> SQLMap API (otomatik başlatma) kullanılsın mı? [E/h]: ").lower().strip() != 'h'
-            results['sqlmap'] = use_sqlmap
-        
+            print("  -> SQLMap API (otomatik başlatma) kullanılıyor.")
+            results['sqlmap'] = True
+
         # FFUF
-        if (self.tools_dir / "ffuf" / "ffuf.exe").exists():
+        ffuf_available = (
+            (self.tools_dir / "ffuf" / "ffuf.exe").exists()
+            or shutil.which("ffuf") is not None
+        )
+        if ffuf_available:
             print("\n[FFUF] Hızlı içerik keşif aracı.")
-            use_ffuf = input("  -> FFUF kullanılsın mı? [E/h]: ").lower().strip() != 'h'
-            results['ffuf'] = use_ffuf
+            print("  -> FFUF kullanılıyor.")
+            results['ffuf'] = True
 
         # Feroxbuster
-        if (self.tools_dir / "feroxbuster" / "feroxbuster.exe").exists():
+        ferox_available = (
+            (self.tools_dir / "feroxbuster" / "feroxbuster.exe").exists()
+            or shutil.which("feroxbuster") is not None
+        )
+        if ferox_available:
             print("\n[Feroxbuster] Alternatif Rust tabanlı tarayıcı.")
-            use_ferox = input("  -> Feroxbuster kullanılsın mı? [E/h]: ").lower().strip() != 'h'
-            results['feroxbuster'] = use_ferox
+            print("  -> Feroxbuster kullanılıyor.")
+            results['feroxbuster'] = True
 
         # Nmap
-        import shutil
-        if shutil.which("nmap") or (self.tools_dir / "Nmap" / "nmap.exe").exists():
+        nmap_available = (
+            shutil.which("nmap") is not None
+            or (self.tools_dir / "Nmap" / "nmap.exe").exists()
+        )
+        if nmap_available:
             print("\n[Nmap] Ağ keşif ve port tarama aracı.")
-            use_nmap = input("  -> Nmap kullanılsın mı? [E/h]: ").lower().strip() != 'h'
-            results['nmap'] = use_nmap
+            print("  -> Nmap kullanılıyor.")
+            results['nmap'] = True
 
-        print("\n✅ Seçimler kaydedildi.")
+        if results:
+            print("\n✅ Araçlar otomatik olarak etkinleştirildi.")
+        else:
+            print("\n⚠️  Hiçbir harici araç bulunamadı.")
         return results
 
     def start_sqlmap_api(self):

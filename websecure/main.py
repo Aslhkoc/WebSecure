@@ -86,7 +86,6 @@ def print_banner(modules_count: int = 0) -> None:
 try:
     from websecure.core.utils import collect_all_wordlists
     _wd = collect_all_wordlists()
-    print(f"       =[ Wordlists: {_wd.get('count',0)} files connected (~{_wd.get('total_lines_est',0)} lines)")
 except (ImportError, AttributeError, OSError) as exc:
     _logger.debug(f"[main] Wordlist yüklenemedi: {exc!r}")
 
@@ -1326,12 +1325,8 @@ O====|_______________________________________________________>  1   1 0
                                                                 1 0
                                                                  1
     """)
-    print("\n   [ SYSTEM SECURE | ZEMSEC PROTOCOL INITIATED | BINARY FLOW STABLE ]\n")
     print("[!] UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
     print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
-    # [FEATURE] Wizard Tip
-    print("    💡 İPUCU: Kolay kurulum için 'python main.py --wizard' komutunu kullanın!")
-    print("    💡 BİLGİ: Tarayıcı varsayılan olarak AÇIK çalışır. Gizlemek için '--headless' kullanın.")
     print("")
     cfg = load_config()
 
@@ -1387,14 +1382,22 @@ O====|_______________________________________________________>  1   1 0
     is_batch_pre = "--batch" in sys.argv
     if "--help" not in sys.argv and "-h" not in sys.argv and not is_dry_run_pre and not is_batch_pre:
         tool_choices = tm.ask_user_interactive()
-        
+
         # Apply choices
-        if "sqlmap" in tool_choices and tool_choices["sqlmap"]:
+        if tool_choices.get("sqlmap"):
             tm.start_sqlmap_api()
-        
-        if "ffuf" in tool_choices and cfg.get("content_discovery"):
-            cfg["content_discovery"]["enabled"] = tool_choices["ffuf"]
-            
+
+        if "ffuf" in tool_choices:
+            if cfg.get("content_discovery"):
+                cfg["content_discovery"]["enabled"] = tool_choices["ffuf"]
+            cfg.setdefault("offensive", {}).setdefault("ffuf", {})["enabled"] = tool_choices["ffuf"]
+
+        if "feroxbuster" in tool_choices:
+            cfg.setdefault("offensive", {}).setdefault("feroxbuster", {})["enabled"] = tool_choices["feroxbuster"]
+
+        if "nmap" in tool_choices:
+            cfg.setdefault("nmap", {})["enabled"] = tool_choices["nmap"]
+
         import atexit
         atexit.register(tm.stop_all)
     # ---------------------------------------------
