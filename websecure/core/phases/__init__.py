@@ -2603,7 +2603,7 @@ def run_sqlmap_scan(ctx) -> None:
         return
 
     # Check config
-    if not _get_config(ctx, "offensive.sqlmap.enabled", True):
+    if not _get_config(ctx, "sqlmap.enabled", True):
         return
 
     _logger.info("Launching SQLMap scan...")
@@ -2613,9 +2613,9 @@ def run_sqlmap_scan(ctx) -> None:
         return
 
     # [Check 2] Payloads/Exploit levels
-    level = int(_get_config(ctx, "offensive.sqlmap.level", 1))
-    risk = int(_get_config(ctx, "offensive.sqlmap.risk", 1))
-    
+    level = int(_get_config(ctx, "sqlmap.level", 1))
+    risk = int(_get_config(ctx, "sqlmap.risk", 1))
+
     # [Check 5] Proxy
     extra_args = []
     proxy = _resolve_proxy(ctx)
@@ -2623,7 +2623,7 @@ def run_sqlmap_scan(ctx) -> None:
         extra_args.append(f"--proxy={proxy}")
         _logger.info(f"[Evasion] SQLMap using proxy: {proxy}")
 
-    if _get_config(ctx, "offensive.sqlmap.random_agent", True):
+    if _get_config(ctx, "sqlmap.random_agent", True):
         extra_args.append("--random-agent")
 
 
@@ -2937,7 +2937,7 @@ def run_feroxbuster_scan(ctx) -> None:
     if not url:
         return
         
-    if not _get_config(ctx, "offensive.feroxbuster.enabled", True):
+    if not _get_config(ctx, "feroxbuster.enabled", True):
         return
 
     wrapper = FeroxbusterWrapper()

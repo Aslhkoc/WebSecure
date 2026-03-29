@@ -149,11 +149,17 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
             # Direct overwrite
             cfg[key] = val
             
-    # 3. Special handling for 'safe_full' or 'aggressive' flags
+    # 3. Normalize http.timeout → http.timeout_seconds
+    # Profiles set "timeout" but http.py reads "timeout_seconds"
+    http_sec = cfg.get("http")
+    if isinstance(http_sec, dict) and "timeout" in http_sec and "timeout_seconds" not in http_sec:
+        http_sec["timeout_seconds"] = http_sec["timeout"]
+
+    # 4. Special handling for 'safe_full' or 'aggressive' flags
     if active_name == "safe_full":
         # Ensure deep scan mode is reflected
         if "fuzz" in cfg:
             cfg["fuzz"]["rate_limit"] = cfg["fuzz"].get("rate_limit", {})
             cfg["fuzz"]["rate_limit"]["max_rate_ms"] = 1500 # Slower
-            
+
     return cfg

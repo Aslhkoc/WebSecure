@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import time
 import random
 import contextvars
@@ -10,6 +11,8 @@ import threading
 import socket
 import ssl
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 
 
@@ -329,7 +332,6 @@ def _smart_request(self, method, url, **kwargs):
 
 import contextvars
 import json
-import logging
 import random
 import subprocess as _subp
 import time
@@ -354,7 +356,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry as Urllib3Retry
 _HTTPX_AVAILABLE = _impspec.find_spec("httpx") is not None
-_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # CAPTCHA middleware (lazy — only active when config sets a solver provider)

@@ -811,6 +811,9 @@
   },
   "offensive": {
     "enabled": true,
+    "ffuf": {
+      "enabled": true
+    },
     "request_smuggling": {
       "enabled": true,
       "variants": [

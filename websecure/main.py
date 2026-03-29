@@ -1718,10 +1718,12 @@ O====|_______________________________________________________>  1   1 0
             print("[i] Geçersiz seçim; kimliksiz taramaya geçiliyor.")
             cfg["mode"] = "unauthenticated"
             cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
+            cfg["kimliksiz_mod"].setdefault("priming", {})["enabled"] = True
     else:
         # Kimliksiz tarama
         cfg["mode"] = "unauthenticated"
         cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
+        cfg["kimliksiz_mod"].setdefault("priming", {})["enabled"] = True
 
     # Opsiyonel: kurumsal proxy/VPN gibi bir çıkış kullanmak ister misiniz?
     # Proxy tercihi (istisnasız)
