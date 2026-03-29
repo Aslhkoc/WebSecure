@@ -46,7 +46,7 @@ class FFUFWrapper:
         if self.binary.endswith(".py"):
             import sys
             return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
-        return shutil.which(self.binary) is not None
+        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
 
     def run_scan(self,
                  url: str,
@@ -158,9 +158,24 @@ class FeroxbusterWrapper:
 
     def __init__(self):
         self.binary = "feroxbuster"
+        self._find_binary()
+
+    def _find_binary(self):
+        if shutil.which(self.binary):
+            return
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent.parent
+        possible = [
+            str(root / "tools" / "feroxbuster" / "feroxbuster.exe"),
+            str(root / "tools" / "feroxbuster.exe"),
+        ]
+        for p in possible:
+            if os.path.exists(p):
+                self.binary = p
+                return
 
     def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None
+        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
 
     def scan(self, target: str, wordlist: str = None, threads: int = 50,
              depth: int = 1, extra_args: List[str] = None) -> List[Dict[str, Any]]:

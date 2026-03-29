@@ -452,21 +452,6 @@ if _det_spec is not None:
     if callable(_prime):
         prime_session = _prime  # mevcut (core.http)’teki varsa üzerine yazar
 else:
-    def classify_access_block(status: int, headers: dict, body: str) -> str:
-        hdrs = headers or {}
-        ua = (hdrs.get('server', '') + ' ' + hdrs.get('via', '')).lower()
-        text = (body or '').lower()
-        if status == 429:
-            return 'rate_limit'
-        if 'cloudflare' in ua or 'attention required' in text:
-            return 'waf_challenge'
-        if status in (401, 403):
-            if 'captcha' in text or 'recaptcha' in text:
-                return 'captcha_block'
-            return 'auth_required'
-        return 'unknown'
-
-
     def classify_access_block(status: int, headers: dict, body: str) -> str:  # minimal heuristic, istisnasız
         get_hdr = headers.get if isinstance(headers, dict) or hasattr(headers, "get") else (lambda k, d=None: d)
 
@@ -489,10 +474,6 @@ else:
                 return "captcha_block"
             return "auth_required"
         return "unknown"
-
-
-    _rep_spec = _ws_spec("websecure.core.reporting")
-    reporting_addendum = _im.import_module("websecure.core.reporting") if _rep_spec is not None else None
 
 
 _plan_spec = _ws_spec("websecure.core.phases")

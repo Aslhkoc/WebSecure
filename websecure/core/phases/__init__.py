@@ -44,7 +44,7 @@ def _install_sigint_handler():
 from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result
 # Safe imports for optional scanners
-_rs = _ma = _jwt = _nq = _ws = _sx = _gqa = _gqr = _fu = None
+_rs = _ma = _jwt = _nq = _ws = _sx = _gql = _fu = None
 
 try:
     from websecure.scanners import request_smuggling as _rs
@@ -1773,7 +1773,7 @@ def run_portscan(ctx):
             return _mk_result("portscan", "failed", {"error": "nmap_missing"})
 
         # Hızlı tarama
-        scan_res = nmap.scan(host, ports="-F")
+        scan_res = nmap.scan(host, mode="fast")
         
         # Sonuçları işle
         port_records = []
