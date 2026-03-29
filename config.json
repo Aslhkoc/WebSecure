@@ -240,32 +240,22 @@
     }
   },
   "i18n": {
-    "severity_canonical_locale": "tr",
+    "severity_canonical_locale": "en",
     "severity_labels": {
-      "tr": {
-        "low": "Düşük",
-        "medium": "Orta",
-        "high": "Yüksek",
-        "critical": "Kritik"
-      },
       "en": {
         "low": "Low",
         "medium": "Medium",
         "high": "High",
-        "critical": "Critical"
+        "critical": "Critical",
+        "info": "Informational"
       }
     },
     "severity_aliases": {
-      "Low": "Düşük",
-      "low": "Düşük",
-      "Medium": "Orta",
-      "medium": "Orta",
-      "Med": "Orta",
-      "High": "Yüksek",
-      "high": "Yüksek",
-      "Critical": "Kritik",
-      "critical": "Kritik",
-      "CRIT": "Kritik"
+      "Low": "Low", "low": "Low", "Düşük": "Low", "düşük": "Low",
+      "Medium": "Medium", "medium": "Medium", "Med": "Medium", "Orta": "Medium", "orta": "Medium",
+      "High": "High", "high": "High", "Yüksek": "High", "yüksek": "High",
+      "Critical": "Critical", "critical": "Critical", "CRIT": "Critical", "Kritik": "Critical", "kritik": "Critical",
+      "Info": "Informational", "info": "Informational", "Bilgi": "Informational", "bilgi": "Informational"
     }
   },
   "crawl": {
@@ -663,12 +653,13 @@
   },
   "payloads": {
     "providers": [
+      "bundled",
       "seclists",
       "pattt",
       "wordlists_custom"
     ],
     "dedup": true,
-    "max_per_category": 2000,
+    "max_per_category": 3000,
     "seclists": {
       "root": "./websecure/wordlists/seclists"
     },
@@ -939,7 +930,7 @@
   "ci": {
     "profile": "aggressive",
     "fail_on": {
-      "severity_min": "Orta",
+      "severity_min": "Medium",
       "new_findings": true
     },
     "incremental": true,
@@ -1293,10 +1284,14 @@
   },
   "sqlmap": {
     "enabled": true,
-    "risk": 1,
-    "level": 1,
+    "risk": 2,
+    "level": 3,
     "extra_args": [
-      "--batch"
+      "--batch",
+      "--parse-errors",
+      "--technique=BEUSTQ",
+      "--dbms-cred=",
+      "--threads=3"
     ]
   },
   "wordlists": {

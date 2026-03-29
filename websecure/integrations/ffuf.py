@@ -53,6 +53,8 @@ class FFUFWrapper:
                  wordlist: str,
                  extensions: Optional[str] = None,
                  threads: int = 40,
+                 match_codes: str = "200,204,301,302,307,401,403,405,500",
+                 filter_size: Optional[str] = None,
                  custom_args: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Runs FFUF against the target URL.
@@ -87,8 +89,11 @@ class FFUFWrapper:
                 "-o", temp_output,
                 "-of", "json",
                 "-t", str(threads),
-                "-mc", "200,204,301,302,307,401,403"
+                "-mc", match_codes,
             ])
+
+            if filter_size:
+                cmd.extend(["-fs", filter_size])
 
             if extensions:
                 cmd.extend(["-e", extensions])

@@ -626,17 +626,17 @@ def _generate_charts(results: Dict, out_dir: str) -> List[Dict[str, str]]:
 
     items = _coerce_final(results)
 
-    # --- 1) Risk pie (Bilgi -> Güvenli, diğerleri ayrı dilim)
-    base_counts = {k: 0 for k in ("Kritik","Yüksek","Orta","Düşük","Bilgi")}
+    # --- 1) Risk pie (Info -> Safe in chart)
+    base_counts = {k: 0 for k in ("Critical", "High", "Medium", "Low", "Info")}
     for it in items:
         base_counts[_norm_sev_tr(it.get("severity"))] = base_counts.get(_norm_sev_tr(it.get("severity")), 0) + 1
-    risk_labels = ["Kritik", "Yüksek", "Orta", "Düşük", "Güvenli"]
+    risk_labels = ["Critical", "High", "Medium", "Low", "Safe"]
     risk_values = [
-        base_counts["Kritik"],
-        base_counts["Yüksek"],
-        base_counts["Orta"],
-        base_counts["Düşük"],
-        base_counts["Bilgi"],  # 'Bilgi' grafikte 'Güvenli' etiketiyle gösterilecek
+        base_counts["Critical"],
+        base_counts["High"],
+        base_counts["Medium"],
+        base_counts["Low"],
+        base_counts["Info"],  # Info shown as Safe in chart
     ]
     if sum(risk_values) > 0:
         fig = plt.figure(figsize=(4, 4))
@@ -679,11 +679,11 @@ def _generate_charts(results: Dict, out_dir: str) -> List[Dict[str, str]]:
         }
         return aliases.get(s, s)
 
-    # --- Başarı sayımı (sadece Bilgi dışı bulgular) — STRICT eşleşme (12,5% bug fix)
+    # --- Success count (exclude Info-level) — STRICT match
     success_per: "OrderedDict[str,int]" = OrderedDict((k, 0) for k in tried_map.keys())
     for it in items:
         sev = _norm_sev_en(it.get("severity"))
-        if sev == "Bilgi":
+        if sev == "Info":
             continue
         typ_norm = _alias_norm(str(it.get("type") or it.get("title") or ""))
         if not typ_norm:
@@ -800,12 +800,13 @@ def _short_poc(s: str) -> str:
 
 
 def _norm_sev_tr(s: str | None) -> str:
-    s = (s or "Bilgi").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "🔴 KRİTİK"
-    if s in ("yüksek", "high", "severe"): return "🟠 YÜKSEK"
-    if s in ("orta", "medium", "med"): return "🟡 ORTA"
-    if s in ("düşük", "low"): return "🔵 DÜŞÜK"
-    return "⚪ BİLGİ"
+    """Normalize severity to English canonical. Accepts English and Turkish inputs."""
+    s = (s or "Info").strip().lower()
+    if s in ("kritik", "critical", "crit"): return "Critical"
+    if s in ("yüksek", "high", "severe"): return "High"
+    if s in ("orta", "medium", "med"): return "Medium"
+    if s in ("düşük", "low"): return "Low"
+    return "Info"
 
 
 def _sev_rank(s: str | None) -> int:
@@ -1085,26 +1086,26 @@ def _render_markdown_report_inline(results: Dict) -> str:
             f"| {egress.get('label', '')} | {egress.get('proxy_url', '') or 'direct'} | {egress.get('region', '')} | {egress.get('accept_language', '')} | {egress.get('ua', '')[:42]}… |")
         lines.append('')
 
-    # Şiddet sayımları
-    counts = {"Kritik": 0, "Yüksek": 0, "Orta": 0, "Düşük": 0, "Bilgi": 0}
+    # Severity counts
+    counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
     for i in items:
         counts[_norm_sev_tr(i.get("severity"))] = counts.get(_norm_sev_tr(i.get("severity")), 0) + 1
 
-    # Başlangıç
+    # Start
     lines: List[str] = []
     lines.append(render_auth_coverage_md())
-    lines.append("# WebSec Raporu")
+    lines.append("# WebSec Report")
     lines.append("")
     if target:
-        lines.append(f"**Hedef:** `{esc_md(target)}`  •  **Tarih:** `{when}`")
+        lines.append(f"**Target:** `{esc_md(target)}`  •  **Date:** `{when}`")
         lines.append("")
 
-    # Genel Özet (tablolaştırılmış)
-    lines.append("## Genel Özet")
+    # Summary Table
+    lines.append("## Summary")
     lines.append("")
-    lines.append("| Seviye | Adet |")
+    lines.append("| Severity | Count |")
     lines.append("|-|-:|")
-    for k in ("Kritik", "Yüksek", "Orta", "Düşük", "Bilgi"):
+    for k in ("Critical", "High", "Medium", "Low", "Info"):
         lines.append(f"| {k} | {counts[k]} |")
 
     # Başarı Oranı ve Kullanılan Araçlar
@@ -1187,9 +1188,9 @@ def _render_markdown_report_inline(results: Dict) -> str:
         sev = _norm_sev_en(it.get("severity"))
         poc = (it.get("poc") or it.get("payload") or it.get("evidence") or "")
         poc_s = str(poc).lower()
-        if sev in ("Kritik", "Yüksek", "Orta", "Düşük") or ("<script" in poc_s) or it.get("exploitable") or it.get(
+        if sev in ("critical", "high", "medium", "low") or ("<script" in poc_s) or it.get("exploitable") or it.get(
                 "exploit_url"):
-            if sev != "Bilgi":
+            if sev not in ("info", "informational", ""):
                 exploitable.append(it)
     if exploitable:
         lines.append("")
@@ -1214,11 +1215,11 @@ def _render_markdown_report_inline(results: Dict) -> str:
         for p_name, c in Counter(params).most_common(50):
             lines.append(f"| {esc_md(p_name)} | {c} |")
 
-    # Edinilen Bilgiler (Bilgi seviyesi)
-    info_items = [it for it in items if _norm_sev_tr(it.get("severity")) == "Bilgi"]
+    # Informational Findings
+    info_items = [it for it in items if _norm_sev_en(it.get("severity") or "") == "info"]
     if info_items:
         lines.append("")
-        lines.append("## Edinilen Bilgiler")
+        lines.append("## Informational Findings")
         lines.append("")
         lines.append("| Kaynak | URL | Param | Not |")
         lines.append("|-|-|-|-|")
@@ -1417,10 +1418,10 @@ _CVSS_DEFAULTS = {
 def _norm_sev_en(s: str) -> str:
     s = (s or "").strip().lower()
     if s in ("kritik", "critical", "crit"): return "critical"
-    if s in ("yüksek", "high"): return "high"
+    if s in ("yüksek", "high", "severe"): return "high"
     if s in ("orta", "medium", "med"): return "medium"
     if s in ("düşük", "low"): return "low"
-    return "low"
+    return "info"
 
 def _cvss_for_item(it: Dict[str, Any], cfg: Dict[str, Any] | None) -> dict:
     # Allow explicit override on item
@@ -1853,7 +1854,15 @@ def _send_integrations(cfg: Dict, results: Dict, out_dir: str) -> None:
 
 def _severity_rank(s: str) -> int:
     s = (s or "").lower()
-    order = {"bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4}
+    order = {
+        "info": 0, "informational": 0,
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "critical": 4,
+        # backward compat Turkish
+        "bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4,
+    }
     return order.get(s, 0)
 
 
@@ -1862,7 +1871,7 @@ def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
 
     ci = (cfg.get("ci") or {})
     fail_on = (ci.get("fail_on") or {})
-    sev_min = (fail_on.get("severity_min") or "Orta").lower()
+    sev_min = (fail_on.get("severity_min") or "Medium").lower()
     new_only = bool(fail_on.get("new_findings", False))
 
     items = _coerce_final(results)
@@ -1883,7 +1892,7 @@ def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
                 items = [it for it in items if _is_new(it)]
 
     rank_min = _severity_rank(sev_min)
-    viol = [it for it in items if _severity_rank((it.get("severity") or "Bilgi").lower()) >= rank_min]
+    viol = [it for it in items if _severity_rank((it.get("severity") or "Info").lower()) >= rank_min]
 
     if viol:
         _write(os.path.join(out_dir, "ci.FAIL"), "\n".join([str(v) for v in viol]))
@@ -1895,12 +1904,16 @@ def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
 def should_fail_ci(cfg: Dict, results: Dict) -> bool:
     def _rank(s: str) -> int:
         s = (s or "").lower()
-        order = {"bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4}
+        order = {
+            "info": 0, "informational": 0,
+            "low": 1, "medium": 2, "high": 3, "critical": 4,
+            "bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4,
+        }
         return order.get(s, 0)
 
     ci = (cfg.get("ci") or {})
     fail_on = (ci.get("fail_on") or {})
-    sev_min = (fail_on.get("severity_min") or "Orta").lower()
+    sev_min = (fail_on.get("severity_min") or "Medium").lower()
     new_only = bool(fail_on.get("new_findings", False))
     items = []
     if isinstance(results, dict) and "final" in results and isinstance(results["final"], list):
@@ -1922,12 +1935,12 @@ def should_fail_ci(cfg: Dict, results: Dict) -> bool:
 
         items = [it for it in items if _is_new(it)]
     rank_min = _rank(sev_min)
-    viol = [it for it in items if _rank((it.get("severity") or "Bilgi")) >= rank_min]
+    viol = [it for it in items if _rank((it.get("severity") or "Info")) >= rank_min]
     return bool(viol)
 
 
 def summarize_by_severity(results: Dict) -> Dict[str, int]:
-    counts = {"Kritik": 0, "Yüksek": 0, "Orta": 0, "Düşük": 0, "Bilgi": 0}
+    counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Informational": 0}
     items = []
     if isinstance(results, dict) and "final" in results and isinstance(results["final"], list):
         items = list(results["final"])
@@ -1939,29 +1952,29 @@ def summarize_by_severity(results: Dict) -> Dict[str, int]:
                 if isinstance(it, dict):
                     items.append(it)
     for it in items:
-        sev = str(it.get("severity") or "Bilgi").title()
-        if sev.lower() == "kritik":
-            counts["Kritik"] += 1
-        elif sev.lower() == "yüksek":
-            counts["Yüksek"] += 1
-        elif sev.lower() == "orta":
-            counts["Orta"] += 1
-        elif sev.lower() == "düşük":
-            counts["Düşük"] += 1
+        sev = _norm_sev_en(it.get("severity") or "")
+        if sev == "critical":
+            counts["Critical"] += 1
+        elif sev == "high":
+            counts["High"] += 1
+        elif sev == "medium":
+            counts["Medium"] += 1
+        elif sev == "low":
+            counts["Low"] += 1
         else:
-            counts["Bilgi"] += 1
+            counts["Informational"] += 1
     return counts
 
 
 def to_markdown_summary(results: Dict) -> str:
     c = summarize_by_severity(results)
     return (
-        "| Severity | Adet |\n|---|---:|\n"
-        f"| Kritik | {c['Kritik']} |\n"
-        f"| Yüksek | {c['Yüksek']} |\n"
-        f"| Orta | {c['Orta']} |\n"
-        f"| Düşük | {c['Düşük']} |\n"
-        f"| Bilgi | {c['Bilgi']} |\n"
+        "| Severity | Count |\n|---|---:|\n"
+        f"| Critical | {c['Critical']} |\n"
+        f"| High | {c['High']} |\n"
+        f"| Medium | {c['Medium']} |\n"
+        f"| Low | {c['Low']} |\n"
+        f"| Informational | {c['Informational']} |\n"
     )
 
 
@@ -2202,7 +2215,7 @@ def _build_type_counts(items: List[Dict]) -> Dict[str, Dict[str, int]]:
     for it in (items or []):
         t = str(it.get("type") or "GEN").upper()
         s = _norm_sev_tr(it.get("severity"))
-        d = by_type.setdefault(t, {"Kritik": 0, "Yüksek": 0, "Orta": 0, "Düşük": 0, "Bilgi": 0})
+        d = by_type.setdefault(t, {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0})
         d[s] = d.get(s, 0) + 1
     return by_type
 
@@ -2251,23 +2264,22 @@ def _gen_curl_for_finding(it: Dict) -> str:
 
 def _render_risk_matrix(items: List[Dict]) -> str:
     by_type = _build_type_counts(items)
-    totals = {"Kritik": 0, "Yüksek": 0, "Orta": 0, "Düşük": 0, "Bilgi": 0}
+    totals = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
     for d in by_type.values():
         for k in list(totals.keys()):
             totals[k] += int(d.get(k, 0) or 0)
     lines = []
-    lines.append("## Risk Matrisi")
-    lines.append("| Tür | Kritik | Yüksek | Orta | Düşük | Bilgi | Toplam |")
+    lines.append("## Risk Matrix")
+    lines.append("| Type | Critical | High | Medium | Low | Info | Total |")
     lines.append("|-|-:|-:|-:|-:|-:|-:|")
-    for t, d in sorted(by_type.items(), key=lambda kv: (-kv[1].get("Kritik", 0), -kv[1].get("Yüksek", 0), kv[0])):
-        tot = int(d.get('Kritik', 0) or 0) + int(d.get('Yüksek', 0) or 0) + int(d.get('Orta', 0) or 0) + int(
-            d.get('Düşük', 0) or 0) + int(d.get('Bilgi', 0) or 0)
+    for t, d in sorted(by_type.items(), key=lambda kv: (-kv[1].get("Critical", 0), -kv[1].get("High", 0), kv[0])):
+        tot = sum(int(d.get(k, 0) or 0) for k in ("Critical", "High", "Medium", "Low", "Info"))
         lines.append(
-            f"| {t} | {d.get('Kritik', 0)} | {d.get('Yüksek', 0)} | {d.get('Orta', 0)} | {d.get('Düşük', 0)} | {d.get('Bilgi', 0)} | {tot} |")
+            f"| {t} | {d.get('Critical', 0)} | {d.get('High', 0)} | {d.get('Medium', 0)} | {d.get('Low', 0)} | {d.get('Info', 0)} | {tot} |")
     lines.append(
-        f"| **Toplam** | **{totals['Kritik']}** | **{totals['Yüksek']}** | **{totals['Orta']}** | **{totals['Düşük']}** | **{totals['Bilgi']}** | **{sum(totals.values())}** |")
+        f"| **Total** | **{totals['Critical']}** | **{totals['High']}** | **{totals['Medium']}** | **{totals['Low']}** | **{totals['Info']}** | **{sum(totals.values())}** |")
     lines.append("")
-    lines.append(_gen_mermaid_pie("Bulgu Dağılımı (Şiddet)", totals))
+    lines.append(_gen_mermaid_pie("Findings by Severity", totals))
     return "\n".join(lines)
 
 
@@ -2662,12 +2674,12 @@ def render_e_phase_markdown_report(results: Dict) -> str:
     sev_counts = summarize_by_severity({"final": items})
     total = sum(sev_counts.values())
     risk_brief = []
-    if sev_counts.get("Kritik", 0):
-        risk_brief.append(f"{sev_counts['Kritik']} kritik")
-    if sev_counts.get("Yüksek", 0):
-        risk_brief.append(f"{sev_counts['Yüksek']} yüksek")
+    if sev_counts.get("Critical", 0):
+        risk_brief.append(f"{sev_counts['Critical']} critical")
+    if sev_counts.get("High", 0):
+        risk_brief.append(f"{sev_counts['High']} high")
     if not risk_brief:
-        risk_brief.append("kritik/yüksek bulgu yok")
+        risk_brief.append("no critical/high findings")
     risk_sentence = ", ".join(risk_brief)
 
     lines: list[str] = []

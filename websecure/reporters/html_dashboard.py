@@ -65,7 +65,12 @@ def render_html_dashboard(results: dict) -> str:
 
             # Filter out Generic items without useful info
             f_type = item.get("type") or item.get("title") or "Generic"
-            f_sev = (item.get("severity") or "Info").title()
+            _raw_sev = (item.get("severity") or "Info").lower()
+            _sev_map = {"critical": "Critical", "kritik": "Critical",
+                        "high": "High", "yüksek": "High",
+                        "medium": "Medium", "orta": "Medium",
+                        "low": "Low", "düşük": "Low"}
+            f_sev = _sev_map.get(_raw_sev, "Info")
 
             # Skip if status/meta info
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
@@ -92,12 +97,8 @@ def render_html_dashboard(results: dict) -> str:
         sev = f["severity"]
         if sev in stats:
             stats[sev] += 1
-        elif sev == "Kritik": stats["Critical"] += 1
-        elif sev == "Yüksek": stats["High"] += 1
-        elif sev == "Orta": stats["Medium"] += 1
-        elif sev == "Düşük": stats["Low"] += 1
-        elif sev == "Bilgi": stats["Info"] += 1
-        elif sev == "Critical": stats["Critical"] += 1
+        else:
+            stats["Info"] += 1
 
     total_issues = sum(stats.values())
 

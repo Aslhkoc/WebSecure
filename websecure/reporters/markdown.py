@@ -15,12 +15,13 @@ def _short_poc(s: str) -> str:
     return (s[:4000] + " …") if len(s) > 4000 else s
 
 def _norm_sev_tr(s: str | None) -> str:
-    s = (s or "Bilgi").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "🔴 KRİTİK"
-    if s in ("yüksek", "high", "severe"): return "🟠 YÜKSEK"
-    if s in ("orta", "medium", "med"): return "🟡 ORTA"
-    if s in ("düşük", "low"): return "🔵 DÜŞÜK"
-    return "⚪ BİLGİ"
+    """Normalize severity to English canonical."""
+    s = (s or "Info").strip().lower()
+    if s in ("kritik", "critical", "crit"): return "Critical"
+    if s in ("yüksek", "high", "severe"): return "High"
+    if s in ("orta", "medium", "med"): return "Medium"
+    if s in ("düşük", "low"): return "Low"
+    return "Info"
 
 def _norm_sev_en(s: str | None) -> str:
     s = (s or "Info").strip().lower()
@@ -173,35 +174,35 @@ def render(results: Dict) -> str:
         return (str(s) or "").replace("|", "\\|").replace("`", "\\`").replace("*", "\\*")
 
     # Counts
-    counts = {"Kritik": 0, "Yüksek": 0, "Orta": 0, "Düşük": 0, "Bilgi": 0}
+    counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
     for i in items:
         counts[_norm_sev_tr(i.get("severity"))] = counts.get(_norm_sev_tr(i.get("severity")), 0) + 1
 
     lines = []
-    lines.append("# WebSec Raporu")
+    lines.append("# WebSec Report")
     lines.append("")
-    if target: 
-        lines.append(f"**Hedef:** `{esc_md(target)}`  •  **Tarih:** `{when}`")
+    if target:
+        lines.append(f"**Target:** `{esc_md(target)}`  •  **Date:** `{when}`")
     lines.append("")
-    
+
     # Summary Table
-    lines.append("## Genel Özet")
-    lines.append("| Seviye | Adet |")
+    lines.append("## Summary")
+    lines.append("| Severity | Count |")
     lines.append("|-|-:|")
-    for k in ("Kritik", "Yüksek", "Orta", "Düşük", "Bilgi"):
+    for k in ("Critical", "High", "Medium", "Low", "Info"):
         lines.append(f"| {k} | {counts[k]} |")
-    
+
     # Findings List
     lines.append("")
-    lines.append("## Bulgular Listesi")
-    lines.append("| Seviye | Tür | URL | Param |")
+    lines.append("## Findings")
+    lines.append("| Severity | Type | URL | Param |")
     lines.append("|-|-|-|-|")
     for i in items:
-        lines.append(f"| {_norm_sev_tr(i.get('severity'))} | {esc_md(i.get('type') or 'Bulgu')} | {esc_md(i.get('url') or '')} | {esc_md(i.get('param') or '')} |")
+        lines.append(f"| {_norm_sev_tr(i.get('severity'))} | {esc_md(i.get('type') or 'Finding')} | {esc_md(i.get('url') or '')} | {esc_md(i.get('param') or '')} |")
 
     # Details
     lines.append("")
-    lines.append("## Detaylar")
+    lines.append("## Details")
     for idx, it in enumerate(items, 1):
         lines.append("")
         t = it.get('type') or 'GEN'

