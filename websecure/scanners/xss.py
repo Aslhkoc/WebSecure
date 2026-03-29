@@ -28,9 +28,9 @@ class XSSScanner(BaseScanner):
     name = "xss"
     phase = "offensive"
 
-    MAX_WORKERS = 4        # parallel threads
-    MAX_URL_PAYLOADS = 25  # cap for URL param fuzzing
-    MAX_FORM_PAYLOADS = 8  # cap per form input
+    MAX_WORKERS = 6        # parallel threads
+    MAX_URL_PAYLOADS = 200 # tüm wordlist denenir (yüksek kapsamlı)
+    MAX_FORM_PAYLOADS = 50 # form input'ları için de tam kapsam
 
     def __init__(self, session=None, results: Dict = None, debug=False):
         super().__init__(session, results, debug)

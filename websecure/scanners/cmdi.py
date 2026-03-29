@@ -23,6 +23,7 @@ from urllib.parse import parse_qsl, urlparse, urlencode, urlunparse
 import requests as _requests
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.payloads import load_external_payloads
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,8 @@ logger = logging.getLogger(__name__)
 # Payload ve detection tanımları
 # ---------------------------------------------------------------------------
 
-_CMDI_PAYLOADS: List[Tuple[str, str]] = [
-    # (payload, technique)
+_CMDI_PAYLOADS_CORE: List[Tuple[str, str]] = [
+    # (payload, technique) — canary + time tabanlı yüksek güvenilirlik
     ("; echo CMDI_UNIX_$(id)",             "unix_echo"),
     ("| echo CMDI_UNIX_$(id)",             "unix_pipe"),
     ("`echo CMDI_UNIX_$(whoami)`",         "unix_backtick"),
@@ -47,6 +48,20 @@ _CMDI_PAYLOADS: List[Tuple[str, str]] = [
     ("| cat /etc/passwd",                  "unix_file_read_pipe"),
     ("& type C:\\Windows\\win.ini",        "windows_file_read"),
 ]
+
+def _load_cmdi_payloads() -> List[Tuple[str, str]]:
+    """cmdi.txt wordlist'ini yükle, core listesiyle birleştir (dedup)."""
+    seen = {p for p, _ in _CMDI_PAYLOADS_CORE}
+    ext: List[Tuple[str, str]] = []
+    for line in load_external_payloads("cmdi"):
+        if line and line not in seen:
+            seen.add(line)
+            # time-based payload'ları etiketle
+            tag = "ext_time" if any(k in line for k in ("sleep", "timeout", "ping", "DELAY")) else "ext"
+            ext.append((line, tag))
+    return _CMDI_PAYLOADS_CORE + ext
+
+_CMDI_PAYLOADS: List[Tuple[str, str]] = _load_cmdi_payloads()
 
 _CMDI_SUCCESS_PATTERNS: List[Tuple[str, str]] = [
     (r"uid=\d+\(.*?\)\s+gid=\d+",          "Unix id output — command execution confirmed"),

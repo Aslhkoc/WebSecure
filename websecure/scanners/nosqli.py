@@ -10,6 +10,7 @@ from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 import requests as _requests
 
 from .base import BaseScanner
+from websecure.core.payloads import load_external_payloads
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ except ImportError:
 # Payload definitions
 # ---------------------------------------------------------------------------
 
-_URL_STRING_PAYLOADS: List[Tuple[str, str]] = [
+_URL_STRING_PAYLOADS_CORE: List[Tuple[str, str]] = [
     ("' && '1'=='1", "js_tautology"),
     ("' || '1'=='1", "js_or_tautology"),
     ("'; return true; //", "js_return_true"),
@@ -33,6 +34,29 @@ _URL_STRING_PAYLOADS: List[Tuple[str, str]] = [
     ("' && this.password.match(/.*/)//+%00", "regex_bypass"),
     ("%24where%3D1%3D1", "where_encoded"),
 ]
+
+def _load_nosqli_payloads() -> List[Tuple[str, str]]:
+    """nosqli.txt'i yükle: JSON satırları → _JSON_OPERATOR_PAYLOADS, string satırları → _URL_STRING_PAYLOADS."""
+    seen_str = {p for p, _ in _URL_STRING_PAYLOADS_CORE}
+    extra_str: List[Tuple[str, str]] = []
+    extra_json: List[Tuple[Any, str]] = []
+    for line in load_external_payloads("nosqli"):
+        if not line:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                obj = json.loads(stripped)
+                extra_json.append((obj, "ext_operator"))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        elif stripped not in seen_str:
+            seen_str.add(stripped)
+            extra_str.append((stripped, "ext_string"))
+    return extra_str, extra_json
+
+_EXT_STR, _EXT_JSON = _load_nosqli_payloads()
+_URL_STRING_PAYLOADS: List[Tuple[str, str]] = _URL_STRING_PAYLOADS_CORE + _EXT_STR
 
 _BRACKET_OPERATORS: List[Tuple[str, str]] = [
     ("[$ne]", "ne_bracket"),
@@ -58,7 +82,7 @@ _JSON_OPERATOR_PAYLOADS: List[Tuple[Any, str]] = [
     ({"$nin": []},                       "nin_empty"),
     ({"$in": ["admin", "user", "root"]}, "in_values"),
     ({"$expr": {"$eq": [1, 1]}},         "expr_tautology"),
-]
+] + _EXT_JSON
 
 _ARRAY_BYPASS_PAYLOADS: List[Tuple[Any, str]] = [
     (["admin"],                    "array_single"),

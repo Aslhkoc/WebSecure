@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 import requests as _requests
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.payloads import load_external_payloads
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,25 @@ _PAYLOADS = [
     f"https://{_CANARY}%00",
 ]
 
+def _load_redirect_payloads() -> List[str]:
+    """open_redirect.txt'i yükle — attacker.com ve benzerlerini _CANARY ile değiştir."""
+    seen = set(_PAYLOADS)
+    _PLACEHOLDER_DOMAINS = ("attacker.com", "evil.com", "x.com", "burpcollaborator.net", "oastify.com")
+    extra: List[str] = []
+    for line in load_external_payloads("open_redirect"):
+        if not line:
+            continue
+        for ph in _PLACEHOLDER_DOMAINS:
+            if ph in line:
+                line = line.replace(ph, _CANARY)
+                break
+        if line not in seen:
+            seen.add(line)
+            extra.append(line)
+    return extra
+
+_PAYLOADS = _PAYLOADS + _load_redirect_payloads()
+
 # Probe edilecek endpoint path'leri
 _PROBE_PATHS = [
     "/login", "/logout", "/signin", "/signout",
@@ -107,7 +127,7 @@ _PROBE_PATHS = [
 ]
 
 _PROBE_PARAMS   = _REDIRECT_PARAMS[:15]  # ilk 15 (en yaygın)
-_PROBE_PAYLOADS = _PAYLOADS[:8]          # ilk 8 (en etkili)
+_PROBE_PAYLOADS = _PAYLOADS[:20]         # ilk 20 (tüm temel bypass varyantları)
 
 
 # ---------------------------------------------------------------------------

@@ -15,13 +15,14 @@ from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 import requests as _requests
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.payloads import load_external_payloads
 
 _logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Tier 1: Polyglot probes — trigger math evaluation across multiple engines
 # ---------------------------------------------------------------------------
-_TIER1_PROBES: List[Tuple[str, str]] = [
+_TIER1_PROBES_CORE: List[Tuple[str, str]] = [
     ("{{7*7}}", r"49"),
     ("${7*7}", r"49"),
     ("#{7*7}", r"49"),
@@ -31,6 +32,27 @@ _TIER1_PROBES: List[Tuple[str, str]] = [
     ("{{7*'7'}}", r"7777777|49"),   # Jinja2 vs Twig disambiguation
     ("${{7*7}}", r"49"),
 ]
+
+def _load_ssti_tier1() -> List[Tuple[str, str]]:
+    """ssti.txt'den math probe payloadlarını yükle, TIER1'e ekle."""
+    seen = {p for p, _ in _TIER1_PROBES_CORE}
+    extra: List[Tuple[str, str]] = []
+    _MATH_KWORDS = ("7*7", "7+'7'", "7*'7'", "1+1", "3*3")
+    _RCE_KWORDS  = ("popen", "subprocess", "system(", "exec(", "__import__", "Runtime", "forName")
+    for line in load_external_payloads("ssti"):
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        if any(k in line for k in _MATH_KWORDS):
+            extra.append((line, r"49|7777777"))
+        elif any(k in line for k in _RCE_KWORDS):
+            # RCE kanıtı: uid= veya root: ya da hata mesajı
+            extra.append((line, r"uid=\d+|root:x|java\.lang|freemarker"))
+        else:
+            extra.append((line, r"49|config|TemplateReference|Twig|freemarker|\d{2,}"))
+    return _TIER1_PROBES_CORE + extra
+
+_TIER1_PROBES: List[Tuple[str, str]] = _load_ssti_tier1()
 
 # ---------------------------------------------------------------------------
 # Tier 2: Engine fingerprinting probes

