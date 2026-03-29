@@ -145,7 +145,10 @@ def _respect_idempotent_first(phase: str, method: str, post_ratio_ok: bool) -> b
 
 def _sleep_for_rps():
     rps = max(1, int(_CURRENT_RPS.get()))
-    time.sleep(1.0 / float(rps))
+    base = 1.0 / float(rps)
+    # ±30% jitter: trafik deseni insan gibi görünsün
+    jitter = base * random.uniform(-0.30, 0.30)
+    time.sleep(max(0.0, base + jitter))
 
 def _parse_retry_after(headers: Dict[str, str]) -> Optional[float]:
     ra = headers.get("Retry-After")
@@ -934,7 +937,9 @@ class _RequestsDriver:
         now = time.monotonic()
         target = self._last_ts + self._interval
         if target > now:
-            time.sleep(target - now)
+            gap = target - now
+            gap = max(0.0, gap * random.uniform(0.70, 1.30))
+            time.sleep(gap)
         self._last_ts = time.monotonic()
         delay = 0.0
         if self._extra_delay_ms > 0:
@@ -1188,7 +1193,9 @@ class HttpClient:
         now = time.monotonic()
         target = self._last_ts + self._interval
         if target > now:
-            time.sleep(target - now)
+            gap = target - now
+            gap = max(0.0, gap * random.uniform(0.70, 1.30))
+            time.sleep(gap)
         self._last_ts = time.monotonic()
         delay = 0.0
         if self._extra_delay_ms > 0:

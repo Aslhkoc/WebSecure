@@ -1415,6 +1415,28 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
     rl = results.get("rate_limit_obs") or []
     abe = results.get("anti_block_event") or []
     cov = results.get("input_coverage") or []
+
+    # Güven seviyesi ve ciddiyet özeti
+    confidence_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+    severity_counts: Dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
+    verified_count = 0
+    all_findings = _coerce_final(results)
+    for f in all_findings:
+        conf = str(f.get("confidence") or "unknown").lower()
+        if conf not in confidence_counts:
+            conf = "unknown"
+        confidence_counts[conf] += 1
+        sev = str(f.get("severity") or "Info")
+        sev = sev.capitalize() if sev.lower() not in ("critical",) else "Critical"
+        if sev not in severity_counts:
+            sev = "Info"
+        severity_counts[sev] += 1
+        if f.get("verified"):
+            verified_count += 1
+
+    total = len(all_findings)
+    fp_rate_est = round(confidence_counts["low"] / total, 3) if total else 0.0
+
     return {
         "http": {
             "requests": int(counters.get("http_requests", 0)),
@@ -1426,6 +1448,13 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
         },
         "coverage": cov,
         "artefacts": {"findings": len(proofs_index), "paths": proofs_index},
+        "scan_meta": {
+            "total_findings": total,
+            "verified_findings": verified_count,
+            "confidence_summary": confidence_counts,
+            "severity_summary": severity_counts,
+            "estimated_fp_rate": fp_rate_est,
+        },
     }
 
 
@@ -1470,6 +1499,28 @@ def _cwe_for_item(it: Dict[str, Any]) -> list[str]:
         return [cwe]
     return []
 
+def _build_poc_curl(finding: Dict[str, Any]) -> str:
+    """Her bulgu için hazır çalıştırılabilir curl komutu üretir."""
+    url     = finding.get("url") or ""
+    method  = (finding.get("method") or finding.get("http_method") or "GET").upper()
+    param   = finding.get("parameter") or finding.get("param") or ""
+    payload = finding.get("payload") or ""
+    headers = finding.get("headers") or {}
+
+    header_str = " ".join(f'-H "{k}: {v}"' for k, v in headers.items())
+
+    if method == "POST":
+        data_arg = f'-d "{param}={payload}"' if param else f'-d "{payload}"'
+        return f'curl -sk -X POST "{url}" {header_str} {data_arg}'.strip()
+
+    if param and payload and url:
+        sep = "&" if "?" in url else "?"
+        injected_url = f"{url}{sep}{param}={payload}"
+        return f'curl -sk "{injected_url}" {header_str}'.strip()
+
+    return f'curl -sk "{url}" {header_str}'.strip()
+
+
 def enrich_cvss_cwe(results: Dict[str, Any], cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if not isinstance(results, dict):
         return results
@@ -1480,6 +1531,8 @@ def enrich_cvss_cwe(results: Dict[str, Any], cfg: Dict[str, Any] | None = None) 
             it["cvss"] = _cvss_for_item(it, cfg)
         if "cwe" not in it:
             it["cwe"] = _cwe_for_item(it)
+        if "poc_curl" not in it:
+            it["poc_curl"] = _build_poc_curl(it)
     # prefer to expose enriched list as 'final' for downstream exporters
     out["final"] = items
     return out

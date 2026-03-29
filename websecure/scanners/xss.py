@@ -138,11 +138,58 @@ class XSSScanner(BaseScanner):
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
         for hit in hits:
+            dom_confirmed = self._dom_verify_xss(url, param_name, hit.get("payload", ""))
             self.report_finding(
                 severity="High",
-                evidence="Payload reflected in response (not in baseline)",
+                evidence=(
+                    "Payload yansıtıldı + Playwright ile DOM yürütmesi DOĞRULANDI"
+                    if dom_confirmed else
+                    "Payload yansıtıldı (baseline'da yok) — DOM doğrulanamadı, manuel kontrol önerilir"
+                ),
+                verified=dom_confirmed,
+                confidence="high" if dom_confirmed else "medium",
                 **hit,
             )
+
+    def _dom_verify_xss(self, url: str, param_name: str, payload: str) -> bool:
+        """
+        Playwright ile XSS'i DOM'da doğrular: window.__xss_confirmed ayarlanmışsa True döner.
+        Playwright yoksa veya hata alınırsa sessizce False döner.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.debug("[XSS] Playwright yüklü değil; DOM doğrulaması atlandı")
+            return False
+
+        # Onay payload'u: alert(1) yerine window.__xss_confirmed=1 yaz
+        confirm_payload = (
+            payload
+            .replace("alert(1)", "window.__xss_confirmed=1")
+            .replace("confirm(1)", "window.__xss_confirmed=1")
+            .replace("prompt(1)", "window.__xss_confirmed=1")
+        )
+        if "window.__xss_confirmed" not in confirm_payload:
+            confirm_payload = '<img src=x onerror="window.__xss_confirmed=1">'
+
+        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        params[param_name] = confirm_payload
+        test_url = urlunparse(parsed._replace(query=urlencode(params)))
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(test_url, timeout=10000, wait_until="domcontentloaded")
+                page.wait_for_timeout(1500)
+                confirmed = page.evaluate("() => !!window.__xss_confirmed")
+                browser.close()
+                return bool(confirmed)
+        except Exception as exc:
+            logger.debug(f"[XSS] DOM doğrulama hatası ({test_url}): {exc!r}")
+            return False
 
     def scan_forms(self, forms: List[Dict]):
         logger.info(f"[XSS] Scanning {len(forms)} forms...")

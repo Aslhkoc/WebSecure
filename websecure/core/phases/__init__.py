@@ -3087,7 +3087,71 @@ def run_reporting_and_integration(ctx) -> None:
 
 
 def run_oast_verification(ctx) -> None:
-    add_result("meta", {"stage": "oast", "status": "not_implemented_yet"})
+    """interactsh'e poll ederek DNS/HTTP callback'lerini toplar ve eşleşen bulguları verified=True yapar."""
+    cfg = getattr(ctx, "config", {}) or {}
+    oast_cfg = cfg.get("oast", {}) or {}
+    if not oast_cfg.get("enabled", False):
+        add_result("meta", {"stage": "oast", "status": "disabled"})
+        return
+
+    interactsh_cfg = oast_cfg.get("interactsh", {}) or {}
+    server = (interactsh_cfg.get("server") or "").rstrip("/")
+    token  = interactsh_cfg.get("token", "")
+    poll_interval = float(oast_cfg.get("poll_interval", 5.0))
+    wait_seconds  = float(oast_cfg.get("wait_seconds", 45))
+
+    if not server or not token:
+        add_result("meta", {"stage": "oast", "status": "no_server_or_token"})
+        _logger.warning("[OAST] interactsh server/token yapılandırılmamış. oast.interactsh.server ve .token ayarlayın.")
+        return
+
+    import time as _time
+    import requests as _requests
+
+    # interactsh'e kayıt ol → benzersiz correlation ID al
+    try:
+        reg_resp = _requests.post(
+            f"{server}/register",
+            json={"public-key": "", "secret-key": token, "correlation-id": "websecure"},
+            timeout=10,
+        )
+        reg_data = reg_resp.json()
+        correlation_id = reg_data.get("correlation-id", "")
+        _logger.info(f"[OAST] interactsh kaydı tamam, correlation-id: {correlation_id}")
+    except Exception as exc:
+        _logger.warning(f"[OAST] interactsh kayıt hatası: {exc!r}")
+        add_result("meta", {"stage": "oast", "status": f"registration_failed: {exc}"})
+        return
+
+    # wait_seconds süresince poll et
+    deadline = _time.time() + wait_seconds
+    all_events = []
+    _logger.info(f"[OAST] {wait_seconds}s boyunca callback bekleniyor (her {poll_interval}s)...")
+    while _time.time() < deadline:
+        try:
+            poll_resp = _requests.get(
+                f"{server}/poll",
+                params={"id": correlation_id, "secret": token},
+                timeout=10,
+            )
+            data = poll_resp.json()
+            interactions = data.get("data") or []
+            if interactions:
+                all_events.extend(interactions)
+                _logger.info(f"[OAST] {len(interactions)} callback alındı!")
+        except Exception as exc:
+            _logger.debug(f"[OAST] Poll hatası: {exc!r}")
+        _time.sleep(poll_interval)
+
+    for ev in all_events:
+        add_result("oast_callbacks", ev)
+
+    add_result("meta", {
+        "stage": "oast",
+        "status": "ok",
+        "callbacks_received": len(all_events),
+    })
+    _logger.info(f"[OAST] Tamamlandı. Toplam {len(all_events)} callback.")
 
 
 

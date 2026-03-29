@@ -6,6 +6,7 @@ Dual-role comparison (high confidence) + sequential enumeration (medium confiden
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
 import logging
 import re
 from difflib import SequenceMatcher
@@ -29,6 +30,12 @@ _SENSITIVE_PATTERNS: Dict[str, str] = {
     "token":       r'"(?:token|secret|api_key|access_token)"\s*:\s*"[^"]{8,}"',
     "api_key":     r'[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]\s*[=:]\s*["\']?[A-Za-z0-9\-_]{16,}',
 }
+
+
+def _body_hash(text: str) -> str:
+    """Boşlukları normalize ederek SHA-256 üretir — aynı içerik farklı whitespace ile eşleşir."""
+    normalized = " ".join(text.split())
+    return _hashlib.sha256(normalized.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _similarity(a: str, b: str) -> float:
@@ -125,24 +132,32 @@ class IDORScanner(BaseScanner):
                 test_url = urlunparse(parsed._replace(query=urlencode(new_params)))
                 body = self._fetch(test_url, self.session)
 
-                if not body or body == original_body:
+                if not body:
+                    continue
+                # Hash kontrolü: aynı içerik ise FP — atla
+                if _body_hash(body) == _body_hash(original_body):
+                    continue
+                # Benzerlik %90 üzerinde ise çok az fark var, anlamsız — atla
+                sim = _similarity(original_body, body)
+                if sim >= 0.90:
                     continue
 
                 sensitive = _contains_sensitive(body)
                 if sensitive:
-                    sim = _similarity(original_body, body)
                     self.report_finding(
                         vuln_type="IDOR",
                         url=test_url,
                         param=param_name,
                         payload=str(test_id),
                         severity="Medium",
-                        evidence=f"Sequential enumeration revealed {sensitive} in response",
+                        evidence=f"Sıralı numaralandırma {sensitive} içeren yanıt ortaya çıkardı",
                         extra={
                             "confidence": "medium",
                             "original_id": base_id,
                             "tested_id": test_id,
                             "similarity_score": round(sim, 3),
+                            "body_hash_original": _body_hash(original_body),
+                            "body_hash_tested": _body_hash(body),
                         },
                     )
 
@@ -160,7 +175,12 @@ class IDORScanner(BaseScanner):
                     new_path = "/".join(new_parts)
                     test_url = urlunparse(parsed._replace(path=new_path))
                     body = self._fetch(test_url, self.session)
-                    if not body or body == original_body:
+                    if not body:
+                        continue
+                    if _body_hash(body) == _body_hash(original_body):
+                        continue
+                    sim_score = _similarity(original_body, body)
+                    if sim_score >= 0.90:
                         continue
                     sensitive = _contains_sensitive(body)
                     if sensitive:
@@ -170,8 +190,15 @@ class IDORScanner(BaseScanner):
                             param=f"path[{i}]",
                             payload=str(test_id),
                             severity="Medium",
-                            evidence=f"Path-based IDOR revealed {sensitive}",
-                            extra={"confidence": "medium", "original_id": base_id, "tested_id": test_id},
+                            evidence=f"Path tabanlı IDOR {sensitive} içeren yanıt ortaya çıkardı",
+                            extra={
+                                "confidence": "medium",
+                                "original_id": base_id,
+                                "tested_id": test_id,
+                                "similarity_score": round(sim_score, 3),
+                                "body_hash_original": _body_hash(original_body),
+                                "body_hash_tested": _body_hash(body),
+                            },
                         )
 
     def _fetch(self, url: str, session) -> Optional[str]:

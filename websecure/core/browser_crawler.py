@@ -7,6 +7,7 @@ Used when the HTTP-only crawler finds few endpoints relative to <script> tags.
 from __future__ import annotations
 import asyncio
 import logging
+import random as _random
 import re
 import time
 from dataclasses import dataclass, field
@@ -54,6 +55,51 @@ class BrowserCrawlResult:
     secrets_found: List[Dict] = field(default_factory=list)
     console_errors: List[str] = field(default_factory=list)
     screenshots: Dict[str, bytes] = field(default_factory=dict)
+
+
+_VIEWPORTS = [
+    {"width": 1920, "height": 1080},
+    {"width": 1680, "height": 1050},
+    {"width": 1440, "height": 900},
+    {"width": 1366, "height": 768},
+    {"width": 1280, "height": 800},
+    {"width": 1024, "height": 768},
+]
+
+_TIMEZONES = [
+    "America/New_York", "America/Chicago", "America/Los_Angeles",
+    "Europe/London", "Europe/Berlin", "Europe/Paris",
+    "Asia/Tokyo", "Asia/Singapore",
+]
+
+_ACCEPT_LANGUAGES = [
+    "en-US,en;q=0.9",
+    "en-GB,en;q=0.8,en-US;q=0.7",
+    "en-US,en;q=0.9,fr;q=0.7",
+    "de-DE,de;q=0.9,en;q=0.8",
+    "fr-FR,fr;q=0.9,en;q=0.8",
+]
+
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+]
+
+
+def _random_browser_fingerprint() -> Dict[str, Any]:
+    """Rastgele Playwright new_context kwargs döndürür (parmak izi rotasyonu)."""
+    lang = _random.choice(_ACCEPT_LANGUAGES)
+    locale = lang.split(",")[0].replace("-", "_")
+    return {
+        "user_agent": _random.choice(_USER_AGENTS),
+        "viewport": _random.choice(_VIEWPORTS),
+        "timezone_id": _random.choice(_TIMEZONES),
+        "locale": locale,
+        "extra_http_headers": {"Accept-Language": lang},
+    }
 
 
 class BrowserCrawler:
@@ -125,7 +171,7 @@ class BrowserCrawler:
 
         async with async_playwright() as pw:
             browser: Browser = await pw.chromium.launch(**launch_opts)
-            ctx_opts: Dict[str, Any] = {"user_agent": self.config.user_agent}
+            ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state
 
