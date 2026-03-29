@@ -1933,8 +1933,11 @@ def summarize_by_severity(results: Dict) -> Dict[str, int]:
         items = list(results["final"])
     else:
         for bucket, arr in (results or {}).items():
-            for it in arr or []:
-                items.append(it)
+            if not isinstance(arr, list):
+                continue
+            for it in arr:
+                if isinstance(it, dict):
+                    items.append(it)
     for it in items:
         sev = str(it.get("severity") or "Bilgi").title()
         if sev.lower() == "kritik":

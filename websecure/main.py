@@ -2701,7 +2701,19 @@ if __name__ == "__main__":
                 _payload = dict(_res)
                 if _bucket_data:
                     _payload.update(_bucket_data)
-                _payload.setdefault("meta", {})["interrupted"] = True
+                # "meta" may be a list (from add_result("meta", {...}) calls) — coerce to dict
+                _meta = _payload.get("meta")
+                if isinstance(_meta, list):
+                    _meta_dict: dict = {}
+                    for _m in _meta:
+                        if isinstance(_m, dict):
+                            _meta_dict.update(_m)
+                    _meta_dict["interrupted"] = True
+                    _payload["meta"] = _meta_dict
+                elif isinstance(_meta, dict):
+                    _meta["interrupted"] = True
+                else:
+                    _payload["meta"] = {"interrupted": True}
                 _rep_safe.perform_reporting(None, _cfg, _payload)
                 print("[+] Raporlar başarıyla kaydedildi.")
             except Exception as _re:
