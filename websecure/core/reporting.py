@@ -82,6 +82,10 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
             oast_index[tok] = ev
 
     # 3. Correlate each finding against OAST index
+    oast_available = bool(oast_index)
+    _OAST_DEPENDENT_TYPES = {"SSRF", "XXE", "SSRF/XXE", "Server-Side Request Forgery",
+                              "XML External Entity", "Blind SSRF"}
+
     for f in unique:
         if f.get("verified"):
             continue
@@ -92,13 +96,29 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
         if f.get("payload"):
             candidates += re.findall(r'[a-z0-9]{8,40}', str(f["payload"]))
 
+        matched = False
         for tok in candidates:
             if tok in oast_index:
                 f["verified"] = True
                 f["confidence"] = "high"
                 f["verification_method"] = "oast_callback"
                 f["oast_event"] = str(oast_index[tok])[:200]
+                matched = True
                 break
+
+        # Annotate SSRF/XXE findings that could not be verified via OAST
+        if not matched and (f.get("type") in _OAST_DEPENDENT_TYPES):
+            if not oast_available:
+                f.setdefault("confidence", "low")
+                f.setdefault("verification_note",
+                             "OAST server not configured — out-of-band callback verification unavailable. "
+                             "Finding is potential only; manual confirmation required.")
+            else:
+                # OAST available but no token matched → still unconfirmed
+                f.setdefault("confidence", "medium")
+                f.setdefault("verification_note",
+                             "No OAST callback received for this finding. "
+                             "May be a false positive or firewall-blocked outbound request.")
 
     # 4. CVSS scoring (score_findings defined in this module via merged cvss_scorer)
     try:

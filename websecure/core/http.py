@@ -129,7 +129,7 @@ def _choose_identity_for_phase(phase: str) -> Dict[str, str]:
     ident = {"User-Agent": ua, "Accept-Language": al, "Accept": ac}
     prev = _LAST_IDENTITY.get()
     if prev != ident:
-        print(f"[HTTP] identity switch → UA='{ua[:42]}...' AL='{al}'")
+        _logger.debug(f"[HTTP] identity switch → UA='{ua[:42]}...' AL='{al}'")
         _LAST_IDENTITY.set(ident)
     return ident
 
@@ -169,7 +169,7 @@ def _respect_retry_after(headers: Dict[str, str]) -> None:
     """Honor Retry-After header on 429 responses. Circuit breaker handles threshold logic."""
     ra = _parse_retry_after(headers) if _HTTP_POLICY["rate_limit"]["respect_retry_after"] else None
     wait_time = ra if (ra is not None and ra > 0) else 5.0
-    print(f"[HTTP] Retry-After → sleeping {wait_time:.1f}s")
+    _logger.debug(f"[HTTP] Retry-After → sleeping {wait_time:.1f}s")
     time.sleep(wait_time)
 
 def _try_rotate_identity(session_obj) -> bool:
@@ -205,7 +205,7 @@ def _maybe_recover_from_backoff() -> None:
     step = int(_HTTP_POLICY["rate_limit"]["recover_step"])
     if rps < max_rps:
         _CURRENT_RPS.set(min(max_rps, rps + max(1, step)))
-        print(f"[HTTP] canary → RPS {rps}→{_CURRENT_RPS.get()} (phase={ACTIVE_PHASE.get()})")
+        _logger.debug(f"[HTTP] canary → RPS {rps}→{_CURRENT_RPS.get()} (phase={ACTIVE_PHASE.get()})")
 
 def _smart_request(self, method, url, **kwargs):
     phase = ACTIVE_PHASE.get()
@@ -275,7 +275,7 @@ def _smart_request(self, method, url, **kwargs):
             _cb_record(status)
 
             if status in (403, 429):
-                print(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")
+                _logger.debug(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")
                 # Live monitor: ban detected
                 try:
                     from websecure.core.reporting import get_live_monitor
@@ -286,7 +286,7 @@ def _smart_request(self, method, url, **kwargs):
                 if attempt <= max_retries:
                     rotated = _try_rotate_identity(self)
                     if rotated:
-                        print("[Autopilot] Identity rotated. Retrying…")
+                        _logger.debug("[Autopilot] Identity rotated. Retrying…")
                         _cb_reset()  # new identity → clean slate for circuit breaker
                         kwargs["headers"].update(_choose_identity_for_phase(phase))
                         continue
@@ -316,7 +316,7 @@ def _smart_request(self, method, url, **kwargs):
             _cb_record_error()
             err_msg    = str(e).lower()
             is_timeout = "timeout" in err_msg or "timed out" in err_msg
-            print(f"[Autopilot] Connection error ({e.__class__.__name__}). Retry {attempt}/{max_retries}…")
+            _logger.debug(f"[Autopilot] Connection error ({e.__class__.__name__}). Retry {attempt}/{max_retries}…")
 
             if is_timeout and attempt < max_retries:
                 _try_rotate_identity(self)
@@ -325,7 +325,7 @@ def _smart_request(self, method, url, **kwargs):
                 time.sleep(1.0)
                 continue
 
-            print(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
+            _logger.debug(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
             raise e
 
     return resp  # safe fallback (loop should always return or raise above)

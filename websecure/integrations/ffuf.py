@@ -6,11 +6,18 @@ Fuzzing tool wrappers.
 """
 import json
 import logging
+import random
 import shutil
+import string
 import subprocess
 import tempfile
 import os
 from typing import List, Dict, Optional, Any
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +55,26 @@ class FFUFWrapper:
             return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
         return shutil.which(self.binary) is not None or os.path.exists(self.binary)
 
+    def _get_baseline_size(self, base_url: str) -> Optional[str]:
+        """
+        Probe a guaranteed-nonexistent path to get the 404 response size.
+        Returns the size as a string for ffuf -fs, or None on failure.
+        This prevents false positives caused by soft-404 pages.
+        """
+        if _requests is None:
+            return None
+        try:
+            rand_path = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+            probe_url = base_url.rstrip("/") + "/" + rand_path
+            resp = _requests.get(probe_url, timeout=10, allow_redirects=True,
+                                 headers={"User-Agent": "WebSecure/1.0"})
+            size = len(resp.content)
+            logger.debug(f"[FFUF] Baseline 404 size for {base_url}: {size} bytes")
+            return str(size)
+        except Exception as e:
+            logger.debug(f"[FFUF] Baseline probe failed: {e}")
+            return None
+
     def run_scan(self,
                  url: str,
                  wordlist: str,
@@ -70,6 +97,11 @@ class FFUFWrapper:
             if not url.endswith("/"):
                 url += "/"
             url += "FUZZ"
+
+        # Auto-baseline: if no explicit filter_size, probe a 404 to suppress soft-404 FPs
+        if not filter_size:
+            base = url.split("FUZZ")[0]
+            filter_size = self._get_baseline_size(base)
 
         findings = []
         fd, temp_output = tempfile.mkstemp(suffix=".json")

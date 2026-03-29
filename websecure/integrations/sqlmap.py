@@ -1,3 +1,4 @@
+import csv
 import re
 import requests
 import time
@@ -127,17 +128,11 @@ class SQLMapWrapper:
                 return []
 
         import tempfile
-        import csv
 
-        # Use CSV output for easier parsing
-        fd, temp_output = tempfile.mkstemp(suffix="") # just a dir prefix? sqlmap creates files
-        os.close(fd)
-        # Actually sqlmap output directory logic is complex. 
-        # Easier: capture stdout for "vulnerability found"? 
-        # Or use --output-dir.
-        
         out_dir = tempfile.mkdtemp()
-        
+        fd, csv_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+
         try:
             if self.binary.endswith(".py"):
                 import sys
@@ -151,6 +146,7 @@ class SQLMapWrapper:
                 "--risk", str(risk),
                 "--level", str(level),
                 "--output-dir", out_dir,
+                "--results-file", csv_path,
                 "--disable-coloring",
                 "--forms",           # also test HTML form inputs
                 "--parse-errors",    # expose DB error messages
@@ -171,23 +167,27 @@ class SQLMapWrapper:
             stdout = proc.stdout or ""
             stderr = proc.stderr or ""
 
-            results = _parse_sqlmap_output(stdout + "\n" + stderr, target)
+            # Primary: parse structured CSV written by --results-file
+            results = _parse_sqlmap_csv(csv_path, target)
 
-            # Also scan the log file written to out_dir for any extra detail
-            for dirpath, _, filenames in os.walk(out_dir):
-                if "log" in filenames:
-                    try:
-                        with open(os.path.join(dirpath, "log"), encoding="utf-8", errors="replace") as fh:
-                            log_text = fh.read()
-                        extra = _parse_sqlmap_output(log_text, target)
-                        # Merge: append findings not already in results
-                        seen = {r.get("parameter") for r in results}
-                        for r in extra:
-                            if r.get("parameter") not in seen:
-                                results.append(r)
-                                seen.add(r.get("parameter"))
-                    except Exception as exc:
-                        pass
+            if not results:
+                # Fallback: regex parsing of stdout/stderr
+                results = _parse_sqlmap_output(stdout + "\n" + stderr, target)
+
+                # Also check the log file sqlmap writes to out_dir
+                for dirpath, _, filenames in os.walk(out_dir):
+                    if "log" in filenames:
+                        try:
+                            with open(os.path.join(dirpath, "log"), encoding="utf-8", errors="replace") as fh:
+                                log_text = fh.read()
+                            extra = _parse_sqlmap_output(log_text, target)
+                            seen = {r.get("parameter") for r in results}
+                            for r in extra:
+                                if r.get("parameter") not in seen:
+                                    results.append(r)
+                                    seen.add(r.get("parameter"))
+                        except Exception:
+                            pass
 
             return results
 
@@ -200,8 +200,53 @@ class SQLMapWrapper:
         finally:
             try:
                 shutil.rmtree(out_dir)
-            except Exception as exc:
+            except Exception:
                 pass
+            try:
+                os.remove(csv_path)
+            except Exception:
+                pass
+
+
+def _parse_sqlmap_csv(csv_path: str, target: str) -> List[Dict[str, Any]]:
+    """
+    Parse sqlmap --results-file CSV output.
+    Columns: Target URL, Place, Parameter, Technique(s), Note(s)
+    Returns structured finding dicts compatible with _parse_sqlmap_output format.
+    """
+    results: List[Dict[str, Any]] = []
+    try:
+        with open(csv_path, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                param = (row.get("Parameter") or row.get("parameter") or "").strip()
+                place = (row.get("Place") or row.get("place") or "GET").strip().upper()
+                techniques = (row.get("Technique(s)") or row.get("techniques") or "").strip()
+                notes = (row.get("Note(s)") or row.get("notes") or "").strip()
+                url = (row.get("Target URL") or row.get("target url") or target).strip()
+
+                if not param:
+                    continue
+
+                inj_types = [t.strip() for t in techniques.split(",") if t.strip()]
+                results.append({
+                    "type": "SQL Injection",
+                    "url": url,
+                    "severity": "Critical",
+                    "parameter": param,
+                    "method": place,
+                    "injections": [{"type": t} for t in inj_types],
+                    "evidence": {"notes": notes} if notes else {},
+                    "description": (
+                        f"SQL injection in parameter '{param}' ({place}) "
+                        f"via {techniques or 'unknown technique'}."
+                    ),
+                })
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.debug(f"[SQLMap] CSV parse error: {e}")
+    return results
 
 
 def _parse_sqlmap_output(text: str, target: str) -> List[Dict[str, Any]]:

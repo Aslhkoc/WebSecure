@@ -1,4 +1,5 @@
 import logging
+import re
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional, Any
 
@@ -74,21 +75,24 @@ class NmapWrapper:
         try:
             cmd = [self.binary]
 
-            # Mode-based scan args
+            # Mode-based scan args — strip timing flag if extra_args override it
             mode_args = self._mode_args(mode, ports)
+            if extra_args and any(re.match(r'^-T[0-5]$', a) for a in extra_args):
+                mode_args = [a for a in mode_args if not re.match(r'^-T[0-5]$', a)]
             cmd.extend(mode_args)
+
+            # Extra args before target (nmap best practice)
+            if extra_args:
+                cmd.extend(extra_args)
 
             # XML output
             cmd.extend(["-oX", temp_output])
 
-            # Target last
+            # Target always last
             cmd.append(target)
 
-            if extra_args:
-                cmd.extend(extra_args)
-
             logger.info(f"[Nmap] {target} üzerinde '{mode}' taraması başlatılıyor...")
-            print(f"[Nmap] {target} taranıyor (mod={mode}, portlar={ports or 'otomatik'})...")
+            logger.debug(f"[Nmap] {target} taranıyor (mod={mode}, portlar={ports or 'otomatik'})...")
 
             subprocess.run(
                 cmd,

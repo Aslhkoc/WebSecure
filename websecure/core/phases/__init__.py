@@ -1431,6 +1431,18 @@ def _runner_verify_and_score(ctx) -> None:
         scored = score_findings(verified, auth_required=auth_required, waf_detected=waf_detected)
         add_result("scored_findings", {"findings": scored, "total": len(scored)})
         _logger.info(f"[phases] Verified & scored {len(scored)} findings")
+
+        # Warn if OAST-dependent findings exist but OAST was not configured
+        if not oast_events:
+            _OAST_TYPES = {"SSRF", "XXE", "SSRF/XXE", "Server-Side Request Forgery",
+                           "XML External Entity", "Blind SSRF"}
+            unverified_oast = [f for f in scored if f.get("type") in _OAST_TYPES]
+            if unverified_oast:
+                _logger.warning(
+                    f"[phases] {len(unverified_oast)} SSRF/XXE finding(s) could not be verified: "
+                    "no OAST server configured. Configure 'oast.interactsh_url' in config.json "
+                    "to enable out-of-band confirmation."
+                )
     except Exception as e:
         _logger.warning(f"[phases] verify_and_score error: {e}")
 
@@ -2617,7 +2629,7 @@ def run_sqlmap_scan(ctx) -> None:
     risk = int(_get_config(ctx, "sqlmap.risk", 1))
 
     # [Check 5] Proxy
-    extra_args = []
+    extra_args = list(_get_config(ctx, "sqlmap.extra_args", []) or [])
     proxy = _resolve_proxy(ctx)
     if proxy:
         extra_args.append(f"--proxy={proxy}")
