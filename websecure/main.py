@@ -1389,11 +1389,15 @@ O====|_______________________________________________________>  1   1 0
     if _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled"):
         _token = _interactsh_cfg.get("token", "")
         if _token and "BURAYA" not in _token:
+            _server_domain = _interactsh_cfg.get("server", "").replace("https://", "").replace("http://", "")
+            _full_subdomain = f"{_token}.{_server_domain}" if _server_domain else _token
             print("\n" + "="*60)
             print("  [!] OAST / interactsh UYARISI")
             print("  interactsh-client.exe AÇIK OLMALI!")
             print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
-            print(f"  Subdomain: {_token}.{_oast_cfg.get('dns_domain', '').replace(_token + '.', '')}")
+            print(f"  Token   : {_token}")
+            print(f"  Server  : {_interactsh_cfg.get('server', '')}")
+            print(f"  Subdomain: {_full_subdomain}")
             print("="*60 + "\n")
 
     # --- Kimlik doğrulama (auth_profiles) doldurma rehberi ---
