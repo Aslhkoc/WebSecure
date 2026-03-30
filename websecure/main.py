@@ -1414,8 +1414,8 @@ O====|_______________________________________________________>  1   1 0
         if _missing:
             print("\n" + "="*60)
             print("  [i] KİMLİK DOĞRULAMA KURULUMU")
-            print("  Authenticated scan için config.json > authenticated >\")
-            print("  auth_profiles[0] bölümünü doldurun:\n")
+            print("  Authenticated scan icin config.json > authenticated >")
+            print("  auth_profiles[0] bolumunu doldurun:\n")
             for _m in _missing:
                 print(f"    - {_m}")
             print("\n  Örnek:")
