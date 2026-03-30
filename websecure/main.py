@@ -1383,47 +1383,97 @@ O====|_______________________________________________________>  1   1 0
     # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
     _ensure_playwright_chromium()
 
-    # --- OAST interactsh uyarısı ---
+    # --- OAST interactsh kurulum sorusu ---
     _oast_cfg = cfg.get("oast", {}) or {}
     _interactsh_cfg = _oast_cfg.get("interactsh", {}) or {}
-    if _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled"):
-        _token = _interactsh_cfg.get("token", "")
-        if _token and "BURAYA" not in _token:
-            _server_domain = _interactsh_cfg.get("server", "").replace("https://", "").replace("http://", "")
-            _full_subdomain = f"{_token}.{_server_domain}" if _server_domain else _token
-            print("\n" + "="*60)
-            print("  [!] OAST / interactsh UYARISI")
-            print("  interactsh-client.exe AÇIK OLMALI!")
-            print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
-            print(f"  Token   : abc123xyz...")
-            print(f"  Server  : https://oast.me")
-            print(f"  Subdomain: abc123xyz.oast.me")
+    _oast_token = _interactsh_cfg.get("token", "")
+    _oast_enabled = _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled")
+
+    if not _oast_enabled or not _oast_token or "BURAYA" in _oast_token:
+        print("\n" + "="*60)
+        print("  [?] OAST / interactsh kurulumu")
+        print("  SSRF ve XXE bulmalarini dogrulamak icin interactsh gerekir.")
+        print("  interactsh-client.exe'yi indirip calistirarak token alabilirsiniz.")
+        print("  https://github.com/projectdiscovery/interactsh/releases")
+        print("")
+        _ans = input("  interactsh token'iniz var mi? (e/h): ").strip().lower()
+        if _ans == "e":
+            _new_token = input("  Token'i girin (ornek: abc123xyz): ").strip()
+            _new_server = input("  Server'i girin (Enter = https://oast.me): ").strip()
+            if not _new_server:
+                _new_server = "https://oast.me"
+            if _new_token:
+                cfg.setdefault("oast", {})["enabled"] = True
+                cfg["oast"].setdefault("interactsh", {})["enabled"] = True
+                cfg["oast"]["interactsh"]["token"] = _new_token
+                cfg["oast"]["interactsh"]["server"] = _new_server
+                _server_domain = _new_server.replace("https://", "").replace("http://", "")
+                cfg["oast"]["dns_domain"] = f"{_new_token}.{_server_domain}"
+                print(f"  [+] OAST ayarlandi: {_new_token}.{_server_domain}")
+        else:
+            print("  [i] OAST atlanıyor. SSRF/XXE bulguları doğrulanamayacak.")
+        print("="*60)
+
+    elif _oast_enabled and _oast_token:
+        _server_domain = _interactsh_cfg.get("server", "").replace("https://", "").replace("http://", "")
+        print("\n" + "="*60)
+        print("  [!] OAST / interactsh UYARISI")
+        print("  interactsh-client.exe AÇIK OLMALI!")
+        print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
+        print(f"  Örnek subdomain: abc123xyz.oast.me")
+        _confirmed = input("  interactsh-client.exe açık mı? (e/h): ").strip().lower()
+        if _confirmed != "e":
+            print("  [!] Lütfen interactsh-client.exe'yi açıp tekrar çalıştırın.")
+            print("="*60 + "\n")
+        else:
+            print("  [+] Devam ediliyor.")
             print("="*60 + "\n")
 
-    # --- Kimlik doğrulama (auth_profiles) doldurma rehberi ---
+    # --- Kimlik doğrulama (auth_profiles) kullanıcıdan al ---
     _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
+    _do_auth_setup = False
     if _auth_profiles:
         _p = _auth_profiles[0]
-        _missing = []
-        if not _p.get("username") or _p.get("username") == "KULLANICI_ADI":
-            _missing.append("username (kullanıcı adı / e-posta)")
-        if not _p.get("password") or _p.get("password") == "SIFRE":
-            _missing.append("password (şifre)")
-        if not _p.get("login_url") or "hedef-site" in _p.get("login_url", ""):
-            _missing.append("login_url (giriş sayfası URL'si)")
-        if _missing:
-            print("\n" + "="*60)
-            print("  [i] KİMLİK DOĞRULAMA KURULUMU")
-            print("  Authenticated scan icin config.json > authenticated >")
-            print("  auth_profiles[0] bolumunu doldurun:\n")
-            for _m in _missing:
-                print(f"    - {_m}")
-            print("\n  Örnek:")
-            print('    "username": "test@site.com"')
-            print('    "password": "sifreniz"')
-            print('    "login_url": "https://hedef.com/login"')
-            print('    "success_indicator": "dashboard"  ← giriş sonrası sayfada geçen kelime')
-            print("="*60 + "\n")
+        if (not _p.get("username") or _p.get("username") == "KULLANICI_ADI" or
+                not _p.get("password") or _p.get("password") == "SIFRE" or
+                not _p.get("login_url") or "hedef-site" in _p.get("login_url", "")):
+            _do_auth_setup = True
+    else:
+        _do_auth_setup = True
+
+    print("\n" + "="*60)
+    print("  [?] Kimlik dogrulama (Authenticated Scan)")
+    print("  Hedef sitede kullanici hesabi varsa login bilgilerini")
+    print("  girin. Login gerektiren sayfalar da taranacak.")
+    _auth_ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
+    if _auth_ans == "e":
+        _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
+        _username  = input("  Kullanici adi / e-posta: ").strip()
+        import getpass as _getpass
+        _password  = _getpass.getpass("  Sifre (gizli girilir): ")
+        _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
+        _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
+        _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
+        if _login_url and _username and _password:
+            _new_profile = {
+                "login_url": _login_url,
+                "username": _username,
+                "password": _password,
+                "username_field": _ufield,
+                "password_field": _pfield,
+                "success_indicator": _success,
+            }
+            cfg.setdefault("authenticated", {}).setdefault("auth_profiles", [])
+            if cfg["authenticated"]["auth_profiles"]:
+                cfg["authenticated"]["auth_profiles"][0] = _new_profile
+            else:
+                cfg["authenticated"]["auth_profiles"].append(_new_profile)
+            print("  [+] Kimlik bilgileri alindi. Otomatik giris yapilacak.")
+        else:
+            print("  [!] Eksik bilgi. Kimlik dogrulama atlanıyor.")
+    else:
+        print("  [i] Kimlik dogrulama atlanıyor. Yalnizca genel sayfalar taranacak.")
+    print("="*60 + "\n")
 
     # --- Tool Manager Integration (Early Prompt) ---
     from websecure.core.tool_manager import ToolManager
