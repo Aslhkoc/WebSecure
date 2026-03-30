@@ -1395,9 +1395,9 @@ O====|_______________________________________________________>  1   1 0
             print("  [!] OAST / interactsh UYARISI")
             print("  interactsh-client.exe AÇIK OLMALI!")
             print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
-            print(f"  Token   : {_token}")
-            print(f"  Server  : {_interactsh_cfg.get('server', '')}")
-            print(f"  Subdomain: {_full_subdomain}")
+            print(f"  Token   : abc123xyz...")
+            print(f"  Server  : https://oast.me")
+            print(f"  Subdomain: abc123xyz.oast.me")
             print("="*60 + "\n")
 
     # --- Kimlik doğrulama (auth_profiles) doldurma rehberi ---
