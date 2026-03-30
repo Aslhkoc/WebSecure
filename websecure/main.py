@@ -1418,50 +1418,6 @@ O====|_______________________________________________________>  1   1 0
             print("  [i] OAST atlaniyor. SSRF/XXE bulgulari dogrulanamayacak.")
         print("="*60 + "\n")
 
-    # --- Kimlik doğrulama (auth_profiles) kullanıcıdan al ---
-    _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
-    _do_auth_setup = False
-    if _auth_profiles:
-        _p = _auth_profiles[0]
-        if (not _p.get("username") or _p.get("username") == "KULLANICI_ADI" or
-                not _p.get("password") or _p.get("password") == "SIFRE" or
-                not _p.get("login_url") or "hedef-site" in _p.get("login_url", "")):
-            _do_auth_setup = True
-    else:
-        _do_auth_setup = True
-
-    print("\n" + "="*60)
-    print("  [?] Kimlik dogrulama (Authenticated Scan)")
-    print("  Hedef sitede kullanici hesabi varsa login bilgilerini")
-    print("  girin. Login gerektiren sayfalar da taranacak.")
-    _auth_ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
-    if _auth_ans == "e":
-        _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
-        _username  = input("  Kullanici adi / e-posta: ").strip()
-        _password = input("  Sifre: ").strip()
-        _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
-        _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
-        _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
-        if _login_url and _username and _password:
-            _new_profile = {
-                "login_url": _login_url,
-                "username": _username,
-                "password": _password,
-                "username_field": _ufield,
-                "password_field": _pfield,
-                "success_indicator": _success,
-            }
-            cfg.setdefault("authenticated", {}).setdefault("auth_profiles", [])
-            if cfg["authenticated"]["auth_profiles"]:
-                cfg["authenticated"]["auth_profiles"][0] = _new_profile
-            else:
-                cfg["authenticated"]["auth_profiles"].append(_new_profile)
-            print("  [+] Kimlik bilgileri alindi. Otomatik giris yapilacak.")
-        else:
-            print("  [!] Eksik bilgi. Kimlik dogrulama atlanıyor.")
-    else:
-        print("  [i] Kimlik dogrulama atlanıyor. Yalnizca genel sayfalar taranacak.")
-    print("="*60 + "\n")
 
     # --- Tool Manager Integration (Early Prompt) ---
     from websecure.core.tool_manager import ToolManager
@@ -1775,80 +1731,6 @@ O====|_______________________________________________________>  1   1 0
         print("[Egress] Tor devre dışı.")
 
 
-    _read = globals().get("_readline_default")
-    if not callable(_read):
-
-        def _read(prompt: str, default: str) -> str:
-            try:
-                val = input(prompt)
-                s = (val if isinstance(val, str) else "").strip()
-                return s if s != "" else default
-            except EOFError:
-                return default
-
-    print("")
-    if not args.dry_run and not args.batch:
-        print("Kimlikli tarama (oturum/cookie/token ile) yapmak ister misiniz? (E/h)")
-        ans = (_read("> ", "h") or "h").strip().lower()
-    else:
-        ans = "h"
-        if args.dry_run:
-            print("[Dry-Run] Kimlik sorusu atlandı (varsayılan: hayır).")
-
-    if ans.startswith("e"):
-        cfg.setdefault("auth", {}).update({"enabled": True})
-        print("")
-        print("Yöntem seçin:")
-        print("  [1] Cookie (ör. sessionid=...; diğerleri noktalı virgülle)")
-        print("  [2] Bearer Token (sadece değer, 'Bearer' yazmayın)")
-        print("  [3] API Key (Header adı + anahtar)")
-        print("  [4] Form Login (login URL + kullanıcı + parola)")
-        sel = (_read("Seçim (1-4): ", "0") or "0").strip()
-        m = int(sel) if sel.isdigit() else 0
-
-        if m == 1:
-            raw = _read("Cookie girin (ör. sessionid=abc123; csrftoken=xyz): ", "").strip()
-            cookies = {}
-            for part in raw.split(";"):
-                part = part.strip()
-                if not part or "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                cookies[k.strip()] = v.strip()
-            cfg["auth"]["cookie"] = cookies
-            cfg["mode"] = "authenticated"
-        elif m == 2:
-            tok = _read("Bearer token değerini girin: ", "").strip()
-            cfg["auth"]["bearer"] = tok
-            cfg["mode"] = "authenticated"
-        elif m == 3:
-            hdr = (_read("API Key header adı (örn: X-API-Key): ", "X-API-Key") or "X-API-Key").strip()
-            key = _read("API key değeri: ", "").strip()
-            cfg["auth"]["api_key_header"] = hdr
-            cfg["auth"]["api_key"] = key
-            cfg["mode"] = "authenticated"
-        elif m == 4:
-            lu = _read("Login URL: ", "").strip()
-            un = _read("Kullanıcı adı/E-posta: ", "").strip()
-            pw = _read("Parola: ", "").strip()
-            cfg["auth"].update({
-                "login_url": lu,
-                "username_field": cfg.get("auth", {}).get("username_field", "username"),
-                "password_field": cfg.get("auth", {}).get("password_field", "password"),
-                "creds": {"username": un, "password": pw},
-                "enabled": True
-            })
-            cfg["mode"] = "authenticated"
-        else:
-            print("[i] Geçersiz seçim; kimliksiz taramaya geçiliyor.")
-            cfg["mode"] = "unauthenticated"
-            cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
-            cfg["kimliksiz_mod"].setdefault("priming", {})["enabled"] = True
-    else:
-        # Kimliksiz tarama
-        cfg["mode"] = "unauthenticated"
-        cfg.setdefault("kimliksiz_mod", {}).setdefault("idempotent_only", True)
-        cfg["kimliksiz_mod"].setdefault("priming", {})["enabled"] = True
 
     # Opsiyonel: kurumsal proxy/VPN gibi bir çıkış kullanmak ister misiniz?
     # Proxy tercihi (istisnasız)
@@ -1925,32 +1807,8 @@ O====|_______________________________________________________>  1   1 0
 
         session = _setup_session_from_config(cfg)
 
-        # --- Otomatik Playwright login (auth_profiles yapılandırılmışsa) ---
-        _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or
-                          (cfg.get("auth") or {}).get("auth_profiles") or [])
-        _pw_login_result = None
-        if _auth_profiles and _auth_profiles[0].get("username") and _auth_profiles[0].get("password"):
-            try:
-                from websecure.core.auth_flow import playwright_login as _pw_login
-                print("[*] Playwright ile otomatik giriş yapılıyor...")
-                _pw_login_result = _pw_login(cfg, session_path="session.json")
-                if _pw_login_result and _pw_login_result.get("login_successful"):
-                    # Cookies'i requests session'a aktar
-                    for _cname, _cval in (_pw_login_result.get("cookies") or {}).items():
-                        session.cookies.set(_cname, _cval)
-                    # BrowserCrawler için storage_state yolunu config'e yaz
-                    cfg.setdefault("browser", {})["auth_storage_state"] = \
-                        _pw_login_result.get("storage_state_path", "session.json")
-                    # 401 re-auth için auth config'i session'a bağla
-                    session._auth_cfg = {"auth_profiles": _auth_profiles}
-                    print("[+] Giriş başarılı. Oturum cookies'i ve session.json hazır.")
-                elif _pw_login_result:
-                    print("[!] Giriş başarısız olabilir. Scan devam ediyor.")
-            except Exception as _pw_exc:
-                print(f"[!] Otomatik login hatası: {_pw_exc}. Scan devam ediyor.")
-
         # --- Ön tanımlar: daha sonra kullanılan bağlamlar (lint/akış güvenliği) ---
-        auth_ctx = _build_auth_ctx(session, cfg) if (mode == ScanMode.AUTHENTICATED) else None
+        auth_ctx = None
         oast_cfg = (cfg.get('oast') or {})
         _enforce_egress_policy(cfg)
         _egress_health_check(session, cfg, results)
@@ -2178,16 +2036,7 @@ O====|_______________________________________________________>  1   1 0
                 return time.time()
             results["phase_timings"][phase_name] = round(time.time() - start_t, 2)
 
-        if mode == ScanMode.AUTHENTICATED:
-            print("[*] Kimlikli tarama başlatılıyor…")
-            snap = dict(results)
-            run_mode(ctx, ScanMode.AUTHENTICATED)
-            meta = ctx.results.get("meta", {})
-            auth_failed = (ctx.results == snap) or meta.get("auth_fallback") or meta.get("auth_error")
-            if auth_failed:
-                print("[!] Kimlikli tarama başarısız/atlandı; standart taramaya düşülüyor.")
-        else:
-            print("[*] Standart tarama başlatılıyor…")
+        print("[*] Standart tarama başlatılıyor…")
 
         # [FIX] Legacy manual block replaced with Unified Plan Runner to ensure all
         # configured scanners (SSRF, NoSQLi, JWT, etc.) are executed.
@@ -2562,7 +2411,7 @@ O====|_______________________________________________________>  1   1 0
         print("fuzzing başlıyor…")
         t = mark("fuzzing")
 
-        auth_ctx = _build_auth_ctx(session, cfg) if (mode == ScanMode.AUTHENTICATED) else None
+        auth_ctx = None
 
         fuzz_fn = fuzz_endpoint if callable(globals().get("fuzz_endpoint")) else None
         sig_params = set(inspect.signature(fuzz_fn).parameters.keys()) if callable(fuzz_fn) else set()
@@ -2667,15 +2516,6 @@ O====|_______________________________________________________>  1   1 0
             elif not ok_authz and callable(globals().get("add_result")):
                 add_result("errors", {"stage": "authorization", "error": str(auth_findings)})
 
-        # Auth-only kaynak işaretleme (kimlikli akış varsa) — bastırmasız
-        if callable(globals().get("_build_auth_ctx")) and callable(globals().get("probe_auth_only")):
-            if mode == ScanMode.AUTHENTICATED and _build_auth_ctx(session, cfg):
-                for u in endpoints[:20]:
-                    ok_probe, f = _safe_call(probe_auth_only, session, "GET", u, call_timeout=60.0)
-                    if ok_probe and f and callable(globals().get("add_result")):
-                        add_result("auth_only", f)
-                    elif not ok_probe and callable(globals().get("add_result")):
-                        add_result("errors", {"stage": "auth_only_probe", "url": u, "error": str(f)})
 
         bl_cfg = (cfg.get("business_logic") or {}) if isinstance(cfg, dict) else {}
         if bl_cfg.get("enabled", True):
