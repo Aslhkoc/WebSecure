@@ -1438,11 +1438,7 @@ O====|_______________________________________________________>  1   1 0
     if _auth_ans == "e":
         _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
         _username  = input("  Kullanici adi / e-posta: ").strip()
-        try:
-            import getpass as _getpass
-            _password = _getpass.getpass("  Sifre (gizli girilir, Enter ile onayla): ")
-        except Exception:
-            _password = input("  Sifre: ").strip()
+        _password = input("  Sifre: ").strip()
         _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
         _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
         _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
