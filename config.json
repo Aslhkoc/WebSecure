@@ -596,8 +596,8 @@
   "oast": {
     "enabled": true,
     "provider": "generic",
-    "root_domain": "oast.example.com",
-    "dns_domain": "oast.example.com",
+    "root_domain": "d753a6mue20k4855t8p0ym9ycdocz3fx5.oast.me",
+    "dns_domain": "d753a6mue20k4855t8p0ym9ycdocz3fx5.oast.me",
     "api_url": "",
     "api_key": "",
     "http_endpoint": "",
@@ -617,9 +617,9 @@
       "category"
     ],
     "interactsh": {
-      "enabled": false,
-      "server": "https://oast.pro",
-      "token": "BURAYA_INTERACTSH_TOKEN_YAZIN"
+      "enabled": true,
+      "server": "https://oast.me",
+      "token": "d753a6mue20k4855t8p0ym9ycdocz3fx5"
     },
     "wait_seconds": 45,
     "channels": [
