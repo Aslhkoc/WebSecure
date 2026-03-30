@@ -1383,6 +1383,44 @@ O====|_______________________________________________________>  1   1 0
     # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
     _ensure_playwright_chromium()
 
+    # --- OAST interactsh uyarısı ---
+    _oast_cfg = cfg.get("oast", {}) or {}
+    _interactsh_cfg = _oast_cfg.get("interactsh", {}) or {}
+    if _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled"):
+        _token = _interactsh_cfg.get("token", "")
+        if _token and "BURAYA" not in _token:
+            print("\n" + "="*60)
+            print("  [!] OAST / interactsh UYARISI")
+            print("  interactsh-client.exe AÇIK OLMALI!")
+            print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
+            print(f"  Subdomain: {_token}.{_oast_cfg.get('dns_domain', '').replace(_token + '.', '')}")
+            print("="*60 + "\n")
+
+    # --- Kimlik doğrulama (auth_profiles) doldurma rehberi ---
+    _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
+    if _auth_profiles:
+        _p = _auth_profiles[0]
+        _missing = []
+        if not _p.get("username") or _p.get("username") == "KULLANICI_ADI":
+            _missing.append("username (kullanıcı adı / e-posta)")
+        if not _p.get("password") or _p.get("password") == "SIFRE":
+            _missing.append("password (şifre)")
+        if not _p.get("login_url") or "hedef-site" in _p.get("login_url", ""):
+            _missing.append("login_url (giriş sayfası URL'si)")
+        if _missing:
+            print("\n" + "="*60)
+            print("  [i] KİMLİK DOĞRULAMA KURULUMU")
+            print("  Authenticated scan için config.json > authenticated >\")
+            print("  auth_profiles[0] bölümünü doldurun:\n")
+            for _m in _missing:
+                print(f"    - {_m}")
+            print("\n  Örnek:")
+            print('    "username": "test@site.com"')
+            print('    "password": "sifreniz"')
+            print('    "login_url": "https://hedef.com/login"')
+            print('    "success_indicator": "dashboard"  ← giriş sonrası sayfada geçen kelime')
+            print("="*60 + "\n")
+
     # --- Tool Manager Integration (Early Prompt) ---
     from websecure.core.tool_manager import ToolManager
     tm = ToolManager(cfg)

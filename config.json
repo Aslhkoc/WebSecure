@@ -704,7 +704,7 @@
       "http://metadata.google.internal/",
       "http://[::1]/",
       "http://127.0.0.1:80/"
-    ],
+    ]
   },
   "waf": {
     "enabled": true,
