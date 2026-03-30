@@ -177,6 +177,44 @@ class BrowserCrawler:
 
             context: BrowserContext = await browser.new_context(**ctx_opts)
 
+            # Canvas / WebGL fingerprint randomization — evade bot-detection systems
+            await context.add_init_script("""
+                (function() {
+                    // Canvas: add per-pixel noise so toDataURL output is unique per session
+                    const _origGetContext = HTMLCanvasElement.prototype.getContext;
+                    HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+                        const ctx = _origGetContext.apply(this, arguments);
+                        if (ctx && type === '2d') {
+                            const _origGetImageData = ctx.getImageData.bind(ctx);
+                            ctx.getImageData = function(x, y, w, h) {
+                                const d = _origGetImageData(x, y, w, h);
+                                for (let i = 0; i < d.data.length; i += 4) {
+                                    d.data[i]   = (d.data[i]   + (Math.random() * 4 | 0) - 2) & 0xff;
+                                    d.data[i+1] = (d.data[i+1] + (Math.random() * 4 | 0) - 2) & 0xff;
+                                    d.data[i+2] = (d.data[i+2] + (Math.random() * 4 | 0) - 2) & 0xff;
+                                }
+                                return d;
+                            };
+                        }
+                        return ctx;
+                    };
+                    // WebGL: spoof UNMASKED_VENDOR / UNMASKED_RENDERER
+                    const _vendors  = ['Intel Inc.', 'NVIDIA Corporation', 'AMD'];
+                    const _renderers = ['Intel Iris OpenGL Engine', 'NVIDIA GeForce GTX 1060/PCIe/SSE2', 'AMD Radeon Pro 5500M OpenGL Engine'];
+                    const _idx = Math.floor(Math.random() * _vendors.length);
+                    function _patchWebGL(proto) {
+                        const _orig = proto.getParameter;
+                        proto.getParameter = function(p) {
+                            if (p === 37445) return _vendors[_idx];   // UNMASKED_VENDOR_WEBGL
+                            if (p === 37446) return _renderers[_idx]; // UNMASKED_RENDERER_WEBGL
+                            return _orig.apply(this, arguments);
+                        };
+                    }
+                    if (window.WebGLRenderingContext)  _patchWebGL(WebGLRenderingContext.prototype);
+                    if (window.WebGL2RenderingContext) _patchWebGL(WebGL2RenderingContext.prototype);
+                })();
+            """)
+
             # Inject auth cookies if provided
             if self.config.auth_cookies:
                 await context.add_cookies(self.config.auth_cookies)
@@ -255,6 +293,54 @@ class BrowserCrawler:
                     """)
                     if forms_data:
                         self._result.forms_meta.append({"url": url, "forms": forms_data})
+
+                    # SPA: shadow DOM traversal + React/Angular/Vue loose inputs
+                    try:
+                        spa_forms = await page.evaluate("""
+                            () => {
+                                const forms = [];
+                                function collectFromRoot(root) {
+                                    // Shadow DOM forms
+                                    Array.from(root.querySelectorAll('*')).forEach(el => {
+                                        if (el.shadowRoot) {
+                                            Array.from(el.shadowRoot.querySelectorAll('form')).forEach(f => {
+                                                forms.push({
+                                                    action: f.action || window.location.href,
+                                                    method: (f.method || 'GET').toUpperCase(),
+                                                    inputs: Array.from(f.querySelectorAll('input,textarea,select')).map(i => ({
+                                                        name: i.name || i.getAttribute('ng-model') || i.getAttribute('v-model') || i.id || '',
+                                                        type: i.type || 'text',
+                                                        value: i.value || ''
+                                                    })).filter(i => i.name)
+                                                });
+                                            });
+                                            collectFromRoot(el.shadowRoot);
+                                        }
+                                    });
+                                }
+                                collectFromRoot(document);
+                                // Standalone inputs outside <form> (common in React/Angular apps)
+                                const loose = Array.from(document.querySelectorAll(
+                                    'input[name]:not(form input), input[ng-model]:not(form input), input[v-model]:not(form input)'
+                                )).filter(el => el.offsetParent !== null && el.type !== 'hidden');
+                                if (loose.length) {
+                                    forms.push({
+                                        action: window.location.href,
+                                        method: 'POST',
+                                        inputs: loose.map(i => ({
+                                            name: i.name || i.getAttribute('ng-model') || i.getAttribute('v-model') || i.id,
+                                            type: i.type || 'text',
+                                            value: i.value || ''
+                                        })).filter(i => i.name)
+                                    });
+                                }
+                                return forms;
+                            }
+                        """)
+                        if spa_forms:
+                            self._result.forms_meta.append({"url": url + "#spa", "forms": spa_forms})
+                    except Exception:
+                        pass
 
                     # Detect framework
                     tech = await self._detect_framework(page, url)

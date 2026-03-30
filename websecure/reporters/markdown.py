@@ -147,8 +147,63 @@ def _render_ssl_section(results: Dict) -> str:
     return "\n".join(out)
 
 def render_risk_matrix(findings: List[Dict]) -> str:
-    # Placeholder for matrix logic
-    return ""
+    """Render a markdown remediation priority matrix from a list of finding dicts."""
+    if not findings:
+        return ""
+
+    _REMEDIATION_DB = {
+        "sql injection": ("Parameterized queries / prepared statements", "Low"),
+        "sqli": ("Parameterized queries / prepared statements", "Low"),
+        "ssti": ("Disable user-controlled template evaluation; use static templates", "Medium"),
+        "template injection": ("Disable user-controlled template evaluation; use static templates", "Medium"),
+        "command injection": ("Avoid shell calls; use subprocess list args", "Low"),
+        "cmdi": ("Avoid shell calls; use subprocess list args", "Low"),
+        "xss": ("Output-encode user data; enforce strict CSP header", "Medium"),
+        "ssrf": ("Allowlist outbound destinations; block internal metadata endpoints", "Medium"),
+        "xxe": ("Disable external entity processing in XML parser", "Low"),
+        "jwt": ("Use RS256/ES256; validate aud/iss/exp claims", "Medium"),
+        "idor": ("Enforce server-side authorization on every resource", "Medium"),
+        "csrf": ("SameSite=Strict cookies + CSRF tokens on state-changing requests", "Low"),
+        "open redirect": ("Allowlist redirect destinations", "Low"),
+        "security header": ("Set HSTS, X-Content-Type-Options, X-Frame-Options, CSP", "Low"),
+        "prototype pollution": ("Freeze Object.prototype; null-prototype objects for merges", "Medium"),
+        "file upload": ("Validate MIME server-side; store outside web root; rename files", "Medium"),
+        "mass assignment": ("Explicit field allow-lists; reject unexpected params", "Low"),
+        "nosql": ("Use typed query builders; never interpolate input into queries", "Low"),
+        "request smuggling": ("Normalize HTTP/1.1 headers; prefer HTTP/2 end-to-end", "High"),
+        "tls": ("Upgrade to TLS 1.2+; disable weak protocols; renew certificates", "Low"),
+    }
+
+    _SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+    type_map: Dict[str, dict] = {}
+    for f in findings:
+        t = str(f.get("type") or "Unknown")
+        entry = type_map.setdefault(t, {"count": 0, "max_sev": 0, "sev_label": "Info", "advice": "", "effort": "Medium"})
+        entry["count"] += 1
+        sev_rank = _SEV_ORDER.get(_norm_sev_en(f.get("severity")).lower(), 0)
+        if sev_rank > entry["max_sev"]:
+            entry["max_sev"] = sev_rank
+            entry["sev_label"] = _norm_sev_en(f.get("severity"))
+        if not entry["advice"]:
+            tl = t.lower()
+            for kw, (adv, eff) in _REMEDIATION_DB.items():
+                if kw in tl:
+                    entry["advice"] = adv
+                    entry["effort"] = eff
+                    break
+            if not entry["advice"]:
+                entry["advice"] = "Review and remediate per OWASP guidance"
+
+    rows = sorted(type_map.items(), key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
+
+    lines = ["", "## Remediation Priority Matrix", "",
+             "| # | Vulnerability Type | Max Severity | Count | Recommended Fix | Fix Effort |",
+             "|:-:|---|:-:|:-:|---|:-:|"]
+    for i, (vtype, info) in enumerate(rows[:20], 1):
+        lines.append(
+            f"| {i} | {vtype} | {info['sev_label']} | {info['count']} | {info['advice']} | {info['effort']} |"
+        )
+    return "\n".join(lines)
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
@@ -191,6 +246,11 @@ def render(results: Dict) -> str:
     lines.append("|-|-:|")
     for k in ("Critical", "High", "Medium", "Low", "Info"):
         lines.append(f"| {k} | {counts[k]} |")
+
+    # Remediation Priority Matrix
+    risk_matrix = render_risk_matrix(items)
+    if risk_matrix:
+        lines.append(risk_matrix)
 
     # Findings List
     lines.append("")

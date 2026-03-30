@@ -215,6 +215,99 @@ def render_html_dashboard(results: dict) -> str:
             </div>
             """
 
+    # --- Remediation Priority Matrix ---
+    _REMEDIATION_DB = {
+        "sql injection": ("Parameterized queries / prepared statements", "Low"),
+        "sqli": ("Parameterized queries / prepared statements", "Low"),
+        "ssti": ("Disable user-controlled template evaluation; use static templates", "Medium"),
+        "template injection": ("Disable user-controlled template evaluation; use static templates", "Medium"),
+        "command injection": ("Avoid shell calls; use subprocess list args instead of shell=True", "Low"),
+        "cmdi": ("Avoid shell calls; use subprocess list args instead of shell=True", "Low"),
+        "xss": ("Output-encode all user data; set strict CSP header", "Medium"),
+        "cross-site scripting": ("Output-encode all user data; set strict CSP header", "Medium"),
+        "ssrf": ("Allowlist outbound destinations; block access to internal metadata endpoints", "Medium"),
+        "xxe": ("Disable external entity processing in XML parser config", "Low"),
+        "jwt": ("Use RS256/ES256; validate aud/iss/exp; rotate signing keys", "Medium"),
+        "idor": ("Enforce server-side authorization on every resource access", "Medium"),
+        "csrf": ("SameSite=Strict cookies + CSRF tokens on all state-changing requests", "Low"),
+        "open redirect": ("Allowlist redirect destinations; reject arbitrary user-supplied URLs", "Low"),
+        "security header": ("Set HSTS, X-Content-Type-Options, X-Frame-Options, CSP", "Low"),
+        "prototype pollution": ("Freeze Object.prototype; use null-prototype objects for merge targets", "Medium"),
+        "file upload": ("Validate MIME type server-side; store outside web root; rename files", "Medium"),
+        "mass assignment": ("Use explicit allow-lists for assignable fields; reject extra params", "Low"),
+        "nosql": ("Use typed query builders; never interpolate user input into query strings", "Low"),
+        "graphql": ("Disable introspection in production; enforce query depth/cost limits", "Low"),
+        "request smuggling": ("Normalize HTTP/1.1 headers; use HTTP/2 end-to-end where possible", "High"),
+        "race condition": ("Use atomic operations / advisory locks around critical sections", "High"),
+        "tls": ("Upgrade to TLS 1.2+; disable SSLv3/TLS 1.0; renew expiring certificates", "Low"),
+        "certificate": ("Renew certificate; use a trusted CA; enable HSTS preloading", "Low"),
+    }
+    _SEV_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
+    _EFFORT_COLOR = {"Low": "var(--sev-low)", "Medium": "var(--sev-medium)", "High": "var(--sev-high)"}
+
+    # Build type → {max_sev, count, advice, effort}
+    type_map = {}
+    for f in findings:
+        raw_type = f["type"].split(" (")[0] if " (" in f["type"] else f["type"]
+        entry = type_map.setdefault(raw_type, {"count": 0, "max_sev": 0, "sev_label": "Info"})
+        entry["count"] += 1
+        sev_rank = _SEV_ORDER.get(f["severity"], 0)
+        if sev_rank > entry["max_sev"]:
+            entry["max_sev"] = sev_rank
+            entry["sev_label"] = f["severity"]
+        # Lookup advice
+        if "advice" not in entry:
+            key_lower = raw_type.lower()
+            for kw, (adv, eff) in _REMEDIATION_DB.items():
+                if kw in key_lower:
+                    entry["advice"] = adv
+                    entry["effort"] = eff
+                    break
+        entry.setdefault("advice", "Review and remediate per OWASP guidance")
+        entry.setdefault("effort", "Medium")
+
+    priority_rows = sorted(type_map.items(), key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
+
+    _rem_rows_html = ""
+    for rank, (vtype, info) in enumerate(priority_rows[:20], 1):
+        sev_lbl = info["sev_label"]
+        effort  = info["effort"]
+        ec      = _EFFORT_COLOR.get(effort, "var(--text-muted)")
+        _rem_rows_html += (
+            f"<tr>"
+            f"<td style='text-align:center; color:var(--text-muted); font-weight:600'>{rank}</td>"
+            f"<td style='font-weight:500'>{_escape(vtype)}</td>"
+            f"<td><span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)}</span></td>"
+            f"<td style='text-align:center; color:var(--accent); font-weight:600'>{info['count']}</td>"
+            f"<td style='font-size:0.88rem; color:var(--text-muted)'>{_escape(info['advice'])}</td>"
+            f"<td style='font-weight:600; color:{ec}'>{_escape(effort)}</td>"
+            f"</tr>"
+        )
+
+    remediation_html = ""
+    if _rem_rows_html:
+        remediation_html = f"""
+        <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-top:0;">🎯 Remediation Priority Matrix</h3>
+            <p style="color:var(--text-muted); font-size:0.88rem; margin:0 0 1rem;">Ordered by severity and frequency. Fix Critical/High items first.</p>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th width="40">#</th>
+                            <th>Vulnerability Type</th>
+                            <th width="100">Max Severity</th>
+                            <th width="60">Count</th>
+                            <th>Recommended Fix</th>
+                            <th width="110">Fix Effort</th>
+                        </tr>
+                    </thead>
+                    <tbody>{_rem_rows_html}</tbody>
+                </table>
+            </div>
+        </div>
+        """
+
     # Serialize findings for JS
     findings_json = json.dumps(findings, default=str).replace("<", "\\u003c").replace(">", "\\u003e")
 
@@ -250,6 +343,16 @@ def render_html_dashboard(results: dict) -> str:
              </div>
              """
 
+    # --- WAF Detection Status ---
+    waf_raw = results.get("waf_detection") or {}
+    if isinstance(waf_raw, list):
+        waf_raw = next((x for x in waf_raw if isinstance(x, dict)), {})
+    waf_detected = bool(waf_raw.get("detected"))
+    waf_vendor = waf_raw.get("vendor") or "None"
+    waf_confidence = waf_raw.get("confidence") or 0.0
+    waf_badge_color = "var(--sev-critical)" if waf_detected else "var(--sev-low)"
+    waf_label = f"{_escape(waf_vendor)} ({int(float(waf_confidence)*100)}%)" if waf_detected else "Not Detected"
+
     # --- Metrics / Traffic Data ---
     metrics = results.get("metrics") or {}
     counters = metrics.get("counters") or {}
@@ -284,6 +387,10 @@ def render_html_dashboard(results: dict) -> str:
             <div class="stat-card" style="padding:1rem; border-color:var(--accent);">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--accent)">{exploit_count}</span>
                 <span class="stat-label">Confirmed Exploits</span>
+            </div>
+            <div class="stat-card" style="padding:1rem; border-color:{waf_badge_color};">
+                <span class="stat-value" style="font-size:1rem; color:{waf_badge_color}; word-break:break-word">{waf_label}</span>
+                <span class="stat-label">WAF Detected</span>
             </div>
         </div>
     </div>
@@ -628,6 +735,9 @@ def render_html_dashboard(results: dict) -> str:
     { subdomain_html }
     { ports_html }
     { traffic_html }
+
+    <!-- Remediation Priority Matrix -->
+    { remediation_html }
 
     <!-- Findings Table -->
     <h2>🔍 Findings ({total_issues} total)</h2>

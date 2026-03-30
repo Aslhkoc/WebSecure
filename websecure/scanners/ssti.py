@@ -8,6 +8,7 @@ Attack surfaces: URL params, POST form data, JSON body, HTTP headers, cookies.
 from __future__ import annotations
 
 import logging
+import random as _random
 import re
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
@@ -170,6 +171,31 @@ class SSTIScanner(BaseScanner):
 
             self._emit_finding(url, param_name, payload, evidence, engine, poc_evidence)
 
+    def _confirm_with_canary(self, url: str, parsed, params: List, param_name: str) -> bool:
+        """
+        Confirm SSTI with a random-canary math expression to eliminate pure reflections.
+        Sends {{A*B}} and checks the response contains the unique product A*B.
+        Then verifies the same product does NOT appear when sent as a plain string (reflection check).
+        Returns True only if server-side evaluation is confirmed.
+        """
+        a = _random.randint(17, 97)
+        b = _random.randint(17, 97)
+        product = a * b
+        # Jinja2/Twig style
+        for tmpl in (f"{{{{{a}*{b}}}}}", f"${{{a}*{b}}}", f"#{{{a}*{b}}}"):
+            new_params = dict(params)
+            new_params[param_name] = tmpl
+            body = self._get(self._build_url(parsed, new_params))
+            if body and str(product) in body:
+                # Reflection check: send the literal number and see if it also appears
+                baseline_params = dict(params)
+                baseline_params[param_name] = str(product)
+                baseline = self._get(self._build_url(parsed, baseline_params))
+                if baseline and str(product) in baseline:
+                    continue  # pure reflection — not a real SSTI
+                return True
+        return False
+
     def _tier1_probe(self, url: str, parsed, params: List, param_name: str
                      ) -> Optional[Tuple[str, str]]:
         for payload, expected_re in _TIER1_PROBES:
@@ -178,6 +204,10 @@ class SSTIScanner(BaseScanner):
             test_url = self._build_url(parsed, new_params)
             body = self._get(test_url)
             if body and re.search(expected_re, body):
+                # Canary confirmation — rules out pure parameter reflection
+                if not self._confirm_with_canary(url, parsed, params, param_name):
+                    _logger.debug(f"[SSTI] Tier1 regex matched but canary failed (likely reflection): {url} param={param_name}")
+                    continue
                 return payload, body[:200]
         return None
 
@@ -220,10 +250,28 @@ class SSTIScanner(BaseScanner):
             _logger.info(f"[SSTI] Header hit: {url} header={header_name}")
             self._emit_finding(url, f"header:{header_name}", payload, evidence, None, None)
 
+    def _confirm_header_canary(self, url: str, header_name: str) -> bool:
+        """Confirm SSTI in a header via unique-canary math evaluation."""
+        a = _random.randint(17, 97)
+        b = _random.randint(17, 97)
+        product = a * b
+        for tmpl in (f"{{{{{a}*{b}}}}}", f"${{{a}*{b}}}"):
+            body = self._request_with_header(url, header_name, tmpl)
+            if body and str(product) in body:
+                # Reflection check
+                baseline = self._request_with_header(url, header_name, str(product))
+                if baseline and str(product) in baseline:
+                    continue
+                return True
+        return False
+
     def _tier1_probe_header(self, url: str, header_name: str) -> Optional[Tuple[str, str]]:
         for payload, expected_re in _TIER1_PROBES:
             body = self._request_with_header(url, header_name, payload)
             if body and re.search(expected_re, body):
+                if not self._confirm_header_canary(url, header_name):
+                    _logger.debug(f"[SSTI] Header Tier1 matched but canary failed (reflection): {url} [{header_name}]")
+                    continue
                 return payload, body[:200]
         return None
 
