@@ -89,6 +89,27 @@ def _ensure_playwright_chromium() -> bool:
             print(f"[!] playwright install chromium başarısız: {exc}")
             print("[!] XSS DOM doğrulaması bu taramada devre dışı kalacak.")
             return False
+
+
+def _ensure_curl_cffi() -> bool:
+    """curl_cffi kurulu değilse otomatik kurar (JA3/JA4 TLS taklidi için)."""
+    try:
+        from curl_cffi import requests as _  # noqa
+        return True
+    except ImportError:
+        print("[*] curl_cffi kuruluyor (TLS parmak izi gizleme)...")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "curl_cffi"],
+                check=True, capture_output=True, timeout=120
+            )
+            print("[+] curl_cffi kuruldu. TLS parmak izi aktif.")
+            return True
+        except Exception as exc:
+            print(f"[!] curl_cffi kurulamadi: {exc}")
+            return False
+
+
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
@@ -1501,6 +1522,13 @@ O====|_______________________________________________________>  1   1 0
     print("")
     cfg = load_config()
 
+    # Gizlilik: Tor kapalıysa DoH aktif et
+    _priv = cfg.setdefault("privacy", {})
+    _egress = _priv.setdefault("egress", {})
+    _dns = _egress.setdefault("dns", {})
+    if not _dns.get("strategy"):
+        _dns["strategy"] = "doh"
+
     # Install Ctrl+C handler — sets cancel event instead of crashing mid-scan
     try:
         from websecure.core.phases import _install_sigint_handler
@@ -1530,6 +1558,7 @@ O====|_______________________________________________________>  1   1 0
 
     # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
     _ensure_playwright_chromium()
+    _ensure_curl_cffi()
 
     # --- Nuclei otomatik kurulum ---
     _ensure_nuclei(cfg)
