@@ -82,7 +82,8 @@ class FFUFWrapper:
                  threads: int = 40,
                  match_codes: str = "200,204,301,302,307,401,403,405,500",
                  filter_size: Optional[str] = None,
-                 custom_args: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                 custom_args: Optional[List[str]] = None,
+                 proxy: str = None) -> List[Dict[str, Any]]:
         """
         Runs FFUF against the target URL.
         :param url: Target URL with 'FUZZ' keyword (e.g., http://target/FUZZ)
@@ -132,6 +133,9 @@ class FFUFWrapper:
 
             if custom_args:
                 cmd.extend(custom_args)
+
+            if proxy:
+                cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.info(f"Starting FFUF scan on {url}")
             process = subprocess.run(

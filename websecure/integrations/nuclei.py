@@ -137,7 +137,7 @@ class NucleiWrapper:
                 cmd.extend(["-tags", ",".join(active_tags)])
 
             if proxy:
-                cmd.extend(["-proxy", proxy])
+                cmd.extend(["-proxy", proxy.replace("socks5h://", "socks5://")])
 
             if extra_args:
                 cmd.extend(extra_args)

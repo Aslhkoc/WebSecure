@@ -99,7 +99,7 @@ class SQLMapWrapper:
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None
 
-    def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None) -> List[Dict[str, Any]]:
+    def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None, proxy: str = None) -> List[Dict[str, Any]]:
         """
         Runs sqlmap on the target.
         Note: Parsing sqlmap textual output is hard. 
@@ -153,6 +153,9 @@ class SQLMapWrapper:
             ])
             if extra_args:
                 cmd.extend(extra_args)
+
+            if proxy:
+                cmd.extend(["--proxy", proxy.replace("socks5h://", "socks5://")])
 
             logger.info(f"Starting SQLMap binary scan on {target}...")
             proc = subprocess.run(
