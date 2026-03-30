@@ -1389,7 +1389,11 @@ O====|_______________________________________________________>  1   1 0
     _oast_token = _interactsh_cfg.get("token", "")
     _oast_enabled = _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled")
 
-    if not _oast_enabled or not _oast_token or "BURAYA" in _oast_token:
+    if _oast_enabled and _oast_token and "BURAYA" not in _oast_token:
+        # Config'de zaten var — direkt devam et, soru sorma
+        print("[+] OAST / interactsh: config'den okundu, aktif.")
+    else:
+        # Token eksik veya girilmemis — kullanicidan al
         print("\n" + "="*60)
         print("  [?] OAST / interactsh kurulumu")
         print("  SSRF ve XXE bulmalarini dogrulamak icin interactsh gerekir.")
@@ -1409,25 +1413,10 @@ O====|_______________________________________________________>  1   1 0
                 cfg["oast"]["interactsh"]["server"] = _new_server
                 _server_domain = _new_server.replace("https://", "").replace("http://", "")
                 cfg["oast"]["dns_domain"] = f"{_new_token}.{_server_domain}"
-                print(f"  [+] OAST ayarlandi: {_new_token}.{_server_domain}")
+                print(f"  [+] OAST ayarlandi.")
         else:
-            print("  [i] OAST atlanıyor. SSRF/XXE bulguları doğrulanamayacak.")
-        print("="*60)
-
-    elif _oast_enabled and _oast_token:
-        _server_domain = _interactsh_cfg.get("server", "").replace("https://", "").replace("http://", "")
-        print("\n" + "="*60)
-        print("  [!] OAST / interactsh UYARISI")
-        print("  interactsh-client.exe AÇIK OLMALI!")
-        print("  Aksi halde SSRF/XXE bulguları doğrulanamaz.")
-        print(f"  Örnek subdomain: abc123xyz.oast.me")
-        _confirmed = input("  interactsh-client.exe açık mı? (e/h): ").strip().lower()
-        if _confirmed != "e":
-            print("  [!] Lütfen interactsh-client.exe'yi açıp tekrar çalıştırın.")
-            print("="*60 + "\n")
-        else:
-            print("  [+] Devam ediliyor.")
-            print("="*60 + "\n")
+            print("  [i] OAST atlaniyor. SSRF/XXE bulgulari dogrulanamayacak.")
+        print("="*60 + "\n")
 
     # --- Kimlik doğrulama (auth_profiles) kullanıcıdan al ---
     _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
@@ -1449,8 +1438,11 @@ O====|_______________________________________________________>  1   1 0
     if _auth_ans == "e":
         _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
         _username  = input("  Kullanici adi / e-posta: ").strip()
-        import getpass as _getpass
-        _password  = _getpass.getpass("  Sifre (gizli girilir): ")
+        try:
+            import getpass as _getpass
+            _password = _getpass.getpass("  Sifre (gizli girilir, Enter ile onayla): ")
+        except Exception:
+            _password = input("  Sifre: ").strip()
         _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
         _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
         _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
