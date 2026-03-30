@@ -736,6 +736,141 @@ def smart_login(session: requests.Session,
     return bool(ok)
 
 # -----------------------------------------------------------------------------
+# Playwright otomatik login
+# -----------------------------------------------------------------------------
+
+def playwright_login(cfg: Dict[str, Any], session_path: str = "session.json") -> Optional[Dict[str, Any]]:
+    """
+    config'deki auth.auth_profiles[0] bilgilerini kullanarak Playwright ile otomatik giriş yapar.
+    - login_url sayfasına gider
+    - username ve password alanlarını doldurur, formu submit eder
+    - Başarılı girişi session_path'e kaydeder (BrowserCrawler için storage_state)
+    - Cookies dict olarak döndürür (requests Session'a aktarmak için)
+
+    Dönüş: {"cookies": {...}, "storage_state_path": "session.json"} veya None
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logging.getLogger(__name__).warning("[Auth] Playwright kurulu değil. playwright_login atlandı.")
+        return None
+
+    auth_profiles = ((cfg.get("auth") or {}).get("auth_profiles") or
+                     (cfg.get("authenticated") or {}).get("auth_profiles") or [])
+    if not auth_profiles:
+        # Eski stil: auth.login_url + auth.creds
+        auth_cfg = cfg.get("auth") or {}
+        login_url = auth_cfg.get("login_url", "").strip()
+        creds = auth_cfg.get("creds") or {}
+        username = creds.get("username") or auth_cfg.get("username", "")
+        password = creds.get("password") or auth_cfg.get("password", "")
+        username_field = auth_cfg.get("username_field", "username")
+        password_field = auth_cfg.get("password_field", "password")
+        success_indicator = auth_cfg.get("success_indicator", "")
+    else:
+        profile = auth_profiles[0]
+        login_url = profile.get("login_url", "").strip()
+        username = profile.get("username", "").strip()
+        password = profile.get("password", "").strip()
+        username_field = profile.get("username_field", "username")
+        password_field = profile.get("password_field", "password")
+        success_indicator = profile.get("success_indicator", "")
+
+    if not login_url or not username or not password:
+        logging.getLogger(__name__).warning(
+            "[Auth] playwright_login: login_url / username / password eksik. "
+            "config.json > authenticated.auth_profiles[0] doldurun."
+        )
+        return None
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"[Auth] Playwright ile otomatik giriş: {login_url}")
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+
+            page.goto(login_url, timeout=20000, wait_until="domcontentloaded")
+            page.wait_for_timeout(1000)
+
+            # Kullanıcı adı alanını bul ve doldur
+            user_selectors = [
+                f'input[name="{username_field}"]',
+                'input[type="email"]',
+                'input[type="text"][name*="user"]',
+                'input[type="text"][name*="email"]',
+                'input[type="text"]',
+            ]
+            for sel in user_selectors:
+                try:
+                    if page.locator(sel).count() > 0:
+                        page.fill(sel, username)
+                        break
+                except Exception:
+                    continue
+
+            # Şifre alanını doldur
+            pwd_selectors = [
+                f'input[name="{password_field}"]',
+                'input[type="password"]',
+            ]
+            for sel in pwd_selectors:
+                try:
+                    if page.locator(sel).count() > 0:
+                        page.fill(sel, password)
+                        break
+                except Exception:
+                    continue
+
+            # Formu submit et
+            try:
+                page.locator('button[type="submit"]').first.click()
+            except Exception:
+                try:
+                    page.locator('input[type="submit"]').first.click()
+                except Exception:
+                    page.keyboard.press("Enter")
+
+            page.wait_for_timeout(2000)
+
+            # Başarı kontrolü
+            current_url = page.url
+            page_text = page.content()
+            success = (
+                (success_indicator and success_indicator in page_text)
+                or login_url not in current_url  # login sayfasından çıktıysak başarılı
+                or any(kw in page_text.lower() for kw in ("logout", "sign out", "dashboard", "hesabım"))
+            )
+
+            if not success:
+                logger.warning(f"[Auth] Giriş başarısız olabilir. Mevcut URL: {current_url}")
+            else:
+                logger.info(f"[Auth] Giriş başarılı. URL: {current_url}")
+
+            # Session'ı kaydet
+            context.storage_state(path=session_path)
+            logger.info(f"[Auth] Oturum {session_path} dosyasına kaydedildi.")
+
+            # Cookies'i al (requests Session için)
+            raw_cookies = context.cookies()
+            cookies_dict = {c["name"]: c["value"] for c in raw_cookies}
+
+            browser.close()
+
+            return {
+                "cookies": cookies_dict,
+                "storage_state_path": session_path,
+                "login_successful": success,
+            }
+
+    except Exception as exc:
+        logging.getLogger(__name__).error(f"[Auth] playwright_login hatası: {exc!r}")
+        return None
+
+
+# -----------------------------------------------------------------------------
 # [WS3-ANCHOR] Auto-Signup & Device Code helpers
 # -----------------------------------------------------------------------------
 

@@ -605,16 +605,32 @@ class XXEScanner(BaseScanner):
 # Legacy entry points (backward-compatible with main.py dynamic import)
 # =============================================================================
 
-def run_ssrf_xxe_scan(ctx):
+def run_ssrf_xxe_scan(ctx, oast_cfg: Dict = None, **kwargs):
     """
     Legacy entry point using ScanContext from main.py.
     Delegates to SSRFScanner and XXEScanner.
+    oast_cfg: interactsh dns_domain dahil OAST ayarları (phases runner'dan geçirilir)
     """
-    session = ctx.session
-    results = getattr(ctx, "results", {})
+    session = ctx.session if hasattr(ctx, "session") else kwargs.get("session")
+    results = getattr(ctx, "results", {}) or kwargs.get("results", {})
+
+    # oast_cfg: phases runner'dan gelebilir veya ctx.config'den okunur
+    if oast_cfg is None:
+        cfg = getattr(ctx, "config", {}) or {}
+        oast_cfg = cfg.get("oast", {}) or {}
+
+    # OAST config oluştur
+    dns_domain = (oast_cfg or {}).get("dns_domain") or (oast_cfg or {}).get("interactsh", {}).get("server", "")
+    oast_config = OASTConfig(
+        enabled=bool((oast_cfg or {}).get("enabled", True)),
+        dns_domain=dns_domain or None,
+    )
+    ssrf_xxe_cfg = SSRFXXEConfig(oast=oast_config)
 
     # Collect endpoints
     endpoints: Set[str] = set(results.get("endpoints", []))
+    if hasattr(ctx, "endpoints") and ctx.endpoints:
+        endpoints.update(ctx.endpoints)
     discovery = results.get("discovery", {})
     if isinstance(discovery, dict):
         for u in discovery.get("query", []):
@@ -623,14 +639,19 @@ def run_ssrf_xxe_scan(ctx):
 
     targets = list(endpoints)
     if not targets:
-        return
+        base = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None)
+                or getattr(ctx, "target", None) or "")
+        if base:
+            targets = [base]
+        else:
+            return
 
-    logger.info(f"[SSRF/XXE] Scanning {len(targets)} endpoints")
+    logger.info(f"[SSRF/XXE] Scanning {len(targets)} endpoints (oast_domain={dns_domain or 'none'})")
 
-    ssrf = SSRFScanner(session=session, results=results)
+    ssrf = SSRFScanner(session=session, results=results, config=ssrf_xxe_cfg)
     ssrf.run(targets[0] if targets else "", endpoints=targets)
 
-    xxe = XXEScanner(session=session, results=results)
+    xxe = XXEScanner(session=session, results=results, config=ssrf_xxe_cfg)
     xxe.run(targets[0] if targets else "", endpoints=targets)
 
 

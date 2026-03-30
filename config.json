@@ -423,9 +423,12 @@
     },
     "auth_profiles": [
       {
-        "username": "",
-        "password": "",
-        "login_url": "https://target.local/login",
+        "username": "KULLANICI_ADI",
+        "password": "SIFRE",
+        "login_url": "https://hedef-site.com/login",
+        "username_field": "username",
+        "password_field": "password",
+        "success_indicator": "dashboard",
         "csrf_param": "_csrf"
       }
     ],
@@ -615,8 +618,8 @@
     ],
     "interactsh": {
       "enabled": false,
-      "server": "https://interactsh.com",
-      "token": ""
+      "server": "https://oast.pro",
+      "token": "BURAYA_INTERACTSH_TOKEN_YAZIN"
     },
     "wait_seconds": 45,
     "channels": [

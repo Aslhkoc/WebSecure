@@ -143,6 +143,28 @@ def _respect_idempotent_first(phase: str, method: str, post_ratio_ok: bool) -> b
         return bool(post_ratio_ok)
     return True
 
+def _http_reauth(session) -> bool:
+    """
+    401 alındığında oturumu yeniler.
+    Session'a bağlı _auth_cfg varsa playwright_login() ile yeniden giriş yapar,
+    yeni cookies'i session'a ekler.
+    """
+    auth_cfg = getattr(session, "_auth_cfg", None)
+    if not auth_cfg:
+        return False
+    try:
+        from websecure.core.auth_flow import playwright_login
+        result = playwright_login({"auth": auth_cfg, "authenticated": auth_cfg})
+        if result and result.get("cookies"):
+            for name, val in result["cookies"].items():
+                session.cookies.set(name, val)
+            _logger.info("[HTTP] 401 → oturum yenilendi (playwright_login)")
+            return True
+    except Exception as exc:
+        _logger.debug(f"[HTTP] re-auth hatası: {exc!r}")
+    return False
+
+
 def _sleep_for_rps():
     rps = max(1, int(_CURRENT_RPS.get()))
     base = 1.0 / float(rps)
@@ -276,6 +298,10 @@ def _smart_request(self, method, url, **kwargs):
 
             # Feed status into circuit breaker
             _cb_record(status)
+
+            # 401 → otomatik re-auth (oturum süresi dolmuş olabilir)
+            if status == 401 and attempt == 0:
+                _http_reauth(self)
 
             if status in (403, 429):
                 _logger.debug(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")

@@ -47,6 +47,48 @@ from time import sleep
 import asyncio
 import shutil
 import subprocess
+
+
+def _ensure_playwright_chromium() -> bool:
+    """
+    Playwright'ın kurulu ve chromium binary'sinin mevcut olduğunu kontrol eder.
+    Eksikse otomatik olarak 'playwright install chromium' çalıştırır.
+    Başarısız olursa sadece uyarı verir, scan devam eder.
+    """
+    # 1. playwright paketi kurulu mu?
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[!] Playwright kurulu değil. Kuruluyor: pip install playwright")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "playwright"],
+                           check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[!] playwright kurulumu başarısız: {e}. XSS DOM doğrulaması devre dışı.")
+            return False
+
+    # 2. chromium binary var mı?
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            # launch ile kontrol — hata alırsa binary yok demektir
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception:
+        # Binary yok → otomatik kur
+        print("[*] Playwright chromium binary bulunamadı. Kuruluyor...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True, capture_output=True, text=True, timeout=300
+            )
+            print("[+] Playwright chromium başarıyla kuruldu.")
+            return True
+        except Exception as exc:
+            print(f"[!] playwright install chromium başarısız: {exc}")
+            print("[!] XSS DOM doğrulaması bu taramada devre dışı kalacak.")
+            return False
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
@@ -1338,6 +1380,9 @@ O====|_______________________________________________________>  1   1 0
     # Raporlama modülüne tüm config’i ver
     configure_logging(level=str(((cfg or {}).get("settings") or {}).get("logging", {}).get("level", "INFO")))
 
+    # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
+    _ensure_playwright_chromium()
+
     # --- Tool Manager Integration (Early Prompt) ---
     from websecure.core.tool_manager import ToolManager
     tm = ToolManager(cfg)
@@ -1799,6 +1844,31 @@ O====|_______________________________________________________>  1   1 0
             print("[i] WebDriver açılamadı; dinamik gezinme olmadan devam edilecek.")
 
         session = _setup_session_from_config(cfg)
+
+        # --- Otomatik Playwright login (auth_profiles yapılandırılmışsa) ---
+        _auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or
+                          (cfg.get("auth") or {}).get("auth_profiles") or [])
+        _pw_login_result = None
+        if _auth_profiles and _auth_profiles[0].get("username") and _auth_profiles[0].get("password"):
+            try:
+                from websecure.core.auth_flow import playwright_login as _pw_login
+                print("[*] Playwright ile otomatik giriş yapılıyor...")
+                _pw_login_result = _pw_login(cfg, session_path="session.json")
+                if _pw_login_result and _pw_login_result.get("login_successful"):
+                    # Cookies'i requests session'a aktar
+                    for _cname, _cval in (_pw_login_result.get("cookies") or {}).items():
+                        session.cookies.set(_cname, _cval)
+                    # BrowserCrawler için storage_state yolunu config'e yaz
+                    cfg.setdefault("browser", {})["auth_storage_state"] = \
+                        _pw_login_result.get("storage_state_path", "session.json")
+                    # 401 re-auth için auth config'i session'a bağla
+                    session._auth_cfg = {"auth_profiles": _auth_profiles}
+                    print("[+] Giriş başarılı. Oturum cookies'i ve session.json hazır.")
+                elif _pw_login_result:
+                    print("[!] Giriş başarısız olabilir. Scan devam ediyor.")
+            except Exception as _pw_exc:
+                print(f"[!] Otomatik login hatası: {_pw_exc}. Scan devam ediyor.")
+
         # --- Ön tanımlar: daha sonra kullanılan bağlamlar (lint/akış güvenliği) ---
         auth_ctx = _build_auth_ctx(session, cfg) if (mode == ScanMode.AUTHENTICATED) else None
         oast_cfg = (cfg.get('oast') or {})

@@ -807,11 +807,18 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
             "reason": "Modül bulunamadı ya da `scan` yok."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
+
+    # OAST taraması başlamadan interactsh'e kayıt ol → subdomain al
+    oast_domain = _setup_oast_domain(ctx)
+
     scan = getattr(mod, "scan")
     cfg = getattr(ctx, "config", {}) or {}
-    oast_cfg = cfg.get("oast", {}) or {}
+    oast_cfg = dict(cfg.get("oast", {}) or {})
+
+    # interactsh subdomain'i scanner'a geçir
+    if oast_domain:
+        oast_cfg["dns_domain"] = oast_domain
 
     base_url = (getattr(ctx, "url", None)
                 or getattr(ctx, "base_url", None)
@@ -3084,6 +3091,43 @@ def run_reporting_and_integration(ctx) -> None:
     
     _logger.info("Generating Final Reports...")
     perform_reporting(session, cfg, results)
+
+
+def _setup_oast_domain(ctx) -> Optional[str]:
+    """
+    SSRF/XXE taraması başlamadan önce interactsh'e kayıt olur,
+    dönen subdomain'i ctx.oast_domain olarak kaydeder.
+    Döndürülen subdomain SSRF scanner'ın dns_domain alanına geçirilir.
+    """
+    cfg = getattr(ctx, "config", {}) or {}
+    oast_cfg = cfg.get("oast", {}) or {}
+    if not oast_cfg.get("enabled", False):
+        return None
+
+    interactsh_cfg = oast_cfg.get("interactsh", {}) or {}
+    server = (interactsh_cfg.get("server") or "").rstrip("/")
+    token  = interactsh_cfg.get("token", "")
+    if not server or not token:
+        return None
+
+    try:
+        import requests as _requests
+        reg_resp = _requests.post(
+            f"{server}/register",
+            json={"public-key": "", "secret-key": token, "correlation-id": "websecure"},
+            timeout=10,
+        )
+        data = reg_resp.json()
+        # interactsh yanıtı: {"correlation-id": "...", "domain": "abc123.oast.pro"}
+        domain = data.get("domain") or data.get("correlation-id", "")
+        if domain:
+            setattr(ctx, "oast_domain", domain)
+            setattr(ctx, "oast_correlation_id", data.get("correlation-id", ""))
+            _logger.info(f"[OAST] interactsh subdomain alındı: {domain}")
+            return domain
+    except Exception as exc:
+        _logger.debug(f"[OAST] Subdomain alma hatası: {exc!r}")
+    return None
 
 
 def run_oast_verification(ctx) -> None:
