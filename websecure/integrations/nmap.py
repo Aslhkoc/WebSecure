@@ -93,6 +93,9 @@ class NmapWrapper:
             if proxy:
                 _nmap_proxy = proxy.replace("socks5h://", "socks4://").replace("socks5://", "socks4://")
                 cmd.extend(["--proxies", _nmap_proxy])
+                # Proxy aktifken DNS leak'i önle: Nmap DNS çözümlemesi yapmasın
+                if "-n" not in cmd:
+                    cmd.append("-n")
 
             # Target always last
             cmd.append(target)
