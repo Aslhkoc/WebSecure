@@ -185,8 +185,15 @@ def _setup_session_from_config(config: dict):
     s = ensure_session(cfg)
 
     # User-Agent
-    ua_cfg = _pick_from_config(cfg, "user_agent", "WebSecScanner/1.2")
-    ua = ua_cfg if isinstance(ua_cfg, str) and ua_cfg.strip() else "WebSecScanner/1.2"
+    import random as _r_ua
+    _default_uas = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    ]
+    ua_cfg = _pick_from_config(cfg, "user_agent", "")
+    ua = ua_cfg if isinstance(ua_cfg, str) and ua_cfg.strip() and "WebSec" not in ua_cfg else _r_ua.choice(_default_uas)
     s.headers.update({"User-Agent": ua})
 
     # TLS verify
