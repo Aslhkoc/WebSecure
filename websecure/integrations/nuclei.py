@@ -73,7 +73,7 @@ class NucleiWrapper:
             if candidate.exists():
                 self.binary = str(candidate)
                 return
-        logger.warning("Nuclei binary not found. Install from https://github.com/projectdiscovery/nuclei/releases")
+        logger.warning("[Nuclei] Binary bulunamadi. Program baslarken otomatik indirilecek.")
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None or Path(self.binary).exists()

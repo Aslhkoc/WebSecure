@@ -92,6 +92,154 @@ def _ensure_playwright_chromium() -> bool:
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
+import zipfile as _zipfile
+import urllib.request as _urlreq
+import threading as _threading
+
+
+def _ensure_interactsh(cfg: dict) -> bool:
+    """
+    drivers/interactsh-client.exe'yi arka planda başlatır, stdout'tan token/host okur,
+    cfg['oast']['interactsh'] alanlarını doldurur.
+    Exe yoksa GitHub releases'tan otomatik indirir.
+    Config'de zaten geçerli bir token varsa hiçbir şey yapmaz.
+    """
+    # 1. Config'de zaten token var mı?
+    _oast = cfg.get("oast", {}) or {}
+    _ic = _oast.get("interactsh", {}) or {}
+    _tok = _ic.get("token", "")
+    if _oast.get("enabled") and _ic.get("enabled") and _tok and "BURAYA" not in _tok:
+        return True  # config'den geldi, elle başlatmaya gerek yok
+
+    root = _P(__file__).resolve().parent.parent
+    exe_path = root / "drivers" / "interactsh-client.exe"
+
+    # 2. Exe yoksa indir
+    if not exe_path.exists():
+        print("[*] interactsh-client.exe bulunamadi. GitHub'dan indiriliyor...")
+        try:
+            import json as _json
+            api_url = "https://api.github.com/repos/projectdiscovery/interactsh/releases/latest"
+            with _urlreq.urlopen(api_url, timeout=15) as r:
+                data = _json.loads(r.read())
+            asset_url = next(
+                (a["browser_download_url"] for a in data.get("assets", [])
+                 if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
+                 and a["name"].endswith(".zip")),
+                None
+            )
+            if not asset_url:
+                print("[!] interactsh Windows binary bulunamadi. Elle indirin.")
+                return False
+            zip_path = root / "drivers" / "interactsh-client.zip"
+            exe_path.parent.mkdir(parents=True, exist_ok=True)
+            _urlreq.urlretrieve(asset_url, zip_path)
+            with _zipfile.ZipFile(zip_path, "r") as zf:
+                for member in zf.namelist():
+                    if member.endswith(".exe") and "interactsh-client" in member:
+                        with zf.open(member) as src, open(exe_path, "wb") as dst:
+                            dst.write(src.read())
+                        break
+            zip_path.unlink(missing_ok=True)
+            print(f"[+] interactsh-client.exe indirildi: {exe_path}")
+        except Exception as exc:
+            print(f"[!] interactsh indirme hatasi: {exc}")
+            return False
+
+    # 3. Exe'yi arka planda baslat, token/host oku
+    print("[*] interactsh-client baslatiliyor...")
+    try:
+        proc = subprocess.Popen(
+            [str(exe_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace"
+        )
+        token, host = None, None
+        import re as _re
+        for _ in range(60):  # max 6 saniye bekle
+            line = proc.stdout.readline()
+            if not line:
+                time.sleep(0.1)
+                continue
+            # interactsh çıktısı: "[INF] Listing on ... c1abc.oast.me"
+            m = _re.search(r"Listing on\s+(\S+)", line)
+            if m:
+                subdomain = m.group(1).strip()
+                # subdomain = token.server şeklinde gelir
+                parts = subdomain.split(".", 1)
+                if len(parts) == 2:
+                    token = parts[0]
+                    host = subdomain
+                    break
+            time.sleep(0.1)
+
+        if token and host:
+            cfg.setdefault("oast", {})["enabled"] = True
+            cfg["oast"].setdefault("interactsh", {})["enabled"] = True
+            cfg["oast"]["interactsh"]["token"] = token
+            cfg["oast"]["interactsh"]["server"] = "https://" + host.split(".", 1)[1] if "." in host else "https://oast.me"
+            cfg["oast"]["dns_domain"] = host
+            # Proc'u arka planda canlı tut
+            cfg["_interactsh_proc"] = proc
+            print(f"[+] interactsh aktif. Subdomain: {host}")
+            return True
+        else:
+            print("[!] interactsh token alinamadi. Config'deki token kullanilacak.")
+            proc.terminate()
+            return False
+    except Exception as exc:
+        print(f"[!] interactsh baslatilamadi: {exc}")
+        return False
+
+
+def _ensure_nuclei(cfg: dict) -> bool:
+    """
+    tools/nuclei/nuclei.exe varsa True döner.
+    Yoksa GitHub releases'tan en güncel Windows amd64 sürümünü indirir.
+    """
+    root = _P(__file__).resolve().parent.parent
+    candidates = [
+        root / "tools" / "nuclei" / "nuclei.exe",
+        root / "tools" / "nuclei.exe",
+    ]
+    for c in candidates:
+        if c.exists():
+            return True
+
+    print("[*] Nuclei bulunamadi. GitHub'dan indiriliyor...")
+    try:
+        import json as _json
+        api_url = "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
+        with _urlreq.urlopen(api_url, timeout=15) as r:
+            data = _json.loads(r.read())
+        asset_url = next(
+            (a["browser_download_url"] for a in data.get("assets", [])
+             if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
+             and a["name"].endswith(".zip")),
+            None
+        )
+        if not asset_url:
+            print("[!] Nuclei Windows binary bulunamadi.")
+            return False
+
+        dest_dir = root / "tools" / "nuclei"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = dest_dir / "nuclei.zip"
+        print(f"[*] Nuclei indiriliyor: {asset_url.split('/')[-1]}")
+        _urlreq.urlretrieve(asset_url, zip_path)
+
+        with _zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                if member.endswith(".exe") and "nuclei" in member.lower():
+                    with zf.open(member) as src, open(dest_dir / "nuclei.exe", "wb") as dst:
+                        dst.write(src.read())
+                    break
+        zip_path.unlink(missing_ok=True)
+        print(f"[+] Nuclei kuruldu: {dest_dir / 'nuclei.exe'}")
+        return True
+    except Exception as exc:
+        print(f"[!] Nuclei indirme hatasi: {exc}")
+        return False
 from websecure.core.utils import ensure_wordlists as _ensure_wl
 from concurrent.futures import ThreadPoolExecutor
 import time as _t
@@ -1383,21 +1531,19 @@ O====|_______________________________________________________>  1   1 0
     # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
     _ensure_playwright_chromium()
 
-    # --- OAST interactsh kurulum sorusu ---
-    _oast_cfg = cfg.get("oast", {}) or {}
-    _interactsh_cfg = _oast_cfg.get("interactsh", {}) or {}
-    _oast_token = _interactsh_cfg.get("token", "")
-    _oast_enabled = _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled")
+    # --- Nuclei otomatik kurulum ---
+    _ensure_nuclei(cfg)
 
+    # --- interactsh otomatik başlatma + OAST info ---
     print("\n" + "="*60)
-    print("  [?] OAST / interactsh kurulumu")
-    print("  SSRF ve XXE bulmalarini dogrulamak icin interactsh gerekir.")
-    print("  interactsh-client.exe'yi indirip calistirarak token alabilirsiniz.")
-    print("  https://github.com/projectdiscovery/interactsh/releases")
-    if _oast_enabled and _oast_token and "BURAYA" not in _oast_token:
-        print("  [+] OAST / interactsh: config'den okundu, aktif.")
+    print("  [*] OAST / interactsh kurulumu kontrol ediliyor...")
+    _ensure_interactsh(cfg)
+    _oast_cfg2 = cfg.get("oast", {}) or {}
+    _ic2 = _oast_cfg2.get("interactsh", {}) or {}
+    if _oast_cfg2.get("enabled") and _ic2.get("enabled") and _ic2.get("token") and "BURAYA" not in _ic2.get("token", ""):
+        print("  [+] OAST / interactsh aktif.")
     else:
-        print("  [i] OAST atlaniyor. SSRF/XXE bulgulari dogrulanamayacak.")
+        print("  [i] OAST kullanilamiyor. SSRF/XXE bulgulari dogrulanamayacak.")
     print("="*60 + "\n")
 
 
