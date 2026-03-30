@@ -16,9 +16,11 @@ class NmapWrapper:
     Nmap binary wrapper.
     Desteklenen tarama modları:
       - fast:       -F (top 100 ports), hızlı keşif
-      - standard:   -sV -sC --top-ports 1000 (servis+script)
-      - deep:       -sV -sC -O -A --top-ports 3000 (OS+aggresive)
-      - full:       -sV -sC -O -p- (tüm 65535 port)
+      - standard:   -sV --top-ports 1000 + http-title, http-headers, ssl-cert, banner
+      - deep:       -sV -O --top-ports 3000 + ssl-enum-ciphers, ssl-heartbleed, ssl-dh-params,
+                    ssl-poodle, dns-brute (subdomain), auth
+      - full:       -sV -O -p- (tüm 65535) + deep scriptler + vuln
+      - ssl:        Sadece SSL/TLS derinlemesine (443,8443,465,993,995...)
       - stealth:    -sS -T2 (SYN stealth, yavaş)
     """
 
@@ -135,17 +137,52 @@ class NmapWrapper:
         if mode == "fast":
             args = ["-F", "-T4"]
         elif mode == "standard":
-            args = ["-sV", "--version-intensity", "5", "-sC", "--top-ports", "1000", "-T4"]
+            args = [
+                "-sV", "--version-intensity", "5",
+                "--script", "default,http-title,http-headers,http-methods,http-robots.txt,ssl-cert,banner",
+                "--top-ports", "1000", "-T4",
+            ]
         elif mode == "deep":
-            args = ["-sV", "--version-intensity", "9", "-sC", "-O", "--osscan-guess",
-                    "-A", "--top-ports", "3000", "-T3"]
+            args = [
+                "-sV", "--version-intensity", "9",
+                "--script", (
+                    "default,http-title,http-headers,http-methods,http-robots.txt,"
+                    "ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,ssl-poodle,"
+                    "sslv2,ssl-ccs-injection,dns-brute,banner,auth"
+                ),
+                "--script-args", "dns-brute.threads=8",
+                "-O", "--osscan-guess",
+                "--top-ports", "3000", "-T3",
+            ]
         elif mode == "full":
-            args = ["-sV", "--version-intensity", "9", "-sC", "-O", "--osscan-guess",
-                    "-p-", "-T3"]
+            args = [
+                "-sV", "--version-intensity", "9",
+                "--script", (
+                    "default,http-title,http-headers,http-methods,http-robots.txt,"
+                    "ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,ssl-poodle,"
+                    "sslv2,ssl-ccs-injection,dns-brute,banner,auth,vuln"
+                ),
+                "--script-args", "dns-brute.threads=10",
+                "-O", "--osscan-guess",
+                "-p-", "-T3",
+            ]
+        elif mode == "ssl":
+            # Sadece SSL/TLS derinlemesine analiz
+            args = [
+                "-sV", "--version-intensity", "7",
+                "--script", "ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,ssl-poodle,sslv2,sslv2-drown,ssl-ccs-injection,ssl-date,ssl-known-key",
+                "--script-timeout", "30s",
+                "-p", "443,8443,465,993,995,8080,8888,4443",
+                "-T4",
+            ]
         elif mode == "stealth":
             args = ["-sS", "-sV", "--version-intensity", "3", "-T2", "--top-ports", "500"]
         else:
-            args = ["-sV", "-sC", "--top-ports", "1000", "-T4"]
+            args = [
+                "-sV", "--version-intensity", "5",
+                "--script", "default,http-title,http-headers,ssl-cert,banner",
+                "--top-ports", "1000", "-T4",
+            ]
 
         # Override port spec if explicitly given
         if ports:
