@@ -1522,12 +1522,6 @@ O====|_______________________________________________________>  1   1 0
     print("")
     cfg = load_config()
 
-    # Gizlilik: Tor kapalıysa DoH aktif et
-    _priv = cfg.setdefault("privacy", {})
-    _egress = _priv.setdefault("egress", {})
-    _dns = _egress.setdefault("dns", {})
-    if not _dns.get("strategy"):
-        _dns["strategy"] = "doh"
 
     # Install Ctrl+C handler — sets cancel event instead of crashing mid-scan
     try:
@@ -1851,41 +1845,91 @@ O====|_______________________________________________________>  1   1 0
         _close()
 
     # --- Tor (SOCKS) Seçimi ---
+    _tor_socks_url = None
+
+    def _try_autostart_tor() -> str | None:
+        """Tor Browser veya sistem Tor'unu otomatik başlatmaya çalışır. Çalışan port döner veya None."""
+        import subprocess as _sp
+        # Önce 9150 (Tor Browser), sonra 9050 (sistem Tor) dene
+        for _port in [9150, 9050]:
+            if _proxy_alive(f"socks5h://127.0.0.1:{_port}"):
+                return f"socks5h://127.0.0.1:{_port}"
+        # Tor Browser exe yolları dene
+        _tb_paths = [
+            r"C:\Users\Acer\Desktop\Tor Browser\Browser\firefox.exe",
+            r"C:\Program Files\Tor Browser\Browser\firefox.exe",
+            r"C:\Users\Acer\AppData\Local\Programs\Tor Browser\Browser\firefox.exe",
+        ]
+        for _tb in _tb_paths:
+            if os.path.exists(_tb):
+                try:
+                    _sp.Popen([_tb], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                    import time as _t2
+                    for _ in range(20):
+                        _t2.sleep(1)
+                        if _proxy_alive("socks5h://127.0.0.1:9150"):
+                            return "socks5h://127.0.0.1:9150"
+                except Exception:
+                    pass
+        # Sistem Tor servisini başlatmayı dene
+        try:
+            _sp.Popen(["tor"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            import time as _t3
+            for _ in range(15):
+                _t3.sleep(1)
+                if _proxy_alive("socks5h://127.0.0.1:9050"):
+                    return "socks5h://127.0.0.1:9050"
+        except Exception:
+            pass
+        return None
+
+    print("\n" + "="*60)
+    print("  [?] Tor Anonimlik Ayari")
+    print("  Tor kullanilmadan tarama yapilirsa GERCEK IP ADRESINIZ")
+    print("  hedef sunucuya, ISP'ye ve ag dinleyicilerine acik olur.")
+    print("  Tum araclar (Nmap, SQLMap, FFUF, Nuclei) da aynı sekilde")
+    print("  gercek IP ile baglanir.")
+    print("")
+
     if not args.dry_run and not args.batch:
-        print("Tor (SOCKS) kullanılsın mı? (E/h)")
-        use_tor = (input("> ").strip().lower() or "h")
+        _tor_ans = input("  Tor ile anonim tarama yapmak ister misiniz? (E/h): ").strip().lower() or "e"
     else:
-        use_tor = "h"
-        if args.dry_run:
-            print("[Dry-Run] Tor sorusu atlandı (varsayılan: hayır).")
-        # Batch modunda sessiz geç
-    if use_tor.startswith("e"):
-        host = (input("SOCKS host [127.0.0.1]: ").strip() or "127.0.0.1")
-        port = (input("SOCKS port [9150]: ").strip() or "9150")
-        scheme = "socks5h"  # DNS de tünelden geçsin
-        socks_url = f"{scheme}://{host}:{port}"
-        http_cfg = cfg.setdefault("http", {})
-        _cur = http_cfg.get("proxies")
-        if isinstance(_cur, dict):
-            proxies = _cur
-        else:
+        _tor_ans = "h"
+
+    if _tor_ans.startswith("e"):
+        print("  [*] Tor baglantisi kontrol ediliyor...")
+        _tor_socks_url = _try_autostart_tor()
+        if _tor_socks_url:
+            _tor_port = _tor_socks_url.split(":")[-1]
+            _tor_host = "127.0.0.1"
+            http_cfg = cfg.setdefault("http", {})
             proxies = {}
             http_cfg["proxies"] = proxies
-        # Liveness check (connect_ex)
-        if _proxy_alive(socks_url):
-            proxies["http"] = socks_url
-            proxies["https"] = socks_url
-            # Egress sağlık kontrolüne Tor kontrol uç noktasını öne ekle
-            privacy = cfg.setdefault("privacy", {})
-            egress = privacy.setdefault("egress", {})
-            endpoints = egress.setdefault("ip_echo_endpoints", [])
-            if "https://check.torproject.org/api/ip" not in endpoints:
-                endpoints.insert(0, "https://check.torproject.org/api/ip")
-            print(f"[TOR] Proxy etkin: {socks_url}")
+            proxies["http"] = _tor_socks_url
+            proxies["https"] = _tor_socks_url
+            cfg.setdefault("privacy", {}).setdefault("tor", {})["enabled"] = True
+            cfg["privacy"]["tor"]["socks_url"] = _tor_socks_url
+            cfg["_tor_proxy"] = _tor_socks_url
+            print(f"  [+] Tor aktif: {_tor_socks_url}")
+            print("  [+] Tum Python HTTP trafiği Tor uzerinden gidecek.")
+            print("  [+] Tum araclar (Nmap, SQLMap, FFUF, Nuclei, Playwright) Tor ile calisacak.")
         else:
-            print(f"[TOR] Uyarı: {host}:{port} erişilemiyor, proxy uygulanmadı.")
+            print("  [!] Tor baslatilamadi veya bulunamadi.")
+            print("  [!] Tor Browser'i elle acin ve tekrar deneyin.")
+            print("  [!] UYARI: Bu tarama GERCEK IP ile yapilacak!")
+            cfg["_tor_proxy"] = None
     else:
-        print("[Egress] Tor devre dışı.")
+        print("")
+        print("  ╔══════════════════════════════════════════════════════╗")
+        print("  ║  ⚠  GIZLILIK UYARISI                                ║")
+        print("  ║  Tor kullanilmiyor!                                  ║")
+        print("  ║  IP adresiniz hedef sunucuya acikca gorunuyor.       ║")
+        print("  ║  ISP ve ag dinleyicileri tarama yaptigınızı biliyor. ║")
+        print("  ║  Sadece yetkili olduguz sistemlerde devam edin.      ║")
+        print("  ╚══════════════════════════════════════════════════════╝")
+        print("")
+        cfg["_tor_proxy"] = None
+    print("="*60 + "\n")
 
     # --- Kimlik doğrulama (Playwright / Yeni Sistem) ---
     _auth_profiles_cfg = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])

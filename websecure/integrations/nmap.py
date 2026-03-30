@@ -51,7 +51,8 @@ class NmapWrapper:
              ports: str = None,
              mode: str = "standard",
              extra_args: List[str] = None,
-             timeout: int = 300) -> List[Dict[str, Any]]:
+             timeout: int = 300,
+             proxy: str = None) -> List[Dict[str, Any]]:
         """
         Nmap taraması başlatır.
 
@@ -87,6 +88,11 @@ class NmapWrapper:
 
             # XML output
             cmd.extend(["-oX", temp_output])
+
+            # Nmap SOCKS4 proxy (Nmap socks5 desteklemiyor, socks4 yeterli)
+            if proxy:
+                _nmap_proxy = proxy.replace("socks5h://", "socks4://").replace("socks5://", "socks4://")
+                cmd.extend(["--proxies", _nmap_proxy])
 
             # Target always last
             cmd.append(target)

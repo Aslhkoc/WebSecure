@@ -374,8 +374,9 @@ def phase_portscan(ctx: dict):
     if vuln_mode:
         extra_args = extra_args + ["--script", "vuln,auth,default", "--script-timeout", "30s"]
 
+    _nmap_proxy = (ctx.get("config") or {}).get("_tor_proxy")
     _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
-    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args)
+    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args, proxy=_nmap_proxy)
 
     # Store OS guess in ctx for use by other phases
     os_guesses = list({item["os_guess"] for item in res if item.get("os_guess")})
@@ -1792,7 +1793,8 @@ def run_portscan(ctx):
             return _mk_result("portscan", "failed", {"error": "nmap_missing"})
 
         # Hızlı tarama
-        scan_res = nmap.scan(host, mode="fast")
+        _nmap_proxy2 = (getattr(ctx, "config", {}) or {}).get("_tor_proxy")
+        scan_res = nmap.scan(host, mode="fast", proxy=_nmap_proxy2)
         
         # Sonuçları işle
         port_records = []
@@ -2061,16 +2063,21 @@ def _get_config(ctx, key: str, default: Any = None) -> Any:
 
 def _resolve_proxy(ctx) -> str | None:
     """Helper to get proxy string from config (Tor/Rotation)."""
+    # 0. Check _tor_proxy set by main.py Tor auto-start
+    _tor_proxy = (getattr(ctx, "config", {}) or {}).get("_tor_proxy")
+    if _tor_proxy:
+        return _tor_proxy
+
     # 1. Check if Tor is active via proxy_manager
     tor = _get_config(ctx, "proxy.tor.enabled", False)
     if tor:
-        return "socks5://127.0.0.1:9050" 
-    
+        return "socks5://127.0.0.1:9050"
+
     # 2. Check explicit proxy
     proxy_url = _get_config(ctx, "http.proxy")
     if proxy_url:
         return proxy_url
-    
+
     return None
 
 def run_discovery_extended(ctx) -> None:
@@ -2639,7 +2646,6 @@ def run_sqlmap_scan(ctx) -> None:
     extra_args = list(_get_config(ctx, "sqlmap.extra_args", []) or [])
     proxy = _resolve_proxy(ctx)
     if proxy:
-        extra_args.append(f"--proxy={proxy}")
         _logger.info(f"[Evasion] SQLMap using proxy: {proxy}")
 
     if _get_config(ctx, "sqlmap.random_agent", True):
@@ -2693,7 +2699,7 @@ def run_sqlmap_scan(ctx) -> None:
         # If the URL contains high-value params, we might want to boost intensity
         # For now, we just ensure they are tested.
             
-        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args)
+        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args, proxy=proxy)
         findings.extend(current_findings)
     
     # Report
@@ -2887,7 +2893,7 @@ def run_ffuf_scan(ctx) -> None:
         # [Check 5] Proxy
         proxy = _resolve_proxy(ctx)
         if proxy:
-            custom_args.extend(["-x", proxy])
+            _logger.info(f"[Evasion] FFUF using proxy: {proxy}")
 
         # --- Curated discovery wordlist (SecLists priority over merged) ---
         discovery_wl = merged_wl_path  # default: merged everything
@@ -2897,14 +2903,14 @@ def run_ffuf_scan(ctx) -> None:
             _logger.info(f"[FFUF] Curated wordlist kullanılıyor: {discovery_wl}")
 
         # --- Directory/path discovery ---
-        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args)
+        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args, proxy=proxy)
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
         # --- API endpoint discovery (if curated api list available) ---
         curated_api = curated.get("api", [])
         if curated_api:
-            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args)
+            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args, proxy=proxy)
             for f in api_findings:
                 add_result("discovery", {"tool": "ffuf", "category": "api", **f})
 
@@ -2917,6 +2923,7 @@ def run_ffuf_scan(ctx) -> None:
             wordlist=curated_disc[0] if curated_disc else merged_wl_path,
             extensions=sensitive_exts,
             custom_args=custom_args,
+            proxy=proxy,
         )
         try:
             from websecure.scanners.js_analyzer import classify_discovered_file

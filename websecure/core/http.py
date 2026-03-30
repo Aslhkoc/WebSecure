@@ -36,64 +36,6 @@ def _emit_egress_degraded(feature: str, reason: str, details: dict | None = None
         add_result('egress_degraded', rec)
 
 
-def _setup_doh_resolver() -> None:
-    """
-    DNS sorgularını Cloudflare DoH (1.1.1.1) veya Google DoH üzerinden yapar.
-    socket.getaddrinfo monkey-patch ile tüm requests/urllib3 DNS sorgularını yakalar.
-    """
-    import socket as _socket
-    import urllib.request as _ur
-    import json as _json
-
-    _DOH_URLS = [
-        "https://1.1.1.1/dns-query",
-        "https://8.8.8.8/dns-query",
-    ]
-    _doh_cache: dict = {}
-
-    _orig_getaddrinfo = _socket.getaddrinfo
-
-    def _doh_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        # IP adresleri için bypass
-        try:
-            _socket.inet_pton(_socket.AF_INET, host)
-            return _orig_getaddrinfo(host, port, family, type, proto, flags)
-        except OSError:
-            pass
-        try:
-            _socket.inet_pton(_socket.AF_INET6, host)
-            return _orig_getaddrinfo(host, port, family, type, proto, flags)
-        except OSError:
-            pass
-
-        if host in _doh_cache:
-            ip = _doh_cache[host]
-        else:
-            ip = None
-            for doh_url in _DOH_URLS:
-                try:
-                    req = _ur.Request(
-                        f"{doh_url}?name={host}&type=A",
-                        headers={"Accept": "application/dns-json"},
-                    )
-                    with _ur.urlopen(req, timeout=5) as resp:
-                        data = _json.loads(resp.read())
-                    answers = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
-                    if answers:
-                        ip = answers[0]
-                        _doh_cache[host] = ip
-                        break
-                except Exception:
-                    continue
-
-        if ip:
-            return _orig_getaddrinfo(ip, port, family, type, proto, flags)
-        return _orig_getaddrinfo(host, port, family, type, proto, flags)
-
-    if not getattr(_socket.getaddrinfo, "_doh_patched", False):
-        _socket.getaddrinfo = _doh_getaddrinfo
-        _socket.getaddrinfo._doh_patched = True  # type: ignore
-        _logger.info("[DoH] DNS over HTTPS aktif (Cloudflare 1.1.1.1)")
 
 
 def set_phase(name: str):
@@ -1160,10 +1102,7 @@ class HttpClient:
             ok = is_open('127.0.0.1', 9050)
             if not ok:
                 _emit_egress_degraded('tor', 'socks_port_unreachable', {'port': 9050, 'phase': ACTIVE_PHASE.get()})
-        # DoH requested but not implemented → degrade to system resolver
-        dns = (egress.get('dns') or {}) if isinstance(egress, dict) else {}
-        if str(dns.get('strategy') or '').lower() == 'doh':
-            _setup_doh_resolver()
+        pass  # DNS Tor uzerinden gider (socks5h)
         self._egress_degraded_checked = True
         # Anti-blocking pacing
         ab = (self.cfg.get("anti_blocking") or {})
