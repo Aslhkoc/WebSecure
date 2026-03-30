@@ -1389,34 +1389,16 @@ O====|_______________________________________________________>  1   1 0
     _oast_token = _interactsh_cfg.get("token", "")
     _oast_enabled = _oast_cfg.get("enabled") and _interactsh_cfg.get("enabled")
 
+    print("\n" + "="*60)
+    print("  [?] OAST / interactsh kurulumu")
+    print("  SSRF ve XXE bulmalarini dogrulamak icin interactsh gerekir.")
+    print("  interactsh-client.exe'yi indirip calistirarak token alabilirsiniz.")
+    print("  https://github.com/projectdiscovery/interactsh/releases")
     if _oast_enabled and _oast_token and "BURAYA" not in _oast_token:
-        # Config'de zaten var — direkt devam et, soru sorma
-        print("[+] OAST / interactsh: config'den okundu, aktif.")
+        print("  [+] OAST / interactsh: config'den okundu, aktif.")
     else:
-        # Token eksik veya girilmemis — kullanicidan al
-        print("\n" + "="*60)
-        print("  [?] OAST / interactsh kurulumu")
-        print("  SSRF ve XXE bulmalarini dogrulamak icin interactsh gerekir.")
-        print("  interactsh-client.exe'yi indirip calistirarak token alabilirsiniz.")
-        print("  https://github.com/projectdiscovery/interactsh/releases")
-        print("")
-        _ans = input("  interactsh token'iniz var mi? (e/h): ").strip().lower()
-        if _ans == "e":
-            _new_token = input("  Token'i girin (ornek: abc123xyz): ").strip()
-            _new_server = input("  Server'i girin (Enter = https://oast.me): ").strip()
-            if not _new_server:
-                _new_server = "https://oast.me"
-            if _new_token:
-                cfg.setdefault("oast", {})["enabled"] = True
-                cfg["oast"].setdefault("interactsh", {})["enabled"] = True
-                cfg["oast"]["interactsh"]["token"] = _new_token
-                cfg["oast"]["interactsh"]["server"] = _new_server
-                _server_domain = _new_server.replace("https://", "").replace("http://", "")
-                cfg["oast"]["dns_domain"] = f"{_new_token}.{_server_domain}"
-                print(f"  [+] OAST ayarlandi.")
-        else:
-            print("  [i] OAST atlaniyor. SSRF/XXE bulgulari dogrulanamayacak.")
-        print("="*60 + "\n")
+        print("  [i] OAST atlaniyor. SSRF/XXE bulgulari dogrulanamayacak.")
+    print("="*60 + "\n")
 
 
     # --- Tool Manager Integration (Early Prompt) ---
@@ -1730,7 +1712,60 @@ O====|_______________________________________________________>  1   1 0
     else:
         print("[Egress] Tor devre dışı.")
 
-
+    # --- Kimlik doğrulama (Playwright / Yeni Sistem) ---
+    _auth_profiles_cfg = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
+    _auth_profile_valid = (
+        _auth_profiles_cfg and
+        _auth_profiles_cfg[0].get("username") and
+        _auth_profiles_cfg[0].get("username") != "KULLANICI_ADI" and
+        _auth_profiles_cfg[0].get("password") and
+        _auth_profiles_cfg[0].get("password") != "SIFRE" and
+        _auth_profiles_cfg[0].get("login_url") and
+        "hedef-site" not in _auth_profiles_cfg[0].get("login_url", "")
+    )
+    if not args.dry_run and not args.batch:
+        print("\n" + "="*60)
+        print("  [?] Kimlik dogrulama (Authenticated Scan - Playwright)")
+        print("  Hedef sitede kullanici hesabi varsa login bilgilerini")
+        print("  girin. Login gerektiren sayfalar da taranacak.")
+        if _auth_profile_valid:
+            print(f"  [+] Config'de kayitli profil bulundu: {_auth_profiles_cfg[0].get('username')}")
+            _auth_ans = input("  Bu profili kullanmak ister misiniz? (E/h): ").strip().lower() or "e"
+        else:
+            _auth_ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
+        if _auth_ans == "e":
+            if not _auth_profile_valid:
+                _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
+                _username = input("  Kullanici adi / e-posta: ").strip()
+                _password = input("  Sifre: ").strip()
+                _ufield = input("  Username input name (Enter = username): ").strip() or "username"
+                _pfield = input("  Password input name (Enter = password): ").strip() or "password"
+                _success = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
+                if _login_url and _username and _password:
+                    _new_profile = {
+                        "login_url": _login_url,
+                        "username": _username,
+                        "password": _password,
+                        "username_field": _ufield,
+                        "password_field": _pfield,
+                        "success_indicator": _success,
+                    }
+                    cfg.setdefault("authenticated", {}).setdefault("auth_profiles", [])
+                    if cfg["authenticated"]["auth_profiles"]:
+                        cfg["authenticated"]["auth_profiles"][0] = _new_profile
+                    else:
+                        cfg["authenticated"]["auth_profiles"].append(_new_profile)
+                    print("  [+] Kimlik bilgileri alindi. Otomatik giris yapilacak.")
+                else:
+                    print("  [!] Eksik bilgi. Kimlik dogrulama atlanıyor.")
+                    _auth_ans = "h"
+            else:
+                print("  [+] Mevcut profil kullanilacak.")
+        else:
+            print("  [i] Kimlik dogrulama atlanıyor.")
+        print("="*60 + "\n")
+    else:
+        _auth_ans = "h"
 
     # Opsiyonel: kurumsal proxy/VPN gibi bir çıkış kullanmak ister misiniz?
     # Proxy tercihi (istisnasız)
@@ -1806,6 +1841,24 @@ O====|_______________________________________________________>  1   1 0
             print("[i] WebDriver açılamadı; dinamik gezinme olmadan devam edilecek.")
 
         session = _setup_session_from_config(cfg)
+
+        # --- Otomatik Playwright login (auth_profiles yapılandırılmışsa) ---
+        _run_auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
+        if _run_auth_profiles and _run_auth_profiles[0].get("username") and _run_auth_profiles[0].get("password"):
+            try:
+                from websecure.core.auth_flow import playwright_login as _pw_login
+                print("[*] Playwright ile otomatik giris yapiliyor...")
+                _pw_result = _pw_login(cfg, session_path="session.json")
+                if _pw_result and _pw_result.get("login_successful"):
+                    for _cn, _cv in (_pw_result.get("cookies") or {}).items():
+                        session.cookies.set(_cn, _cv)
+                    cfg.setdefault("browser", {})["auth_storage_state"] = \
+                        _pw_result.get("storage_state_path", "session.json")
+                    print("[+] Giris basarili. Oturum hazir.")
+                elif _pw_result:
+                    print("[!] Giris basarisiz olabilir. Scan devam ediyor.")
+            except Exception as _pw_exc:
+                print(f"[!] Otomatik login hatasi: {_pw_exc}. Scan devam ediyor.")
 
         # --- Ön tanımlar: daha sonra kullanılan bağlamlar (lint/akış güvenliği) ---
         auth_ctx = None
@@ -2704,8 +2757,10 @@ if __name__ == "__main__":
     # Keep window open
 
     try:
-        input("\n[i] Çıkmak için Enter'a basın...")
-    except (EOFError, KeyboardInterrupt):
+        sys.stdout.write("\n[i] Cikmak icin Enter'a basin...\n")
+        sys.stdout.flush()
+        sys.stdin.readline()
+    except (EOFError, KeyboardInterrupt, UnicodeDecodeError, OSError):
         pass
 
 

@@ -1609,14 +1609,6 @@ def get_tor_proxy() -> Optional[Dict[str, str]]:
         url = em.get_next_egress()
         if url:
             return {"http": url, "https": url}
-    # Fallback: bare Tor SOCKS5 if port 9050 is open
-    try:
-        import socket as _sock
-        with _sock.create_connection(("127.0.0.1", 9050), timeout=0.5):
-            tor_url = "socks5h://127.0.0.1:9050"
-            return {"http": tor_url, "https": tor_url}
-    except (OSError, ImportError) as exc:
-        _logger.debug(f"[WAFBypass] Tor SOCKS5 probe failed: {exc!r}")
     return None
 
 
