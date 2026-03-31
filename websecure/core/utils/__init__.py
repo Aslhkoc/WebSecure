@@ -53,7 +53,6 @@ from .config import (
     get_active_profile,
     validate_and_normalize_config,
     ensure_wordlists,
-    verify_for_phase,
     get_logging_prefs,
     apply_active_profile,
 )

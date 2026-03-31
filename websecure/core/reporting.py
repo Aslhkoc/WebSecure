@@ -1548,9 +1548,9 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     written: Dict[str, str] = {}
     os.makedirs(out_dir, exist_ok=True)
 
-    # Always write JSON for CI consumption
-    _json_dump(os.path.join(out_dir, 'report.json'), results)
-    written['json'] = os.path.join(out_dir, 'report.json')
+    # JSON — results.json olarak yazılıyor (aşağıda), report.json alias
+    # Çift yazımı önlemek için burada yalnızca path saklıyoruz
+    written['json'] = os.path.join(out_dir, 'results.json')
     # Also persist HTTP metrics snapshot for CI/analysis
     try:
         from websecure.core.http import get_http_metrics

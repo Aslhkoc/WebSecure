@@ -2,25 +2,22 @@
   "$schema": "./config.schema.json",
   "_meta": {
     "version": "2.5.2-b8",
-    "last_updated": "2025-09-14T14:36:41Z",
+    "last_updated": "2026-03-31T00:00:00Z",
     "notes": [
-      "Bu dosya, orijinal config.json üstünde GENİŞLETME yapılarak üretildi.",
-      "Yeni alanlar schema'ya eklenmeli: config.schema.json güncellemesi önerilir.",
-      "Eski alanlar korunmuştur; kaldırma yapılmadı. Yalnızca parametre GENİŞLETİLDİ.",
-      "Batch 5 entegrasyonu: SSRF/XXE ek şemalar (SMB/LDAP/TFTP) + metadata (IMDSv1/v2, GCP, Azure); SARIF & JUnit exporter ayarları ve reporting.formats güncellemesi uygulandı.",
-      "Batch 7: Otomatik rapor (flush), SARIF/JUnit güçlendirme, rule-id registry.",
-      "Batch 8: run_plan entegrasyonu; ws_fuzz endpoint düzeltmesi; JWT alias/wordlist; scan() sargıları.",
-      "Patched at 2025-09-22T16:07:57.825074Z — auth.strict_required otomatik gevşetildi (geçici), profile=aggressive uyumlandı; env yerleştirme için __guidance__ eklendi."
+      "2 tarama profili: aggressive (hizli) ve stealth (yavas, WAF bypass)",
+      "root profiles kaldirildi — settings.profiles kullaniliyor",
+      "report.path kaldirildi — reporting.output_dir kullaniliyor",
+      "scan_profile: aggressive (varsayilan)"
     ]
   },
   "settings": {
     "logging": {
-      "level": "DEBUG",
+      "level": "INFO",
       "json": false,
       "file": "scan_pro.log",
       "redact_sensitive": true
     },
-    "scan_profile": "safe_full",
+    "scan_profile": "aggressive",
     "wordlists": {
       "root": "./websecure/wordlists",
       "defaults": [
@@ -32,117 +29,47 @@
     "proxy_pool": [],
     "profiles": {
       "stealth": {
-        "rps": 5,
-        "concurrency": 10,
-        "modules": [
-          "headers",
-          "tls",
-          "owasp"
-        ]
-      },
-      "deep": {
-        "rps": 20,
-        "concurrency": 50,
-        "modules": [
-          "headers",
-          "tls",
-          "owasp",
-          "injection",
-          "graphql",
-          "file_upload",
-          "ssrf_xxe"
-        ]
-      },
-      "aggressive": {
-        "rps": 60,
-        "concurrency": 120,
+        "description": "Tam kapsam, yavas, WAF bypass, sakin adimlar",
+        "rps": 1,
+        "concurrency": 2,
         "modules": [
           "*"
         ],
+        "politeness_ms": 2500,
+        "backoff_factor": 3.0,
         "http": {
-          "safe_methods_only": true
-        }
-      },
-      "normal": {
-        "rps": 12,
-        "concurrency": 20,
-        "allow_categories": [
-          "xss",
-          "sqli",
-          "ssrf",
-          "ssti",
-          "open_redirect"
-        ],
-        "idempotent_only": false,
-        "oast": true,
-        "heavy_modules": false,
-        "robots_respect": true,
-        "politeness_ms": 300,
-        "obs_seconds": 60,
-        "min_req": 40,
-        "up_when_block_rate_below": 0.005,
-        "down_when_block_rate_above": 0.03
-      },
-      "smart": {
-        "rps": 5,
-        "concurrency": 5,
-        "modules": [
-          "*"
-        ],
-        "politeness_ms": 1200,
-        "backoff_factor": 2.5,
-        "http": {
+          "timeout": 30,
+          "retries": 3,
           "user_agent_rotation": true,
           "randomize_headers": true
-        },
-        "robots_respect": true,
-        "description": "Slow, comprehensive scan designed to evade WAFs and avoid IP blocking."
-      },
-      "safe_full": {
-        "description": "Maximum coverage with high stealth/WAF evasion. Very slow.",
-        "rps": 2,
-        "concurrency": 2,
-        "politeness_ms": 1500,
-        "backoff_factor": 3.0,
-        "modules": [
-          "*"
-        ],
-        "http": {
-          "user_agent_rotation": true,
-          "randomize_headers": true,
-          "timeout": 25,
-          "retries": 5
-        },
-        "crawler": {
-          "headless": true,
-          "browser_max_pages": 30,
-          "timeout_http": 20
         },
         "waf": {
           "evasion_level": 3,
           "randomize_fingerprint": true
+        },
+        "crawler": {
+          "headless": true,
+          "browser_max_pages": 30
         }
       },
-      "nightmare": {
-        "rps": 100,
-        "concurrency": 200,
+      "aggressive": {
+        "description": "Tam kapsam, maksimum hiz, tum moduller",
+        "rps": 15,
+        "concurrency": 20,
         "modules": [
           "*"
         ],
-        "politeness_ms": 0,
-        "backoff_factor": 0.5,
         "http": {
-          "user_agent_rotation": true,
-          "randomize_headers": true,
-          "safe_methods_only": false
+          "timeout": 20,
+          "retries": 2,
+          "user_agent_rotation": true
         },
-        "robots_respect": false,
-        "description": "UNLEASH HELL: Extreme speed, max concurrency, full crawling, no limits."
+        "waf": {
+          "evasion_level": 2,
+          "randomize_fingerprint": true
+        }
       }
     }
-  },
-  "report": {
-    "path": "output/latest_report"
   },
   "reporting": {
     "output_dir": "output",
@@ -248,11 +175,28 @@
       }
     },
     "severity_aliases": {
-      "Low": "Low", "low": "Low", "Düşük": "Low", "düşük": "Low",
-      "Medium": "Medium", "medium": "Medium", "Med": "Medium", "Orta": "Medium", "orta": "Medium",
-      "High": "High", "high": "High", "Yüksek": "High", "yüksek": "High",
-      "Critical": "Critical", "critical": "Critical", "CRIT": "Critical", "Kritik": "Critical", "kritik": "Critical",
-      "Info": "Informational", "info": "Informational", "Bilgi": "Informational", "bilgi": "Informational"
+      "Low": "Low",
+      "low": "Low",
+      "Düşük": "Low",
+      "düşük": "Low",
+      "Medium": "Medium",
+      "medium": "Medium",
+      "Med": "Medium",
+      "Orta": "Medium",
+      "orta": "Medium",
+      "High": "High",
+      "high": "High",
+      "Yüksek": "High",
+      "yüksek": "High",
+      "Critical": "Critical",
+      "critical": "Critical",
+      "CRIT": "Critical",
+      "Kritik": "Critical",
+      "kritik": "Critical",
+      "Info": "Informational",
+      "info": "Informational",
+      "Bilgi": "Informational",
+      "bilgi": "Informational"
     }
   },
   "crawl": {
@@ -967,37 +911,6 @@
   "jwt": {
     "weak_secrets": "./wordlists/jwt_secrets.txt"
   },
-  "profiles": {
-    "stealth": {
-      "rps": 5,
-      "concurrency": 10,
-      "modules": [
-        "headers",
-        "tls",
-        "owasp"
-      ]
-    },
-    "deep": {
-      "rps": 20,
-      "concurrency": 50,
-      "modules": [
-        "headers",
-        "tls",
-        "owasp",
-        "injection",
-        "graphql",
-        "file_upload",
-        "ssrf_xxe"
-      ]
-    },
-    "aggressive": {
-      "rps": 60,
-      "concurrency": 120,
-      "modules": [
-        "*"
-      ]
-    }
-  },
   "network": {
     "ports_common": [
       21,
@@ -1283,20 +1196,20 @@
     ]
   },
   "wordlists": {
-    "xss":           "./websecure/wordlists/xss.txt",
-    "sqli":          "./websecure/wordlists/sqli.txt",
-    "lfi":           "./websecure/wordlists/lfi.txt",
-    "ssrf":          "./websecure/wordlists/ssrf.txt",
-    "ssti":          "./websecure/wordlists/ssti.txt",
-    "nosqli":        "./websecure/wordlists/nosqli.txt",
-    "cmdi":          "./websecure/wordlists/cmdi.txt",
-    "xxe":           "./websecure/wordlists/xxe.txt",
+    "xss": "./websecure/wordlists/xss.txt",
+    "sqli": "./websecure/wordlists/sqli.txt",
+    "lfi": "./websecure/wordlists/lfi.txt",
+    "ssrf": "./websecure/wordlists/ssrf.txt",
+    "ssti": "./websecure/wordlists/ssti.txt",
+    "nosqli": "./websecure/wordlists/nosqli.txt",
+    "cmdi": "./websecure/wordlists/cmdi.txt",
+    "xxe": "./websecure/wordlists/xxe.txt",
     "open_redirect": "./websecure/wordlists/open_redirect.txt",
-    "dirs":          "./websecure/wordlists/dirs.txt",
-    "files":         "./websecure/wordlists/files.txt",
-    "params":        "./websecure/wordlists/params.txt",
-    "passwords":     "./websecure/wordlists/passwords_top1000.txt",
-    "jwt_secrets":   "./websecure/wordlists/jwt_secrets.txt"
+    "dirs": "./websecure/wordlists/dirs.txt",
+    "files": "./websecure/wordlists/files.txt",
+    "params": "./websecure/wordlists/params.txt",
+    "passwords": "./websecure/wordlists/passwords_top1000.txt",
+    "jwt_secrets": "./websecure/wordlists/jwt_secrets.txt"
   },
   "proxy": {
     "enabled": true,
@@ -1321,5 +1234,10 @@
     "timeout_ms": 15000,
     "wait_after_load_ms": 1500,
     "escalate_threshold": 5
+  },
+  "http": {
+    "timeout_seconds": 20,
+    "retries": 2,
+    "user_agent": "Mozilla/5.0 (compatible; WebSecure/2.5)"
   }
 }

@@ -449,11 +449,7 @@ if __package__ is None or __package__ == "":
     if _parent not in _sys.path:
         _sys.path.insert(0, _parent)
     __package__ = "websecure"
-def _load_config(p: str) -> dict:
-    if not p or not os.path.exists(p):
-        return {}
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
+# _load_config kaldırıldı — load_config (core/utils) kullanılıyor
 
 
 
@@ -921,17 +917,16 @@ else:
 # --- Port tarama: phases.py:phase_portscan() kullanılır, bu wrapper'lar kaldırıldı ---
 
 
-# --- Port Scanner ---
-    # Auto-binded orphan modules (plugin imports) — DO NOT REMOVE
-    for _m in [
-        'websecure.core.injection',
-        'websecure.core.phases',
-        'websecure.core.safe_regex',
-        'websecure.core.auth.auth_flow' if _ws_has('websecure.core.auth.auth_flow') else None,
-        'websecure.crawler',
-    ]:
-        if _m and _ws_spec(_m) is not None:
-            _im.import_module(_m)
+# --- Plugin / bağımlı modül ön yüklemesi ---
+for _m in [
+    'websecure.core.injection',
+    'websecure.core.phases',
+    'websecure.core.safe_regex',
+    'websecure.core.auth.auth_flow' if _ws_has('websecure.core.auth.auth_flow') else None,
+    'websecure.crawler',
+]:
+    if _m and _ws_spec(_m) is not None:
+        _im.import_module(_m)
 
 
 # --- Crawler ---
@@ -2127,35 +2122,36 @@ O====|_______________________________________________________>  1   1 0
     if not args.dry_run and not args.batch and not args.profile:
         profile, cfg = _offer_scan_profile_and_confirm(cfg)
     else:
-        # Öncelik: CLI --profile > Config > Varsayılan Deep
-        profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "deep"
-        # Profil ayarlarına göre config güncelle (normalde _offer... fonksiyonu bunu yapar)
-        # Burada basitçe profili set ediyoruz, detaylı config ayarı için _apply_profile benzeri bir mantık gerekebilir
-        # Ancak mevcut yapıda profili settings'e yazmak yeterli olabilir, runner bunu okuyup karar veriyorsa.
-        # Bir kontrol yapalım: _offer_scan_profile_and_confirm fonksiyonu cfg'yi güncelliyor mu?
-        # Fonksiyonu çağırmadığımız için manuel güncelleme yapmamız gerekebilir.
-        # Basitlik adına settings'e yazalım.
-        cfg.setdefault("settings", {})["scan_profile"] = profile
+        # Öncelik: CLI --profile > Config > Varsayılan aggressive
+        profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
+        # Batch/dry-run modunda da profil ayarlarını tam uygula
+        from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile
+        from websecure.core.utils import apply_active_profile
+        if profile in ("stealth",):
+            cfg = _apply_stealth_profile(cfg)
+        else:
+            cfg = _apply_aggressive_profile(cfg)
+            profile = "aggressive"
+        cfg = apply_active_profile(cfg)
 
         if args.dry_run:
-            print(f"[Dry-Run] Profil seçimi atlandı (seçilen: {profile}).")
+            print(f"[Dry-Run] Profil uygulandı: {profile}.")
         elif args.batch:
-            print(f"[Batch] Profil otomatik seçildi: {profile}")
+            print(f"[Batch] Profil otomatik uygulandı: {profile}")
 
     # [Fix] Force Aggressive if attack mode is requested via CLI
     if args.attack or args.attack_unsafe:
         if profile not in ("aggressive", "deep"):
             print(f"[WARN] Saldırı modu seçildi ancak profil '{profile}'. 'AGGRESSIVE' olarak zorlanıyor.")
-            profile = "aggressive"
-            # Re-fetch profile config
-            _profiles = (cfg.get("settings") or {}).get("profiles") or {}
-            cfg["_resolved_profile"] = _profiles.get("aggressive", {})
-            cfg["settings"]["scan_profile"] = "aggressive"
+        profile = "aggressive"
+        from websecure.core.scan_profile import _apply_aggressive_profile
+        from websecure.core.utils import apply_active_profile
+        cfg = _apply_aggressive_profile(cfg)
+        cfg = apply_active_profile(cfg)
 
     mode = _choose_mode_from_config(cfg)
-    detailed = (mode == ScanMode.DETAILED) or bool((cfg.get("settings") or {}).get("detailed", False))
+    detailed = (ScanMode is not None and mode == ScanMode.DETAILED) or bool((cfg.get("settings") or {}).get("detailed", False))
     print(f"[MOD] {mode.upper()}  |  Detay: {'EVET' if detailed else 'HAYIR'}  |  Profil: {profile.upper()}")
-    print(f"[DEBUG] Active Config Profile: {cfg.get('settings', {}).get('scan_profile')} (Resolved: {bool(cfg.get('_resolved_profile'))})")
 
 
     debug = str((cfg.get("settings") or {}).get("logging", {}).get("level", "")).upper() == "DEBUG"

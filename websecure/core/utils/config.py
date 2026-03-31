@@ -82,9 +82,6 @@ def ensure_wordlists(cfg: Dict[str, Any]) -> Dict[str, Any]:
         
     return cfg
 
-def verify_for_phase(phase: str) -> bool:
-    return True
-
 def get_logging_prefs(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return cfg.get("logging", {})
 

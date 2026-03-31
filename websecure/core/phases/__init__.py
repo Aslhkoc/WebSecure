@@ -25,7 +25,10 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
-from websecure.core.reporting import _phase_rec
+try:
+    from websecure.core.reporting import _phase_rec
+except ImportError:
+    def _phase_rec(*_a, **_k): pass
 
 # Global cancel event — set by SIGINT handler or external callers to stop the scan
 _SCAN_CANCEL = threading.Event()
@@ -2017,9 +2020,20 @@ import os
 import shutil
 import time
 
-from websecure.core.reporting import add_result
-from websecure.core.http import hardened_session
-from websecure.crawler import WebCrawler, CrawlerConfig
+try:
+    from websecure.core.reporting import add_result
+except ImportError:
+    def add_result(*_a, **_k): pass  # type: ignore[assignment]
+
+try:
+    from websecure.core.http import hardened_session
+except ImportError:
+    hardened_session = None  # type: ignore[assignment]
+
+try:
+    from websecure.crawler import WebCrawler, CrawlerConfig
+except ImportError:
+    pass  # WebCrawler already guarded above
 
 # Integration Wrappers
 try:
