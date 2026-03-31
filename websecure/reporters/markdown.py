@@ -102,37 +102,77 @@ def _coerce_final(results: Dict) -> List[Dict]:
     return merged
 
 def _render_ports_section(results: Dict) -> str:
-    # Logic extracted from original code
-    cand_keys = ["ports", "port_scan", "nmap", "nmap_summary", "services", "open_ports"]
+    """Açık portları tam detayla render eder — Host | Port | Proto | Servis | Ürün/Versiyon | NSE | CPE"""
+    cand_keys = ["nmap", "port_scan", "ports", "nmap_summary", "services"]
     rows = []
-    
+
     def _as_int(val):
         s = str(val).strip()
         return int(s) if re.fullmatch(r"[+-]?\d+", s) else val
 
+    def _script_highlights(scripts: dict) -> str:
+        if not isinstance(scripts, dict):
+            return ""
+        parts = []
+        for key in ("http-title", "banner", "ssl-cert", "http-server-header",
+                    "ssh-hostkey", "ftp-anon", "ssl-heartbleed", "ssl-poodle"):
+            val = scripts.get(key, "")
+            if val:
+                first = val.strip().split("\n")[0].strip()[:120]
+                parts.append(f"{key}: {first}")
+        for k, v in scripts.items():
+            if v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-")):
+                parts.append(f"⚠️ {k}: {v.strip().split(chr(10))[0][:120]}")
+        return " // ".join(parts)
+
     for k in cand_keys:
         v = results.get(k)
-        if isinstance(v, list):
-            for it in v:
-                if not isinstance(it, dict): continue
-                host = str(it.get("host") or it.get("ip") or it.get("address") or "")
-                port = it.get("port") or it.get("dst_port") or it.get("service_port")
-                if port is None: continue
-                # Simple normalization
-                rows.append({"host": host, "port": _as_int(port), "proto": str(it.get("proto") or "tcp"), 
-                             "state": str(it.get("state") or "open"), "service": str(it.get("service") or "")})
-        # Note: Additional dict key parsing omitted for brevity/focus on stability, 
-        # normally nmap module output is a list of dicts.
+        if not isinstance(v, list):
+            continue
+        for it in v:
+            if not isinstance(it, dict):
+                continue
+            port = it.get("port") or it.get("dst_port")
+            if port is None:
+                continue
+            product = str(it.get("product") or "")
+            version = str(it.get("version") or "")
+            pv = (product + " " + version).strip()
+            cpe = it.get("cpe") or []
+            rows.append({
+                "host":    str(it.get("host") or it.get("ip") or ""),
+                "port":    _as_int(port),
+                "proto":   (str(it.get("proto") or it.get("protocol") or "tcp")).lower(),
+                "service": str(it.get("service") or ""),
+                "pv":      pv,
+                "scripts": _script_highlights(it.get("scripts") or {}),
+                "cpe":     ", ".join(cpe[:2]) if isinstance(cpe, list) else "",
+                "os":      str(it.get("os_guess") or ""),
+            })
 
-    if not rows: return ""
-    
-    # Dedupe
-    u_ports = {}
-    for r in rows: u_ports[(r["host"], r["port"])] = r
-    
-    out = ["## Taranan/Açık Portlar", "", "| Host | Port | Protokol | Servis |", "|-|-|-|-|"]
-    for (h, p), r in sorted(u_ports.items(), key=lambda x: (x[0][0], x[0][1] if isinstance(x[0][1], int) else 99999)):
-         out.append(f"| {h} | {p} | {r.get('proto')} | {r.get('service')} |")
+    if not rows:
+        return ""
+
+    seen = {}
+    for r in rows:
+        key = (r["host"], r["port"], r["proto"])
+        if key not in seen:
+            seen[key] = r
+
+    sorted_rows = sorted(seen.values(),
+                         key=lambda r: (r["host"], r["port"] if isinstance(r["port"], int) else 99999))
+
+    os_info = next((r["os"] for r in sorted_rows if r["os"]), "")
+    out = ["## Açık Portlar", ""]
+    if os_info:
+        out.append(f"> **OS Tahmini:** {os_info}\n")
+    out.append("| Host | Port | Proto | Servis | Ürün / Versiyon | NSE Script Çıktıları | CPE |")
+    out.append("|-|-:|-|-|-|-|-|")
+    for r in sorted_rows[:500]:
+        out.append(
+            f"| {r['host']} | **{r['port']}** | {r['proto']} "
+            f"| {r['service']} | {r['pv']} | {r['scripts']} | {r['cpe']} |"
+        )
     return "\n".join(out)
 
 

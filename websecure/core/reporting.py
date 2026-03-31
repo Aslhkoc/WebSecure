@@ -919,91 +919,81 @@ def _dedupe_findings(items: List[Dict]) -> List[Dict]:
 
 def _render_ports(results: Dict) -> str:
     """
-    Taranan/Açık portları tablo halinde basar.
-    Beklenen kaynaklar: results['ports'] veya results['port_scan'] veya results['nmap'] / ['nmap_summary']
-    Her kayıt: {"host":..., "port":..., "proto":..., "state": "open/closed/filtered", "service":...}
+    Açık portları tam detayla render eder.
+    Host | Port | Proto | Servis | Ürün/Versiyon | NSE Çıktıları | CPE
     """
-    cand_keys = ["ports", "port_scan", "nmap", "nmap_summary", "services", "open_ports"]
+    cand_keys = ["nmap", "port_scan", "ports", "nmap_summary", "services"]
     rows = []
 
     def _as_int(val):
         s = str(val).strip()
         return int(s) if re.fullmatch(r"[+-]?\d+", s) else val
 
+    def _script_highlights(scripts: dict) -> str:
+        if not isinstance(scripts, dict):
+            return ""
+        parts = []
+        for key in ("http-title", "banner", "ssl-cert", "http-server-header",
+                    "ssh-hostkey", "ftp-anon", "smtp-commands",
+                    "ssl-heartbleed", "ssl-poodle"):
+            val = scripts.get(key, "")
+            if val:
+                first = val.strip().split("\n")[0].strip()[:120]
+                parts.append(f"{key}: {first}")
+        for k, v in scripts.items():
+            if v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-")):
+                parts.append(f"⚠️ {k}: {v.strip().split(chr(10))[0][:120]}")
+        return " // ".join(parts)
+
     for k in cand_keys:
         v = results.get(k)
-        if isinstance(v, list):
-            for it in v:
-                if not isinstance(it, dict):
-                    continue
-                host = str(it.get("host") or it.get("ip") or it.get("address") or "")
-                port = it.get("port") or it.get("dst_port") or it.get("service_port")
-                if port is None:
-                    continue
-                port = _as_int(port)
-                proto = (str(it.get("proto") or it.get("protocol") or "") or "tcp").lower()
-                state = str(it.get("state") or it.get("status") or "")
-                svc = str(it.get("service") or it.get("name") or it.get("product") or "")
-                rows.append({"host": host, "port": port, "proto": proto, "state": state or "open", "service": svc})
-        elif isinstance(v, dict):
-            scanned = v.get("scanned") or []
-            opened = v.get("open") or v.get("open_ports") or []
-            for it in scanned:
-                if isinstance(it, dict) and "port" in it:
-                    rows.append({
-                        "host": str(it.get("host") or ""),
-                        "port": _as_int(it.get("port")),
-                        "proto": str(it.get("proto") or "tcp"),
-                        "state": str(it.get("state") or "scanned"),
-                        "service": str(it.get("service") or "")
-                    })
-            for it in opened:
-                if isinstance(it, dict) and "port" in it:
-                    rows.append({
-                        "host": str(it.get("host") or ""),
-                        "port": _as_int(it.get("port")),
-                        "proto": str(it.get("proto") or "tcp"),
-                        "state": "open",
-                        "service": str(it.get("service") or "")
-                    })
+        if not isinstance(v, list):
+            continue
+        for it in v:
+            if not isinstance(it, dict):
+                continue
+            port = it.get("port") or it.get("dst_port")
+            if port is None:
+                continue
+            product = str(it.get("product") or "")
+            version = str(it.get("version") or "")
+            pv = (product + " " + version).strip()
+            cpe = it.get("cpe") or []
+            rows.append({
+                "host":    str(it.get("host") or it.get("ip") or ""),
+                "port":    _as_int(port),
+                "proto":   (str(it.get("proto") or it.get("protocol") or "tcp")).lower(),
+                "service": str(it.get("service") or ""),
+                "pv":      pv,
+                "scripts": _script_highlights(it.get("scripts") or {}),
+                "cpe":     ", ".join(cpe[:2]) if cpe else "",
+                "os":      str(it.get("os_guess") or ""),
+            })
 
     if not rows:
         return ""
 
-    scanned_ports = {}
-    open_ports = {}
+    # Dedupe by (host, port, proto)
+    seen = {}
     for r in rows:
-        key = (r["host"], r["proto"], r["port"])
-        scanned_ports[key] = r
-        if str(r.get("state", "")).lower().startswith("open"):
-            open_ports[key] = r
+        key = (r["host"], r["port"], r["proto"])
+        if key not in seen:
+            seen[key] = r
 
-    out = []
-    out.append("## Taranan Portlar")
-    out.append("")
-    out.append("| Host | Proto | Port | Servis | Durum |")
-    out.append("|-|-|-:|-|-|")
+    sorted_rows = sorted(seen.values(), key=lambda r: (r["host"], r["port"] if isinstance(r["port"], int) else 99999))
 
-    def _sort_key(kv):
-        h, pr, po = kv[0]
-        if isinstance(po, int):
-            return (h, pr, po)
-        # int değilse string karşılaştırma
-        return (h, pr, str(po))
+    os_info = next((r["os"] for r in sorted_rows if r["os"]), "")
 
-    for (h, pr, po), rr in sorted(scanned_ports.items(), key=_sort_key):
-        out.append(f"| {h} | {pr} | {po} | {rr.get('service') or ''} | {rr.get('state') or ''} |")
-
-    out.append("")
-    out.append("## Açık Portlar")
-    out.append("")
-    out.append("| Host | Proto | Port | Servis |")
-    out.append("|-|-|-:|-|")
-    if open_ports:
-        for (h, pr, po), rr in sorted(open_ports.items(), key=_sort_key):
-            out.append(f"| {h} | {pr} | {po} | {rr.get('service') or ''} |")
-    else:
-        out.append("| - | - | - | - |")
+    out = ["## Açık Portlar", ""]
+    if os_info:
+        out.append(f"> **OS Tahmini:** {os_info}\n")
+    out.append("| Host | Port | Proto | Servis | Ürün / Versiyon | NSE Script Çıktıları | CPE |")
+    out.append("|-|-:|-|-|-|-|-|")
+    for r in sorted_rows[:500]:
+        out.append(
+            f"| {r['host']} | **{r['port']}** | {r['proto']} "
+            f"| {r['service']} | {r['pv']} | {r['scripts']} | {r['cpe']} |"
+        )
     return "\n".join(out)
 
 
@@ -2608,12 +2598,11 @@ def _e_table_oast(results: Dict[str, Any]) -> str:
 
 def _e_table_ports(results: Dict) -> str:
     """
-    Hem ayrıntılı 'port_scan' listesi (dict) hem de özet 'port_scan_summary.open' (int listesi)
-    ile çalışır.
+    Nmap sonuçlarını tam detayla render eder:
+    Port | Proto | Servis | Ürün/Versiyon | NSE Script Çıktıları | CPE | OS
     """
 
     def _as_int(x):
-        # bool -> dışla, int -> al, str sayısal -> al, aksi halde None
         if isinstance(x, bool):
             return None
         if isinstance(x, int):
@@ -2624,65 +2613,91 @@ def _e_table_ports(results: Dict) -> str:
                 return int(s)
         return None
 
+    def _script_highlights(scripts: dict) -> str:
+        """NSE scriptlerinden en önemli bilgileri tek satıra toplar."""
+        if not isinstance(scripts, dict):
+            return ""
+        parts = []
+        # Önemli scriptler sırayla
+        for key in ("http-title", "http-server-header", "banner", "ssl-cert",
+                    "ssh-hostkey", "ftp-anon", "smtp-commands",
+                    "ssl-heartbleed", "ssl-poodle", "ssl-dh-params",
+                    "http-auth-finder", "http-methods"):
+            val = scripts.get(key, "")
+            if not val:
+                continue
+            # İlk satır yeterli
+            first_line = val.strip().split("\n")[0].strip()
+            if first_line:
+                parts.append(f"**{key}**: {first_line[:120]}")
+        # Vuln scriptleri — varsa ekle
+        for k, v in scripts.items():
+            if k not in parts and v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-", "exploit")):
+                first_line = v.strip().split("\n")[0].strip()
+                parts.append(f"⚠️ **{k}**: {first_line[:120]}")
+        return " | ".join(parts)
+
     rows: list[dict] = []
 
-    # 1) Ayrıntı varsa onu kullan — port_scan VEYA nmap bucket'ı
-    scan_list = results.get("port_scan") or results.get("nmap") or []
-    # nmap bucket liste-of-dicts formatında geliyor, doğrudan kullanılabilir
-    if isinstance(scan_list, list) and any(isinstance(it, dict) for it in scan_list):
+    # nmap bucket'ı > port_scan bucket'ı
+    scan_list = results.get("nmap") or results.get("port_scan") or []
+
+    if isinstance(scan_list, list) and scan_list:
         for it in scan_list:
             if not isinstance(it, dict):
                 continue
-            st = str(it.get("state") or "").lower()
-            if st == "open" or st.startswith("open"):
-                port = _as_int(it.get("port"))
-                if port is None:
-                    continue
-                rows.append({
-                    "host": str(it.get("host") or ""),
-                    "port": port,
-                    "service": str(it.get("service") or ""),
-                    "banner": str(it.get("banner") or ""),
-                })
+            port = _as_int(it.get("port"))
+            if port is None:
+                continue
+            product = str(it.get("product") or "")
+            version = str(it.get("version") or "")
+            pv = (product + " " + version).strip()
+            cpe = it.get("cpe") or []
+            cpe_str = ", ".join(cpe[:2]) if cpe else ""
+            rows.append({
+                "host":    str(it.get("host") or it.get("ip") or ""),
+                "port":    port,
+                "proto":   str(it.get("proto") or it.get("protocol") or "tcp"),
+                "service": str(it.get("service") or ""),
+                "pv":      pv,
+                "scripts": _script_highlights(it.get("scripts") or {}),
+                "cpe":     cpe_str,
+                "os":      str(it.get("os_guess") or ""),
+            })
     else:
-        # 2) Özet mod: int listesi -> satıra dönüştür
+        # Özet mod fallback
         summ = results.get("port_scan_summary") or {}
-        opened = (summ.get("open") or summ.get("open_ports") or [])
+        opened = summ.get("open") or summ.get("open_ports") or []
         host_default = str(summ.get("host") or "")
-        if not host_default:
-            meta = (results.get("meta") if isinstance(results, dict) else {})
-            if isinstance(meta, list):
-                meta = next((x for x in meta if isinstance(x, dict)), {})
-            target = str((meta.get("target") if isinstance(meta, dict) else "") or "")
-            if target:
-                host_default = urlparse(target).hostname or ""
         for it in opened:
-            if isinstance(it, dict):
-                port = _as_int(it.get("port"))
-                if port is None:
-                    continue
-                rows.append({
-                    "host": str(it.get("host") or host_default),
-                    "port": port,
-                    "service": str(it.get("service") or ""),
-                    "banner": str(it.get("banner") or ""),
-                })
-            else:
-                port = _as_int(it)
-                if port is None:
-                    continue
-                rows.append({"host": host_default, "port": port, "service": "", "banner": ""})
+            port = _as_int(it.get("port") if isinstance(it, dict) else it)
+            if port is None:
+                continue
+            rows.append({
+                "host": str(it.get("host") if isinstance(it, dict) else "") or host_default,
+                "port": port, "proto": "tcp", "service": str(it.get("service", "") if isinstance(it, dict) else ""),
+                "pv": "", "scripts": "", "cpe": "", "os": "",
+            })
 
     if not rows:
         return "_Açık port bulunamadı._"
 
-    # Stabil sıralama: host, port
     rows.sort(key=lambda r: (r["host"], r["port"]))
 
-    lines = ["| Host | Port | Servis | Banner |", "|-|-|-|-|"]
-    for r in rows[:200]:
-        lines.append(f"| {r['host']} | {r['port']} | {r['service']} | {r['banner']} |")
-    return "\n".join(lines)
+    # OS bilgisi varsa bir kez başa yaz
+    os_info = next((r["os"] for r in rows if r["os"]), "")
+    header_lines = []
+    if os_info:
+        header_lines.append(f"> **İşletim Sistemi Tahmini:** {os_info}\n")
+
+    header_lines += ["| Host | Port | Proto | Servis | Ürün / Versiyon | NSE Script Çıktıları | CPE |",
+                     "|-|-|-|-|-|-|-|"]
+    for r in rows[:500]:
+        header_lines.append(
+            f"| {r['host']} | **{r['port']}** | {r['proto']} "
+            f"| {r['service']} | {r['pv']} | {r['scripts']} | {r['cpe']} |"
+        )
+    return "\n".join(header_lines)
 
 
 def _e_table_tls_headers(results: Dict[str, Any]) -> str:
