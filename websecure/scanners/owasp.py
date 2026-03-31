@@ -849,13 +849,6 @@ def backup_hunt(url: str, session, results: Dict[str, Any], debug: bool = False)
     results.setdefault("a05_backup_scan_ext", findings)
     return {"backup": findings}
 
-def run_all_(url: str, session, *, results: Optional[Dict[str, Any]] = None, debug: bool = False) -> Dict[str, Any]:
-    results = results or {"target": url}
-    host_header_cache_poison(url, session, results, debug=debug)
-    backup_hunt(url, session, results, debug=debug)
-    return results
-
-
 def get_payloads_from_config(cfg: dict, key: str = "xss") -> list:
     if not isinstance(cfg, dict):
         return []

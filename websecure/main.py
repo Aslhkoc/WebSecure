@@ -1684,7 +1684,7 @@ O====|_______________________________________________________>  1   1 0
     parser.add_argument("--oast-url", help="OAST HTTP callback tabanı (örn. https://oast.example)")
     parser.add_argument("--dry-run", action="store_true", help="Etkileşimli soruları atla ve sadece yapılandırmayı doğrula")
     parser.add_argument("--batch", action="store_true", help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
-    parser.add_argument("--profile", help="Tarama profili (stealth, normal, aggressive, deep)")
+    parser.add_argument("--profile", help="Tarama profili (aggressive, stealth)")
     parser.add_argument("--debug", action="store_true", help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
     parser.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
     parser.add_argument("--headless", action="store_true", help="Tarayıcıyı GİZLE (Arka planda çalıştır)")

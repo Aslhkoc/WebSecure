@@ -125,7 +125,7 @@ _DEFAULTS = {
         "common":         ["common.txt"],
         "wordlist":       ["dirs.txt", "common.txt"],
         # Parameter / value fuzzing
-        "params":         ["params.txt", "learned.txt"],
+        "params":         ["params.txt"],
         "values":         ["values.txt"],
         "fuzz":           ["params.txt", "values.txt"],
         # Auth
