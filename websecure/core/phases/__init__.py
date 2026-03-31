@@ -1270,8 +1270,23 @@ def _runner_owasp_nuclei(ctx) -> None:
     debug = bool(getattr(ctx, "debug", False))
     auth_ctx = getattr(ctx, "auth_ctx", None)
     
-    # Run
+    # Run — populates results dict with a01_, a02_, etc. OWASP buckets
     run_func(url, results, session, config=cfg, debug=debug, auth_ctx=auth_ctx)
+
+    # Flush OWASP bucket findings into the global reporting system.
+    # owasp.py writes to results["a01_broken_access_control"] etc. but never calls
+    # add_result() directly, so findings would otherwise be invisible to the reporter.
+    _owasp_bucket_keys = [k for k in results if isinstance(k, str) and k.startswith("a0")]
+    for _bk in _owasp_bucket_keys:
+        for _item in (results.get(_bk) or []):
+            if not isinstance(_item, dict):
+                continue
+            _item.setdefault("source", "owasp")
+            _item.setdefault("owasp_bucket", _bk)
+            add_result("owasp", _item)
+            if _item.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", _item)
+
     add_result("meta", {"stage": "owasp_nuclei", "status": "completed"})
 
 

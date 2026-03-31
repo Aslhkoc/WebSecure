@@ -41,10 +41,11 @@ def render_html_dashboard(results: dict) -> str:
     all_buckets = [
         "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
         "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
-        "headers", "rate_limit", "request_smuggling", "session_hunter",
-        "mass_assignment", "ws_fuzz", "infrastructure",
-        "sqlmap", "feroxbuster", "ffuf", "discovery", "passive",
-        "portscan", "tls_findings", "js_analysis", "files_discovered",
+        "headers", "security_headers", "rate_limit", "request_smuggling",
+        "session_hunter", "mass_assignment", "ws_fuzz", "infrastructure",
+        "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
+        "discovery", "passive", "subdomains",
+        "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
     ]
 
     _id_counter = 1
@@ -72,11 +73,19 @@ def render_html_dashboard(results: dict) -> str:
                         "low": "Low", "düşük": "Low"}
             f_sev = _sev_map.get(_raw_sev, "Info")
 
-            # Skip if status/meta info
+            # Skip status/meta-only items
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
-                 continue
+                continue
             if bucket == "feroxbuster" and item.get("status") in ("skipped", "finished"):
-                 continue
+                continue
+            if bucket == "nuclei" and item.get("status") in ("skipped", "completed"):
+                continue
+            # phase_error items get their own section below, not the findings table
+            if bucket == "phase_error":
+                continue
+            # Skip subdomains items that are plain strings (not finding dicts)
+            if bucket == "subdomains" and not item.get("type") and not item.get("severity"):
+                continue
 
             f = {
                 "id": _id_counter,
@@ -399,13 +408,23 @@ def render_html_dashboard(results: dict) -> str:
     # --- Subdomain / Domain Info ---
     subdomain_html = ""
     subdomains = set()
-    # Collect subdomains from passive_recon findings
+    # 1. Collect subdomains from evidence dicts in passive/discovery/final buckets
     for bucket in ("passive", "discovery", "final"):
         for item in (results.get(bucket) or []):
             if not isinstance(item, dict): continue
             ev = item.get("evidence") or {}
             subs = ev.get("subdomains") or []
             subdomains.update(subs)
+    # 2. Collect from dedicated "subdomains" bucket (from _runner_subdomain)
+    for item in (results.get("subdomains") or []):
+        if isinstance(item, str):
+            subdomains.add(item)
+        elif isinstance(item, dict):
+            sub = item.get("subdomain") or item.get("host") or item.get("url") or item.get("value") or item.get("name")
+            if sub:
+                subdomains.add(str(sub))
+            for s in (item.get("evidence") or {}).get("subdomains") or []:
+                subdomains.add(str(s))
     if subdomains:
         sub_rows = "".join(
             f"<tr><td style='font-family:monospace; color:var(--accent)'>{_escape(s)}</td></tr>"
@@ -482,6 +501,31 @@ def render_html_dashboard(results: dict) -> str:
                 <div class="label">Protocol</div>    <div>{_escape(cert.get('tls_version') or '-')}</div>
                 <div class="label">Fingerprint</div> <div style="font-family:monospace; font-size:0.82rem; word-break:break-all;">{_escape(cert.get('fingerprint') or '-')}</div>
                 {san_html}
+            </div>
+        </div>
+        """
+
+    # --- Phase Errors Section ---
+    phase_errors_html = ""
+    phase_errors = [e for e in (results.get("phase_error") or []) if isinstance(e, dict)]
+    if phase_errors:
+        err_rows = "".join(
+            f"<tr>"
+            f"<td style='font-family:monospace; color:var(--sev-high)'>{_escape((e.get('meta') or {}).get('phase') or e.get('type', '-'))}</td>"
+            f"<td style='color:var(--sev-medium)'>{_escape((e.get('meta') or {}).get('exc_type', ''))}</td>"
+            f"<td style='font-size:0.85rem; color:var(--text-muted)'>{_escape(e.get('message', ''))}</td>"
+            f"</tr>"
+            for e in phase_errors
+        )
+        phase_errors_html = f"""
+        <div class="card" style="background:rgba(210,153,34,0.07); border:1px solid var(--sev-high); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-top:0; color:var(--sev-high);">⚠️ Scan Phase Errors ({len(phase_errors)})</h3>
+            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Some scan phases encountered errors. Results from these phases may be incomplete.</p>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Phase</th><th>Error Type</th><th>Message</th></tr></thead>
+                    <tbody>{err_rows}</tbody>
+                </table>
             </div>
         </div>
         """
@@ -736,8 +780,15 @@ def render_html_dashboard(results: dict) -> str:
     { ports_html }
     { traffic_html }
 
+    <!-- JS & File Analysis -->
+    { js_files_html }
+    { files_html }
+
     <!-- Remediation Priority Matrix -->
     { remediation_html }
+
+    <!-- Phase Errors -->
+    { phase_errors_html }
 
     <!-- Findings Table -->
     <h2>🔍 Findings ({total_issues} total)</h2>
