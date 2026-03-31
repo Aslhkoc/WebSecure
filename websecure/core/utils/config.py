@@ -103,24 +103,47 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # [FIX] Built-in Profile Fallback
     # If custom config doesn't define 'safe_full' etc., we must provide the defaults here
     # otherwise it resolves to None and we get a shallow scan.
-    if not profile and active_name in ("safe_full", "deep", "aggressive"):
-        if active_name == "safe_full":
-            profile = {
-                "rps": 4,
-                "concurrency": 8,
-                "description": "Safe Full Scan (Built-in)",
-                "modules": ["*"],
-                "offensive": {"enabled": True}, 
-                "http": {"timeout_seconds": 25, "retries": 3}
-            }
-        elif active_name in ("deep", "aggressive"):
-             profile = {
-                "rps": 20,
-                "concurrency": 40,
-                "description": "Deep Scan (Built-in)",
-                "modules": ["*"],
-                "offensive": {"enabled": True}
-            }
+    _BUILTIN_PROFILES = {
+        "safe_full": {
+            "rps": 4,
+            "concurrency": 8,
+            "description": "Safe Full Scan (Built-in)",
+            "modules": ["*"],
+            "offensive": {"enabled": True},
+            "http": {"timeout_seconds": 25, "retries": 3},
+        },
+        "aggressive": {
+            "rps": 20,
+            "concurrency": 40,
+            "description": "Aggressive Scan (Built-in)",
+            "modules": ["*"],
+            "offensive": {"enabled": True},
+        },
+        "deep": {
+            "rps": 20,
+            "concurrency": 40,
+            "description": "Deep Scan (Built-in)",
+            "modules": ["*"],
+            "offensive": {"enabled": True},
+        },
+        "stealth": {
+            "rps": 1,
+            "concurrency": 2,
+            "description": "Stealth Scan (Built-in)",
+            "modules": ["*"],
+            "offensive": {"enabled": True},
+            "http": {"timeout_seconds": 30, "retries": 3},
+        },
+        "normal": {
+            "rps": 10,
+            "concurrency": 10,
+            "description": "Normal Scan (Built-in)",
+            "modules": ["*"],
+            "offensive": {"enabled": True},
+        },
+    }
+    if not profile and active_name in _BUILTIN_PROFILES:
+        profile = _BUILTIN_PROFILES[active_name]
             
     if not profile:
         logging.warning(f"[Config] Profile '{active_name}' not found in settings.profiles")
