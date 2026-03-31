@@ -103,43 +103,48 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # [FIX] Built-in Profile Fallback
     # If custom config doesn't define 'safe_full' etc., we must provide the defaults here
     # otherwise it resolves to None and we get a shallow scan.
+    # Built-in profiller: 2 mod var — agresif (hızlı) ve stealth (yavaş, WAF bypass)
+    # Her iki mod da TAM KAPSAM kullanır (tüm araç/payload/wordlist)
+    _FULL_SCOPE_OFFENSIVE = {"enabled": True, "profile": "deep"}
     _BUILTIN_PROFILES = {
-        "safe_full": {
-            "rps": 4,
-            "concurrency": 8,
-            "description": "Safe Full Scan (Built-in)",
-            "modules": ["*"],
-            "offensive": {"enabled": True},
-            "http": {"timeout_seconds": 25, "retries": 3},
-        },
         "aggressive": {
-            "rps": 20,
-            "concurrency": 40,
-            "description": "Aggressive Scan (Built-in)",
+            "rps": 15,
+            "concurrency": 20,
+            "description": "Agresif: Tam kapsam, maksimum hiz (Built-in)",
             "modules": ["*"],
-            "offensive": {"enabled": True},
-        },
-        "deep": {
-            "rps": 20,
-            "concurrency": 40,
-            "description": "Deep Scan (Built-in)",
-            "modules": ["*"],
-            "offensive": {"enabled": True},
+            "offensive": _FULL_SCOPE_OFFENSIVE,
+            "http": {"timeout_seconds": 20, "retries": 2},
         },
         "stealth": {
             "rps": 1,
             "concurrency": 2,
-            "description": "Stealth Scan (Built-in)",
+            "description": "Stealth: Tam kapsam, yavas, WAF bypass (Built-in)",
             "modules": ["*"],
-            "offensive": {"enabled": True},
+            "offensive": _FULL_SCOPE_OFFENSIVE,
             "http": {"timeout_seconds": 30, "retries": 3},
+        },
+        # Geriye dönük uyumluluk
+        "safe_full": {
+            "rps": 4,
+            "concurrency": 8,
+            "description": "Safe Full → Stealth'e eslendi (Built-in)",
+            "modules": ["*"],
+            "offensive": _FULL_SCOPE_OFFENSIVE,
+            "http": {"timeout_seconds": 30, "retries": 3},
+        },
+        "deep": {
+            "rps": 15,
+            "concurrency": 20,
+            "description": "Deep → Agresif'e eslendi (Built-in)",
+            "modules": ["*"],
+            "offensive": _FULL_SCOPE_OFFENSIVE,
         },
         "normal": {
             "rps": 10,
             "concurrency": 10,
-            "description": "Normal Scan (Built-in)",
+            "description": "Normal → Stealth'e eslendi (Built-in)",
             "modules": ["*"],
-            "offensive": {"enabled": True},
+            "offensive": _FULL_SCOPE_OFFENSIVE,
         },
     }
     if not profile and active_name in _BUILTIN_PROFILES:

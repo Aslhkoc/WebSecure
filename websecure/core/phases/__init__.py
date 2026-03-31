@@ -3621,17 +3621,32 @@ def _resolve_auth_runner():
 def offensive_enabled_map(config: dict[str, 'Any']) -> dict[str, bool]:
     off = config.get('offensive') or {}
     mode = str((config.get('mode') or '')).upper()
+    scan_profile = str((config.get('settings') or {}).get('scan_profile') or '').lower()
+    # Agresif ve Stealth: ikisi de tam kapsam — her modül açık
+    _full_scope = mode in ('AGGRESSIVE', 'DEEP', 'STEALTH') or scan_profile in ('aggressive', 'stealth')
     def _e(k: str, default: bool) -> bool:
         v = off.get(k)
         if isinstance(v, dict) and 'enabled' in v:
             return bool(v.get('enabled'))
-        return True if mode in ('AGGRESSIVE','DEEP') else default
+        return True if _full_scope else default
     return {
-        'request_smuggling': _e('request_smuggling', False),
-        'mass_assignment': _e('mass_assignment', False),
-        'jwt_attacks': _e('jwt_attacks', False),
-        'nosql_injection': _e('nosql_injection', False),
-        'websocket_fuzz': _e('websocket_fuzz', False),
+        'request_smuggling': _e('request_smuggling', _full_scope),
+        'mass_assignment': _e('mass_assignment', _full_scope),
+        'jwt_attacks': _e('jwt_attacks', _full_scope),
+        'nosql_injection': _e('nosql_injection', _full_scope),
+        'websocket_fuzz': _e('websocket_fuzz', _full_scope),
+        'ssrf': _e('ssrf', _full_scope),
+        'xxe': _e('xxe', _full_scope),
+        'graphql': _e('graphql', _full_scope),
+        'race_condition': _e('race_condition', _full_scope),
+        'prototype_pollution': _e('prototype_pollution', _full_scope),
+        'dom_xss': _e('dom_xss', _full_scope),
+        'crlf_injection': _e('crlf_injection', _full_scope),
+        'file_upload': _e('file_upload', _full_scope),
+        'idor': _e('idor', _full_scope),
+        'open_redirect': _e('open_redirect', _full_scope),
+        'ssti': _e('ssti', _full_scope),
+        'cmdi': _e('cmdi', _full_scope),
     }
 
 

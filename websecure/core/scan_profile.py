@@ -2,14 +2,10 @@
 websecure.core.scan_profile
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Profil seçme/uygulama yardımcıları.
-main.py'den taşındı (FAZ-EK).
 
-İçerik:
-  - _estimate_minutes
-  - _apply_normal_profile
-  - _offer_scan_profile_and_confirm
-  - _pick_from_config
-  - _choose_mode_from_config
+SADECE 2 MOD:
+  - Agresif : Tam kapsam, maksimum hız, tüm araçlar/payload/wordlist/script aktif
+  - Stealth : Tam kapsam, yavaş, WAF bypass, sakin adımlar — kapsam AYNI
 """
 from __future__ import annotations
 
@@ -19,10 +15,56 @@ import logging
 
 _logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Sistemdeki tüm modüller — her iki profilde de TAM AÇIK
+# ---------------------------------------------------------------------------
+_ALL_OFFENSIVE_MODULES = [
+    "request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection",
+    "websocket_fuzz", "ssrf", "xxe", "graphql", "sqlmap",
+    "xss", "sqli", "ssti", "cmdi", "csrf", "crlf_injection",
+    "open_redirect", "idor", "race_condition", "prototype_pollution",
+    "file_upload", "dom_xss", "headers", "tls",
+    "auth_scanners", "owasp", "infrastructure", "passive_recon",
+    "js_analyzer", "session_hunter", "cors", "clickjacking", "hsts",
+]
+
+def _enable_all_modules(cfg: dict) -> None:
+    """Sistemdeki tüm modülleri tek tek aktif et."""
+    off = cfg.setdefault("offensive", {})
+    off["enabled"] = True
+    off["profile"] = "deep"
+    for mod in _ALL_OFFENSIVE_MODULES:
+        node = off.setdefault(mod, {})
+        if isinstance(node, dict):
+            node["enabled"] = True
+
+    # Keşif / tarama modülleri
+    cfg.setdefault("content_discovery", {})["enabled"] = True
+    cfg.setdefault("subdomain", {})["enabled"] = True
+    cfg.setdefault("crawl", {})["enabled"] = True
+    cfg.setdefault("crawl", {})["deep"] = True
+    cfg.setdefault("waf_detect", {})["enabled"] = True
+    cfg.setdefault("nmap", {})["enabled"] = True
+    cfg.setdefault("nmap", {})["vuln_scripts"] = True
+    cfg.setdefault("oast", {})["enabled"] = True
+    cfg.setdefault("graphql", {})["enabled"] = True
+    cfg.setdefault("graphql", {})["deep"] = True
+
+    # Wordlist maksimum
+    cfg.setdefault("wordlists", {})["use_all"] = True
+
+    # OAST maksimum enjeksiyon
+    cfg.setdefault("oast", {})["max_injections_per_loc"] = 10
+
+    # Fuzz: maksimum payload
+    os.environ["WS_PAYLOADS_MAX"] = "100000"
+
+
+# ---------------------------------------------------------------------------
+# Tahmin
+# ---------------------------------------------------------------------------
 
 def _estimate_minutes(config: dict, profile: str) -> tuple[int, int]:
-    """Çok kaba bir süre kestirimi (dakika). Raporsal amaçlıdır; garanti vermez."""
-
     def _to_float(x, default: float) -> float:
         if isinstance(x, (int, float)):
             return float(x)
@@ -44,221 +86,208 @@ def _estimate_minutes(config: dict, profile: str) -> tuple[int, int]:
         return default
 
     cfg = config if isinstance(config, dict) else {}
-
-    # fuzz ayarları
-    fz = cfg.get("fuzz")
-    fz = fz if isinstance(fz, dict) else {}
-
+    fz = cfg.get("fuzz") or {}
     rps = _to_float(fz.get("rps"), 0.0)
     if rps <= 0.0:
         rate_ms = _to_float(fz.get("rate_ms"), 0.0)
         rps = 1000.0 / rate_ms if rate_ms > 0.0 else 10.0
-
     max_total = _to_int(fz.get("max_total"), 2000)
     if max_total < 1:
         max_total = 2000
-
     base_sec = max_total / (rps if rps > 0.0 else 1.0)
-
-    # discovery overhead
-    disc = cfg.get("content_discovery")
-    disc = disc if isinstance(disc, dict) else {}
+    disc = cfg.get("content_discovery") or {}
     disc_over = 8 * 60 if bool(disc.get("enabled")) else 0
-
-    # offensive overhead
-    off = cfg.get("offensive")
-    off = off if isinstance(off, dict) else {}
+    off = cfg.get("offensive") or {}
     of_count = sum(1 for v in off.values() if isinstance(v, dict) and bool(v.get("enabled")))
-
     prof = profile.lower() if isinstance(profile, str) else ""
-    off_over = of_count * (90 if prof == "aggressive" else 45)  # saniye
-
+    off_over = of_count * (90 if prof == "aggressive" else 45)
     sec = base_sec + disc_over + off_over
     lo = int(max(1, round((sec / 60.0) * 0.8)))
     hi = int(max(1, round((sec / 60.0) * 1.4)))
     if hi < lo:
         hi = lo + 1
-
     return (lo, hi)
 
 
-def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
-    """Config üzerinde NORMAL (stealth) profil ayarı yapar ve yoğunluğu azaltır.
-    Mutasyon: verilen sözlüğü yerinde günceller, ayrıca değişiklik notlarını döndürür.
-    """
-
-    def _to_int(x, default: int) -> int:
-        if isinstance(x, int):
-            return x
-        if isinstance(x, float) and x.is_integer():
-            return int(x)
-        if isinstance(x, str):
-            s = x.strip()
-            if re.fullmatch(r'[+-]?\d+', s):
-                return int(s)
-        return default
-
-    if not isinstance(config, dict):
-        return {}, ["Config sözlük değil; normal profil uygulanamadı"]
-
-    notes: list[str] = []
-
-    # --- Fuzz ---
-    fz = config.setdefault("fuzz", {})
-    if not isinstance(fz, dict):
-        fz = {}
-        config["fuzz"] = fz
-
-    if "per_param" in fz:
-        old = _to_int(fz.get("per_param"), 10)
-        new = max(1, old // 2)
-        fz["per_param"] = new
-        notes.append(f"Parametre başına mutasyon sayısı {old}→{new}")
-    else:
-        fz["per_param"] = 3
-        notes.append("Parametre başına mutasyon sayısı 3 olarak sınırlandı")
-
-    if "max_total" in fz:
-        old = _to_int(fz.get("max_total"), 1000)
-        new = max(50, old // 2)
-        fz["max_total"] = new
-        notes.append(f"Toplam enjeksiyon {old}→{new}")
-    else:
-        fz["max_total"] = 500
-        notes.append("Toplam enjeksiyon 500 ile sınırlandı")
-
-    if "rps" in fz:
-        old = _to_int(fz.get("rps"), 20)
-        new = max(1, old // 2)
-        fz["rps"] = new
-        notes.append(f"Fuzz RPS {old}→{new}")
-    elif ("rate_ms" in fz) and bool(fz.get("rate_ms")):
-        old = _to_int(fz.get("rate_ms"), 100)
-        new = max(50, old * 2)
-        fz["rate_ms"] = new
-        notes.append(f"Fuzz rate_ms {old}→{new}")
-    else:
-        fz["rps"] = 10
-        notes.append("Fuzz RPS 10 olarak ayarlandı")
-
-    # --- Offensive (stealth) ---
-    off = config.setdefault("offensive", {})
-    if not isinstance(off, dict):
-        off = {}
-        config["offensive"] = off
-    off["profile"] = "stealth"
-    for k in ("request_smuggling", "mass_assignment", "websocket_fuzz"):
-        node = off.setdefault(k, {})
-        if isinstance(node, dict):
-            node.setdefault("enabled", False)
-    for k in ("jwt_attacks", "nosql_injection"):
-        node = off.setdefault(k, {})
-        if isinstance(node, dict):
-            node.setdefault("enabled", True)
-
-    # --- WAF ---
-    waf = config.setdefault("waf", {})
-    if not isinstance(waf, dict):
-        waf = {}
-        config["waf"] = waf
-    if "max_variants_per_payload" in waf:
-        old = _to_int(waf.get("max_variants_per_payload"), 6)
-        new = max(1, old // 2)
-        waf["max_variants_per_payload"] = new
-        notes.append(f"WAF payload varyantları {old}->{new}")
-
-    # --- OAST ---
-    oast = config.setdefault("oast", {})
-    if not isinstance(oast, dict):
-        oast = {}
-        config["oast"] = oast
-    if "max_injections_per_loc" in oast:
-        old = _to_int(oast.get("max_injections_per_loc"), 3)
-        new = max(1, old // 2)
-        oast["max_injections_per_loc"] = new
-        notes.append(f"OAST enjeksiyonları {old}->{new}")
-
-    # --- GraphQL ---
-    gql = config.setdefault("graphql", {})
-    if not isinstance(gql, dict):
-        gql = {}
-        config["graphql"] = gql
-    if bool(gql.get("deep", True)):
-        gql["deep"] = False
-        notes.append("GraphQL derin testler sadeleştirildi (introspection + temel kontroller)")
-
-    # --- İçerik keşfi ---
-    cd = config.setdefault("content_discovery", {})
-    if not isinstance(cd, dict):
-        cd = {}
-        config["content_discovery"] = cd
-    rate = _to_int(cd.get("rate_limit"), 50)
-    new_rate = max(10, rate // 2)
-    cd["rate_limit"] = new_rate
-    notes.append(f"İçerik keşfi hız limiti {rate}->{new_rate}")
-
-    return config, notes
-
+# ---------------------------------------------------------------------------
+# AGRESİF PROFİL
+# Tam kapsam + maksimum hız + WAF'tan kaçınmaya çalışır (ama hızdan ödün vermez)
+# ---------------------------------------------------------------------------
 
 def _apply_aggressive_profile(cfg: dict) -> dict:
-    """Agresif profil: tam kapsam, yüksek hız."""
-    os.environ["WS_PAYLOADS_MAX"] = "100000"
+    """Agresif profil: tüm modüller, tüm araçlar, tüm payloadlar — maksimum hız."""
     cfg.setdefault("settings", {})["scan_profile"] = "aggressive"
     cfg.setdefault("_profile", {})["selected"] = "aggressive"
     cfg["_scan_mode"] = "aggressive"
-    off = cfg.setdefault("offensive", {})
-    off["profile"] = "deep"
-    for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
-        off.setdefault(k, {})["enabled"] = True
-    # HTTP: yüksek RPS
-    cfg.setdefault("anti_blocking", {}).setdefault("http", {})["rps"] = 10
-    cfg["anti_blocking"]["http"]["jitter_ms"] = 100
-    # SQLMap: maksimum agresiflik
-    cfg.setdefault("_sqlmap", {}).update({"risk": 3, "level": 5, "extra_args": []})
-    # FFUF: yüksek thread
-    cfg.setdefault("_ffuf", {}).update({"threads": 40, "extra_args": []})
-    # Nuclei: yüksek rate
-    cfg.setdefault("_nuclei", {}).update({"rate_limit": 150})
-    # Nmap: deep, hızlı
-    cfg.setdefault("_nmap", {}).update({"mode": "deep", "extra_args": []})
+
+    # Tüm modülleri aç
+    _enable_all_modules(cfg)
+
+    # --- HTTP / Anti-blocking ---
+    ab = cfg.setdefault("anti_blocking", {}).setdefault("http", {})
+    ab["rps"] = 15
+    ab["jitter_ms"] = 100
+    ab["max_extra_delay_ms"] = 200
+    ab["rotate_user_agent"] = True
+
+    # --- Fuzz ---
+    fz = cfg.setdefault("fuzz", {})
+    fz["rps"] = 15
+    fz["concurrency"] = 20
+    fz["per_param"] = 20
+    fz["max_total"] = 100000
+
+    # --- SQLMap: tam güç ---
+    cfg.setdefault("_sqlmap", {}).update({
+        "risk": 3, "level": 5,
+        "threads": 10,
+        "extra_args": ["--random-agent", "--batch", "--forms", "--crawl=3"],
+    })
+
+    # --- FFUF: çok thread ---
+    cfg.setdefault("_ffuf", {}).update({
+        "threads": 50,
+        "extra_args": ["-rate", "200", "-recursion", "-recursion-depth", "3"],
+    })
+
+    # --- Feroxbuster ---
+    cfg.setdefault("_feroxbuster", {}).update({
+        "threads": 50,
+        "extra_args": ["--depth", "5", "--auto-tune"],
+    })
+
+    # --- Nuclei: tam rate ---
+    cfg.setdefault("_nuclei", {}).update({
+        "rate_limit": 200,
+        "concurrency": 50,
+        "bulk_size": 50,
+        "extra_args": ["-severity", "critical,high,medium,low,info", "-tags", ""],
+    })
+
+    # --- Nmap: deep + hızlı ---
+    cfg.setdefault("_nmap", {}).update({
+        "mode": "deep",
+        "extra_args": ["-T4", "--min-parallelism", "10"],
+    })
+    cfg.setdefault("nmap", {})["mode"] = "deep"
+
+    # --- Content discovery ---
+    cd = cfg.setdefault("content_discovery", {})
+    cd["rate_limit"] = 200
+    cd["threads"] = 50
+    cd["recursive"] = True
+
+    # --- WAF bypass headers (agresif ama dener) ---
+    cfg.setdefault("waf_bypass", {}).update({
+        "enabled": True,
+        "rotate_headers": True,
+        "max_variants_per_payload": 10,
+    })
+
     return cfg
 
 
+# ---------------------------------------------------------------------------
+# STEALTH PROFİL
+# Tam kapsam + yavaş + güçlü WAF bypass — kapsam Agresif ile AYNI
+# ---------------------------------------------------------------------------
+
 def _apply_stealth_profile(cfg: dict) -> dict:
-    """Stealth profil: tam kapsam, yavaş, WAF bypass, emin adımlar."""
-    os.environ["WS_PAYLOADS_MAX"] = "100000"
+    """Stealth profil: tüm modüller, tüm araçlar, tüm payloadlar — yavaş & WAF bypass."""
     cfg.setdefault("settings", {})["scan_profile"] = "stealth"
     cfg.setdefault("_profile", {})["selected"] = "stealth"
     cfg["_scan_mode"] = "stealth"
-    off = cfg.setdefault("offensive", {})
-    off["profile"] = "deep"
-    for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
-        off.setdefault(k, {})["enabled"] = True
-    # HTTP: düşük RPS, yüksek jitter, insan gibi
-    cfg.setdefault("anti_blocking", {}).setdefault("http", {})["rps"] = 1
-    cfg["anti_blocking"]["http"]["jitter_ms"] = 2000
-    cfg["anti_blocking"]["http"]["max_extra_delay_ms"] = 3000
-    # SQLMap: orta seviye, gecikmeli, WAF tamper
+
+    # Tüm modülleri aç (kapsam agresifle aynı)
+    _enable_all_modules(cfg)
+
+    # --- HTTP / Anti-blocking: insan gibi davran ---
+    ab = cfg.setdefault("anti_blocking", {}).setdefault("http", {})
+    ab["rps"] = 1
+    ab["jitter_ms"] = 2500
+    ab["max_extra_delay_ms"] = 4000
+    ab["rotate_user_agent"] = True
+    ab["human_like_delays"] = True
+
+    # --- Fuzz ---
+    fz = cfg.setdefault("fuzz", {})
+    fz["rps"] = 1
+    fz["concurrency"] = 2
+    fz["per_param"] = 20     # Payload sayısı aynı, tempo yavaş
+    fz["max_total"] = 100000
+
+    # --- SQLMap: tam güç + WAF tamper + gecikmeli ---
     cfg.setdefault("_sqlmap", {}).update({
-        "risk": 2, "level": 3,
-        "extra_args": ["--delay=3", "--random-agent",
-                       "--tamper=space2comment,between,randomcase,charencode"],
+        "risk": 3, "level": 5,
+        "threads": 1,
+        "extra_args": [
+            "--delay=5", "--random-agent", "--batch", "--forms", "--crawl=3",
+            "--tamper=space2comment,between,randomcase,charencode,equaltolike,greatest",
+        ],
     })
-    # FFUF: tek thread, düşük rate
+
+    # --- FFUF: tek thread, çok yavaş ---
     cfg.setdefault("_ffuf", {}).update({
         "threads": 1,
-        "extra_args": ["-rate", "2", "-p", "0.5-2.0"],
+        "extra_args": ["-rate", "2", "-p", "1.0-3.0", "-recursion", "-recursion-depth", "3"],
     })
-    # Nuclei: çok düşük rate
-    cfg.setdefault("_nuclei", {}).update({"rate_limit": 3})
-    # Nmap: deep kapsam, T1, yavaş
+
+    # --- Feroxbuster: yavaş ---
+    cfg.setdefault("_feroxbuster", {}).update({
+        "threads": 1,
+        "extra_args": ["--depth", "5", "--rate-limit", "5"],
+    })
+
+    # --- Nuclei: çok düşük rate ---
+    cfg.setdefault("_nuclei", {}).update({
+        "rate_limit": 3,
+        "concurrency": 5,
+        "bulk_size": 5,
+        "extra_args": ["-severity", "critical,high,medium,low,info", "-tags", ""],
+    })
+
+    # --- Nmap: deep + çok yavaş + stealth ---
     cfg.setdefault("_nmap", {}).update({
         "mode": "deep",
-        "extra_args": ["-T1", "--scan-delay", "3s", "--max-parallelism", "1",
-                       "--randomize-hosts"],
+        "extra_args": [
+            "-T1", "--scan-delay", "5s", "--max-parallelism", "1",
+            "--randomize-hosts", "-sS",
+        ],
     })
+    cfg.setdefault("nmap", {})["mode"] = "deep"
+
+    # --- Content discovery ---
+    cd = cfg.setdefault("content_discovery", {})
+    cd["rate_limit"] = 5
+    cd["threads"] = 1
+    cd["recursive"] = True
+
+    # --- WAF bypass: güçlü ---
+    cfg.setdefault("waf_bypass", {}).update({
+        "enabled": True,
+        "rotate_headers": True,
+        "max_variants_per_payload": 10,
+        "encoding_variants": True,
+        "case_variants": True,
+        "comment_variants": True,
+    })
+
     return cfg
 
+
+# ---------------------------------------------------------------------------
+# Geriye dönük uyumluluk: _apply_normal_profile → stealth'e yönlendir
+# ---------------------------------------------------------------------------
+
+def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
+    """Eski isim; stealth profiline yönlendirildi. Her iki mod da tam kapsamlı."""
+    cfg = _apply_stealth_profile(config)
+    return cfg, ["Normal profil kaldırıldı → Stealth profili uygulandı (tam kapsam, yavaş)"]
+
+
+# ---------------------------------------------------------------------------
+# Kullanıcıya profil sor
+# ---------------------------------------------------------------------------
 
 def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
     """Kullanıcıya Agresif / Stealth profilini sorar ve cfg'yi buna göre ayarlar."""
@@ -281,8 +310,8 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
     while True:
         print("""
 [?] Tarama modu:
-    1) Agresif  - tam kapsam, yuksek hiz, tum moduller aktif
-    2) Stealth  - tam kapsam, yavass, WAF atlatma, rastgele gecikmeler
+    1) Agresif  - Tum moduller + tum payloadlar + tum wordlistler, YUKSEK HIZ
+    2) Stealth  - Tum moduller + tum payloadlar + tum wordlistler, YAVAS & WAF bypass
 """.rstrip())
 
         sel = (_prompt("Seciminiz [1/2, varsayilan=1]: ", "1") or "1").strip()
@@ -292,7 +321,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
 
         if sel == "1":
             lo, hi = _estimate_minutes(cfg, "aggressive")
-            print(f"[*] Agresif mod. Yaklasik {lo}-{hi} dakika surebilir.")
+            print(f"[*] Agresif mod secildi. Yaklasik {lo}-{hi} dakika surebilir.")
             ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
             if ans.startswith("b"):
                 continue
@@ -303,8 +332,8 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
 
         # sel == "2"
         lo, hi = _estimate_minutes(cfg, "stealth")
-        print(f"[*] Stealth mod: ayni derin tarama ama cok yavas ve WAF kaciniyor.")
-        print(f"    Yaklasik {lo * 3}-{hi * 4} dakika surebilir (hiz kasitli dusuk).")
+        print(f"[*] Stealth mod secildi. Tam kapsam, cok yavas (~{lo * 4}-{hi * 6} dakika).")
+        print(f"    WAF bypass aktif, tum tamperler, dusuk RPS, rastgele gecikmeler.")
         ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
         if ans.startswith("b"):
             continue
@@ -320,10 +349,7 @@ def _pick_from_config(cfg: dict, key: str, default=None):
 
 
 def _choose_mode_from_config(config: dict | None) -> str:
-    """Mode seçimi: sadece kullanıcı açıkça AUTHENTICATED seçerse auth moduna geç.
-    Otomatik şarta (auth.enabled/username/token) bakarak asla AUTHENTICATED seçme.
-    Aksi halde NORMAL/DETAILED/DEEP mantığı korunur."""
-    # Lazy import avoids circular: scan_profile ← phases ← scan_profile
+    """Mode seçimi."""
     try:
         from websecure.core.phases._context import ScanMode
     except ImportError:
@@ -341,19 +367,18 @@ def _choose_mode_from_config(config: dict | None) -> str:
     if not config:
         return _normal()
 
-    # Explicit mode
     m = str((config.get("mode") or "")).strip().lower()
-    alias = {"auth": "authenticated", "kimlikli": "authenticated", "detaylı": "detailed", "detayli": "detailed", "derin": "deep"}
+    alias = {"auth": "authenticated", "kimlikli": "authenticated",
+             "detaylı": "detailed", "detayli": "detailed", "derin": "deep"}
     if m in alias:
         m = alias[m]
     if ScanMode and m in (ScanMode.NORMAL, ScanMode.DETAILED, ScanMode.AUTHENTICATED, ScanMode.DEEP):
         return m
 
-    # Profile fallback (never escalates to AUTHENTICATED implicitly)
     prof = ((config.get("settings") or {}).get("scan_profile") or "").strip().lower()
     if prof == "detailed":
         return _detailed()
-    if prof == "deep":
+    if prof in ("deep", "aggressive"):
         return _deep()
     return _normal()
 
