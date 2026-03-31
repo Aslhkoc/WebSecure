@@ -1966,22 +1966,38 @@ O====|_______________________________________________________>  1   1 0
     )
     if not args.dry_run and not args.batch:
         print("\n" + "="*60)
-        print("  [?] Kimlik dogrulama (Authenticated Scan - Playwright)")
-        print("  Hedef sitede kullanici hesabi varsa login bilgilerini")
-        print("  girin. Login gerektiren sayfalar da taranacak.")
+        print("  [?] Kimlik Dogrulama (Authenticated Scan)")
+        print("  Hedef sitede hesap varsa login bilgilerini girin.")
+        print("  Login gerektiren sayfalar da taranacak.")
+        print("")
+        # --- TEST HESABI UYARISI ---
+        print("  ╔══════════════════════════════════════════════════════╗")
+        print("  ║  ⚠  OPERASYONEL GUVENLIK (OpSec) UYARISI           ║")
+        print("  ║                                                      ║")
+        print("  ║  GERCEK hesabinizla giris yaparsaniz:               ║")
+        print("  ║   • Hesabiniz hedef sunucu LOGLARINDA gorunur       ║")
+        print("  ║   • IP adresiniz hesabinizla ESLESTIRILIR           ║")
+        print("  ║   • Anormal istek paterni hesaba BAGLANIR           ║")
+        print("  ║   • Hesabiniz banlanabilir / kimliginiz ifsa olur   ║")
+        print("  ║                                                      ║")
+        print("  ║  → Mutlaka OZEL BIR TEST HESABI olusturun!         ║")
+        print("  ║  → Test hesabi: test_scan@gecici-mail.com gibi      ║")
+        print("  ║  → Gercek isim / gercek mail KULLANMAYIN            ║")
+        print("  ╚══════════════════════════════════════════════════════╝")
+        print("")
         if _auth_profile_valid:
-            print(f"  [+] Config'de kayitli profil bulundu: {_auth_profiles_cfg[0].get('username')}")
+            print(f"  [+] Config'de kayitli profil: {_auth_profiles_cfg[0].get('username')}")
             _auth_ans = input("  Bu profili kullanmak ister misiniz? (E/h): ").strip().lower() or "e"
         else:
             _auth_ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
         if _auth_ans == "e":
             if not _auth_profile_valid:
                 _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
-                _username = input("  Kullanici adi / e-posta: ").strip()
-                _password = input("  Sifre: ").strip()
-                _ufield = input("  Username input name (Enter = username): ").strip() or "username"
-                _pfield = input("  Password input name (Enter = password): ").strip() or "password"
-                _success = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
+                _username  = input("  Kullanici adi / e-posta (TEST hesabi kullanin!): ").strip()
+                _password  = input("  Sifre: ").strip()
+                _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
+                _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
+                _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
                 if _login_url and _username and _password:
                     _new_profile = {
                         "login_url": _login_url,
@@ -1998,42 +2014,114 @@ O====|_______________________________________________________>  1   1 0
                         cfg["authenticated"]["auth_profiles"].append(_new_profile)
                     print("  [+] Kimlik bilgileri alindi. Otomatik giris yapilacak.")
                 else:
-                    print("  [!] Eksik bilgi. Kimlik dogrulama atlanıyor.")
+                    print("  [!] Eksik bilgi. Kimlik dogrulama atlaniyor.")
                     _auth_ans = "h"
             else:
                 print("  [+] Mevcut profil kullanilacak.")
         else:
-            print("  [i] Kimlik dogrulama atlanıyor.")
+            print("  [i] Kimlik dogrulama atlaniyor.")
         print("="*60 + "\n")
     else:
         _auth_ans = "h"
 
-    # Opsiyonel: kurumsal proxy/VPN gibi bir çıkış kullanmak ister misiniz?
-    # Proxy tercihi (istisnasız)
-    _read = globals().get("_readline_default") or globals().get("_read")
-    if not callable(_read):
-        def _read(prompt: str, default: str) -> str:
-            try:
-                val = input(prompt)
-                s = (val if isinstance(val, str) else "").strip()
-                return s if s != "" else default
-            except EOFError:
-                return default
+    # --- Proxy / IP Rotasyon Kurulumu ---
+    def _read(prompt: str, default: str) -> str:
+        try:
+            val = input(prompt)
+            s = (val if isinstance(val, str) else "").strip()
+            return s if s != "" else default
+        except EOFError:
+            return default
+
     if not args.dry_run and not args.batch:
-        use_proxy = (_read("Çıkış trafiği için bir HTTPS proxy kullanmak ister misiniz? (E/h): ",
-                           "h") or "h").strip().lower()
+        print("\n" + "="*60)
+        print("  [?] Proxy / IP Rotasyon Ayari")
+        print("  Tek IP ile tarama = hedef loglarinda ayni IP surekli gorunur.")
+        print("  Proxy havuzu ile rotasyon = her istekte farkli IP, tespiti zorlaştirir.")
+        print("")
+        print("  Secenekler:")
+        print("    1) Proxy yok  - Gercek IP ile (Tor sectiyseniz o gecerli)")
+        print("    2) Tek proxy  - Burp Suite / HTTPS proxy (debug/intercept)")
+        print("    3) Proxy havuzu - Birden fazla proxy, otomatik rotasyon (IP maskeleme)")
+        print("")
+        _proxy_choice = (_read("  Seciminiz [1/2/3, Enter=1]: ", "1") or "1").strip()
+
+        if _proxy_choice == "2":
+            # Tek proxy
+            purl = _read("  Proxy URL (ornek: http://127.0.0.1:8080): ", "").strip()
+            if purl:
+                cfg.setdefault("http", {}).setdefault("proxies", {})
+                cfg["http"]["proxies"]["http"]  = purl
+                cfg["http"]["proxies"]["https"] = purl
+                cfg.setdefault("network", {}).setdefault("proxies", {})["pool"] = [purl]
+                print(f"  [+] Tek proxy ayarlandi: {purl}")
+            else:
+                print("  [!] URL girilmedi, proxy atlanıyor.")
+
+        elif _proxy_choice == "3":
+            # Proxy havuzu
+            print("  Her satirda bir proxy URL girin. Bos satir ile bitirin.")
+            print("  Format: http://user:pass@host:port  veya  socks5h://host:port")
+            _proxy_pool = []
+            _idx = 1
+            while True:
+                _pline = _read(f"  Proxy #{_idx} (bos birak = bitti): ", "").strip()
+                if not _pline:
+                    break
+                _proxy_pool.append(_pline)
+                _idx += 1
+            if _proxy_pool:
+                cfg.setdefault("network", {}).setdefault("proxies", {})
+                cfg["network"]["proxies"]["pool"]    = _proxy_pool
+                cfg["network"]["proxies"]["rotate"]  = "round_robin"
+                cfg["network"]["proxies"]["failure_threshold"] = 3
+                # İlk proxy'yi HTTP session'a da set et (fallback)
+                cfg.setdefault("http", {}).setdefault("proxies", {})
+                cfg["http"]["proxies"]["http"]  = _proxy_pool[0]
+                cfg["http"]["proxies"]["https"] = _proxy_pool[0]
+                print(f"  [+] {len(_proxy_pool)} proxy yuklendi. Rotasyon: round_robin")
+                # EgressManager'ı güncelle
+                try:
+                    from websecure.core.waf_bypass import init_egress_manager
+                    init_egress_manager(cfg)
+                    print("  [+] IP rotasyon motoru (EgressManager) baslatildi.")
+                except Exception as _em_ex:
+                    print(f"  [!] EgressManager baslanamadi: {_em_ex}")
+            else:
+                print("  [!] Hicbir proxy girilmedi. Proxy havuzu atlanıyor.")
+        else:
+            print("  [i] Proxy kullanilmayacak.")
+        print("="*60 + "\n")
+
+        # --- OpSec Özet Ekranı ---
+        _tor_aktif   = bool(cfg.get("_tor_proxy"))
+        _proxy_aktif = bool((cfg.get("network", {}).get("proxies") or {}).get("pool"))
+        _tek_proxy   = bool((cfg.get("http", {}).get("proxies") or {}).get("https")) and not _proxy_aktif
+        _auth_aktif  = _auth_ans == "e"
+        _username_str = (cfg.get("authenticated", {}).get("auth_profiles") or [{}])[0].get("username", "")
+
+        print("  ┌─────────────────────────────────────────────────────┐")
+        print("  │              TARAMA OPSec OZETI                     │")
+        print("  ├─────────────────────────────────────────────────────┤")
+        print(f"  │  Tor           : {'✓ AKTIF' if _tor_aktif else '✗ Kapali — Gercek IP gorunuyor':40}│")
+        if _proxy_aktif:
+            _pcount = len(cfg["network"]["proxies"]["pool"])
+            print(f"  │  Proxy havuzu  : ✓ {_pcount} proxy, round_robin rotasyon{' '*max(0,17-len(str(_pcount)))}│")
+        elif _tek_proxy:
+            print(f"  │  Tek proxy     : ✓ AKTIF{' '*30}│")
+        else:
+            print(f"  │  Proxy         : ✗ Yok — Gercek IP{' '*19}│")
+        if _auth_aktif:
+            print(f"  │  Hesap         : ⚠ {_username_str[:36]:36}│")
+            print(f"  │  (!) Hedef bu hesabi loglarinda gorecek{' '*14}│")
+        else:
+            print(f"  │  Hesap         : Kimlik dogrulama yok{' '*16}│")
+        print("  └─────────────────────────────────────────────────────┘")
+        print("")
+
     else:
-        use_proxy = "h"
         if args.dry_run:
-            print("[Dry-Run] Proxy sorusu atlandı (varsayılan: hayır).")
-    if use_proxy.startswith("e"):
-        purl = (_read("Proxy URL (örn: http://127.0.0.1:8080 veya http://user:pass@host:port): ", "").strip())
-        http_cfg = cfg.setdefault("http", {})
-        proxies = http_cfg.setdefault("proxies", {})
-        if purl:
-            proxies["http"] = purl
-            proxies["https"] = purl
-            print("[i] Proxy ayarlandı.")
+            print("[Dry-Run] Proxy sorusu atlanıyor (varsayilan: hayir).")
 
 
     if not args.dry_run and not args.batch and not args.profile:
