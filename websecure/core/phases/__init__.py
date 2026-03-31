@@ -45,7 +45,7 @@ def _install_sigint_handler():
     except (OSError, ValueError):
         pass  # not in main thread or signal not supported
 from websecure.core.http import hardened_session
-from websecure.core.reporting import add_result
+from websecure.core.reporting import add_result, redact_sensitive
 # Safe imports for optional scanners
 _rs = _ma = _jwt = _nq = _ws = _sx = _gql = _fu = None
 
@@ -450,44 +450,80 @@ def phase_tls(ctx: dict):
         add_result("tls", {"severity": "warning", "message": f"TLS scan error: {e}"})
 
 def phase_sec_headers(ctx: dict):
-    if not _call_if_exists("websecure.scanners.infrastructure", ("run","scan")):
-        add_result("security_headers", {"severity":"note","message":"security_headers scanner not present; skipped"})
+    url = ctx.get("url") or ctx.get("target") or ""
+    session = ctx.get("session") or hardened_session({})
+    if not _call_if_exists("websecure.scanners.infrastructure", ("run", "scan_tls", "scan"),
+                           url, session=session, results=ctx.get("results", {})):
+        add_result("security_headers", {"severity": "note", "message": "security_headers scanner not present; skipped"})
 
 def phase_offensive(ctx: dict):
-    add_result('offensive', {'severity':'note','message':'offensive_gate_applied'})
+    add_result('offensive', {'severity': 'note', 'message': 'offensive_gate_applied'})
     cfg = ctx.get("config", {}) if isinstance(ctx, dict) else getattr(ctx, "config", {}) or {}
     if not (cfg.get("offensive", {}) or {}).get("enabled", True):
-        add_result("offensive", {"severity":"note","message":"offensive disabled"})
+        add_result("offensive", {"severity": "note", "message": "offensive disabled"})
         return
-    mods = [
+
+    url = ctx.get("url") or ctx.get("target") or ""
+    session = ctx.get("session") or hardened_session({})
+    results = ctx.get("results") or {}
+
+    hit = 0
+
+    def _safe_run(label: str, fn):
+        nonlocal hit
+        try:
+            fn()
+            hit += 1
+        except Exception as _e:
+            _logger.warning(f"[phases] {label} error: {_e}")
+            _report_phase_error("offensive", label, _e)
+
+    # --- Scanners with standard (url, session=, results=, ...) signature ---
+    _url_first = [
         "websecure.scanners.request_smuggling",
         "websecure.scanners.mass_assignment",
         "websecure.scanners.jwt",
         "websecure.scanners.ws_fuzz",
         "websecure.scanners.graphql",
         "websecure.scanners.csrf",
-        "websecure.scanners.owasp",
         "websecure.scanners.passive_recon",
         "websecure.scanners.session_hunter",
         "websecure.scanners.sqli",
         "websecure.scanners.xss",
-        "websecure.scanners.nosqli",
-        "websecure.scanners.ssrf_xxe",
-        "websecure.scanners.file_upload",
         "websecure.scanners.auth_scanners",
-        # Phase 4 new scanners
         "websecure.scanners.ssti",
         "websecure.scanners.idor",
-        "websecure.scanners.auth_scanners",
         "websecure.scanners.js_analyzer",
     ]
-    hit = 0
-    for m in mods:
-        if _call_if_exists(m, ("run","scan","main","execute")):
-            hit += 1
+    for m in _url_first:
+        label = m.rsplit(".", 1)[-1]
+        _safe_run(label, lambda _m=m: _call_if_exists(
+            _m, ("run", "scan", "main", "execute"), url,
+            session=session, results=results, cfg=cfg))
+
+    # --- ctx-first scanners (nosqli, ssrf_xxe already have run(ctx)) ---
+    for m in ("websecure.scanners.nosqli", "websecure.scanners.ssrf_xxe"):
+        label = m.rsplit(".", 1)[-1]
+        _safe_run(label, lambda _m=m: _call_if_exists(
+            _m, ("run", "scan", "main", "execute"), ctx))
+
+    # --- owasp: run(session, base_url, config, ...) ---
+    _safe_run("owasp", lambda: __import__(
+        "websecure.scanners.owasp", fromlist=["run"]
+    ).run(session, url, config=cfg, debug=False))
+
+    # --- file_upload: run(session, endpoints, results, ...) ---
+    if _fu:
+        _safe_run("file_upload", lambda: _fu.run(
+            session,
+            list(results.get("endpoints") or [url]) or [url],
+            results,
+            base_url=url,
+        ))
+
     if not hit:
-        add_result("offensive", {"severity":"note","message":"no offensive modules found"})
-    
+        add_result("offensive", {"severity": "note", "message": "no offensive modules found"})
+
     # [WS3] External Tools Execution (Sqlmap)
     try:
         if (cfg.get("offensive", {}).get("sqlmap", {}).get("enabled", True)):
@@ -496,22 +532,6 @@ def phase_offensive(ctx: dict):
         _logger.warning(f"[phases] sqlmap runner error: {_e}")
 
 
-_reporting_mod = None
-if _iul.find_spec("websecure.core.reporting") is not None:
-    _reporting_mod = importlib.import_module("websecure.core.reporting")
-elif _iul.find_spec("reporting") is not None:
-    _reporting_mod = importlib.import_module("reporting")
-
-if _reporting_mod is not None:
-    add_result = getattr(_reporting_mod, "add_result", lambda *_a, **_k: None)
-    redact_sensitive = getattr(_reporting_mod, "redact_sensitive", lambda x: x)
-else:
-    def add_result(*_a, **_k) -> None:
-        _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return_none')
-
-        return None
-    def redact_sensitive(x):
-        return x
 """
 Koşul bazlı AMA görünür (visible) fazlar:
  - SSRF/XXE

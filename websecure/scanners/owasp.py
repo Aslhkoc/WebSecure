@@ -856,13 +856,6 @@ def run_all_(url: str, session, *, results: Optional[Dict[str, Any]] = None, deb
     return results
 
 
-def run_all_(url: str, session, *, results: Optional[Dict[str,Any]]=None, debug: bool=False) -> Dict[str,Any]:
-    results = results or {"target": url}
-    host_header_cache_poison(url, session, results, debug=debug)
-    backup_hunt(url, session, results, debug=debug)
-    return results
-
-
 def get_payloads_from_config(cfg: dict, key: str = "xss") -> list:
     if not isinstance(cfg, dict):
         return []
