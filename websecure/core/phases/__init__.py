@@ -1812,7 +1812,7 @@ def run_discovery(ctx):
 
 
 def run_portscan(ctx):
-    """Port taraması: Nmap entegrasyonu — config/profil tabanlı mod seçimi."""
+    """Port taraması: Nmap entegrasyonu — profile göre maksimum güç."""
     from websecure.integrations.nmap import NmapWrapper
     from urllib.parse import urlparse
 
@@ -1837,32 +1837,26 @@ def run_portscan(ctx):
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı, port taraması atlandı."})
+        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı — sudo apt install nmap"})
         return _mk_result("portscan", "failed", {"error": "nmap_missing"})
 
-    # --- Mod seçimi: config > scan_profile ---
-    nmap_mode = nmap_cfg.get("mode")
-    if not nmap_mode:
-        scan_profile = str(cfg.get("scan_profile") or
-                          (cfg.get("settings") or {}).get("scan_profile") or "aggressive").upper()
-        nmap_mode = {"STEALTH": "stealth", "AGGRESSIVE": "deep", "NORMAL": "standard"}.get(scan_profile, "standard")
-
-    # --- Port override ---
-    ports_cfg = nmap_cfg.get("ports", [])
-    ports_arg = ",".join(map(str, ports_cfg)) if ports_cfg else None
-
-    # --- Extra argümanlar ---
-    extra_args = list(nmap_cfg.get("arguments", []))
-    extra_args += (cfg.get("_nmap", {}) or {}).get("extra_args", [])
-    if nmap_cfg.get("vuln_scripts", False):
-        extra_args += ["--script", "vuln,auth,default", "--script-timeout", "30s"]
+    # --- Mod seçimi: scan_profile'a göre —
+    # Config portları veya arguments YOK SAYILIR — en güçlü tarama yapılır
+    scan_profile = str(
+        cfg.get("scan_profile") or
+        (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
+    ).upper()
+    nmap_mode = {
+        "STEALTH":    "stealth",    # -sT -T2 (root gerektirmez, gizli)
+        "AGGRESSIVE": "aggressive", # -sV -sC --top-ports 10000 + vuln + root'ta -A
+        "NORMAL":     "deep",       # -sV -sC --top-ports 3000
+    }.get(scan_profile, "aggressive")
 
     _tor_proxy = cfg.get("_tor_proxy")
-    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode}, portlar={ports_arg or 'default'}")
+    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode} (profil={scan_profile})")
 
     try:
-        scan_res = nmap.scan(host, ports=ports_arg, mode=nmap_mode,
-                             extra_args=extra_args or None, proxy=_tor_proxy)
+        scan_res = nmap.scan(host, mode=nmap_mode, proxy=_tor_proxy)
     except Exception as e:
         return _mk_result("portscan", "failed", {"error": str(e)})
 
