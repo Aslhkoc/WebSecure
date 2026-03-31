@@ -99,7 +99,7 @@ class SQLMapWrapper:
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None
 
-    def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None, proxy: str = None) -> List[Dict[str, Any]]:
+    def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None) -> List[Dict[str, Any]]:
         """
         Runs sqlmap on the target.
         Note: Parsing sqlmap textual output is hard. 
@@ -134,6 +134,12 @@ class SQLMapWrapper:
         os.close(fd)
 
         try:
+            # Profil ayarlarını uygula (_sqlmap config'den)
+            _p = profile_cfg or {}
+            _risk  = _p.get("risk", risk)
+            _level = _p.get("level", level)
+            _prof_extra = list(_p.get("extra_args", []))
+
             if self.binary.endswith(".py"):
                 import sys
                 cmd = [sys.executable, self.binary]
@@ -143,14 +149,16 @@ class SQLMapWrapper:
             cmd.extend([
                 "-u", target,
                 "--batch",
-                "--risk", str(risk),
-                "--level", str(level),
+                "--risk", str(_risk),
+                "--level", str(_level),
                 "--output-dir", out_dir,
                 "--results-file", csv_path,
                 "--disable-coloring",
-                "--forms",           # also test HTML form inputs
-                "--parse-errors",    # expose DB error messages
+                "--forms",
+                "--parse-errors",
             ])
+            if _prof_extra:
+                cmd.extend(_prof_extra)
             if extra_args:
                 cmd.extend(extra_args)
 

@@ -200,8 +200,68 @@ def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
     return config, notes
 
 
+def _apply_aggressive_profile(cfg: dict) -> dict:
+    """Agresif profil: tam kapsam, yüksek hız."""
+    os.environ["WS_PAYLOADS_MAX"] = "100000"
+    cfg.setdefault("settings", {})["scan_profile"] = "aggressive"
+    cfg.setdefault("_profile", {})["selected"] = "aggressive"
+    cfg["_scan_mode"] = "aggressive"
+    off = cfg.setdefault("offensive", {})
+    off["profile"] = "deep"
+    for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
+        off.setdefault(k, {})["enabled"] = True
+    # HTTP: yüksek RPS
+    cfg.setdefault("anti_blocking", {}).setdefault("http", {})["rps"] = 10
+    cfg["anti_blocking"]["http"]["jitter_ms"] = 100
+    # SQLMap: maksimum agresiflik
+    cfg.setdefault("_sqlmap", {}).update({"risk": 3, "level": 5, "extra_args": []})
+    # FFUF: yüksek thread
+    cfg.setdefault("_ffuf", {}).update({"threads": 40, "extra_args": []})
+    # Nuclei: yüksek rate
+    cfg.setdefault("_nuclei", {}).update({"rate_limit": 150})
+    # Nmap: deep, hızlı
+    cfg.setdefault("_nmap", {}).update({"mode": "deep", "extra_args": []})
+    return cfg
+
+
+def _apply_stealth_profile(cfg: dict) -> dict:
+    """Stealth profil: tam kapsam, yavaş, WAF bypass, emin adımlar."""
+    os.environ["WS_PAYLOADS_MAX"] = "100000"
+    cfg.setdefault("settings", {})["scan_profile"] = "stealth"
+    cfg.setdefault("_profile", {})["selected"] = "stealth"
+    cfg["_scan_mode"] = "stealth"
+    off = cfg.setdefault("offensive", {})
+    off["profile"] = "deep"
+    for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
+        off.setdefault(k, {})["enabled"] = True
+    # HTTP: düşük RPS, yüksek jitter, insan gibi
+    cfg.setdefault("anti_blocking", {}).setdefault("http", {})["rps"] = 1
+    cfg["anti_blocking"]["http"]["jitter_ms"] = 2000
+    cfg["anti_blocking"]["http"]["max_extra_delay_ms"] = 3000
+    # SQLMap: orta seviye, gecikmeli, WAF tamper
+    cfg.setdefault("_sqlmap", {}).update({
+        "risk": 2, "level": 3,
+        "extra_args": ["--delay=3", "--random-agent",
+                       "--tamper=space2comment,between,randomcase,charencode"],
+    })
+    # FFUF: tek thread, düşük rate
+    cfg.setdefault("_ffuf", {}).update({
+        "threads": 1,
+        "extra_args": ["-rate", "2", "-p", "0.5-2.0"],
+    })
+    # Nuclei: çok düşük rate
+    cfg.setdefault("_nuclei", {}).update({"rate_limit": 3})
+    # Nmap: deep kapsam, T1, yavaş
+    cfg.setdefault("_nmap", {}).update({
+        "mode": "deep",
+        "extra_args": ["-T1", "--scan-delay", "3s", "--max-parallelism", "1",
+                       "--randomize-hosts"],
+    })
+    return cfg
+
+
 def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
-    """Kullanıcıya Agresif/Normal profilini sorar ve cfg'yi buna göre ayarlar."""
+    """Kullanıcıya Agresif / Stealth profilini sorar ve cfg'yi buna göre ayarlar."""
 
     def _prompt(msg: str, default: str) -> str:
         try:
@@ -211,109 +271,47 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
         except EOFError:
             return default
 
-    # Lazy import to avoid circular at module load time
     def _get_apply_active_profile():
         try:
             from websecure.core.utils import apply_active_profile
             return apply_active_profile
-        except Exception as exc:
+        except Exception:
             return lambda c: c
 
     while True:
         print("""
-[?] Tarama yoğunluğu:
-    1) Agresif - kapsam ve mutasyonlar tam (daha uzun sürebilir)
-    2) Normal   - payload/mutasyon yoğunluğu azaltılır (kapsam korunur)
-    3) Güvenli Full - WAF atlatma öncelikli, tüm araçlar aktif (en yavaş, en kapsamlı)
+[?] Tarama modu:
+    1) Agresif  - tam kapsam, yuksek hiz, tum moduller aktif
+    2) Stealth  - tam kapsam, yavass, WAF atlatma, rastgele gecikmeler
 """.rstrip())
 
-        sel = (_prompt("Seçiminiz [1/2/3, varsayılan=1]: ", "1") or "1").strip()
-        if sel not in ("1", "2", "3"):
-            print("Geçersiz seçim.")
+        sel = (_prompt("Seciminiz [1/2, varsayilan=1]: ", "1") or "1").strip()
+        if sel not in ("1", "2"):
+            print("Gecersiz secim.")
             continue
 
         if sel == "1":
             lo, hi = _estimate_minutes(cfg, "aggressive")
-            print(f"[!] Agresif modu seçtiniz. Yaklaşık {lo}-{hi} dakika sürebilir.")
-            ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
+            print(f"[*] Agresif mod. Yaklasik {lo}-{hi} dakika surebilir.")
+            ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
             if ans.startswith("b"):
                 continue
-            cfg.setdefault("settings", {})["scan_profile"] = "aggressive"
-            cfg.setdefault("_profile", {})["selected"] = "aggressive"
-            off = cfg.setdefault("offensive", {})
-            off["profile"] = "deep"
-            for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
-                node = off.setdefault(k, {})
-                if isinstance(node, dict):
-                    node["enabled"] = True
-
-            # [WS3] UNLOCKED: Enable full destructive potential (Realism)
-            os.environ["WS_PAYLOADS_MAX"] = "100000"
-            print("[!] Sınırlar Kaldırıldı: Payload limiti 100,000'e yükseltildi.")
-            print("[!] DİKKAT: Yıkıcı mod aktif (DELETE/DROP tabloları silinebilir).")
-
-            # [FIX] Apply profile settings
+            cfg = _apply_aggressive_profile(cfg)
             apply_active_profile = _get_apply_active_profile()
             cfg = apply_active_profile(cfg)
-            print(f"[DEBUG] Active Config Profile: {cfg.get('settings', {}).get('scan_profile')} (Applied: True)")
-
             return "aggressive", cfg
 
-        if sel == "3":
-             print(f"[!] Güvenli Full (WAF Evasion) modu seçtiniz. Çok yavaş ama gizli çalışır.")
-             ans = (_prompt("Devam etmek istiyor musunuz? [D]evam / [B]aşa dön: ", "D") or "D").lower()
-             if ans.startswith("b"):
-                 continue
-             cfg.setdefault("settings", {})["scan_profile"] = "safe_full"
-             cfg.setdefault("_profile", {})["selected"] = "safe_full"
-
-             # [FIX] Apply profile settings immediately (RPS, concurrency etc.)
-             apply_active_profile = _get_apply_active_profile()
-             cfg = apply_active_profile(cfg)
-             print(f"[DEBUG] Active Config Profile: {cfg.get('settings', {}).get('scan_profile')} (Applied: True)")
-
-             return "safe_full", cfg
-
-             # Activate all offensive modules but with 'safe' defaults implied by profile
-             off = cfg.setdefault("offensive", {})
-             off["profile"] = "deep" # needs deep module access
-             for k in ("request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection", "websocket_fuzz"):
-                node = off.setdefault(k, {})
-                if isinstance(node, dict):
-                    node["enabled"] = True
-
-             # [WS3] STEALTH-SNIPER MODE:
-             # User requested: "Don't be cowardly" + "Avoid WAF"
-             # Solution: High Payload Count + Low Speed
-             os.environ["WS_PAYLOADS_MAX"] = "100000"
-             print("[!] STEALTH-SNIPER Modu: Payload limiti 100,000 (Yıkıcı/Gerçekçi).")
-             print("[!] NOT: WAF yakalanmamak için yavaş çalışır. Sabırlı olun.")
-             print("[✓] GÜVENLİK: Bu saldırılar SADECE hedef URL'ye yapılır. Sizin bilgisayarınız etkilenmez.")
-
-             return "safe_full", cfg
-             return "safe_full", cfg
-
         # sel == "2"
-        cfg2, notes = _apply_normal_profile(dict(cfg))  # kopya üstünde
-        print("[i] Normal mod: aşağıdaki alanlarda yoğunluk azaltılacak:")
-        for n in notes:
-            print("   - ", n)
-        ans = (_prompt("Devam edilsin mi? [D]evam / [B]aşa dön: ", "D") or "D").lower()
+        lo, hi = _estimate_minutes(cfg, "stealth")
+        print(f"[*] Stealth mod: ayni derin tarama ama cok yavas ve WAF kaciniyor.")
+        print(f"    Yaklasik {lo * 3}-{hi * 4} dakika surebilir (hiz kasitli dusuk).")
+        ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
         if ans.startswith("b"):
             continue
-        cfg2.setdefault("settings", {})["scan_profile"] = "normal"
-        cfg2.setdefault("_profile", {})["selected"] = "normal"
-        off = cfg2.setdefault("offensive", {})
-        off["profile"] = "stealth"
-        for k in ("request_smuggling", "mass_assignment", "websocket_fuzz"):
-            node = off.setdefault(k, {})
-            if isinstance(node, dict):
-                node["enabled"] = False
-        for k in ("jwt_attacks", "nosql_injection"):
-            node = off.setdefault(k, {})
-            if isinstance(node, dict):
-                node.setdefault("enabled", True)
-        return "normal", cfg2
+        cfg = _apply_stealth_profile(cfg)
+        apply_active_profile = _get_apply_active_profile()
+        cfg = apply_active_profile(cfg)
+        return "stealth", cfg
 
 
 def _pick_from_config(cfg: dict, key: str, default=None):
@@ -363,6 +361,8 @@ def _choose_mode_from_config(config: dict | None) -> str:
 __all__ = [
     "_estimate_minutes",
     "_apply_normal_profile",
+    "_apply_aggressive_profile",
+    "_apply_stealth_profile",
     "_offer_scan_profile_and_confirm",
     "_pick_from_config",
     "_choose_mode_from_config",
