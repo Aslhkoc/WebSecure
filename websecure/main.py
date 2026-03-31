@@ -177,21 +177,34 @@ def _ensure_interactsh(cfg: dict) -> bool:
         )
         token, host = None, None
         import re as _re
-        for _ in range(60):  # max 6 saniye bekle
+        # ANSI renk kodlarini temizle
+        _ansi_re = _re.compile(r'\x1b\[[0-9;]*m|\[[0-9]+m')
+        # interactsh v1.3+ cikti formati:
+        #   [INF] Listing 1 payload for OOB Testing
+        #   [INF] d75qcguue20j9k62hg90wswmdj6h5swoq.oast.site
+        # Eski format: [INF] Listing on c1abc.oast.me
+        _domain_re = _re.compile(r'([a-z0-9]{10,})\.(oast\.[a-z]+|interact\.sh)', _re.IGNORECASE)
+        for _ in range(100):  # max 10 saniye bekle
             line = proc.stdout.readline()
             if not line:
                 time.sleep(0.1)
                 continue
-            # interactsh çıktısı: "[INF] Listing on ... c1abc.oast.me"
-            m = _re.search(r"Listing on\s+(\S+)", line)
+            clean = _ansi_re.sub("", line).strip()
+            # Eski format: "Listing on <subdomain>"
+            m = _re.search(r"Listing on\s+(\S+)", clean)
             if m:
                 subdomain = m.group(1).strip()
-                # subdomain = token.server şeklinde gelir
                 parts = subdomain.split(".", 1)
                 if len(parts) == 2:
                     token = parts[0]
                     host = subdomain
                     break
+            # Yeni format: satir dogrudan domain iceriyor
+            m2 = _domain_re.search(clean)
+            if m2:
+                host = m2.group(0).strip()
+                token = m2.group(1).strip()
+                break
             time.sleep(0.1)
 
         if token and host:
