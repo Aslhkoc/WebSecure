@@ -357,26 +357,31 @@ def phase_portscan(ctx: dict):
         add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı."})
         return
 
-    # Mode selection: config override > scan_profile auto
-    nmap_mode = nmap_cfg.get("mode", None)
+    # Mode selection: _nmap config > scan_profile
+    _cfg_top = ctx.get("config") or {}
+    _nmap_profile = _cfg_top.get("_nmap", {})
+    nmap_mode = nmap_cfg.get("mode") or _nmap_profile.get("mode")
     if not nmap_mode:
-        scan_profile = str((ctx.get("config") or {}).get("scan_profile", "NORMAL")).upper()
-        nmap_mode = {"STEALTH": "stealth", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
+        scan_profile = str(_cfg_top.get("scan_profile", "NORMAL")).upper()
+        # Agresif ve Stealth: ikisi de deep kapsam
+        nmap_mode = {"STEALTH": "deep", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
 
     # Port override
     ports_cfg = nmap_cfg.get("ports", [])
     ports_arg = ",".join(map(str, ports_cfg)) if ports_cfg else None
 
-    extra_args = nmap_cfg.get("arguments", [])
+    # Extra args: config + profil ek argümanları
+    extra_args = list(nmap_cfg.get("arguments", []))
+    extra_args += _nmap_profile.get("extra_args", [])
 
     # Vuln script mode if explicitly configured
     vuln_mode = nmap_cfg.get("vuln_scripts", False)
     if vuln_mode:
         extra_args = extra_args + ["--script", "vuln,auth,default", "--script-timeout", "30s"]
 
-    _nmap_proxy = (ctx.get("config") or {}).get("_tor_proxy")
+    _nmap_proxy = _cfg_top.get("_tor_proxy")
     _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
-    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args, proxy=_nmap_proxy)
+    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args or None, proxy=_nmap_proxy)
 
     # Store OS guess in ctx for use by other phases
     os_guesses = list({item["os_guess"] for item in res if item.get("os_guess")})
@@ -2699,7 +2704,8 @@ def run_sqlmap_scan(ctx) -> None:
         # If the URL contains high-value params, we might want to boost intensity
         # For now, we just ensure they are tested.
             
-        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args, proxy=proxy)
+        _sqlmap_profile = (getattr(ctx, "config", {}) or {}).get("_sqlmap", {})
+        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile)
         findings.extend(current_findings)
     
     # Report
@@ -2902,15 +2908,17 @@ def run_ffuf_scan(ctx) -> None:
             discovery_wl = curated_disc[0]  # best curated dir list
             _logger.info(f"[FFUF] Curated wordlist kullanılıyor: {discovery_wl}")
 
+        _ffuf_profile = (getattr(ctx, "config", {}) or {}).get("_ffuf", {})
+
         # --- Directory/path discovery ---
-        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args, proxy=proxy)
+        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
         # --- API endpoint discovery (if curated api list available) ---
         curated_api = curated.get("api", [])
         if curated_api:
-            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args, proxy=proxy)
+            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
             for f in api_findings:
                 add_result("discovery", {"tool": "ffuf", "category": "api", **f})
 
@@ -2924,6 +2932,7 @@ def run_ffuf_scan(ctx) -> None:
             extensions=sensitive_exts,
             custom_args=custom_args,
             proxy=proxy,
+            profile_cfg=_ffuf_profile,
         )
         try:
             from websecure.scanners.js_analyzer import classify_discovered_file
@@ -3035,6 +3044,7 @@ def run_nuclei_scan(ctx) -> None:
 
     _logger.info(f"[Nuclei] Starting scan on {url} (tech: {tech_stack or 'auto'})")
 
+    _nuclei_profile = (getattr(ctx, "config", {}) or {}).get("_nuclei", {})
     findings = wrapper.scan(
         target=url,
         tags=tags,
@@ -3042,6 +3052,7 @@ def run_nuclei_scan(ctx) -> None:
         rate_limit=rate_limit,
         proxy=proxy,
         tech_stack=tech_stack,
+        profile_cfg=_nuclei_profile,
     )
 
     for finding in findings:

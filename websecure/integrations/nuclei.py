@@ -89,6 +89,7 @@ class NucleiWrapper:
         proxy: Optional[str] = None,
         extra_args: Optional[List[str]] = None,
         tech_stack: Optional[List[str]] = None,
+        profile_cfg: dict = None,
     ) -> List[Dict[str, Any]]:
         """
         Run nuclei against target. Returns list of findings dicts.
@@ -111,16 +112,19 @@ class NucleiWrapper:
         os.close(fd)
 
         try:
+            _p = profile_cfg or {}
+            _rate = _p.get("rate_limit", rate_limit)
+
             cmd = [
                 self.binary,
                 "-u", target,
                 "-o", output_file,
-                "-je",          # JSON output per-finding
+                "-je",
                 "-silent",
-                "-nc",          # No color
-                "-rate-limit", str(rate_limit),
+                "-nc",
+                "-rate-limit", str(_rate),
                 "-severity", severity,
-                "-timeout", "10",  # Per-request timeout (seconds)
+                "-timeout", "10",
             ]
 
             # Template selection: tech-aware or default tags
