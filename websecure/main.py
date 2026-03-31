@@ -2761,6 +2761,8 @@ O====|_______________________________________________________>  1   1 0
         report_payload = dict(results)
         report_payload.update(get_bucket_results())
         report_payload.update(buckets)
+        # Bucket'lardan nmap/tls/discovery verilerini açıkça al
+        _bkts = get_bucket_results()
         report_payload.update({
             "meta": {
                 "target": url,
@@ -2773,8 +2775,14 @@ O====|_______________________________________________________>  1   1 0
             "security_headers_summary": results.get("security_headers_summary"),
             "port_scan_summary": results.get("port_scan_summary"),
             "discovery_summary": results.get("discovery_summary"),
-            # --- TLS Özet Tablosu 2.5 ---
-            "tls_summary": results.get("tls_summary", []),
+            # Nmap: bucket veya results'tan
+            "nmap": _bkts.get("nmap") or results.get("nmap") or results.get("port_scan") or [],
+            # TLS: bucket veya results'tan; _e_table_tls_headers normalize eder
+            "tls": _bkts.get("tls") or results.get("tls") or [],
+            "tls_summary": results.get("tls_summary") or [],
+            # Discovery: bucket'lardan
+            "discovery": _bkts.get("discovery") or results.get("discovery") or [],
+            "files_discovered": _bkts.get("files_discovered") or results.get("files_discovered") or [],
         })
 
         out = perform_reporting(session, cfg, report_payload)

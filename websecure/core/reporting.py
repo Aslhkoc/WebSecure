@@ -1544,7 +1544,7 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     # Output directory & formats
     rep_cfg = (cfg.get("reporting") or {}) if isinstance(cfg, dict) else {}
     out_dir = (rep_cfg.get("output_dir") or "output")
-    fmts: List[str] = rep_cfg.get("formats") or ["md"]
+    fmts: List[str] = rep_cfg.get("formats") or ["md", "html"]
     written: Dict[str, str] = {}
     os.makedirs(out_dir, exist_ok=True)
 
@@ -2626,8 +2626,9 @@ def _e_table_ports(results: Dict) -> str:
 
     rows: list[dict] = []
 
-    # 1) Ayrıntı varsa onu kullan (daha zengin veri)
-    scan_list = results.get("port_scan") or []
+    # 1) Ayrıntı varsa onu kullan — port_scan VEYA nmap bucket'ı
+    scan_list = results.get("port_scan") or results.get("nmap") or []
+    # nmap bucket liste-of-dicts formatında geliyor, doğrudan kullanılabilir
     if isinstance(scan_list, list) and any(isinstance(it, dict) for it in scan_list):
         for it in scan_list:
             if not isinstance(it, dict):
@@ -2685,31 +2686,134 @@ def _e_table_ports(results: Dict) -> str:
 
 
 def _e_table_tls_headers(results: Dict[str, Any]) -> str:
-    tls = results.get("tls_summary") or []
+    # tls_summary (yapılandırılmış özet) veya tls bucket'ından normalize et
+    tls_raw = results.get("tls_summary") or results.get("tls") or []
+    tls: list[dict] = []
+    if isinstance(tls_raw, dict):
+        # Tek dict — scanner çıktısı: {"certificate": {...}, "issues": [...]}
+        cert = tls_raw.get("certificate") or {}
+        tls.append({
+            "host": tls_raw.get("host") or cert.get("host") or "",
+            "tls_version": cert.get("tls_version") or tls_raw.get("tls_version") or "",
+            "cn": cert.get("subject_CN") or cert.get("common_name") or cert.get("cn") or "",
+            "status": "Geçerli ✓" if cert.get("valid") else ("Geçersiz ✗" if "valid" in cert else ""),
+            "issues": tls_raw.get("issues") or [],
+        })
+    elif isinstance(tls_raw, list):
+        for item in tls_raw:
+            if not isinstance(item, dict):
+                continue
+            cert = item.get("certificate") or {}
+            if cert:
+                # Scanner formatı: item içinde certificate anahtarı var
+                tls.append({
+                    "host": item.get("host") or cert.get("host") or "",
+                    "tls_version": cert.get("tls_version") or item.get("tls_version") or "",
+                    "cn": cert.get("subject_CN") or cert.get("common_name") or cert.get("cn") or "",
+                    "status": "Geçerli ✓" if cert.get("valid") else ("Geçersiz ✗" if "valid" in cert else ""),
+                    "issues": item.get("issues") or [],
+                })
+            elif item.get("tls_version") or item.get("host") or item.get("cn"):
+                # Zaten özet formatında
+                tls.append(item)
+
     hdr = results.get("security_headers_summary") or {}
+    # headers bucket'ından da dene
+    if not hdr:
+        hdr_raw = results.get("headers") or results.get("security_headers") or {}
+        if isinstance(hdr_raw, list) and hdr_raw:
+            hdr_raw = hdr_raw[0] if isinstance(hdr_raw[0], dict) else {}
+        if isinstance(hdr_raw, dict):
+            hdr = hdr_raw
+
     lines = []
-    # TLS
     if tls:
-        lines.append("**TLS Özeti**")
+        lines.append("**TLS / Sertifika Özeti**")
         lines.append("")
-        lines.append("| Host | Versiyon | CN | Durum | HSTS | Geçerlilik | Sorunlar |")
+        lines.append("| Host | TLS Versiyon | CN (Subject) | Durum | Sorunlar |")
         lines.append("|-|-|-|-|-|")
         for t in tls[:50]:
-            valid = ""
-            issues = ",".join(t.get("issues") or [])
+            issues = ", ".join(t.get("issues") or []) or "—"
             lines.append(
-                f"| {t.get('host') or ''} | {t.get('tls_version') or ''} | {t.get('cn') or ''} | {t.get('status') or ''} | {issues} |")
+                f"| {t.get('host') or '—'} | {t.get('tls_version') or '—'} | "
+                f"`{t.get('cn') or '—'}` | {t.get('status') or '—'} | {issues} |"
+            )
         lines.append("")
-    # Headers
     if hdr:
-        lines.append("**Security Headers Özeti**")
-        lines.append("")
-        lines.append("| Başlık | Durum | Not |")
-        lines.append("|-|-|-|")
-        for k, v in (hdr.get("matrix") or {}).items():
-            lines.append(f"| {k} | {v.get('status') or ''} | {v.get('note') or ''} |")
-        lines.append("")
+        matrix = hdr.get("matrix") or hdr.get("headers") or {}
+        if not matrix and isinstance(hdr, dict):
+            # Bazı formatlarda doğrudan {header: {status,note}} gelir
+            matrix = {k: v for k, v in hdr.items() if isinstance(v, dict)}
+        if matrix:
+            lines.append("**Security Headers Özeti**")
+            lines.append("")
+            lines.append("| Başlık | Durum | Not |")
+            lines.append("|-|-|-|")
+            for k, v in matrix.items():
+                if isinstance(v, dict):
+                    lines.append(f"| `{k}` | {v.get('status') or ''} | {v.get('note') or ''} |")
+            lines.append("")
     return "\n".join(lines) if lines else "_TLS/Headers özeti mevcut değil._"
+
+
+def _e_table_discovery(results: Dict[str, Any]) -> str:
+    """
+    FFUF / Feroxbuster / gobuster tarzı dizin-dosya keşif sonuçlarını tablo olarak render eder.
+    Bucket keys: 'discovery', 'files_discovered', 'discovery_summary'
+    """
+    disc_items = results.get("discovery") or []
+    files_items = results.get("files_discovered") or []
+    disc_summary = results.get("discovery_summary") or {}
+
+    # discovery_summary içinde list varsa onu da al
+    if isinstance(disc_summary, dict):
+        for key in ("paths", "urls", "discovered", "items"):
+            extra = disc_summary.get(key) or []
+            if isinstance(extra, list):
+                disc_items = list(disc_items) + extra
+
+    all_items = []
+    seen = set()
+    for it in list(disc_items) + list(files_items):
+        if not isinstance(it, dict):
+            continue
+        url = str(it.get("url") or it.get("path") or it.get("input") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        all_items.append({
+            "url": url,
+            "status": str(it.get("status") or it.get("status_code") or ""),
+            "size": str(it.get("length") or it.get("size") or it.get("content_length") or ""),
+            "tool": str(it.get("tool") or it.get("source") or ""),
+            "category": str(it.get("category") or ""),
+        })
+
+    if not all_items:
+        return "_Dizin/dosya keşfi sonucu bulunamadı._"
+
+    # Durum koduna göre sırala: 200 önce
+    def _sort_key(r):
+        try:
+            return int(r["status"])
+        except Exception:
+            return 999
+
+    all_items.sort(key=_sort_key)
+
+    lines = [
+        f"_Toplam {len(all_items)} yol keşfedildi._",
+        "",
+        "| URL / Yol | HTTP Durum | Boyut | Araç | Kategori |",
+        "|-|-|-|-|-|",
+    ]
+    for r in all_items[:500]:
+        lines.append(
+            f"| `{r['url']}` | {r['status']} | {r['size']} | {r['tool']} | {r['category']} |"
+        )
+    if len(all_items) > 500:
+        lines.append(f"| _... ve {len(all_items) - 500} sonuç daha_ | | | | |")
+    return "\n".join(lines)
 
 
 def _e_glossary() -> str:
@@ -2800,6 +2904,9 @@ def render_e_phase_markdown_report(results: Dict) -> str:
     lines.append("")
     lines.append("### TLS/Headers")
     lines.append(_e_table_tls_headers(results))
+    lines.append("")
+    lines.append("### Dizin & Dosya Keşfi (FFUF / Feroxbuster)")
+    lines.append(_e_table_discovery(results))
     lines.append("")
 
     # ===== Teknik Detay (Her bulgu) =====
