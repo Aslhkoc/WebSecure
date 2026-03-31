@@ -1812,58 +1812,126 @@ def run_discovery(ctx):
 
 
 def run_portscan(ctx):
-    """Port taraması: Nmap entegrasyonu (Native scanner silindi)."""
+    """Port taraması: Nmap entegrasyonu — config/profil tabanlı mod seçimi."""
     from websecure.integrations.nmap import NmapWrapper
-    
-    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+    from urllib.parse import urlparse
+
+    cfg = getattr(ctx, "config", {}) or {}
+    nmap_cfg = cfg.get("nmap", {}) or {}
     results = getattr(ctx, "results", None) or {}
-    debug = bool(getattr(ctx, "debug", False))
-    
+
+    # Nmap disabled ise atla
+    if not nmap_cfg.get("enabled", True):
+        add_result("portscan", {"severity": "note", "message": "Nmap devre dışı (config)."})
+        return _mk_result("portscan", "skipped", {"reason": "disabled"})
+
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
     if not url:
         return _mk_result("portscan", "failed", {"error": "no_url"})
-        
+
+    # Host adını ayıkla
+    if "://" in url:
+        host = urlparse(url).hostname or url
+    else:
+        host = url.split(":")[0]
+
+    nmap = NmapWrapper()
+    if not nmap.is_available():
+        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı, port taraması atlandı."})
+        return _mk_result("portscan", "failed", {"error": "nmap_missing"})
+
+    # --- Mod seçimi: config > scan_profile ---
+    nmap_mode = nmap_cfg.get("mode")
+    if not nmap_mode:
+        scan_profile = str(cfg.get("scan_profile") or
+                          (cfg.get("settings") or {}).get("scan_profile") or "aggressive").upper()
+        nmap_mode = {"STEALTH": "stealth", "AGGRESSIVE": "deep", "NORMAL": "standard"}.get(scan_profile, "standard")
+
+    # --- Port override ---
+    ports_cfg = nmap_cfg.get("ports", [])
+    ports_arg = ",".join(map(str, ports_cfg)) if ports_cfg else None
+
+    # --- Extra argümanlar ---
+    extra_args = list(nmap_cfg.get("arguments", []))
+    extra_args += (cfg.get("_nmap", {}) or {}).get("extra_args", [])
+    if nmap_cfg.get("vuln_scripts", False):
+        extra_args += ["--script", "vuln,auth,default", "--script-timeout", "30s"]
+
+    _tor_proxy = cfg.get("_tor_proxy")
+    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode}, portlar={ports_arg or 'default'}")
+
     try:
-        # Host adını ayıkla
-        if "://" in url:
-            from urllib.parse import urlparse
-            host = urlparse(url).hostname or url
-        else:
-            host = url.split(":")[0]
-
-        nmap = NmapWrapper()
-        if not nmap.is_available():
-            add_result("errors", {"stage": "portscan", "error": "Nmap binary not found. Please install Nmap."})
-            return _mk_result("portscan", "failed", {"error": "nmap_missing"})
-
-        # Hızlı tarama
-        _nmap_proxy2 = (getattr(ctx, "config", {}) or {}).get("_tor_proxy")
-        scan_res = nmap.scan(host, mode="fast", proxy=_nmap_proxy2)
-        
-        # Sonuçları işle
-        port_records = []
-        open_ports = []
-        for item in scan_res:
-             p = item.get("port")
-             if p:
-                 open_ports.append(p)
-                 port_records.append({
-                     "host": item.get("ip") or host,
-                     "port": p,
-                     "proto": item.get("protocol", "tcp"),
-                     "state": "open",
-                     "service": item.get("service", "unknown"),
-                     "product": item.get("product", ""),
-                     "version": item.get("version", "")
-                 })
-                 
-        # Merkezi sonuçlara ekle (reporting uyumluluğu için)
-        results["port_scan"] = port_records 
-        results["nmap"] = port_records      
-        results["open_ports"] = open_ports
-        
-        return _mk_result("portscan", "ok", {"scanned": "Nmap Fast", "open": len(open_ports)})
+        scan_res = nmap.scan(host, ports=ports_arg, mode=nmap_mode,
+                             extra_args=extra_args or None, proxy=_tor_proxy)
     except Exception as e:
         return _mk_result("portscan", "failed", {"error": str(e)})
+
+    port_records = []
+    open_ports = []
+
+    for item in scan_res:
+        p = item.get("port")
+        if not p:
+            continue
+        open_ports.append(p)
+        svc = item.get("service", "unknown")
+        product = item.get("product", "")
+        version = item.get("version", "")
+        scripts = item.get("scripts", {})
+        record = {
+            "severity": "info",
+            "message": f"Açık port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version})".strip(),
+            "host": item.get("ip") or host,
+            "port": p,
+            "proto": item.get("protocol", "tcp"),
+            "service": svc,
+            "product": product,
+            "version": version,
+            "cpe": item.get("cpe", []),
+            "os_guess": item.get("os_guess", ""),
+            "scripts": scripts,
+            "state": "open",
+        }
+        port_records.append(record)
+        # Rapor bucket'ına ekle
+        add_result("nmap", record)
+
+        # Script çıktısında zafiyet varsa vulnerability bucket'ına da ekle
+        for script_id, script_out in scripts.items():
+            if script_out and any(kw in script_out.lower() for kw in ("vuln", "vulnerable", "cve-", "exploit")):
+                add_result("vulnerability", {
+                    "severity": "high",
+                    "tool": "nmap-nse",
+                    "script": script_id,
+                    "host": host,
+                    "port": p,
+                    "evidence": script_out[:500],
+                })
+
+        # Web servisleri teknoloji listesine ekle
+        if svc in ("http", "https", "http-alt", "http-proxy"):
+            ctx_techs = getattr(ctx, "technologies", None)
+            if isinstance(ctx_techs, list) and "web" not in ctx_techs:
+                ctx_techs.append("web")
+
+    # OS tahmini results'a yaz (ctx.__slots__ kısıtı için güvenli)
+    os_guesses = list({item["os_guess"] for item in scan_res if item.get("os_guess")})
+    if os_guesses:
+        results["os_guess"] = os_guesses[0]
+        try:
+            ctx.os_guess = os_guesses[0]
+        except (AttributeError, TypeError):
+            pass
+
+    # Reporting uyumluluğu için results dict'e de yaz
+    results["port_scan"] = port_records
+    results["nmap"] = port_records
+    results["open_ports"] = open_ports
+
+    if not port_records:
+        add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
+
+    return _mk_result("portscan", "ok", {"scanned": nmap_mode, "open": len(open_ports)})
 
 
 def run_tls(ctx):
