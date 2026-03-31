@@ -1565,6 +1565,15 @@ O====|_______________________________________________________>  1   1 0
     _ic2 = _oast_cfg2.get("interactsh", {}) or {}
     if _oast_cfg2.get("enabled") and _ic2.get("enabled") and _ic2.get("token") and "BURAYA" not in _ic2.get("token", ""):
         print("  [+] OAST / interactsh aktif.")
+        # Global arka plan polling thread'ini başlat
+        try:
+            from websecure.core.oast import start_global_oast_poller, stop_global_oast_poller
+            import atexit as _atexit_oast
+            start_global_oast_poller(cfg)
+            print("  [+] OAST global poller baslatildi (arka plan dogrulama aktif).")
+            _atexit_oast.register(stop_global_oast_poller)
+        except Exception as _oast_ex:
+            print(f"  [!] OAST poller baslanamadi: {_oast_ex}")
     else:
         print("  [i] OAST kullanilamiyor. SSRF/XXE bulgulari dogrulanamayacak.")
     print("="*60 + "\n")
