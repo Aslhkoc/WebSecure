@@ -378,6 +378,8 @@ class SubdomainScanner(BaseScanner):
             r["severity"] = "info"
             r["title"] = f"Subdomain: {r['subdomain']}"
             r["domain"] = domain
+            r["url"] = f"https://{r['subdomain']}"
+            r["message"] = f"{r['subdomain']} ({r.get('ip', '')}) [{r.get('method', '')}]"
 
         return all_results
 
