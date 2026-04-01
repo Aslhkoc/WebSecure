@@ -129,7 +129,12 @@ class PDFReporter:
 
         # WAF info
         waf_info = results.get("waf_detection", [{}])
-        waf = waf_info[0] if waf_info else {}
+        if isinstance(waf_info, dict):
+            waf = waf_info
+        elif isinstance(waf_info, list) and waf_info:
+            waf = waf_info[0] if isinstance(waf_info[0], dict) else {}
+        else:
+            waf = {}
         waf_vendor = waf.get("vendor", "None detected")
         waf_confidence = waf.get("confidence", 0.0)
 

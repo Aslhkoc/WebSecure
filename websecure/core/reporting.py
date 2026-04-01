@@ -35,8 +35,14 @@ def should_fail_ci(cfg: dict, results: dict) -> bool:
         counts = results["summary"]["counts"]
     elif "findings" in results:
         counts = {"kritik": 0, "yüksek": 0, "orta": 0, "düşük": 0, "bilgi": 0}
-        for cat, items in results["findings"].items():
+        _findings = results["findings"]
+        _findings_iter = _findings.items() if isinstance(_findings, dict) else enumerate(_findings) if isinstance(_findings, list) else []
+        for cat, items in _findings_iter:
+            if not isinstance(items, (list, tuple)):
+                items = [items]
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 s = str(item.get("severity") or "Bilgi").lower()
                 if s in ["critical", "severe"]: s = "kritik"
                 elif s in ["high"]: s = "yüksek"
@@ -1581,7 +1587,14 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     # Markdown
     md = None
     if "md" in fmts:
-        md = render_e_phase_markdown_report(results)
+        try:
+            md = render_e_phase_markdown_report(results)
+        except Exception as _md_exc:
+            import traceback as _tb
+            _logger.error(f"[Reporting] Markdown render hatası: {_md_exc!r}\n{_tb.format_exc()}")
+            print(f"\n[!] RAPOR HATASI (Markdown): {_md_exc!r}")
+            print(_tb.format_exc())
+            md = f"# Rapor Hatası\n\n```\n{_tb.format_exc()}\n```"
         # Prepend banner image (copy asset to output/assets)
         out_assets = Path(out_dir) / "assets"
         out_assets.mkdir(parents=True, exist_ok=True)
@@ -2748,6 +2761,8 @@ def _e_table_tls_headers(results: Dict[str, Any]) -> str:
         lines.append("| Host | TLS Versiyon | CN (Subject) | Durum | Sorunlar |")
         lines.append("|-|-|-|-|-|")
         for t in tls[:50]:
+            if not isinstance(t, dict):
+                continue
             issues = ", ".join(t.get("issues") or []) or "—"
             lines.append(
                 f"| {t.get('host') or '—'} | {t.get('tls_version') or '—'} | "
