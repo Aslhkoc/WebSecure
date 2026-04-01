@@ -123,6 +123,7 @@ class JWTScanner(BaseScanner):
 
             self.add(bucket, {
                 "type": "JWT Info", "severity": "Info",
+                "url": url,
                 "details": "JWT Decoded",
                 "metadata": {"header": header, "payload": payload},
             })

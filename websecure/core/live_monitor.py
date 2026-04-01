@@ -174,13 +174,17 @@ class LiveMonitor:
         else:
             color, icon = self._G, "🟢"
 
+        # Ekstra bilgi: message veya details (url yoksa göster)
+        msg = str(item.get("message") or item.get("details") or "")[:120]
+
         self._print(
             f"\n{color}{self._B}"
             f"{'▓'*60}\n"
             f"  {icon} VULN #{n}: {vtype.upper()}  [{sev.upper()}]\n"
-            f"  URL    : {url}\n"
+            + (f"  URL    : {url}\n" if url else "")
             + (f"  PARAM  : {param}\n" if param else "")
             + (f"  PAYLOAD: {payload}\n" if payload else "")
+            + (f"  DETAY  : {msg}\n" if msg and not url else "")
             + f"{'▓'*60}"
             f"{self._RS}\n"
         )

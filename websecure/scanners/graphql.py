@@ -367,6 +367,7 @@ class GraphQLScanner(BaseScanner):
             for p in probes:
                 for f in p.run(client, ep):
                     self.add(bucket, {
+                        "url": f.endpoint,
                         "endpoint": f.endpoint,
                         "issue": f.issue,
                         "severity": f.severity,

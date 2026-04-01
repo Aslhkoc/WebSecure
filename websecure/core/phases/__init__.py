@@ -121,6 +121,7 @@ def _report_phase_error(_phase: str, _where: str, _err: BaseException) -> None:
             "type": "phase_error",
             "severity": "error",
             "message": str(_err),
+            "target": _where or "",
             "meta": {
                 "phase": _phase,
                 "where": _where,
@@ -251,7 +252,7 @@ def _quick_tech_probe(ctx) -> set:
         ctx.technologies = list(techs)
         if techs:
             _logger.info(f"[TechProbe] Detected: {', '.join(sorted(techs))}")
-            add_result("meta", {"stage": "tech_probe", "technologies": list(techs)})
+            add_result("meta", {"stage": "tech_probe", "technologies": list(techs), "url": url, "message": f"Tespit edilen teknolojiler: {', '.join(sorted(techs))}"})
         return techs
     except Exception as e:
         _logger.debug(f"[TechProbe] Quick probe failed: {e}")
@@ -296,10 +297,13 @@ def phase_waf_detect(ctx: dict):
             except (ImportError, AttributeError) as exc:
                 _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
         add_result("waf_detection", {
+            "url": target,
+            "target": target,
             "vendor": profile.vendor,
             "confidence": profile.confidence,
             "detected": profile.detected,
             "bypass_strategies": profile.bypass_strategies,
+            "message": f"WAF: {profile.vendor} (güven: {profile.confidence:.0%})" if profile.detected else "WAF tespit edilmedi",
         })
         if profile.detected:
             _logger.info(f"[phases] WAF detected: {profile.vendor} ({profile.confidence:.0%})")
@@ -1872,10 +1876,13 @@ def run_portscan(ctx):
         product = item.get("product", "")
         version = item.get("version", "")
         scripts = item.get("scripts", {})
+        _h = item.get("ip") or host
         record = {
             "severity": "info",
             "message": f"Açık port: {p}/{item.get('protocol','tcp')} ({svc} {product} {version})".strip(),
-            "host": item.get("ip") or host,
+            "url": f"{_h}:{p}",
+            "target": _h,
+            "host": _h,
             "port": p,
             "proto": item.get("protocol", "tcp"),
             "service": svc,
