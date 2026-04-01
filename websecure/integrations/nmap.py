@@ -81,10 +81,17 @@ _BASE_SCRIPTS = (
 
 
 def _is_root() -> bool:
+    """Linux'ta root, Windows'ta Administrator kontrolü."""
     try:
-        return os.geteuid() == 0
+        return os.geteuid() == 0          # Linux / macOS / Kali
     except AttributeError:
-        return False  # Windows
+        pass
+    # Windows — ctypes ile admin kontrolü
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def _run_nmap(binary: str, args: List[str], target: str,
