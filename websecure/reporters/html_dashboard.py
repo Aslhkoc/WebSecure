@@ -112,9 +112,28 @@ def render_html_dashboard(results: dict) -> str:
     total_issues = sum(stats.values())
 
     # Discovery Info (IP)
-    disc = results.get("discovery") or {}
-    dns = disc.get("dns") or {}
-    target_ip = dns.get("ip") or "N/A"
+    # "discovery" bucket is a list of finding dicts; DNS info lives in meta or dedicated keys
+    _disc_raw = results.get("discovery")
+    if isinstance(_disc_raw, dict):
+        _disc_dict = _disc_raw
+    elif isinstance(_disc_raw, list):
+        # Try to find a dict entry that carries dns/ip info
+        _disc_dict = next(
+            (x for x in _disc_raw if isinstance(x, dict) and ("dns" in x or "ip" in x)),
+            {}
+        )
+    else:
+        _disc_dict = {}
+    dns = _disc_dict.get("dns") or {}
+    if isinstance(dns, list):
+        dns = next((x for x in dns if isinstance(x, dict)), {})
+    # Fallback: look for ip directly in meta or top-level results
+    target_ip = (
+        dns.get("ip")
+        or (meta.get("ip") if isinstance(meta, dict) else None)
+        or results.get("target_ip")
+        or "N/A"
+    )
 
     # Charts logic (images)
     charts_html = ""
@@ -363,8 +382,20 @@ def render_html_dashboard(results: dict) -> str:
     waf_label = f"{_escape(waf_vendor)} ({int(float(waf_confidence)*100)}%)" if waf_detected else "Not Detected"
 
     # --- Metrics / Traffic Data ---
-    metrics = results.get("metrics") or {}
-    counters = metrics.get("counters") or {}
+    _metrics_raw = results.get("metrics") or {}
+    if isinstance(_metrics_raw, list):
+        metrics = next((x for x in _metrics_raw if isinstance(x, dict)), {})
+    elif isinstance(_metrics_raw, dict):
+        metrics = _metrics_raw
+    else:
+        metrics = {}
+    _counters_raw = metrics.get("counters") or {}
+    if isinstance(_counters_raw, list):
+        counters = next((x for x in _counters_raw if isinstance(x, dict)), {})
+    elif isinstance(_counters_raw, dict):
+        counters = _counters_raw
+    else:
+        counters = {}
     total_req = counters.get("total", 0)
     ok_2xx = counters.get("2xx", 0)
     block_403 = counters.get("403", 0)
