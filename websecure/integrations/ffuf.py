@@ -344,7 +344,7 @@ class FFUFWrapper:
                    "-of", "json",
                    "-t", str(_threads),
                    "-mc", baseline_codes,
-                   "-silent"]
+                   "-s"]
 
             if proxy:
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
@@ -413,7 +413,7 @@ class FFUFWrapper:
                    "-of", "json",
                    "-t", str(threads),
                    "-mc", match_codes,
-                   "-silent"]
+                   "-s"]
 
             if proxy:
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])

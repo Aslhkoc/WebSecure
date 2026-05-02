@@ -443,7 +443,8 @@ def render_html_dashboard(results: dict) -> str:
     for bucket in ("passive", "discovery", "final"):
         for item in (results.get(bucket) or []):
             if not isinstance(item, dict): continue
-            ev = item.get("evidence") or {}
+            _ev_raw = item.get("evidence")
+            ev = _ev_raw if isinstance(_ev_raw, dict) else {}
             subs = ev.get("subdomains") or []
             subdomains.update(subs)
     # 2. Collect from dedicated "subdomains" bucket (from _runner_subdomain)
@@ -454,7 +455,9 @@ def render_html_dashboard(results: dict) -> str:
             sub = item.get("subdomain") or item.get("host") or item.get("url") or item.get("value") or item.get("name")
             if sub:
                 subdomains.add(str(sub))
-            for s in (item.get("evidence") or {}).get("subdomains") or []:
+            _ev2 = item.get("evidence")
+            _ev2 = _ev2 if isinstance(_ev2, dict) else {}
+            for s in (_ev2.get("subdomains") or []):
                 subdomains.add(str(s))
     if subdomains:
         sub_rows = "".join(
@@ -540,10 +543,13 @@ def render_html_dashboard(results: dict) -> str:
     phase_errors_html = ""
     phase_errors = [e for e in (results.get("phase_error") or []) if isinstance(e, dict)]
     if phase_errors:
+        def _safe_meta(e):
+            m = e.get("meta")
+            return m if isinstance(m, dict) else {}
         err_rows = "".join(
             f"<tr>"
-            f"<td style='font-family:monospace; color:var(--sev-high)'>{_escape((e.get('meta') or {}).get('phase') or e.get('type', '-'))}</td>"
-            f"<td style='color:var(--sev-medium)'>{_escape((e.get('meta') or {}).get('exc_type', ''))}</td>"
+            f"<td style='font-family:monospace; color:var(--sev-high)'>{_escape(_safe_meta(e).get('phase') or e.get('type', '-'))}</td>"
+            f"<td style='color:var(--sev-medium)'>{_escape(_safe_meta(e).get('exc_type', ''))}</td>"
             f"<td style='font-size:0.85rem; color:var(--text-muted)'>{_escape(e.get('message', ''))}</td>"
             f"</tr>"
             for e in phase_errors

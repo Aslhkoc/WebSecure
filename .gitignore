@@ -27,3 +27,7 @@ drivers/
 *.txt
 !websecure/wordlists_custom/custom/*.txt
 !websecure/wordlists/*.txt
+
+# Tarama sırasında oluşturulan geçici/artifact dosyalar
+websecure/session.json
+websecure/-*

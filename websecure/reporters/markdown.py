@@ -71,8 +71,9 @@ def _dedupe_findings(items: List[Dict]) -> List[Dict]:
                 cur.setdefault(f, [])
                 cur[f] = list(dict.fromkeys((cur.get(f) or []) + (it.get(f) or [])))
 
-        if it.get("evidence"):
-            cur.setdefault("evidence", {}).update(it.get("evidence") or {})
+        _ev = it.get("evidence")
+        if isinstance(_ev, dict) and _ev:
+            cur.setdefault("evidence", {}).update(_ev)
 
         cur_poc_short = _short_poc(cur.get("poc") or "")
         it_poc_short = _short_poc(it.get("poc") or "")
@@ -177,7 +178,11 @@ def _render_ports_section(results: Dict) -> str:
 
 
 def _render_ssl_section(results: Dict) -> str:
-    tls = results.get("tls") or results.get("ssl") or {}
+    _tls_raw = results.get("tls") or results.get("ssl") or {}
+    if isinstance(_tls_raw, list):
+        tls = next((x for x in _tls_raw if isinstance(x, dict) and "certificate" in x), {})
+    else:
+        tls = _tls_raw if isinstance(_tls_raw, dict) else {}
     cert = tls.get("certificate") or {}
     if not cert: return ""
     
