@@ -11,10 +11,16 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# How old (in seconds) templates must be before auto-update triggers (default: 24h)
+_TEMPLATE_STALENESS_SECONDS = 86_400   # 24 hours
+# Marker file storing last successful update timestamp
+_LAST_UPDATE_FILE = Path.home() / ".nuclei" / ".ws_last_update"
 
 # Severity mapping from nuclei to WebSecure standard
 _SEV_MAP = {
@@ -78,6 +84,101 @@ class NucleiWrapper:
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None or Path(self.binary).exists()
 
+    # -------------------------------------------------------------------------
+    # Template update management
+    # -------------------------------------------------------------------------
+
+    def _templates_are_stale(self) -> bool:
+        """Return True if templates haven't been updated within staleness window."""
+        try:
+            if _LAST_UPDATE_FILE.exists():
+                last = float(_LAST_UPDATE_FILE.read_text().strip())
+                return (time.time() - last) > _TEMPLATE_STALENESS_SECONDS
+        except Exception:
+            pass
+        return True  # No marker → assume stale
+
+    def _mark_updated(self) -> None:
+        """Write current timestamp to the last-update marker file."""
+        try:
+            _LAST_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _LAST_UPDATE_FILE.write_text(str(time.time()))
+        except Exception as exc:
+            logger.debug(f"[Nuclei] Could not write update marker: {exc!r}")
+
+    def update_templates(self, force: bool = False, timeout: int = 120) -> bool:
+        """
+        Update Nuclei templates via `nuclei -update-templates`.
+
+        Args:
+            force: Update even if templates were recently updated.
+            timeout: Max seconds to wait for update to complete.
+
+        Returns:
+            True if update succeeded or was skipped (not stale), False on failure.
+        """
+        if not self.is_available():
+            logger.warning("[Nuclei] Cannot update templates — binary not available")
+            return False
+
+        if not force and not self._templates_are_stale():
+            logger.debug("[Nuclei] Templates are up-to-date (updated < 24h ago), skipping")
+            return True
+
+        logger.info("[Nuclei] Updating templates...")
+        try:
+            proc = subprocess.run(
+                [self.binary, "-update-templates", "-silent"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode == 0:
+                self._mark_updated()
+                logger.info("[Nuclei] Templates updated successfully")
+                return True
+            else:
+                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
+                logger.warning(f"[Nuclei] Template update failed (rc={proc.returncode}): {stderr_out}")
+                return False
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[Nuclei] Template update timed out after {timeout}s")
+            return False
+        except Exception as exc:
+            logger.error(f"[Nuclei] Template update error: {exc!r}")
+            return False
+
+    def ensure_templates_fresh(self, timeout: int = 120) -> None:
+        """
+        Convenience: silently update templates if stale.
+        Call this before .scan() to ensure templates are current.
+        """
+        if self._templates_are_stale():
+            self.update_templates(timeout=timeout)
+
+    def get_template_version(self) -> Optional[str]:
+        """Return current template version string, or None if unavailable."""
+        if not self.is_available():
+            return None
+        try:
+            proc = subprocess.run(
+                [self.binary, "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            out = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            # nuclei -version output: "Nuclei Engine Version: v3.x.x\nNuclei Templates Version: v9.x.x"
+            for line in out.splitlines():
+                if "template" in line.lower() and "version" in line.lower():
+                    return line.strip()
+            return out.strip().splitlines()[0] if out.strip() else None
+        except Exception as exc:
+            logger.debug(f"[Nuclei] Version check failed: {exc!r}")
+            return None
+
     def scan(
         self,
         target: str,
@@ -90,6 +191,7 @@ class NucleiWrapper:
         extra_args: Optional[List[str]] = None,
         tech_stack: Optional[List[str]] = None,
         profile_cfg: dict = None,
+        auto_update: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Run nuclei against target. Returns list of findings dicts.
@@ -103,10 +205,15 @@ class NucleiWrapper:
             timeout: Total scan timeout in seconds
             proxy: HTTP proxy URL
             tech_stack: Detected technologies — auto-selects relevant templates
+            auto_update: Automatically update templates if stale (>24h old)
         """
         if not self.is_available():
             logger.warning("[Nuclei] Binary not available, skipping")
             return []
+
+        # Auto-update templates if stale (non-blocking best-effort)
+        if auto_update:
+            self.ensure_templates_fresh(timeout=60)
 
         fd, output_file = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
@@ -245,6 +352,7 @@ def run_nuclei_scan(
     tech_stack: Optional[List[str]] = None,
     proxy: Optional[str] = None,
     rate_limit: int = 150,
+    auto_update: bool = True,
 ) -> List[Dict[str, Any]]:
     """Convenience function: scan target with nuclei, return findings."""
     wrapper = NucleiWrapper()
@@ -255,4 +363,11 @@ def run_nuclei_scan(
         tech_stack=tech_stack,
         proxy=proxy,
         rate_limit=rate_limit,
+        auto_update=auto_update,
     )
+
+
+def update_nuclei_templates(force: bool = False) -> bool:
+    """Standalone helper: update Nuclei templates. Returns True on success."""
+    wrapper = NucleiWrapper()
+    return wrapper.update_templates(force=force)

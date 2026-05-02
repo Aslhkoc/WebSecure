@@ -193,6 +193,255 @@ class FFUFWrapper:
             logger.error(f"FFUF result parsing error: {e}")
         return results
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Header fuzzing mode
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Common security-relevant headers to fuzz for auth bypass / WAF bypass
+    _SECURITY_HEADERS = [
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Forwarded-Proto",
+        "X-Real-IP",
+        "X-Remote-IP",
+        "X-Remote-Addr",
+        "X-Originating-IP",
+        "X-Host",
+        "X-Custom-IP-Authorization",
+        "X-Original-URL",
+        "X-Override-URL",
+        "X-Rewrite-URL",
+        "X-Original-Host",
+        "X-Forwarded-Server",
+        "X-HTTP-Host-Override",
+        "Forwarded",
+        "Via",
+        "True-Client-IP",
+        "CF-Connecting-IP",
+        "Fastly-Client-IP",
+        "X-Client-IP",
+        "Client-IP",
+        "X-ProxyUser-Ip",
+        "X-Requested-With",
+        "Authorization",
+        "X-Api-Key",
+        "X-Auth-Token",
+        "X-Access-Token",
+        "X-User-Id",
+        "X-Admin",
+        "X-Internal",
+        "X-Backend-Server",
+        "X-Cluster-Client-IP",
+    ]
+
+    # Values to try when fuzzing IP-spoofing headers
+    _IP_BYPASS_VALUES = [
+        "127.0.0.1",
+        "127.0.0.1:80",
+        "localhost",
+        "0.0.0.0",
+        "::1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.0.1",
+        "169.254.169.254",
+        "2130706433",   # 127.0.0.1 decimal
+        "0x7f000001",   # 127.0.0.1 hex
+    ]
+
+    def fuzz_headers(
+        self,
+        url: str,
+        wordlist: Optional[str] = None,
+        headers_to_fuzz: Optional[List[str]] = None,
+        baseline_codes: str = "200,204,301,302",
+        threads: int = 20,
+        proxy: Optional[str] = None,
+        profile_cfg: dict = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fuzz HTTP request headers for auth bypass, IP spoofing, and WAF bypass.
+
+        Two modes:
+          1. header_name mode — inject FUZZ as header name, wordlist = header names
+          2. header_value mode — inject FUZZ as value for each security header,
+             wordlist = IP/bypass values (default: built-in IP bypass list)
+
+        Args:
+            url: Target URL
+            wordlist: Path to wordlist. If None, uses built-in IP bypass values.
+            headers_to_fuzz: List of specific headers to fuzz. Default: all security headers.
+            baseline_codes: HTTP status codes to match as interesting.
+            threads: Concurrent FFUF threads.
+            proxy: HTTP proxy URL.
+            profile_cfg: Profile configuration dict.
+
+        Returns:
+            List of interesting findings.
+        """
+        if not self.is_available():
+            logger.warning("[FFUF] Header fuzzing skipped — binary not available")
+            return []
+
+        # If no external wordlist, build a temporary one from built-in IP values
+        _temp_wl = None
+        if not wordlist or not os.path.isfile(wordlist):
+            fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_hdr_")
+            with os.fdopen(fd, "w") as fh:
+                fh.write("\n".join(self._IP_BYPASS_VALUES))
+            wordlist = _temp_wl
+
+        target_headers = headers_to_fuzz or self._SECURITY_HEADERS
+        all_results: List[Dict[str, Any]] = []
+
+        try:
+            for header in target_headers:
+                findings = self._fuzz_single_header(
+                    url=url,
+                    header_name=header,
+                    wordlist=wordlist,
+                    baseline_codes=baseline_codes,
+                    threads=threads,
+                    proxy=proxy,
+                    profile_cfg=profile_cfg,
+                )
+                all_results.extend(findings)
+        finally:
+            if _temp_wl and os.path.exists(_temp_wl):
+                try:
+                    os.remove(_temp_wl)
+                except OSError:
+                    pass
+
+        return all_results
+
+    def _fuzz_single_header(
+        self,
+        url: str,
+        header_name: str,
+        wordlist: str,
+        baseline_codes: str,
+        threads: int,
+        proxy: Optional[str],
+        profile_cfg: dict,
+    ) -> List[Dict[str, Any]]:
+        """
+        Run FFUF with FUZZ injected as the value of a specific header.
+        Uses -H "HeaderName: FUZZ" syntax.
+        """
+        fd, temp_output = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+
+        try:
+            _p = profile_cfg or {}
+            _threads = _p.get("threads", threads)
+
+            cmd = [self.binary,
+                   "-u", url,
+                   "-w", wordlist,
+                   "-H", f"{header_name}: FUZZ",
+                   "-o", temp_output,
+                   "-of", "json",
+                   "-t", str(_threads),
+                   "-mc", baseline_codes,
+                   "-silent"]
+
+            if proxy:
+                cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
+
+            logger.debug(f"[FFUF] Header fuzzing: {header_name} on {url}")
+            subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=120,
+            )
+
+            raw = self._parse_json_output(temp_output)
+            results = []
+            for item in raw:
+                item["fuzzed_header"] = header_name
+                item["fuzz_mode"] = "header_value"
+                results.append(item)
+            return results
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[FFUF] Header fuzz timed out for header={header_name}")
+            return []
+        except Exception as exc:
+            logger.error(f"[FFUF] Header fuzz error for header={header_name}: {exc!r}")
+            return []
+        finally:
+            if os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except OSError:
+                    pass
+
+    def fuzz_header_names(
+        self,
+        url: str,
+        wordlist: Optional[str] = None,
+        threads: int = 20,
+        match_codes: str = "200,204,301,302,401,403",
+        proxy: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fuzz header names — inject FUZZ as the header name with a fixed value of '1'.
+        Useful for discovering hidden/undocumented headers that change behavior.
+        """
+        if not self.is_available():
+            return []
+
+        _temp_wl = None
+        if not wordlist or not os.path.isfile(wordlist):
+            fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_hdrname_")
+            with os.fdopen(fd, "w") as fh:
+                fh.write("\n".join(self._SECURITY_HEADERS))
+            wordlist = _temp_wl
+
+        fd2, temp_output = tempfile.mkstemp(suffix=".json")
+        os.close(fd2)
+
+        try:
+            cmd = [self.binary,
+                   "-u", url,
+                   "-w", wordlist,
+                   "-H", "FUZZ: 1",
+                   "-o", temp_output,
+                   "-of", "json",
+                   "-t", str(threads),
+                   "-mc", match_codes,
+                   "-silent"]
+
+            if proxy:
+                cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
+
+            logger.debug(f"[FFUF] Header name fuzzing on {url}")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=False, timeout=120)
+
+            raw = self._parse_json_output(temp_output)
+            for item in raw:
+                item["fuzz_mode"] = "header_name"
+            return raw
+
+        except Exception as exc:
+            logger.error(f"[FFUF] Header name fuzz error: {exc!r}")
+            return []
+        finally:
+            if _temp_wl and os.path.exists(_temp_wl):
+                try:
+                    os.remove(_temp_wl)
+                except OSError:
+                    pass
+            if os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except OSError:
+                    pass
+
 
 # ============================================================================
 # SECTION 2: Feroxbuster (merged from feroxbuster.py)

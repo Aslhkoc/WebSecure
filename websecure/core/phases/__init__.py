@@ -3033,10 +3033,21 @@ def run_ffuf_scan(ctx) -> None:
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
-        # --- API endpoint discovery (if curated api list available) ---
+        # --- API endpoint discovery (curated api list OR bundled api_paths.txt) ---
         curated_api = curated.get("api", [])
-        if curated_api:
-            api_findings = wrapper.run_scan(url, wordlist=curated_api[0], custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
+        _bundled_api_wl = None
+        if not curated_api:
+            # Fall back to bundled api_paths.txt
+            _api_wl_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", "wordlists", "api_paths.txt"
+            )
+            _api_wl_path = os.path.normpath(_api_wl_path)
+            if os.path.isfile(_api_wl_path):
+                _bundled_api_wl = _api_wl_path
+        api_wl = (curated_api[0] if curated_api else _bundled_api_wl)
+        if api_wl:
+            _logger.info(f"[FFUF] API endpoint scan using: {api_wl}")
+            api_findings = wrapper.run_scan(url, wordlist=api_wl, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
             for f in api_findings:
                 add_result("discovery", {"tool": "ffuf", "category": "api", **f})
 
@@ -3067,7 +3078,39 @@ def run_ffuf_scan(ctx) -> None:
         except ImportError:
             for f in ext_findings:
                 add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
-            
+
+        # --- Header fuzzing: IP spoofing / auth bypass / WAF bypass ---
+        _hdr_fuzz_enabled = _get_config(ctx, "offensive.ffuf.header_fuzzing", True)
+        if _hdr_fuzz_enabled:
+            try:
+                hdr_findings = wrapper.fuzz_headers(
+                    url=url,
+                    proxy=proxy,
+                    threads=min(int(_ffuf_profile.get("threads", 20)), 20),
+                )
+                for hf in hdr_findings:
+                    hdr_name = hf.get("fuzzed_header", "unknown")
+                    hdr_val = hf.get("input", "")
+                    hdr_status = hf.get("status", 0)
+                    add_result("offensive", {
+                        "type": "Header Fuzzing — Potential Auth/IP Bypass",
+                        "severity": "Medium",
+                        "url": url,
+                        "tool": "ffuf",
+                        "fuzz_mode": "header_value",
+                        "fuzzed_header": hdr_name,
+                        "fuzzed_value": hdr_val,
+                        "status": hdr_status,
+                        "message": (
+                            f"Header '{hdr_name}: {hdr_val}' produced HTTP {hdr_status} — "
+                            "may indicate auth bypass or IP spoofing vector"
+                        ),
+                    })
+                if hdr_findings:
+                    _logger.info(f"[FFUF] Header fuzzing: {len(hdr_findings)} interesting responses")
+            except Exception as _hdr_exc:
+                _logger.debug(f"[FFUF] Header fuzzing skipped: {_hdr_exc!r}")
+
     finally:
         # Cleanup
         if os.path.exists(merged_wl_path):
@@ -3156,9 +3199,21 @@ def run_nuclei_scan(ctx) -> None:
     rate_limit = int(_get_config(ctx, "offensive.nuclei.rate_limit", 150))
     severity = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
     extra_tags = _get_config(ctx, "offensive.nuclei.extra_tags", "")
+    auto_update = bool(_get_config(ctx, "offensive.nuclei.auto_update_templates", True))
     tags = None
     if extra_tags:
         tags = extra_tags
+
+    # Auto-update templates if stale (controlled via config)
+    if auto_update:
+        _logger.info("[Nuclei] Checking template freshness...")
+        try:
+            updated = wrapper.update_templates(force=False, timeout=60)
+            if updated:
+                ver = wrapper.get_template_version()
+                _logger.info(f"[Nuclei] Templates ready: {ver or 'unknown version'}")
+        except Exception as _nu_exc:
+            _logger.debug(f"[Nuclei] Template update check failed: {_nu_exc!r}")
 
     _logger.info(f"[Nuclei] Starting scan on {url} (tech: {tech_stack or 'auto'})")
 
@@ -3171,6 +3226,7 @@ def run_nuclei_scan(ctx) -> None:
         proxy=proxy,
         tech_stack=tech_stack,
         profile_cfg=_nuclei_profile,
+        auto_update=False,  # Already handled above
     )
 
     for finding in findings:
