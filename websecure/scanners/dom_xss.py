@@ -27,14 +27,35 @@ except ImportError:
 
 _DOM_SINK_PATTERNS = [
     "document.write",
+    "document.writeln",
     "innerHTML",
     "outerHTML",
+    "insertAdjacentHTML",
     "eval(",
+    "Function(",
     "setTimeout(",
     "setInterval(",
+    "setImmediate(",
     "location.href",
     "location.replace",
     "location.assign",
+    "location.search",
+    "location.hash",
+    "location.pathname",
+    "document.referrer",
+    "window.name",
+    "document.URL",
+    "document.documentURI",
+    "document.baseURI",
+    "document.cookie",
+    "localStorage.getItem",
+    "sessionStorage.getItem",
+    "postMessage",
+    "jQuery.html(",
+    "$(", ".html(", ".append(", ".prepend(",
+    "angular.element",
+    "__proto__",
+    "prototype[",
 ]
 
 # DOM-specific canary payloads (used when get_payloads returns nothing)
@@ -44,7 +65,13 @@ _DOM_PAYLOADS_FALLBACK = [
     "javascript:console.error('DOMXSS_{CANARY}')",
     "'-console.error('DOMXSS_{CANARY}')-'",
     "\"><script>console.error('DOMXSS_{CANARY}')</script>",
-    "{{CANARY}}",  # Angular/Vue template injection
+    "{{constructor.constructor('console.error(\"DOMXSS_{CANARY}\")')()}}",   # Angular
+    "${console.error('DOMXSS_{CANARY}')}",                                   # Template literal
+    "</script><script>console.error('DOMXSS_{CANARY}')</script>",
+    "'><img src=x onerror=console.error('DOMXSS_{CANARY}')>",
+    "<details open ontoggle=console.error('DOMXSS_{CANARY}')>",
+    "<input autofocus onfocus=console.error('DOMXSS_{CANARY}')>",
+    "DOMXSS_{CANARY}",   # For checking reflection without execution context
 ]
 
 
@@ -110,8 +137,11 @@ class DOMXSSScanner(BaseScanner):
         params = parse_qsl(parsed.query)
 
         if not params:
-            # Try fragment-based injection
+            # No query params — test all alternative DOM sources
             await self._test_fragment(page, url)
+            await self._test_window_name(page, url)
+            await self._test_localstorage(page, url)
+            await self._test_postmessage(page, url)
             return
 
         for param_name, _ in params:
@@ -129,6 +159,10 @@ class DOMXSSScanner(BaseScanner):
             if found:
                 self._report(url, param_name, payload, found)
 
+        # Also test fragment and postMessage on parametrised pages
+        await self._test_fragment(page, url)
+        await self._test_postmessage(page, url)
+
     async def _test_fragment(self, page, url: str):
         """Test hash-based DOM XSS (location.hash sources)."""
         canary = _gen_canary()
@@ -137,6 +171,83 @@ class DOMXSSScanner(BaseScanner):
         found = await self._navigate_and_check(page, test_url, canary, "#fragment")
         if found:
             self._report(url, "#fragment", payload, found)
+
+    async def _test_window_name(self, page, url: str):
+        """Test window.name as a DOM XSS source."""
+        canary = _gen_canary()
+        payload = f"<img src=x onerror=console.error('DOMXSS_{canary}')>"
+        try:
+            # Set window.name to the payload, then navigate — window.name persists across navigations
+            await page.evaluate(f"window.name = {repr(payload)}")
+            found = await self._navigate_and_check(page, url, canary, "window.name")
+            if found:
+                self._report(url, "window.name", payload, found)
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSScanner] window.name test error on {url}: {exc!r}")
+
+    async def _test_localstorage(self, page, url: str):
+        """Test localStorage/sessionStorage as DOM XSS sources."""
+        canary = _gen_canary()
+        payload = f"<img src=x onerror=console.error('DOMXSS_{canary}')>"
+        storage_keys = ["xss", "data", "token", "user", "payload", "q", "search", "redirect"]
+        try:
+            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            for key in storage_keys:
+                await page.evaluate(f"""
+                    () => {{
+                        try {{
+                            localStorage.setItem({repr(key)}, {repr(payload)});
+                            sessionStorage.setItem({repr(key)}, {repr(payload)});
+                        }} catch(e) {{}}
+                    }}
+                """)
+            # Reload to trigger any code that reads storage on load
+            found = await self._navigate_and_check(page, url, canary, "localStorage/sessionStorage")
+            if found:
+                self._report(url, "localStorage/sessionStorage", payload, found)
+            # Clean up
+            await page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e) {} }")
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSScanner] localStorage test error on {url}: {exc!r}")
+
+    async def _test_postmessage(self, page, url: str):
+        """Test postMessage-based DOM XSS (event.data sink)."""
+        canary = _gen_canary()
+        payloads = [
+            f"<img src=x onerror=console.error('DOMXSS_{canary}')>",
+            f"javascript:console.error('DOMXSS_{canary}')",
+            f"DOMXSS_{canary}",
+        ]
+        try:
+            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            await page.wait_for_timeout(500)
+            for payload in payloads:
+                result = await page.evaluate(f"""
+                    async () => {{
+                        return new Promise(resolve => {{
+                            const canary = {repr(canary)};
+                            const msgs = [];
+                            const handler = e => {{
+                                const d = String(e.data);
+                                if (d.includes(canary)) msgs.push('postMessage reflected: ' + d.substring(0, 80));
+                            }};
+                            window.addEventListener('message', handler);
+                            // Try sending to various origins
+                            window.postMessage({repr(payload)}, '*');
+                            try {{ window.postMessage({{type: 'data', data: {repr(payload)}}}, '*'); }} catch(e) {{}}
+                            try {{ window.postMessage({{message: {repr(payload)}}}, '*'); }} catch(e) {{}}
+                            setTimeout(() => {{
+                                window.removeEventListener('message', handler);
+                                resolve(msgs.length > 0 ? msgs[0] : null);
+                            }}, 600);
+                        }});
+                    }}
+                """)
+                if result:
+                    self._report(url, "postMessage", payload, str(result))
+                    return
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSScanner] postMessage test error on {url}: {exc!r}")
 
     async def _navigate_and_check(self, page, url: str, canary: str, param: str) -> Optional[str]:
         """Navigate to URL and check for XSS execution. Returns evidence or None."""

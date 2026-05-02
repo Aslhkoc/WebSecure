@@ -98,7 +98,20 @@ class DNSBruteForce:
             except Exception as e:
                 logger.warning(f"[Subdomain] Wordlist yüklenemedi: {e}")
 
-        # SecLists otomatik tespit
+        # WebSecure bundled subdomains.txt — packaged with the tool
+        _here = os.path.dirname(__file__)
+        bundled = os.path.normpath(os.path.join(_here, "..", "wordlists", "subdomains.txt"))
+        if os.path.isfile(bundled):
+            try:
+                with open(bundled, encoding="utf-8", errors="ignore") as f:
+                    words = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                if words:
+                    logger.info(f"[Subdomain] Bundled subdomains.txt yüklendi: {len(words)} kelime")
+                    return words
+            except Exception as exc:
+                logger.debug(f"[Subdomain] subdomains.txt okunamadı: {exc!r}")
+
+        # SecLists otomatik tespit (priority over built-in if available)
         seclists_candidates = [
             "/usr/share/seclists/Discovery/DNS/subdomains-top1million-20000.txt",
             "/usr/share/SecLists/Discovery/DNS/subdomains-top1million-20000.txt",

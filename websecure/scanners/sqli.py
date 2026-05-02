@@ -101,7 +101,50 @@ class SQLInjectionScanner(BaseScanner):
 
     def _is_time_payload(self, payload: str) -> bool:
         p = payload.upper()
-        return any(kw in p for kw in ("SLEEP", "WAITFOR", "PG_SLEEP"))
+        return any(kw in p for kw in ("SLEEP", "WAITFOR", "PG_SLEEP", "DBMS_PIPE"))
+
+    def _is_union_payload(self, payload: str) -> bool:
+        p = payload.upper()
+        return "UNION" in p and "SELECT" in p
+
+    # Union-based: responses that echo column values from UNION SELECT
+    _UNION_MARKERS = [
+        "wsunion1337",
+        "WSUNION_MARKER",
+        "@@version",
+        "user()",
+        "database()",
+    ]
+
+    # Max columns to try for UNION-based probing
+    _UNION_MAX_COLS = 10
+
+    def _try_union_based(self, url: str, param: str) -> Optional[Tuple[str, str]]:
+        """
+        Attempt UNION-based SQLi by probing column counts 1-N.
+        Returns (payload, evidence) if a successful UNION injection is detected.
+        """
+        marker = "wsunion1337"
+        for cols in range(1, self._UNION_MAX_COLS + 1):
+            # Build NULL-padded union select with our marker in pos 1
+            null_cols = ["NULL"] * cols
+            null_cols[0] = f"'{marker}'"
+            union_str = ",".join(null_cols)
+            for quote in ("'", '"', ""):
+                payload = f"{quote} UNION SELECT {union_str}-- -"
+                test_url = self.inject_param(url, param, payload)
+                try:
+                    resp = self.session.get(test_url, timeout=10)
+                    if marker in (resp.text or ""):
+                        evidence = (
+                            f"Union-based: marker '{marker}' reflected in response "
+                            f"with {cols}-column UNION SELECT"
+                        )
+                        return payload, evidence
+                except _requests.exceptions.RequestException as exc:
+                    logger.debug(f"[SQLi] Union probe failed for cols={cols}: {exc!r}")
+                    continue
+        return None
 
     # Boolean-blind payloads: (true_payload, false_payload)
     _BOOL_PAIRS: List[Tuple[str, str]] = [
@@ -181,6 +224,20 @@ class SQLInjectionScanner(BaseScanner):
                 url, param_name, baseline_errors, time_threshold
             )
             if found:
+                break
+
+            # Union-based detection
+            union_result = self._try_union_based(url, param_name)
+            if union_result:
+                payload, evidence = union_result
+                self.report_finding(
+                    vuln_type="SQL Injection (Union-Based)",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity="Critical",
+                    evidence=evidence,
+                )
                 break
 
             # Boolean-blind fallback
