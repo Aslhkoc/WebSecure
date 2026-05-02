@@ -120,6 +120,9 @@ class ScanCircuitBreaker:
         self._opened_at: Optional[float] = None
         self._open_reason: str = ""
 
+        # Trip history — each OPEN transition is recorded here for reporting
+        self._trip_log: list[dict] = []
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -214,6 +217,11 @@ class ScanCircuitBreaker:
             if self._state != CBState.CLOSED:
                 self._transition(CBState.CLOSED, "manual reset after identity rotation")
 
+    def get_trip_log(self) -> list[dict]:
+        """Return all OPEN-state trip events recorded during this scan."""
+        with self._lock:
+            return list(self._trip_log)
+
     def status(self) -> dict:
         """Return a diagnostic snapshot (safe to call anytime)."""
         with self._lock:
@@ -273,10 +281,32 @@ class ScanCircuitBreaker:
             self._opened_at        = time.time()
             self._open_reason      = reason
             self._half_open_probes = 0
+            trip_event = {
+                "ts": self._opened_at,
+                "from_state": old.value,
+                "reason": reason,
+            }
+            self._trip_log.append(trip_event)
             _logger.warning(
                 "[CircuitBreaker] %s → OPEN: %s", old.value.upper(), reason
             )
             print(f"[CircuitBreaker] ⛔ OPEN — {reason}")
+            # Emit to global reporting without importing reporting (avoids circular import)
+            try:
+                from websecure.core.reporting import add_result as _ar
+                _ar("circuit_breaker", {
+                    "type": "circuit_breaker_trip",
+                    "severity": "Medium",
+                    "reason": reason,
+                    "from_state": old.value,
+                    "detail": (
+                        "Tarama throttle edildi veya bloklandı. "
+                        "WAF/rate-limit aktif olabilir. "
+                        f"Recovery timeout: {self._cfg.recovery_timeout}s"
+                    ),
+                })
+            except Exception:
+                pass  # reporting unavailable — trip_log still captures the event
 
         elif new_state == CBState.HALF_OPEN:
             self._half_open_probes = 0
@@ -349,3 +379,8 @@ def cb_reset() -> None:
 def cb_status() -> dict:
     """Return a diagnostic snapshot of the global circuit breaker."""
     return get_circuit_breaker().status()
+
+
+def cb_get_trip_log() -> list[dict]:
+    """Return all OPEN-state trip events for the current scan run."""
+    return get_circuit_breaker().get_trip_log()

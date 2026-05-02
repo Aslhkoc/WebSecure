@@ -30,33 +30,48 @@ def should_fail_ci(cfg: dict, results: dict) -> bool:
     normalized_fail = [s.strip().lower() for s in fail_on if isinstance(s, str)]
     if not normalized_fail:
         return False
-    counts = {}
+    # severity_aliases: map any TR/EN variant to canonical lowercase English
+    _SEV_ALIAS: dict[str, str] = {
+        "kritik": "critical", "critical": "critical", "crit": "critical", "severe": "critical",
+        "yüksek": "high", "yuksek": "high", "high": "high",
+        "orta": "medium", "medium": "medium", "med": "medium",
+        "düşük": "low", "dusuk": "low", "low": "low",
+        "bilgi": "info", "info": "info", "information": "info",
+    }
+
+    counts: dict[str, int] = {}
     if "summary" in results and "counts" in results["summary"]:
-        counts = results["summary"]["counts"]
+        raw = results["summary"]["counts"]
+        # Normalize whatever the summary stored
+        for k, v in (raw or {}).items():
+            canonical = _SEV_ALIAS.get(str(k).strip().lower(), "info")
+            counts[canonical] = counts.get(canonical, 0) + int(v or 0)
     elif "findings" in results:
-        counts = {"kritik": 0, "yüksek": 0, "orta": 0, "düşük": 0, "bilgi": 0}
         _findings = results["findings"]
-        _findings_iter = _findings.items() if isinstance(_findings, dict) else enumerate(_findings) if isinstance(_findings, list) else []
-        for cat, items in _findings_iter:
+        _findings_iter = (
+            _findings.items() if isinstance(_findings, dict)
+            else enumerate(_findings) if isinstance(_findings, list)
+            else []
+        )
+        for _cat, items in _findings_iter:
             if not isinstance(items, (list, tuple)):
                 items = [items]
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                s = str(item.get("severity") or "Bilgi").lower()
-                if s in ["critical", "severe"]: s = "kritik"
-                elif s in ["high"]: s = "yüksek"
-                elif s in ["medium"]: s = "orta"
-                elif s in ["low"]: s = "düşük"
-                elif s in ["info"]: s = "bilgi"
-                counts[s] = counts.get(s, 0) + 1
+                raw_s = str(item.get("severity") or "info").strip().lower()
+                canonical = _SEV_ALIAS.get(raw_s, "info")
+                counts[canonical] = counts.get(canonical, 0) + 1
+
     for severity, count in counts.items():
         if count > 0:
             if "any" in normalized_fail:
-                _ci_logger.error(f"CI Failure: Found {count} issues (Rule: 'any')")
+                _ci_logger.error(f"CI Failure: {count} bulgu tespit edildi (kural: 'any')")
                 return True
-            if severity.lower() in normalized_fail:
-                _ci_logger.error(f"CI Failure: Found {count} issues with severity '{severity}'")
+            if severity in normalized_fail:
+                _ci_logger.error(
+                    f"CI Failure: {count} bulgu — severity '{severity}' eşiği aşıldı"
+                )
                 return True
     return False
 
@@ -519,6 +534,15 @@ def add_result(bucket: str, item: Any) -> None:
     with _lock:
         it = _normalize_item(item)
         it.setdefault("ts", _now_iso())
+
+        # Normalize severity to canonical English for every stored finding.
+        # Scanners may emit "High", "Yüksek", "high", "CRITICAL", etc.
+        # Storing canonical English ensures sorting, CI gates and CVSS scoring
+        # all use the same key space without any per-caller conversion.
+        raw_sev = it.get("severity")
+        if raw_sev is not None:
+            it["severity"] = _norm_sev_tr(raw_sev)  # returns "Critical"/"High"/…
+
         enforce = globals().get("_ENFORCE_REDACT", True)
         # [WS3] Bypass redaction for explicit 'sessions' bucket if user requested visibility
         if bucket == "sessions":
@@ -828,10 +852,10 @@ def _short_poc(s: str) -> str:
 def _norm_sev_tr(s: str | None) -> str:
     """Normalize severity to English canonical. Accepts English and Turkish inputs."""
     s = (s or "Info").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "Critical"
-    if s in ("yüksek", "high", "severe"): return "High"
+    if s in ("kritik", "critical", "crit", "severe"): return "Critical"
+    if s in ("yüksek", "yuksek", "high"): return "High"
     if s in ("orta", "medium", "med"): return "Medium"
-    if s in ("düşük", "low"): return "Low"
+    if s in ("düşük", "dusuk", "low"): return "Low"
     return "Info"
 
 
@@ -1977,42 +2001,7 @@ def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
 
 
 # ===================== CI Yardımcıları (public) =====================
-def should_fail_ci(cfg: Dict, results: Dict) -> bool:
-    def _rank(s: str) -> int:
-        s = (s or "").lower()
-        order = {
-            "info": 0, "informational": 0,
-            "low": 1, "medium": 2, "high": 3, "critical": 4,
-            "bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4,
-        }
-        return order.get(s, 0)
-
-    ci = (cfg.get("ci") or {})
-    fail_on = (ci.get("fail_on") or {})
-    sev_min = (fail_on.get("severity_min") or "Medium").lower()
-    new_only = bool(fail_on.get("new_findings", False))
-    items = []
-    if isinstance(results, dict) and "final" in results and isinstance(results["final"], list):
-        items = list(results["final"])
-    else:
-        for bucket, arr in (results or {}).items():
-            for it in arr or []:
-                items.append(it)
-    if new_only:
-        keyed_new = set()
-        for it in items:
-            if it.get("_is_new"):
-                key = f"{it.get('type')}|{it.get('url')}|{it.get('param')}|{it.get('location')}"
-                keyed_new.add(key)
-
-        def _is_new(it: Dict) -> bool:
-            key = f"{it.get('type')}|{it.get('url')}|{it.get('param')}|{it.get('location')}"
-            return key in keyed_new
-
-        items = [it for it in items if _is_new(it)]
-    rank_min = _rank(sev_min)
-    viol = [it for it in items if _rank((it.get("severity") or "Info")) >= rank_min]
-    return bool(viol)
+# should_fail_ci is defined at the top of this module (canonical, TR+EN aware).
 
 
 def summarize_by_severity(results: Dict) -> Dict[str, int]:
@@ -2941,7 +2930,7 @@ def render_e_phase_markdown_report(results: Dict) -> str:
 
     # ===== Teknik Detay (Her bulgu) =====
     lines.append("## Teknik Detay")
-    rank_order = {"Kritik": 4, "Yüksek": 3, "Orta": 2, "Düşük": 1, "Bilgi": 0}
+    rank_order = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
     items_sorted = sorted(items, key=lambda i: -rank_order.get(_norm_sev_tr(i.get("severity")), 0))
     for idx, it in enumerate(items_sorted, 1):
         sev = _norm_sev_en(it.get("severity"))

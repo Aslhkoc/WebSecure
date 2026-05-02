@@ -49,73 +49,19 @@ import shutil
 import subprocess
 
 
-def _ensure_playwright_chromium() -> bool:
-    """
-    Playwright'ın kurulu ve chromium binary'sinin mevcut olduğunu kontrol eder.
-    Eksikse otomatik olarak 'playwright install chromium' çalıştırır.
-    Başarısız olursa sadece uyarı verir, scan devam eder.
-    """
-    # 1. playwright paketi kurulu mu?
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("[!] Playwright kurulu değil. Kuruluyor: pip install playwright")
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "playwright"],
-                           check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            print(f"[!] playwright kurulumu başarısız: {e}. XSS DOM doğrulaması devre dışı.")
-            return False
-
-    # 2. chromium binary var mı?
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as pw:
-            # launch ile kontrol — hata alırsa binary yok demektir
-            browser = pw.chromium.launch(headless=True)
-            browser.close()
-        return True
-    except Exception:
-        # Binary yok → otomatik kur
-        print("[*] Playwright chromium binary bulunamadı. Kuruluyor...")
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                check=True, capture_output=True, text=True, timeout=300
-            )
-            print("[+] Playwright chromium başarıyla kuruldu.")
-            return True
-        except Exception as exc:
-            print(f"[!] playwright install chromium başarısız: {exc}")
-            print("[!] XSS DOM doğrulaması bu taramada devre dışı kalacak.")
-            return False
-
-
-def _ensure_curl_cffi() -> bool:
-    """curl_cffi kurulu değilse otomatik kurar (JA3/JA4 TLS taklidi için)."""
-    try:
-        from curl_cffi import requests as _  # noqa
-        return True
-    except ImportError:
-        print("[*] curl_cffi kuruluyor (TLS parmak izi gizleme)...")
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "curl_cffi"],
-                check=True, capture_output=True, timeout=120
-            )
-            print("[+] curl_cffi kuruldu. TLS parmak izi aktif.")
-            return True
-        except Exception as exc:
-            print(f"[!] curl_cffi kurulamadi: {exc}")
-            return False
-
-
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
 import zipfile as _zipfile
 import urllib.request as _urlreq
 import threading as _threading
+
+# Startup dependency helpers — implementation lives in core/startup.py
+from websecure.core.startup import (
+    ensure_playwright_chromium as _ensure_playwright_chromium,
+    ensure_curl_cffi           as _ensure_curl_cffi,
+    ensure_nuclei              as _ensure_nuclei,
+)
 
 
 def _ensure_interactsh(cfg: dict) -> bool:
@@ -226,54 +172,6 @@ def _ensure_interactsh(cfg: dict) -> bool:
         return False
 
 
-def _ensure_nuclei(cfg: dict) -> bool:
-    """
-    tools/nuclei/nuclei.exe varsa True döner.
-    Yoksa GitHub releases'tan en güncel Windows amd64 sürümünü indirir.
-    """
-    root = _P(__file__).resolve().parent.parent
-    candidates = [
-        root / "tools" / "nuclei" / "nuclei.exe",
-        root / "tools" / "nuclei.exe",
-    ]
-    for c in candidates:
-        if c.exists():
-            return True
-
-    print("[*] Nuclei bulunamadi. GitHub'dan indiriliyor...")
-    try:
-        import json as _json
-        api_url = "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
-        with _urlreq.urlopen(api_url, timeout=15) as r:
-            data = _json.loads(r.read())
-        asset_url = next(
-            (a["browser_download_url"] for a in data.get("assets", [])
-             if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
-             and a["name"].endswith(".zip")),
-            None
-        )
-        if not asset_url:
-            print("[!] Nuclei Windows binary bulunamadi.")
-            return False
-
-        dest_dir = root / "tools" / "nuclei"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        zip_path = dest_dir / "nuclei.zip"
-        print(f"[*] Nuclei indiriliyor: {asset_url.split('/')[-1]}")
-        _urlreq.urlretrieve(asset_url, zip_path)
-
-        with _zipfile.ZipFile(zip_path, "r") as zf:
-            for member in zf.namelist():
-                if member.endswith(".exe") and "nuclei" in member.lower():
-                    with zf.open(member) as src, open(dest_dir / "nuclei.exe", "wb") as dst:
-                        dst.write(src.read())
-                    break
-        zip_path.unlink(missing_ok=True)
-        print(f"[+] Nuclei kuruldu: {dest_dir / 'nuclei.exe'}")
-        return True
-    except Exception as exc:
-        print(f"[!] Nuclei indirme hatasi: {exc}")
-        return False
 from websecure.core.utils import ensure_wordlists as _ensure_wl
 from concurrent.futures import ThreadPoolExecutor
 import time as _t
@@ -3046,9 +2944,7 @@ if __name__ == "__main__":
 
     # Wordlists sync removed per user request
     try:
-        _ret = main()
-        if inspect.iscoroutine(_ret):
-            asyncio.run(_ret)
+        main()
     except KeyboardInterrupt:
         print("\n[!] Kullanıcı tarafından iptal edildi (Ctrl+C).")
     except Exception as e:
