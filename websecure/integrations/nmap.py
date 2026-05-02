@@ -243,11 +243,16 @@ class NmapWrapper:
         rc1, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 180))
 
         # Açık portları ayıkla
-        open_ports = self._extract_open_ports(xml1)
+        open_ports = self._extract_open_ports(xml1) if xml1 else []
         try:
-            os.remove(xml1)
+            if xml1:
+                os.remove(xml1)
         except Exception:
             pass
+
+        if rc1 not in (0, 1) and not open_ports:
+            print(f"\033[33m[Nmap Faz-1]\033[0m Nmap hata kodu {rc1} — çıktı yok.")
+            return []
 
         if not open_ports:
             print(f"\033[33m[Nmap Faz-1]\033[0m {target} üzerinde açık port bulunamadı.")
@@ -283,7 +288,9 @@ class NmapWrapper:
         self._inject_proxy(phase2_args, proxy)
 
         rc2, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
-        results = NmapParser.parse_xml(xml2)
+        if rc2 not in (0, 1):
+            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}")
+        results = NmapParser.parse_xml(xml2) if xml2 else []
         try:
             os.remove(xml2)
         except Exception:

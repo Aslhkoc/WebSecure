@@ -1613,7 +1613,7 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         host = urlparse(str(meta_target)).hostname
         if not host:
             tls = results.get("tls_summary") or []
-            if isinstance(tls, list) and tls:
+            if isinstance(tls, list) and tls and isinstance(tls[0], dict):
                 host = tls[0].get("host")
         safe = _safe_host_for_filename("https://" + (host or "report"))
         report_path = os.path.join(out_dir, f"{safe}_report.md")
@@ -2969,8 +2969,9 @@ def render_e_phase_markdown_report(results: Dict) -> str:
         lines.append("```")
         lines.append("")
         lines.append("**Yeniden Üretim Adımları**")
-        for s in it.get("repro_steps") or []:
-            lines.append(f"- {s}")
+        for s in (it.get("repro_steps") or []):
+            if isinstance(s, str):
+                lines.append(f"- {s}")
         lines.append("")
         lines.append("**Düzeltme Önerisi**")
         lines.append(str(it.get("remediation") or "—"))

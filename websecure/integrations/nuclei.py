@@ -155,9 +155,13 @@ class NucleiWrapper:
                 check=False,
             )
 
-            if proc.returncode not in (0, 1):  # 1 = findings found
+            # 0 = no findings, 1 = findings found, diğerleri hata
+            if proc.returncode not in (0, 1):
                 stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:500]
-                logger.warning(f"[Nuclei] Exit {proc.returncode}: {stderr_out}")
+                logger.warning(f"[Nuclei] Exit kodu {proc.returncode} — hata olabilir: {stderr_out}")
+                if proc.returncode >= 2 and not stderr_out:
+                    # Binary crash veya permission hatası — çıktı bekleme
+                    return []
 
             return self._parse_output(output_file)
 

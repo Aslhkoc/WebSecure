@@ -140,6 +140,9 @@ class SQLMapWrapper:
             _level = _p.get("level", level)
             _prof_extra = list(_p.get("extra_args", []))
 
+            if not self.binary:
+                logger.warning("[SQLMap] Binary path boş — atlanıyor")
+                return []
             if self.binary.endswith(".py"):
                 import sys
                 cmd = [sys.executable, self.binary]

@@ -239,6 +239,7 @@ def _smart_request(self, method, url, **kwargs):
     # --- IMMORTAL LOOP: Auto-Heal & Retry ---
     max_retries = 3
     attempt     = 0
+    resp        = None
 
     while attempt <= max_retries:
         attempt += 1
