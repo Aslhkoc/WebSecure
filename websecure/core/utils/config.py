@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 # ========================== Config Loading ==========================
+_SUPPORTED_SCHEMA_VERSION = (1, 0)
+
+
 def load_config(path: str = "config.json") -> Dict[str, Any]:
     p = Path(path)
     cfg = {}
@@ -14,10 +17,34 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
                 cfg = json.load(f)
         except Exception as e:
             logging.error(f"Failed to load config from {path}: {e}")
-            
-    # Normalize/Validate
+
+    _validate_version(cfg, path)
     _apply_defaults(cfg)
     return cfg
+
+
+def _validate_version(cfg: Dict[str, Any], path: str) -> None:
+    ver = cfg.get("version")
+    if ver is None:
+        logging.warning(
+            "[Config] 'version' alanı bulunamadı (%s). "
+            "config.json'a \"version\": \"1.0\" ekleyin.",
+            path,
+        )
+        return
+    try:
+        parts = [int(x) for x in str(ver).split(".", 2)[:2]]
+        if tuple(parts[:2]) > _SUPPORTED_SCHEMA_VERSION:
+            logging.warning(
+                "[Config] Config versiyonu (%s) bu WebSecure sürümünün desteklediğinden "
+                "(%s) yüksek. Bilinmeyen alanlar görmezden gelinecek.",
+                ver,
+                ".".join(str(x) for x in _SUPPORTED_SCHEMA_VERSION),
+            )
+        else:
+            logging.debug("[Config] Version %s OK.", ver)
+    except (ValueError, TypeError):
+        logging.warning("[Config] Geçersiz version formatı: %r (beklenen: '1.0')", ver)
 
 def _apply_defaults(cfg: Dict[str, Any]) -> None:
     # HTTP Defaults

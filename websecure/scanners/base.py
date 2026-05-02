@@ -38,8 +38,19 @@ class BaseScanner:
         self.debug = debug
         self.logger = logging.getLogger(f"websecure.scanners.{self.name}")
         self._results_lock = threading.Lock()
+        self._baseline_cache: Dict[str, Optional[_requests.Response]] = {}
+        self._baseline_cache_lock = threading.Lock()
+        self._max_workers = self._resolve_max_workers()
         if debug:
             self.logger.setLevel(logging.DEBUG)
+
+    def _resolve_max_workers(self) -> int:
+        try:
+            from websecure.core.payloads import _load_cfg
+            cfg = _load_cfg()
+            return int((cfg.get("scan") or {}).get("max_workers", 8))
+        except Exception:
+            return 8
 
     # ------------------------------------------------------------------
     # Core result methods
@@ -152,9 +163,11 @@ class BaseScanner:
         probe_fn: Callable[[str], Optional[Any]],
         payloads: List[str],
         *,
-        max_workers: int = 8,
+        max_workers: int = 0,
         stop_on_first: bool = True,
     ) -> List[Any]:
+        if max_workers <= 0:
+            max_workers = self._max_workers
         """
         Execute *probe_fn(payload)* for each payload in a thread pool.
         Returns a list of truthy results from probe_fn.
@@ -208,26 +221,29 @@ class BaseScanner:
         """
         Fetch a baseline response with explicit network error handling.
         Returns the Response on success, None on failure (always logs the failure).
-
-        Replaces the 5 near-identical try/except baseline blocks across scanners.
+        Responses are cached per (method, url) to avoid duplicate requests across scanners.
         """
+        cache_key = f"{method}:{url}"
+        with self._baseline_cache_lock:
+            if cache_key in self._baseline_cache:
+                return self._baseline_cache[cache_key]
+
+        resp: Optional[_requests.Response] = None
         try:
             if method == "POST":
-                return self.session.post(url, data=data or {}, timeout=timeout)
-            return self.session.get(url, timeout=timeout)
+                resp = self.session.post(url, data=data or {}, timeout=timeout)
+            else:
+                resp = self.session.get(url, timeout=timeout)
         except _requests.exceptions.Timeout as exc:
-            self.logger.warning(
-                f"[{self.name}] Baseline timed out for {url}: {exc!r}"
-            )
+            self.logger.warning(f"[{self.name}] Baseline timed out for {url}: {exc!r}")
         except _requests.exceptions.ConnectionError as exc:
-            self.logger.warning(
-                f"[{self.name}] Baseline connection error for {url}: {exc!r}"
-            )
+            self.logger.warning(f"[{self.name}] Baseline connection error for {url}: {exc!r}")
         except _requests.exceptions.RequestException as exc:
-            self.logger.warning(
-                f"[{self.name}] Baseline request failed for {url}: {exc!r}"
-            )
-        return None
+            self.logger.warning(f"[{self.name}] Baseline request failed for {url}: {exc!r}")
+
+        with self._baseline_cache_lock:
+            self._baseline_cache[cache_key] = resp
+        return resp
 
     # ------------------------------------------------------------------
     # Smart payload retrieval (unchanged)

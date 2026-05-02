@@ -95,7 +95,7 @@ class Mutator:
         return p
 
     @staticmethod
-    def mutate_sql(payload: str) -> list[str]:
+    def mutate_sql(payload: str, max_variants: int = 30) -> list[str]:
         """Generates evasive variants of a SQLi payload."""
         variants = set()
         
@@ -172,7 +172,7 @@ class Mutator:
                 result.append(v)
             except (UnicodeEncodeError, UnicodeDecodeError):
                 pass
-        return result
+        return result[:max_variants]
 
     @staticmethod
     def mutate_padding(payload: str) -> str:
@@ -186,10 +186,10 @@ class Mutator:
         return noise[:mid] + payload + noise[mid:]
 
     @staticmethod
-    def mutate_xss(payload: str) -> list[str]:
+    def mutate_xss(payload: str, max_variants: int = 30) -> list[str]:
         """Generates evasive variants of an XSS payload."""
         variants = set()
-        
+
         # 1. URL Encodings
         variants.add(urllib.parse.quote(payload))
         
@@ -232,8 +232,8 @@ class Mutator:
 
         # [NIGHTMARE] Ultimate Session Hijacker (One-Shot)
         variants.add(Mutator._generate_nightmare_js())
-            
-        return list(variants)
+
+        return list(variants)[:max_variants]
 
     @staticmethod
     def _generate_nightmare_js() -> str:
@@ -274,7 +274,7 @@ class Mutator:
         return list(variants)
 
     @staticmethod
-    def mutate_rce(payload: str) -> list[str]:
+    def mutate_rce(payload: str, max_variants: int = 30) -> list[str]:
         """
         [WS3] VOLCANO v7.0 RCE Obfuscation Layer.
         Wraps payloads in zlib/base64 decoders for Python/PHP/Bash.
@@ -308,11 +308,11 @@ class Mutator:
 
         # [WS3] Common Polymorphs (HTML, Base32, BZ2, etc)
         variants.update(Mutator._common_polymorph(payload))
-            
-        return list(variants)
+
+        return list(variants)[:max_variants]
 
     @staticmethod
-    def mutate_nosql(payload: str) -> list[str]:
+    def mutate_nosql(payload: str, max_variants: int = 30) -> list[str]:
         """
         Generates evasive variants for NoSQL Injection (MongoDB/Generic).
         """
@@ -345,5 +345,5 @@ class Mutator:
             
         # [WS3] Common Polymorphs
         variants.update(Mutator._common_polymorph(payload))
-        
-        return list(variants)
+
+        return list(variants)[:max_variants]

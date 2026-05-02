@@ -1512,6 +1512,31 @@ def _normalize_webdriver_cfg(cfg: dict) -> dict:
     return out
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """CLI argüman tanımları — main()'den bağımsız, test edilebilir."""
+    p = argparse.ArgumentParser(description="WebSecure hedef seçimi")
+    p.add_argument("--waf", action="store_true", help="WAF bypass modunu etkinleştir")
+    p.add_argument("--fuzz-ml", action="store_true", help="Heuristik tabanlı anomali tespiti")
+    p.add_argument("--target", "-t", help="Hedef domain veya URL")
+    p.add_argument("--attack", action="store_true", help="Offensive D-fazını etkinleştir (güvenli mod)")
+    p.add_argument("--attack-unsafe", action="store_true",
+                   help="Offensive fazı güvenli olmayan modda çalıştır (dikkat!)")
+    p.add_argument("--verify-only", action="store_true", help="Yalnız bulguları doğrula & skorla")
+    p.add_argument("--oast-domain", help="OAST için kök domain (DNS tabanlı callback)")
+    p.add_argument("--oast-url", help="OAST HTTP callback tabanı (örn. https://oast.example)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Etkileşimli soruları atla ve sadece yapılandırmayı doğrula")
+    p.add_argument("--batch", action="store_true",
+                   help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
+    p.add_argument("--profile", help="Tarama profili (aggressive, stealth)")
+    p.add_argument("--debug", action="store_true",
+                   help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
+    p.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
+    p.add_argument("--headless", action="store_true", help="Tarayıcıyı GİZLE (Arka planda çalıştır)")
+    p.add_argument("--wizard", action="store_true", help="Kurulum sihirbazını çalıştır")
+    return p
+
+
 def main():
     print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
 
@@ -1672,23 +1697,7 @@ O====|_______________________________________________________>  1   1 0
     # Cleanup (Daemon threadler otomatik kapanır, manuel stop gerekmez)
 
     # CLI argümanları
-    parser = argparse.ArgumentParser(description="WebSecure hedef seçimi")
-    parser.add_argument("--waf", action="store_true", help="WAF bypass modunu etkinleştir")
-    parser.add_argument("--fuzz-ml", action="store_true", help="Heuristik tabanlı anomali tespiti")
-    parser.add_argument("--target", "-t", help="Hedef domain veya URL")
-    parser.add_argument("--attack", action="store_true", help="Offensive D-fazını etkinleştir (güvenli mod)")
-    parser.add_argument("--attack-unsafe", action="store_true",
-                        help="Offensive fazı güvenli olmayan modda çalıştır (dikkat!)")
-    parser.add_argument("--verify-only", action="store_true", help="Yalnız bulguları doğrula & skorla")
-    parser.add_argument("--oast-domain", help="OAST için kök domain (DNS tabanlı callback)")
-    parser.add_argument("--oast-url", help="OAST HTTP callback tabanı (örn. https://oast.example)")
-    parser.add_argument("--dry-run", action="store_true", help="Etkileşimli soruları atla ve sadece yapılandırmayı doğrula")
-    parser.add_argument("--batch", action="store_true", help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
-    parser.add_argument("--profile", help="Tarama profili (aggressive, stealth)")
-    parser.add_argument("--debug", action="store_true", help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
-    parser.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
-    parser.add_argument("--headless", action="store_true", help="Tarayıcıyı GİZLE (Arka planda çalıştır)")
-    args = parser.parse_args()
+    args = _build_arg_parser().parse_args()
 
     # --headless VARSA gizle, --visible VARSA göster (çakışırsa visible kazanır, yukarıda sys.argv ile işledik ama burada config'e basıyoruz)
     # _normalize_webdriver_cfg zaten sys.argv kontrolü yaptı ve config yüklendiğinde headless set edildi.

@@ -627,12 +627,32 @@ class OASTPollerThread:
     def _process_events(self, events) -> None:
         with self._lock:
             for event in (events if isinstance(events, list) else [events]):
-                ev_str = str(event)
                 self._callbacks_received.append(event)
                 for token, finding in self._token_map.items():
-                    if token in ev_str:
+                    matched = False
+                    if isinstance(event, dict):
+                        # Exact match on known token fields first (no false positives)
+                        ev_token = str(
+                            event.get("token")
+                            or event.get("unique-id")
+                            or event.get("unique_id")
+                            or ""
+                        )
+                        if ev_token and ev_token == token:
+                            matched = True
+                        if not matched:
+                            # Fallback: look inside raw request body using word-boundary check
+                            raw = str(event.get("raw-request") or event.get("request") or "")
+                            if raw and token in raw.split():
+                                matched = True
+                    else:
+                        # Non-dict event: require token as a standalone word to reduce collision risk
+                        ev_str = str(event)
+                        matched = token in ev_str.split()
+
+                    if matched:
                         finding["verified"] = True
-                        finding["oast_callback"] = ev_str[:200]
+                        finding["oast_callback"] = str(event)[:200]
                         finding["confidence"] = "high"
                         finding["verification_method"] = "oast_dns_http_callback"
                         _logger.info(f"[OAST] Verified finding via callback: token={token[:12]}")

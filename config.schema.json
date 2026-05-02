@@ -4,6 +4,50 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?$",
+      "description": "Config format version (e.g. '1.0'). Validated at startup."
+    },
+    "payloads": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "max_per_category": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum payloads loaded per category"
+        },
+        "dedup": {
+          "type": "boolean",
+          "description": "Deduplicate payloads before use"
+        },
+        "sync": {
+          "type": "boolean",
+          "description": "Git-sync external wordlist repos at startup"
+        },
+        "bundled": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "root": {"type": "string"},
+            "git":  {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "scan": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "max_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Thread pool size for parallel scanner probes"
+        }
+      }
+    },
     "target": {
       "type": "string",
       "minLength": 1

@@ -350,6 +350,17 @@ def get_payloads(
         return list(_PAYLOAD_CACHE[ck])
 
     items = load_external_payloads(category, marker=marker)
+
+    if not items:
+        items = get_builtin_payloads(category)
+        if not items:
+            _logger.warning(
+                "[payloads] '%s' kategorisi için ne harici wordlist ne de builtin payload "
+                "bulunamadı — scanner sıfır payload ile çalışacak. "
+                "websecure/wordlists/ dizinini ve config.payloads.bundled.root ayarını kontrol edin.",
+                category,
+            )
+
     items = filter_by_technology(items, category, tech_tags)
 
     _PAYLOAD_CACHE[ck] = list(items)
