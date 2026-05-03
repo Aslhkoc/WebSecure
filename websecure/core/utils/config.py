@@ -2,10 +2,98 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # ========================== Config Loading ==========================
 _SUPPORTED_SCHEMA_VERSION = (1, 0)
+
+try:
+    import jsonschema as _jsonschema
+    _JSONSCHEMA_AVAILABLE = True
+except ImportError:
+    _jsonschema = None  # type: ignore[assignment]
+    _JSONSCHEMA_AVAILABLE = False
+
+
+def validate_config(cfg: dict, schema_path: Optional[str] = None) -> List[str]:
+    """
+    Validate *cfg* against a JSON Schema (if jsonschema is installed and the
+    schema file exists) or fall back to manual type-checking of critical fields.
+
+    Returns a list of warning message strings (empty list means no issues).
+    Never raises — validation failures are always non-fatal.
+    """
+    warnings: List[str] = []
+
+    # ------------------------------------------------------------------ #
+    # Strategy 1: jsonschema + schema file                                 #
+    # ------------------------------------------------------------------ #
+    if _JSONSCHEMA_AVAILABLE:
+        # Locate the schema file
+        candidates: List[Path] = []
+        if schema_path:
+            candidates.append(Path(schema_path))
+        # Default: project root (two levels up from websecure/core/utils/)
+        candidates.append(Path(__file__).parent.parent.parent.parent / "config.schema.json")
+        candidates.append(Path(__file__).parent.parent.parent / "config.schema.json")
+
+        schema_file: Optional[Path] = next(
+            (c for c in candidates if c.exists()), None
+        )
+
+        if schema_file:
+            try:
+                with schema_file.open("r", encoding="utf-8") as fh:
+                    schema = json.load(fh)
+                validator = _jsonschema.Draft7Validator(schema)
+                for error in sorted(validator.iter_errors(cfg), key=lambda e: list(e.path)):
+                    msg = f"[Config] Schema validation warning at '{'.'.join(str(p) for p in error.path)}': {error.message}"
+                    warnings.append(msg)
+            except Exception as exc:
+                warnings.append(f"[Config] Could not run jsonschema validation: {exc}")
+        else:
+            # jsonschema available but no schema file — fall through to manual checks
+            warnings.extend(_manual_type_checks(cfg))
+    else:
+        # ------------------------------------------------------------------ #
+        # Strategy 2: manual type-checking of critical fields                 #
+        # ------------------------------------------------------------------ #
+        warnings.extend(_manual_type_checks(cfg))
+
+    return warnings
+
+
+def _manual_type_checks(cfg: dict) -> List[str]:
+    """Return warning strings for critical config fields that fail type constraints."""
+    issues: List[str] = []
+
+    # http.timeout_seconds must be int in 1..300
+    timeout = cfg.get("http", {}).get("timeout_seconds")
+    if timeout is not None:
+        if not isinstance(timeout, int) or not (1 <= timeout <= 300):
+            issues.append(
+                f"[Config] http.timeout_seconds must be an integer between 1 and 300 "
+                f"(got {timeout!r})"
+            )
+
+    # scan.max_workers must be int in 1..64
+    max_workers = cfg.get("scan", {}).get("max_workers")
+    if max_workers is not None:
+        if not isinstance(max_workers, int) or not (1 <= max_workers <= 64):
+            issues.append(
+                f"[Config] scan.max_workers must be an integer between 1 and 64 "
+                f"(got {max_workers!r})"
+            )
+
+    # oast.dns_domain if present must be a non-empty string
+    dns_domain = cfg.get("oast", {}).get("dns_domain")
+    if dns_domain is not None:
+        if not isinstance(dns_domain, str) or not dns_domain.strip():
+            issues.append(
+                f"[Config] oast.dns_domain must be a non-empty string (got {dns_domain!r})"
+            )
+
+    return issues
 
 
 def load_config(path: str = "config.json") -> Dict[str, Any]:
@@ -19,6 +107,11 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
             logging.error(f"Failed to load config from {path}: {e}")
 
     _validate_version(cfg, path)
+
+    # Run comprehensive validation; emit every warning found
+    for msg in validate_config(cfg):
+        logging.warning(msg)
+
     _apply_defaults(cfg)
     return cfg
 
