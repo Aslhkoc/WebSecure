@@ -547,10 +547,31 @@ def run_oast_on_target(
     found_tokens = {str(ev.get("token")): ev for ev in found}
     for att in attempted:
         tok = att["oast_token"]
-        if tok in found_tokens:
+        ev = found_tokens.get(tok)
+        if ev:
+            # Determine confidence based on how the token was matched
+            ev_token = str(
+                ev.get("token") or ev.get("unique-id") or ev.get("unique_id") or ""
+            )
+            if ev_token and ev_token == tok:
+                confidence: float = 1.0
+            else:
+                raw = str(ev.get("raw-request") or ev.get("request") or "")
+                confidence = 0.7 if (raw and tok in raw.split()) else 0.3
+            confidence_label = (
+                "Confirmed" if confidence >= 0.9
+                else "Probable" if confidence >= 0.6
+                else "Possible"
+            )
             results.append({
-                "type": "OAST", "severity": "Yüksek", "url": att["url"], "param": att["param"],
-                "injected": att["injected"], "details": found_tokens[tok]
+                "type": "OAST",
+                "severity": "Yüksek",
+                "url": att["url"],
+                "param": att["param"],
+                "injected": att["injected"],
+                "details": ev,
+                "confidence": confidence,
+                "confidence_label": confidence_label,
             })
             
     if report_cb:
@@ -624,12 +645,22 @@ class OASTPollerThread:
         except Exception as e:
             _logger.debug(f"[OAST] Client poll failed: {e}")
 
+    @staticmethod
+    def _confidence_label(score: float) -> str:
+        """Human-readable label for a numeric confidence score."""
+        if score >= 0.9:
+            return "Confirmed"
+        if score >= 0.6:
+            return "Probable"
+        return "Possible"
+
     def _process_events(self, events) -> None:
         with self._lock:
             for event in (events if isinstance(events, list) else [events]):
                 self._callbacks_received.append(event)
                 for token, finding in self._token_map.items():
                     matched = False
+                    confidence: float = 0.3  # default: timed injection, no confirmed event
                     if isinstance(event, dict):
                         # Exact match on known token fields first (no false positives)
                         ev_token = str(
@@ -640,22 +671,30 @@ class OASTPollerThread:
                         )
                         if ev_token and ev_token == token:
                             matched = True
+                            confidence = 1.0  # exact field match — fully confirmed
                         if not matched:
                             # Fallback: look inside raw request body using word-boundary check
                             raw = str(event.get("raw-request") or event.get("request") or "")
                             if raw and token in raw.split():
                                 matched = True
+                                confidence = 0.7  # word-boundary match in raw body — probable
                     else:
                         # Non-dict event: require token as a standalone word to reduce collision risk
                         ev_str = str(event)
-                        matched = token in ev_str.split()
+                        if token in ev_str.split():
+                            matched = True
+                            confidence = 0.7  # word-boundary match in stringified event
 
                     if matched:
                         finding["verified"] = True
                         finding["oast_callback"] = str(event)[:200]
-                        finding["confidence"] = "high"
+                        finding["confidence"] = confidence
+                        finding["confidence_label"] = self._confidence_label(confidence)
                         finding["verification_method"] = "oast_dns_http_callback"
-                        _logger.info(f"[OAST] Verified finding via callback: token={token[:12]}")
+                        _logger.info(
+                            f"[OAST] Verified finding via callback: token={token[:12]} "
+                            f"confidence={confidence} ({self._confidence_label(confidence)})"
+                        )
 
 
 # Global singleton - started/stopped by flow_runner

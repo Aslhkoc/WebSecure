@@ -3,8 +3,9 @@ from __future__ import annotations
 import threading
 import time
 import logging
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import requests as _requests
@@ -38,8 +39,14 @@ class BaseScanner:
         self.debug = debug
         self.logger = logging.getLogger(f"websecure.scanners.{self.name}")
         self._results_lock = threading.Lock()
-        self._baseline_cache: Dict[str, Optional[_requests.Response]] = {}
+        # LRU cache: OrderedDict maps cache_key -> (response, timestamp)
+        # Max 100 entries; entries older than _CACHE_TTL seconds are re-fetched.
+        self._baseline_cache: OrderedDict[str, Tuple[Optional[_requests.Response], float]] = OrderedDict()
         self._baseline_cache_lock = threading.Lock()
+        self._CACHE_TTL: int = 300          # seconds before a cached entry expires
+        self._CACHE_MAX_SIZE: int = 100     # max LRU entries
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
         self._max_workers = self._resolve_max_workers()
         if debug:
             self.logger.setLevel(logging.DEBUG)
@@ -210,6 +217,16 @@ class BaseScanner:
     # FAZ 2.3 — Baseline response fetch (replaces duplicated baseline logic)
     # ------------------------------------------------------------------
 
+    def get_cache_stats(self) -> dict:
+        """Return baseline cache statistics."""
+        with self._baseline_cache_lock:
+            size = len(self._baseline_cache)
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": size,
+        }
+
     def fetch_baseline(
         self,
         url: str,
@@ -221,12 +238,26 @@ class BaseScanner:
         """
         Fetch a baseline response with explicit network error handling.
         Returns the Response on success, None on failure (always logs the failure).
-        Responses are cached per (method, url) to avoid duplicate requests across scanners.
+
+        Caching policy (LRU + TTL):
+          - Max 100 entries (LRU eviction of least-recently-used when full).
+          - Entries expire after 300 seconds (TTL); stale entries are re-fetched.
+          - Cache stats are tracked via _cache_hits / _cache_misses.
         """
         cache_key = f"{method}:{url}"
+        now = time.monotonic()
+
         with self._baseline_cache_lock:
             if cache_key in self._baseline_cache:
-                return self._baseline_cache[cache_key]
+                cached_resp, cached_ts = self._baseline_cache[cache_key]
+                if now - cached_ts < self._CACHE_TTL:
+                    # Fresh hit — move to end (most-recently-used)
+                    self._baseline_cache.move_to_end(cache_key)
+                    self._cache_hits += 1
+                    return cached_resp
+                # Stale — remove and re-fetch
+                del self._baseline_cache[cache_key]
+            self._cache_misses += 1
 
         resp: Optional[_requests.Response] = None
         try:
@@ -242,7 +273,10 @@ class BaseScanner:
             self.logger.warning(f"[{self.name}] Baseline request failed for {url}: {exc!r}")
 
         with self._baseline_cache_lock:
-            self._baseline_cache[cache_key] = resp
+            # LRU eviction: drop the oldest entry if at capacity
+            while len(self._baseline_cache) >= self._CACHE_MAX_SIZE:
+                self._baseline_cache.popitem(last=False)
+            self._baseline_cache[cache_key] = (resp, time.monotonic())
         return resp
 
     # ------------------------------------------------------------------
