@@ -199,7 +199,11 @@ def _extract_csrf_dom(html_text: str) -> Optional[str]:
             root = lxml_html.fromstring(html_text or "")
             for n in _CSRF_NAMES:
                 if hasattr(root, "cssselect"):
-                    els = root.cssselect(f'input[name="{n}"], input#{n}')
+                    try:
+                        els = root.cssselect(f'input[name="{n}"], input#{n}')
+                    except ImportError:
+                        # cssselect package not installed — fall through to regex
+                        break
                     if els:
                         val = els[0].get("value")
                         if val:

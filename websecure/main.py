@@ -61,115 +61,8 @@ from websecure.core.startup import (
     ensure_playwright_chromium as _ensure_playwright_chromium,
     ensure_curl_cffi           as _ensure_curl_cffi,
     ensure_nuclei              as _ensure_nuclei,
+    ensure_interactsh          as _ensure_interactsh,
 )
-
-
-def _ensure_interactsh(cfg: dict) -> bool:
-    """
-    drivers/interactsh-client.exe'yi arka planda başlatır, stdout'tan token/host okur,
-    cfg['oast']['interactsh'] alanlarını doldurur.
-    Exe yoksa GitHub releases'tan otomatik indirir.
-    Config'de zaten geçerli bir token varsa hiçbir şey yapmaz.
-    """
-    # 1. Config'de zaten token var mı?
-    _oast = cfg.get("oast", {}) or {}
-    _ic = _oast.get("interactsh", {}) or {}
-    _tok = _ic.get("token", "")
-    if _oast.get("enabled") and _ic.get("enabled") and _tok and "BURAYA" not in _tok:
-        return True  # config'den geldi, elle başlatmaya gerek yok
-
-    root = _P(__file__).resolve().parent.parent
-    exe_path = root / "drivers" / "interactsh-client.exe"
-
-    # 2. Exe yoksa indir
-    if not exe_path.exists():
-        print("[*] interactsh-client.exe bulunamadi. GitHub'dan indiriliyor...")
-        try:
-            import json as _json
-            api_url = "https://api.github.com/repos/projectdiscovery/interactsh/releases/latest"
-            with _urlreq.urlopen(api_url, timeout=15) as r:
-                data = _json.loads(r.read())
-            asset_url = next(
-                (a["browser_download_url"] for a in data.get("assets", [])
-                 if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
-                 and a["name"].endswith(".zip")),
-                None
-            )
-            if not asset_url:
-                print("[!] interactsh Windows binary bulunamadi. Elle indirin.")
-                return False
-            zip_path = root / "drivers" / "interactsh-client.zip"
-            exe_path.parent.mkdir(parents=True, exist_ok=True)
-            _urlreq.urlretrieve(asset_url, zip_path)
-            with _zipfile.ZipFile(zip_path, "r") as zf:
-                for member in zf.namelist():
-                    if member.endswith(".exe") and "interactsh-client" in member:
-                        with zf.open(member) as src, open(exe_path, "wb") as dst:
-                            dst.write(src.read())
-                        break
-            zip_path.unlink(missing_ok=True)
-            print(f"[+] interactsh-client.exe indirildi: {exe_path}")
-        except Exception as exc:
-            print(f"[!] interactsh indirme hatasi: {exc}")
-            return False
-
-    # 3. Exe'yi arka planda baslat, token/host oku
-    print("[*] interactsh-client baslatiliyor...")
-    try:
-        proc = subprocess.Popen(
-            [str(exe_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace"
-        )
-        token, host = None, None
-        import re as _re
-        # ANSI renk kodlarini temizle
-        _ansi_re = _re.compile(r'\x1b\[[0-9;]*m|\[[0-9]+m')
-        # interactsh v1.3+ cikti formati:
-        #   [INF] Listing 1 payload for OOB Testing
-        #   [INF] d75qcguue20j9k62hg90wswmdj6h5swoq.oast.site
-        # Eski format: [INF] Listing on c1abc.oast.me
-        _domain_re = _re.compile(r'([a-z0-9]{10,})\.(oast\.[a-z]+|interact\.sh)', _re.IGNORECASE)
-        for _ in range(100):  # max 10 saniye bekle
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.1)
-                continue
-            clean = _ansi_re.sub("", line).strip()
-            # Eski format: "Listing on <subdomain>"
-            m = _re.search(r"Listing on\s+(\S+)", clean)
-            if m:
-                subdomain = m.group(1).strip()
-                parts = subdomain.split(".", 1)
-                if len(parts) == 2:
-                    token = parts[0]
-                    host = subdomain
-                    break
-            # Yeni format: satir dogrudan domain iceriyor
-            m2 = _domain_re.search(clean)
-            if m2:
-                host = m2.group(0).strip()
-                token = m2.group(1).strip()
-                break
-            time.sleep(0.1)
-
-        if token and host:
-            cfg.setdefault("oast", {})["enabled"] = True
-            cfg["oast"].setdefault("interactsh", {})["enabled"] = True
-            cfg["oast"]["interactsh"]["token"] = token
-            cfg["oast"]["interactsh"]["server"] = "https://" + host.split(".", 1)[1] if "." in host else "https://oast.me"
-            cfg["oast"]["dns_domain"] = host
-            # Proc'u arka planda canlı tut
-            cfg["_interactsh_proc"] = proc
-            print(f"[+] interactsh aktif. Subdomain: {host}")
-            return True
-        else:
-            print("[!] interactsh token alinamadi. Config'deki token kullanilacak.")
-            proc.terminate()
-            return False
-    except Exception as exc:
-        print(f"[!] interactsh baslatilamadi: {exc}")
-        return False
 
 
 from websecure.core.utils import ensure_wordlists as _ensure_wl
@@ -1435,11 +1328,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main():
-    print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
+# ─── Phase helper functions (extracted from main()) ──────────────────────────
 
+def _print_banner() -> None:
+    """Print the WebSecure ASCII art startup banner."""
+    print("=== Bu program Zemheri tarafından web sitesi ve web uygulamaları zaafiyet keşfi için oluşturuldu ===\n")
     print(r"""
-  ______  ______  __  __   _____  ______   _____ 
+  ______  ______  __  __   _____  ______   _____
  |___  / |  ____||  \/  | / ____||  ____| / ____|
 O====|_______________________________________________________>  1   1 0
   / /__  | |____ | |  | | ____) || |____ | |____               0 0 1 1
@@ -1451,52 +1346,36 @@ O====|_______________________________________________________>  1   1 0
     print("[!] UYARI / ETHICS: Bu aracı yalnızca yazılı izinli ortamlarda ve yasal çerçevede kullanın.")
     print("    Tarama, hedef sistemlerde kayıt bırakabilir. Gizlilik/uyumluluk ve hız sınırlarını gözetin.")
     print("")
-    cfg = load_config()
 
 
-    # Install Ctrl+C handler — sets cancel event instead of crashing mid-scan
-    try:
-        from websecure.core.phases import _install_sigint_handler
-        _install_sigint_handler()
-    except (ImportError, Exception):
-        pass
-
-    try_prime = True
-
-    _ = _ensure_wl(cfg)
-
-    # port_scan anti-blocking kaldırıldı — Nmap rate control kendi içinde yönetiliyor
-
-    # === Sonuç kovası (yerel ve global bağ) ===
-    results: dict = {"phase_timings": {}, "sections": []}
-    globals()['results'] = results
-    globals()['cfg'] = cfg
-
-    # Profil çözümleme (settings.profiles → _resolved_profile)
-    # Profil çözümleme (settings.profiles → _resolved_profile)
+def _startup_phase(cfg: dict) -> None:
+    """
+    Run all pre-scan startup tasks:
+      - profile resolution and logging config
+      - dependency checks (playwright, curl_cffi, nuclei, interactsh, OAST poller)
+      - optional interactive tool manager prompts
+      - profile-based Tor rotation init
+    """
+    # Resolve scan profile
     _profiles = (cfg.get("settings") or {}).get("profiles") or {}
-    _active = (cfg.get("settings") or {}).get("scan_profile") or "stealth"
+    _active   = (cfg.get("settings") or {}).get("scan_profile") or "stealth"
     cfg.setdefault("_resolved_profile", _profiles.get(_active, {}))
-
-    # Raporlama modülüne tüm config’i ver
     configure_logging(level=str(((cfg or {}).get("settings") or {}).get("logging", {}).get("level", "INFO")))
 
-    # Playwright chromium kurulum kontrolü (XSS DOM doğrulama için gerekli)
+    # Dependency checks
     _ensure_playwright_chromium()
     _ensure_curl_cffi()
-
-    # --- Nuclei otomatik kurulum ---
     _ensure_nuclei(cfg)
 
-    # --- interactsh otomatik başlatma + OAST info ---
-    print("\n" + "="*60)
+    # OAST / interactsh
+    print("\n" + "=" * 60)
     print("  [*] OAST / interactsh kurulumu kontrol ediliyor...")
     _ensure_interactsh(cfg)
     _oast_cfg2 = cfg.get("oast", {}) or {}
-    _ic2 = _oast_cfg2.get("interactsh", {}) or {}
-    if _oast_cfg2.get("enabled") and _ic2.get("enabled") and _ic2.get("token") and "BURAYA" not in _ic2.get("token", ""):
+    _ic2       = _oast_cfg2.get("interactsh", {}) or {}
+    if (_oast_cfg2.get("enabled") and _ic2.get("enabled")
+            and _ic2.get("token") and "BURAYA" not in _ic2.get("token", "")):
         print("  [+] OAST / interactsh aktif.")
-        # Global arka plan polling thread'ini başlat
         try:
             from websecure.core.oast import start_global_oast_poller, stop_global_oast_poller
             import atexit as _atexit_oast
@@ -1507,213 +1386,105 @@ O====|_______________________________________________________>  1   1 0
             print(f"  [!] OAST poller baslanamadi: {_oast_ex}")
     else:
         print("  [i] OAST kullanilamiyor. SSRF/XXE bulgulari dogrulanamayacak.")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
-
-    # --- Tool Manager Integration (Early Prompt) ---
-    from websecure.core.tool_manager import ToolManager
-    tm = ToolManager(cfg)
-    # Interactive Prompt
-    # CLI argümanlarından bağımsız çalışması için burada çağırıyoruz.
-    # Ancak --help veya versiyon sorgusunda çalışmasın diye basit bir kontrol eklenebilir ama
-    # argparse henüz parse edilmediği için sys.argv kontrolü gerekebilir.
+    # Interactive tool manager (skipped in --dry-run / --batch / --help)
     is_dry_run_pre = "--dry-run" in sys.argv
-    is_wizard = "--wizard" in sys.argv
-
+    is_wizard      = "--wizard" in sys.argv
     if is_wizard:
-        # Import dynamically to avoid overhead if not used
         try:
-           from websecure.core.wizard import run_wizard
-           should_run = run_wizard()
-           if not should_run:
-               sys.exit(0)
-           # If user said YES to run immediately, reload config and proceed
-           cfg = load_config() 
+            from websecure.core.wizard import run_wizard  # noqa: PLC0415
+            if not run_wizard():
+                sys.exit(0)
         except ImportError:
             print("[!] Wizard module not found.")
             sys.exit(1)
+
     is_batch_pre = "--batch" in sys.argv
     if "--help" not in sys.argv and "-h" not in sys.argv and not is_dry_run_pre and not is_batch_pre:
+        from websecure.core.tool_manager import ToolManager  # noqa: PLC0415
+        tm = ToolManager(cfg)
         tool_choices = tm.ask_user_interactive()
-
-        # Apply choices
         if tool_choices.get("sqlmap"):
             tm.start_sqlmap_api()
-
         if "ffuf" in tool_choices:
             if cfg.get("content_discovery"):
                 cfg["content_discovery"]["enabled"] = tool_choices["ffuf"]
             cfg.setdefault("offensive", {}).setdefault("ffuf", {})["enabled"] = tool_choices["ffuf"]
-
         if "feroxbuster" in tool_choices:
             cfg.setdefault("offensive", {}).setdefault("feroxbuster", {})["enabled"] = tool_choices["feroxbuster"]
-
         if "nmap" in tool_choices:
             cfg.setdefault("nmap", {})["enabled"] = tool_choices["nmap"]
-
-        import atexit
+        import atexit  # noqa: PLC0415
         atexit.register(tm.stop_all)
-    # ---------------------------------------------
 
-    # InsecureRequestWarning sustur
+    # Profile-based Tor rotation (from config, non-interactive)
     silence_insecure_request_warnings()
-
-    # --- Tor Integration ---
-    # Check if active profile config has Tor settings
-    # _resolved_profile is populated above
-    _prof = cfg.get("_resolved_profile") or {}
+    _prof         = cfg.get("_resolved_profile") or {}
     _tor_interval = _prof.get("tor_rotation_interval")
-    _tor_port = _prof.get("tor_control_port")
-    
-    # If proxy is a socks proxy pointing to local tor (9050, 9150), also might want to enable
-    # But explicit config is safer.
-    
-    # [FIX] Tor Global Initialization (Acil Durum Onarımı)
-    # Bu, tüm modüllerin (özellikle http.py) tek bir Tor kontrolcüsüne erişmesini sağlar.
-    if _tor_interval and _tor_port:
-         try:
-             print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
-             from websecure.core.waf_bypass import init_tor_control, start_auto_rotation, rotate_tor_identity
-             
-             # Global kontrolcüyü başlat
-             init_tor_control({"enabled": True, "control_port": int(_tor_port)})
-             
-             # İlk yenileme denemesi
-             if rotate_tor_identity():
-                 pass # Sessiz başarılı
-             else:
-                 print("[!] UYARI: Tor Control Port'a bağlanılamadı. (Tor çalışıyor mu?)")
-                 
-             # Otomatik döngüyü başlat
-             start_auto_rotation(interval=int(_tor_interval))
-             
-         except ImportError:
-             pass
-         except Exception as e:
-             print(f"[!] Tor hatası: {e}")
-             
-    # Cleanup (Daemon threadler otomatik kapanır, manuel stop gerekmez)
+    _tor_ctrl_port = _prof.get("tor_control_port")
+    if _tor_interval and _tor_ctrl_port:
+        try:
+            print(f"[+] Tor Entegrasyonu Aktif: Her {_tor_interval} saniyede IP değişecek.")
+            from websecure.core.waf_bypass import init_tor_control, start_auto_rotation, rotate_tor_identity  # noqa: PLC0415
+            init_tor_control({"enabled": True, "control_port": int(_tor_ctrl_port)})
+            if not rotate_tor_identity():
+                print("[!] UYARI: Tor Control Port’a bağlanılamadı. (Tor çalışıyor mu?)")
+            start_auto_rotation(interval=int(_tor_interval))
+        except ImportError:
+            pass
+        except Exception as _e:
+            print(f"[!] Tor hatası: {_e}")
 
-    # CLI argümanları
-    args = _build_arg_parser().parse_args()
 
-    # --headless VARSA gizle, --visible VARSA göster (çakışırsa visible kazanır, yukarıda sys.argv ile işledik ama burada config'e basıyoruz)
-    # _normalize_webdriver_cfg zaten sys.argv kontrolü yaptı ve config yüklendiğinde headless set edildi.
-    # Ancak burada son bir override yapalım:
-    
+def _apply_cli_args(cfg: dict, args) -> None:
+    """Apply parsed CLI flags to the config dict (headless, attack mode, OAST, etc.)."""
+    # Browser visibility
     if args.headless and not args.visible:
-        # Config'deki her yere işle
-        cfg.setdefault("crawler", {})["headless"] = True
-        cfg.setdefault("crawl", {})["headless"] = True
-        if "webdriver" not in cfg: cfg["webdriver"] = {}
-        cfg["webdriver"]["headless"] = True
-        if "settings" not in cfg: cfg["settings"] = {}
-        if "webdriver" not in cfg["settings"]: cfg["settings"]["webdriver"] = {}
-        cfg["settings"]["webdriver"]["headless"] = True
+        cfg.setdefault("crawler", {})["headless"]  = True
+        cfg.setdefault("crawl",   {})["headless"]  = True
+        cfg.setdefault("webdriver", {})["headless"] = True
+        cfg.setdefault("settings", {}).setdefault("webdriver", {})["headless"] = True
         print("[*] Headless Mod Etkinleştirildi (Tarayıcı GİZLİ).")
-
-    # VISIBLE MODE: Force all headless settings to False if requested OR default
-    # Eğer --headless YOKSA, varsayılan olarak görünür olsun (veya --visible varsa)
-    if args.visible or (not args.headless):
+    if args.visible or not args.headless:
         if args.visible:
-             print("[*] Live View (Visible Browser) Modu Etkinleştirildi.")
-        # Config'deki her yere işle (Görünür yap)
-        cfg.setdefault("crawler", {})["headless"] = False
-        cfg.setdefault("crawl", {})["headless"] = False
-        if "webdriver" not in cfg: cfg["webdriver"] = {}
-        cfg["webdriver"]["headless"] = False
-        if "settings" not in cfg: cfg["settings"] = {}
-        if "webdriver" not in cfg["settings"]: cfg["settings"]["webdriver"] = {}
-        cfg["settings"]["webdriver"]["headless"] = False
+            print("[*] Live View (Visible Browser) Modu Etkinleştirildi.")
+        cfg.setdefault("crawler",  {})["headless"] = False
+        cfg.setdefault("crawl",    {})["headless"] = False
+        cfg.setdefault("webdriver",{})["headless"] = False
+        cfg.setdefault("settings", {}).setdefault("webdriver", {})["headless"] = False
 
-    off = (cfg.setdefault('offensive', {}) if isinstance(cfg, dict) else {})
-    if args.attack or args.attack_unsafe or (off.get('enabled') is True):
-        off['enabled'] = True
-        off.setdefault('safe', True)
+    # Offensive mode
+    off = cfg.setdefault("offensive", {}) if isinstance(cfg, dict) else {}
+    if args.attack or args.attack_unsafe or off.get("enabled") is True:
+        off["enabled"] = True
+        off.setdefault("safe", True)
         if args.attack_unsafe:
-            off['safe'] = False
+            off["safe"] = False
     if args.verify_only:
-        off['enabled'] = True
-        off['verify'] = {'enabled': True}
-    # OAST ayarları
+        off["enabled"] = True
+        off["verify"]  = {"enabled": True}
+
+    # OAST overrides
     if args.oast_domain or args.oast_url:
-        oast = cfg.setdefault('oast', {})
+        oast = cfg.setdefault("oast", {})
         if args.oast_domain:
-            oast['dns_domain'] = args.oast_domain
+            oast["dns_domain"] = args.oast_domain
         if args.oast_url:
-            oast['http_base'] = args.oast_url
+            oast["http_base"] = args.oast_url
 
+    # Misc flags
     if args.fuzz_ml:
-        cfg.setdefault('fuzz', {}).setdefault('heuristics', {})
-        cfg['fuzz']['heuristics']['enabled'] = True
-
+        cfg.setdefault("fuzz", {}).setdefault("heuristics", {})["enabled"] = True
     if args.waf:
-        cfg.setdefault('waf', {})
-        cfg['waf']['enabled'] = True
+        cfg.setdefault("waf", {})["enabled"] = True
 
-    def _readline_default(prompt: str, default: str) -> str:
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-        si = getattr(sys, "stdin", None)
-        # TTY olmasa da oku
-        if si is not None and hasattr(si, "readline"):
-            line = si.readline()
-            if isinstance(line, str):
-                line = line.rstrip("\r\n")
-            if line:
-                return line.strip()
-        return default
 
-    def _detect_final_url_and_scheme_safe(raw: str, timeout_s: float = 6.0) -> tuple[str | None, str | None]:
-        if not isinstance(raw, str) or not raw.strip():
-            return None, None
-
-        t = raw.strip()
-        if "://" in t:
-            candidates = [t]
-        else:
-            host = t.strip("/")
-            candidates = [
-                f"https://{host}",
-                f"https://www.{host}",
-                f"http://{host}",
-                f"http://www.{host}",
-            ]
-
-        curl_bin = shutil.which("curl")
-        if not curl_bin:
-            # curl yoksa, ilk adayı normalize edip dön (erişilebilirlik doğrulaması yapmadan)
-            u0 = candidates[0]
-            sch = urlparse(u0).scheme or "http"
-            return u0, sch
-
-        for u in candidates:
-            # -I başlık isteği, -L yönlendirme, --max-time süre, -sS sessiz, -o /dev/null gövdeyi at
-            cp = subprocess.run(
-                [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout_s)), u, "-w",
-                 "%{url_effective} %{http_code}\n", "-o", "/dev/null"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            if cp.returncode != 0:
-                continue
-            out = (cp.stdout or "").strip()
-            if not out:
-                continue
-            parts = out.split()
-            if len(parts) >= 2 and parts[-1].isdigit():
-                code = int(parts[-1])
-                final = " ".join(parts[:-1])
-                if 200 <= code < 600:
-                    eff = final.split("#", 1)[0].rstrip("/")
-                    sch = urlparse(eff).scheme or "http"
-                    return eff, sch
-        return None, None
-
-    # ---------------- snippet replacement (istisnasız) ----------------
-
+def _resolve_target_url(cfg: dict, args) -> tuple[str, str]:
+    """
+    Prompt for or read the target URL from args, then validate and normalise it.
+    Returns (canonical_url, scheme).
+    """
     if args.target:
         raw_input_url = args.target.strip()
     else:
@@ -1724,7 +1495,6 @@ O====|_______________________________________________________>  1   1 0
         raw_input_url = (raw_input_url if isinstance(raw_input_url, str) else "").strip() or str(
             cfg.get("base_url") or "")
 
-    # Keşif için geçici session (config'ten bağımsız, sadece ulaşılabilirliği bulmak için)
     temp_session = ensure_session({})
     temp_session.verify = True
 
@@ -1735,327 +1505,128 @@ O====|_______________________________________________________>  1   1 0
         ok, valid_url, scheme_checked = (False, None, None)
 
     if ok and valid_url:
-        url = valid_url
+        url    = valid_url
         scheme = scheme_checked or scheme or "https"
+    elif final_url:
+        print("[WARN] validate_url başarısız; normalize edilmiş URL ile devam ediliyor.")
+        url    = final_url
+        scheme = scheme or "https"
     else:
-        if final_url:
-            print("[WARN] validate_url başarısız; normalize edilmiş URL ile devam ediliyor.")
-            url = final_url
-            scheme = scheme or "https"
+        print(f"[HATA] URL çözümlenemedi; http ile devam deneniyor. Girdi: {raw_input_url!r}")
+        host = (raw_input_url or "").strip()
+        if "://" not in host and host:
+            url = "http://" + host
         else:
-            print(f"[HATA] URL çözümlenemedi; http ile devam deneniyor. Girdi: {raw_input_url!r}")
-            _close = getattr(temp_session, "close", None)
-            if callable(_close):
-                _close()
-            # Fallback: şema yoksa http ile deneriz, varsa olduğu gibi bırakırız
-            host = (raw_input_url or "").strip()
-            if "://" not in host and host:
-                url = "http://" + host
-            else:
-                url = host or "http://localhost"
-            scheme = ("http" if url.lower().startswith("http://") else
-                      "https" if url.lower().startswith("https://") else
-                      (url.split(':', 1)[0].lower() if ':' in url else "http"))
-
-    # >>> RUN-TIME OVERRIDE: Kullanıcıdan gelen (kanonik/valid edilmiş) URL'i config'e uygula
-    cfg["target"] = url
-    cfg["base_url"] = url
-    # <<< OVERRIDE
-
-    print(f"[URL] Kanonik erişim: {url}  (Mod: {scheme.upper()})")
+            url = host or "http://localhost"
+        scheme = ("http"  if url.lower().startswith("http://")  else
+                  "https" if url.lower().startswith("https://") else
+                  (url.split(":", 1)[0].lower() if ":" in url else "http"))
 
     _close = getattr(temp_session, "close", None)
     if callable(_close):
         _close()
 
-    # --- Tor (SOCKS) Seçimi ---
-    _tor_socks_url = None
-
-    def _try_autostart_tor() -> str | None:
-        """Tor Browser veya sistem Tor'unu otomatik başlatmaya çalışır. Çalışan port döner veya None."""
-        import subprocess as _sp
-        # Önce 9150 (Tor Browser), sonra 9050 (sistem Tor) dene
-        for _port in [9150, 9050]:
-            if _proxy_alive(f"socks5h://127.0.0.1:{_port}"):
-                return f"socks5h://127.0.0.1:{_port}"
-        # Tor Browser exe yolları dene
-        _tb_paths = [
-            r"C:\Users\Acer\Desktop\Tor Browser\Browser\firefox.exe",
-            r"C:\Program Files\Tor Browser\Browser\firefox.exe",
-            r"C:\Users\Acer\AppData\Local\Programs\Tor Browser\Browser\firefox.exe",
-        ]
-        for _tb in _tb_paths:
-            if os.path.exists(_tb):
-                try:
-                    _sp.Popen([_tb], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-                    import time as _t2
-                    for _ in range(20):
-                        _t2.sleep(1)
-                        if _proxy_alive("socks5h://127.0.0.1:9150"):
-                            return "socks5h://127.0.0.1:9150"
-                except Exception:
-                    pass
-        # Sistem Tor servisini başlatmayı dene
-        try:
-            _sp.Popen(["tor"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-            import time as _t3
-            for _ in range(15):
-                _t3.sleep(1)
-                if _proxy_alive("socks5h://127.0.0.1:9050"):
-                    return "socks5h://127.0.0.1:9050"
-        except Exception:
-            pass
-        return None
-
-    print("\n" + "="*60)
-    print("  [?] Tor Anonimlik Ayari")
-    print("  Tor kullanilmadan tarama yapilirsa GERCEK IP ADRESINIZ")
-    print("  hedef sunucuya, ISP'ye ve ag dinleyicilerine acik olur.")
-    print("  Tum araclar (Nmap, SQLMap, FFUF, Nuclei) da aynı sekilde")
-    print("  gercek IP ile baglanir.")
-    print("")
-
-    if not args.dry_run and not args.batch:
-        _tor_ans = input("  Tor ile anonim tarama yapmak ister misiniz? (E/h): ").strip().lower() or "e"
-    else:
-        _tor_ans = "h"
-
-    if _tor_ans.startswith("e"):
-        print("  [*] Tor baglantisi kontrol ediliyor...")
-        _tor_socks_url = _try_autostart_tor()
-        if _tor_socks_url:
-            _tor_port = _tor_socks_url.split(":")[-1]
-            _tor_host = "127.0.0.1"
-            http_cfg = cfg.setdefault("http", {})
-            proxies = {}
-            http_cfg["proxies"] = proxies
-            proxies["http"] = _tor_socks_url
-            proxies["https"] = _tor_socks_url
-            cfg.setdefault("privacy", {}).setdefault("tor", {})["enabled"] = True
-            cfg["privacy"]["tor"]["socks_url"] = _tor_socks_url
-            cfg["_tor_proxy"] = _tor_socks_url
-            print(f"  [+] Tor aktif: {_tor_socks_url}")
-            print("  [+] Tum Python HTTP trafiği Tor uzerinden gidecek.")
-            print("  [+] Tum araclar (Nmap, SQLMap, FFUF, Nuclei, Playwright) Tor ile calisacak.")
-        else:
-            print("  [!] Tor baslatilamadi veya bulunamadi.")
-            print("  [!] Tor Browser'i elle acin ve tekrar deneyin.")
-            print("  [!] UYARI: Bu tarama GERCEK IP ile yapilacak!")
-            cfg["_tor_proxy"] = None
-    else:
-        print("")
-        print("  ╔══════════════════════════════════════════════════════╗")
-        print("  ║  ⚠  GIZLILIK UYARISI                                ║")
-        print("  ║  Tor kullanilmiyor!                                  ║")
-        print("  ║  IP adresiniz hedef sunucuya acikca gorunuyor.       ║")
-        print("  ║  ISP ve ag dinleyicileri tarama yaptigınızı biliyor. ║")
-        print("  ║  Sadece yetkili olduguz sistemlerde devam edin.      ║")
-        print("  ╚══════════════════════════════════════════════════════╝")
-        print("")
-        cfg["_tor_proxy"] = None
-    print("="*60 + "\n")
-
-    # --- Kimlik doğrulama (Playwright / Yeni Sistem) ---
-    _auth_profiles_cfg = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
-    _auth_profile_valid = (
-        _auth_profiles_cfg and
-        _auth_profiles_cfg[0].get("username") and
-        _auth_profiles_cfg[0].get("username") != "KULLANICI_ADI" and
-        _auth_profiles_cfg[0].get("password") and
-        _auth_profiles_cfg[0].get("password") != "SIFRE" and
-        _auth_profiles_cfg[0].get("login_url") and
-        "hedef-site" not in _auth_profiles_cfg[0].get("login_url", "")
-    )
-    if not args.dry_run and not args.batch:
-        print("\n" + "="*60)
-        print("  [?] Kimlik Dogrulama (Authenticated Scan)")
-        print("  Hedef sitede hesap varsa login bilgilerini girin.")
-        print("  Login gerektiren sayfalar da taranacak.")
-        print("")
-        # --- TEST HESABI UYARISI ---
-        print("  ╔══════════════════════════════════════════════════════╗")
-        print("  ║  ⚠  OPERASYONEL GUVENLIK (OpSec) UYARISI           ║")
-        print("  ║                                                      ║")
-        print("  ║  GERCEK hesabinizla giris yaparsaniz:               ║")
-        print("  ║   • Hesabiniz hedef sunucu LOGLARINDA gorunur       ║")
-        print("  ║   • IP adresiniz hesabinizla ESLESTIRILIR           ║")
-        print("  ║   • Anormal istek paterni hesaba BAGLANIR           ║")
-        print("  ║   • Hesabiniz banlanabilir / kimliginiz ifsa olur   ║")
-        print("  ║                                                      ║")
-        print("  ║  → Mutlaka OZEL BIR TEST HESABI olusturun!         ║")
-        print("  ║  → Test hesabi: test_scan@gecici-mail.com gibi      ║")
-        print("  ║  → Gercek isim / gercek mail KULLANMAYIN            ║")
-        print("  ╚══════════════════════════════════════════════════════╝")
-        print("")
-        if _auth_profile_valid:
-            print(f"  [+] Config'de kayitli profil: {_auth_profiles_cfg[0].get('username')}")
-            _auth_ans = input("  Bu profili kullanmak ister misiniz? (E/h): ").strip().lower() or "e"
-        else:
-            _auth_ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
-        if _auth_ans == "e":
-            if not _auth_profile_valid:
-                _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
-                _username  = input("  Kullanici adi / e-posta (TEST hesabi kullanin!): ").strip()
-                _password  = input("  Sifre: ").strip()
-                _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
-                _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
-                _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
-                if _login_url and _username and _password:
-                    _new_profile = {
-                        "login_url": _login_url,
-                        "username": _username,
-                        "password": _password,
-                        "username_field": _ufield,
-                        "password_field": _pfield,
-                        "success_indicator": _success,
-                    }
-                    cfg.setdefault("authenticated", {}).setdefault("auth_profiles", [])
-                    if cfg["authenticated"]["auth_profiles"]:
-                        cfg["authenticated"]["auth_profiles"][0] = _new_profile
-                    else:
-                        cfg["authenticated"]["auth_profiles"].append(_new_profile)
-                    print("  [+] Kimlik bilgileri alindi. Otomatik giris yapilacak.")
-                else:
-                    print("  [!] Eksik bilgi. Kimlik dogrulama atlaniyor.")
-                    _auth_ans = "h"
-            else:
-                print("  [+] Mevcut profil kullanilacak.")
-        else:
-            print("  [i] Kimlik dogrulama atlaniyor.")
-        print("="*60 + "\n")
-    else:
-        _auth_ans = "h"
-
-    # --- Proxy / IP Rotasyon Kurulumu ---
-    def _read(prompt: str, default: str) -> str:
-        try:
-            val = input(prompt)
-            s = (val if isinstance(val, str) else "").strip()
-            return s if s != "" else default
-        except EOFError:
-            return default
-
-    if not args.dry_run and not args.batch:
-        print("\n" + "="*60)
-        print("  [?] Proxy / IP Rotasyon Ayari")
-        print("  Tek IP ile tarama = hedef loglarinda ayni IP surekli gorunur.")
-        print("  Proxy havuzu ile rotasyon = her istekte farkli IP, tespiti zorlaştirir.")
-        print("")
-        print("  Secenekler:")
-        print("    1) Proxy yok  - Gercek IP ile (Tor sectiyseniz o gecerli)")
-        print("    2) Tek proxy  - Burp Suite / HTTPS proxy (debug/intercept)")
-        print("    3) Proxy havuzu - Birden fazla proxy, otomatik rotasyon (IP maskeleme)")
-        print("")
-        _proxy_choice = (_read("  Seciminiz [1/2/3, Enter=1]: ", "1") or "1").strip()
-
-        if _proxy_choice == "2":
-            # Tek proxy
-            purl = _read("  Proxy URL (ornek: http://127.0.0.1:8080): ", "").strip()
-            if purl:
-                cfg.setdefault("http", {}).setdefault("proxies", {})
-                cfg["http"]["proxies"]["http"]  = purl
-                cfg["http"]["proxies"]["https"] = purl
-                cfg.setdefault("network", {}).setdefault("proxies", {})["pool"] = [purl]
-                print(f"  [+] Tek proxy ayarlandi: {purl}")
-            else:
-                print("  [!] URL girilmedi, proxy atlanıyor.")
-
-        elif _proxy_choice == "3":
-            # Proxy havuzu
-            print("  Her satirda bir proxy URL girin. Bos satir ile bitirin.")
-            print("  Format: http://user:pass@host:port  veya  socks5h://host:port")
-            _proxy_pool = []
-            _idx = 1
-            while True:
-                _pline = _read(f"  Proxy #{_idx} (bos birak = bitti): ", "").strip()
-                if not _pline:
-                    break
-                _proxy_pool.append(_pline)
-                _idx += 1
-            if _proxy_pool:
-                cfg.setdefault("network", {}).setdefault("proxies", {})
-                cfg["network"]["proxies"]["pool"]    = _proxy_pool
-                cfg["network"]["proxies"]["rotate"]  = "round_robin"
-                cfg["network"]["proxies"]["failure_threshold"] = 3
-                # İlk proxy'yi HTTP session'a da set et (fallback)
-                cfg.setdefault("http", {}).setdefault("proxies", {})
-                cfg["http"]["proxies"]["http"]  = _proxy_pool[0]
-                cfg["http"]["proxies"]["https"] = _proxy_pool[0]
-                print(f"  [+] {len(_proxy_pool)} proxy yuklendi. Rotasyon: round_robin")
-                # EgressManager'ı güncelle
-                try:
-                    from websecure.core.waf_bypass import init_egress_manager
-                    init_egress_manager(cfg)
-                    print("  [+] IP rotasyon motoru (EgressManager) baslatildi.")
-                except Exception as _em_ex:
-                    print(f"  [!] EgressManager baslanamadi: {_em_ex}")
-            else:
-                print("  [!] Hicbir proxy girilmedi. Proxy havuzu atlanıyor.")
-        else:
-            print("  [i] Proxy kullanilmayacak.")
-        print("="*60 + "\n")
-
-        # --- OpSec Özet Ekranı ---
-        _tor_aktif   = bool(cfg.get("_tor_proxy"))
-        _proxy_aktif = bool((cfg.get("network", {}).get("proxies") or {}).get("pool"))
-        _tek_proxy   = bool((cfg.get("http", {}).get("proxies") or {}).get("https")) and not _proxy_aktif
-        _auth_aktif  = _auth_ans == "e"
-        _username_str = (cfg.get("authenticated", {}).get("auth_profiles") or [{}])[0].get("username", "")
-
-        print("  ┌─────────────────────────────────────────────────────┐")
-        print("  │              TARAMA OPSec OZETI                     │")
-        print("  ├─────────────────────────────────────────────────────┤")
-        print(f"  │  Tor           : {'✓ AKTIF' if _tor_aktif else '✗ Kapali — Gercek IP gorunuyor':40}│")
-        if _proxy_aktif:
-            _pcount = len(cfg["network"]["proxies"]["pool"])
-            print(f"  │  Proxy havuzu  : ✓ {_pcount} proxy, round_robin rotasyon{' '*max(0,17-len(str(_pcount)))}│")
-        elif _tek_proxy:
-            print(f"  │  Tek proxy     : ✓ AKTIF{' '*30}│")
-        else:
-            print(f"  │  Proxy         : ✗ Yok — Gercek IP{' '*19}│")
-        if _auth_aktif:
-            print(f"  │  Hesap         : ⚠ {_username_str[:36]:36}│")
-            print(f"  │  (!) Hedef bu hesabi loglarinda gorecek{' '*14}│")
-        else:
-            print(f"  │  Hesap         : Kimlik dogrulama yok{' '*16}│")
-        print("  └─────────────────────────────────────────────────────┘")
-        print("")
-
-    else:
-        if args.dry_run:
-            print("[Dry-Run] Proxy sorusu atlanıyor (varsayilan: hayir).")
+    print(f"[URL] Kanonik erişim: {url}  (Mod: {scheme.upper()})")
+    return url, scheme
 
 
+def _select_profile(cfg: dict, args) -> tuple[str, dict]:
+    """
+    Interactively (or automatically) choose and apply the scan profile.
+    Returns (profile_name, updated_cfg).
+    """
     if not args.dry_run and not args.batch and not args.profile:
         profile, cfg = _offer_scan_profile_and_confirm(cfg)
     else:
-        # Öncelik: CLI --profile > Config > Varsayılan aggressive
         profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
-        # Batch/dry-run modunda da profil ayarlarını tam uygula
-        from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile
-        from websecure.core.utils import apply_active_profile
+        from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile  # noqa: PLC0415
+        from websecure.core.utils import apply_active_profile  # noqa: PLC0415
         if profile in ("stealth",):
             cfg = _apply_stealth_profile(cfg)
         else:
             cfg = _apply_aggressive_profile(cfg)
             profile = "aggressive"
         cfg = apply_active_profile(cfg)
-
         if args.dry_run:
             print(f"[Dry-Run] Profil uygulandı: {profile}.")
         elif args.batch:
             print(f"[Batch] Profil otomatik uygulandı: {profile}")
 
-    # [Fix] Force Aggressive if attack mode is requested via CLI
+    # Attack mode forces aggressive profile
     if args.attack or args.attack_unsafe:
         if profile not in ("aggressive", "deep"):
-            print(f"[WARN] Saldırı modu seçildi ancak profil '{profile}'. 'AGGRESSIVE' olarak zorlanıyor.")
+            print(f"[WARN] Saldırı modu seçildi ancak profil ‘{profile}’. ‘AGGRESSIVE’ olarak zorlanıyor.")
         profile = "aggressive"
-        from websecure.core.scan_profile import _apply_aggressive_profile
-        from websecure.core.utils import apply_active_profile
+        from websecure.core.scan_profile import _apply_aggressive_profile  # noqa: PLC0415
+        from websecure.core.utils import apply_active_profile  # noqa: PLC0415
         cfg = _apply_aggressive_profile(cfg)
         cfg = apply_active_profile(cfg)
 
+    return profile, cfg
+
+
+# ─── Slim main entry point ────────────────────────────────────────────────────
+
+def main() -> None:
+    """
+    WebSecure entry point — intentionally slim.
+    Each phase is delegated to a focused helper function.
+    """
+    _print_banner()
+    cfg = load_config()
+
+    # Ctrl+C handler
+    try:
+        from websecure.core.phases import _install_sigint_handler  # noqa: PLC0415
+        _install_sigint_handler()
+    except (ImportError, Exception):
+        pass
+
+    _ = _ensure_wl(cfg)
+    results: dict = {"phase_timings": {}, "sections": []}
+
+    # Phase 1 — startup checks + tool manager + Tor rotation
+    _startup_phase(cfg)
+
+    # Phase 2 — CLI argument parsing + config override
+    args = _build_arg_parser().parse_args()
+    _apply_cli_args(cfg, args)
+
+    # Phase 3 — target URL resolution
+    url, scheme = _resolve_target_url(cfg, args)
+    cfg["target"]   = url
+    cfg["base_url"] = url
+
+    # Phase 4 — interactive wizard (Tor / auth / proxy)
+    from websecure.core.cli.interactive import setup_tor, setup_auth, setup_proxy  # noqa: PLC0415
+    setup_tor(cfg, args)
+    setup_auth(cfg, args)
+    setup_proxy(cfg, args)
+
+    # Phase 5 — profile selection
+    profile, cfg = _select_profile(cfg, args)
+
+    # Phase 6 — full scan execution
+    _run_scan_phases(cfg, args, url, scheme, profile, results)
+
+
+# ─── Scan execution (extracted from main) ────────────────────────────────────
+
+def _run_scan_phases(
+    cfg:     dict,
+    args,
+    url:     str,
+    scheme:  str,
+    profile: str,
+    results: dict,
+) -> None:
+    """
+    Execute all scan phases in order:
+      session setup → auth flow → context → unified plan → reporting → fuzzing.
+
+    All scanner module globals are accessible because this function lives in
+    the same module where they are dynamically loaded at import time.
+    """
     mode = _choose_mode_from_config(cfg)
     detailed = (ScanMode is not None and mode == ScanMode.DETAILED) or bool((cfg.get("settings") or {}).get("detailed", False))
     print(f"[MOD] {mode.upper()}  |  Detay: {'EVET' if detailed else 'HAYIR'}  |  Profil: {profile.upper()}")
