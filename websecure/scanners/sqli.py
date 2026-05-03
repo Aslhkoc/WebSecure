@@ -2,6 +2,7 @@ import time
 import logging
 import random
 import re
+import statistics
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
@@ -154,37 +155,108 @@ class SQLInjectionScanner(BaseScanner):
         ("1 AND 1=1",     "1 AND 1=2"),
         ("' OR 1=1--",    "' OR 1=2--"),
     ]
-    _BOOL_DIFF_THRESHOLD = 0.12  # 12% content-length change flags as vuln
+    # Minimum absolute difference (bytes) to consider a boolean-blind hit real.
+    # The dynamic stddev guard below is the primary gate; this is a hard floor.
+    _BOOL_MIN_DIFF_BYTES = 50
+
+    def _measure_natural_variation(self, url: str, n: int = 4) -> Tuple[float, float]:
+        """
+        Sample n benign baseline requests and return (mean_len, stddev_len).
+        This captures dynamic content churn (CSRF tokens, timestamps, ads, etc.)
+        so we never flag normal variation as a boolean difference.
+        """
+        lengths: List[int] = []
+        for _ in range(n):
+            try:
+                r = self.session.get(url, timeout=10)
+                lengths.append(len(r.text))
+            except _requests.exceptions.RequestException:
+                pass
+        if len(lengths) < 2:
+            # Fallback: no variation data — use a conservative 15% guard
+            mean = lengths[0] if lengths else 0
+            return float(mean), float(mean) * 0.15
+        mean = statistics.mean(lengths)
+        stdev = statistics.stdev(lengths)
+        return mean, stdev
 
     def _is_boolean_blind(self, url: str, param: str,
                           baseline_len: int) -> Optional[Tuple[str, str]]:
-        """Compare TRUE vs FALSE condition response lengths. Returns (payload, evidence) if vuln."""
+        """
+        Compare TRUE vs FALSE condition response lengths.
+
+        Detection requires ALL of:
+          1. |len_true - len_false| >= _BOOL_MIN_DIFF_BYTES  (hard floor)
+          2. diff > natural_mean + 3 * natural_stdev          (dynamic guard)
+          3. Cross-validation: a second independent pair confirms the pattern
+             (len_true2 ~ len_true AND len_false2 ~ len_false)
+
+        Returns (payload, evidence) only when all gates pass.
+        """
+        # Measure natural content churn (4 benign requests)
+        nat_mean, nat_stdev = self._measure_natural_variation(url)
+        # Gate: signal must exceed natural churn by 3 sigma
+        dynamic_threshold = nat_mean + 3.0 * nat_stdev
+
+        candidate: Optional[Tuple[str, str, int, int]] = None  # (true_pl, false_pl, len_t, len_f)
+
         for true_pl, false_pl in self._BOOL_PAIRS:
             try:
-                true_url  = self.inject_param(url, param, true_pl)
-                false_url = self.inject_param(url, param, false_pl)
-                r_true  = self.session.get(true_url,  timeout=10)
-                r_false = self.session.get(false_url, timeout=10)
+                r_true  = self.session.get(self.inject_param(url, param, true_pl),  timeout=10)
+                r_false = self.session.get(self.inject_param(url, param, false_pl), timeout=10)
                 len_true  = len(r_true.text)
                 len_false = len(r_false.text)
-                diff_tf = abs(len_true - len_false)
-                if baseline_len > 0 and diff_tf / max(baseline_len, 1) >= self._BOOL_DIFF_THRESHOLD:
-                    evidence = (
-                        f"Boolean-blind: TRUE response={len_true}B "
-                        f"FALSE response={len_false}B diff={diff_tf}B "
-                        f"({diff_tf/max(baseline_len,1)*100:.1f}% change)"
-                    )
-                    return true_pl, evidence
-            except _requests.exceptions.Timeout as exc:
-                logger.debug(f"[SQLi] Boolean-blind probe timed out for {url}: {exc!r}")
-                continue
-            except _requests.exceptions.ConnectionError as exc:
-                logger.debug(f"[SQLi] Boolean-blind probe connection error for {url}: {exc!r}")
-                continue
+                diff = abs(len_true - len_false)
+
+                if diff < self._BOOL_MIN_DIFF_BYTES:
+                    continue
+                if diff <= dynamic_threshold:
+                    continue
+
+                # First-pass hit — record for cross-validation
+                candidate = (true_pl, false_pl, len_true, len_false)
+                break
             except _requests.exceptions.RequestException as exc:
-                logger.warning(f"[SQLi] Boolean-blind probe failed for {url}: {exc!r}")
+                logger.debug(f"[SQLi] Boolean probe error ({url}): {exc!r}")
                 continue
-        return None
+
+        if candidate is None:
+            return None
+
+        true_pl, false_pl, len_true1, len_false1 = candidate
+
+        # Cross-validation: repeat the winning pair independently
+        try:
+            r_true2  = self.session.get(self.inject_param(url, param, true_pl),  timeout=10)
+            r_false2 = self.session.get(self.inject_param(url, param, false_pl), timeout=10)
+            len_true2  = len(r_true2.text)
+            len_false2 = len(r_false2.text)
+
+            # TRUE responses should be similar to each other
+            true_stable  = abs(len_true1  - len_true2)  <= max(nat_stdev * 2, 30)
+            # FALSE responses should be similar to each other
+            false_stable = abs(len_false1 - len_false2) <= max(nat_stdev * 2, 30)
+            # TRUE and FALSE responses must still differ
+            cross_diff   = abs(len_true2 - len_false2)
+
+            if not (true_stable and false_stable and cross_diff >= self._BOOL_MIN_DIFF_BYTES):
+                logger.debug(
+                    f"[SQLi] Boolean-blind cross-validation FAILED for {url} param={param} "
+                    f"true_stable={true_stable} false_stable={false_stable} cross_diff={cross_diff}"
+                )
+                return None
+
+        except _requests.exceptions.RequestException as exc:
+            logger.debug(f"[SQLi] Boolean cross-validation error ({url}): {exc!r}")
+            return None
+
+        diff_final = abs(len_true2 - len_false2)
+        evidence = (
+            f"Boolean-blind (cross-validated): "
+            f"TRUE={len_true1}B/{len_true2}B, FALSE={len_false1}B/{len_false2}B, "
+            f"diff={diff_final}B | natural_stdev={nat_stdev:.1f}B, threshold={dynamic_threshold:.0f}B"
+        )
+        return true_pl, evidence
 
     def run(self, url, **kwargs):
         urls = url if isinstance(url, list) else [url]
@@ -220,13 +292,12 @@ class SQLInjectionScanner(BaseScanner):
         baseline_len = len(baseline_resp.text) if baseline_resp.text else 0
 
         for param_name, _ in params:
-            found = self._test_param_parallel(
+            # Error-based + time-based (all payloads in parallel)
+            self._test_param_parallel(
                 url, param_name, baseline_errors, time_threshold
             )
-            if found:
-                break
 
-            # Union-based detection
+            # Union-based detection — independent of error results
             union_result = self._try_union_based(url, param_name)
             if union_result:
                 payload, evidence = union_result
@@ -238,9 +309,8 @@ class SQLInjectionScanner(BaseScanner):
                     severity="Critical",
                     evidence=evidence,
                 )
-                break
 
-            # Boolean-blind fallback
+            # Boolean-blind fallback — independent, always run
             bool_result = self._is_boolean_blind(url, param_name, baseline_len)
             if bool_result:
                 payload, evidence = bool_result
@@ -252,7 +322,12 @@ class SQLInjectionScanner(BaseScanner):
                     severity="Critical",
                     evidence=evidence,
                 )
-                break
+
+        # JSON body injection — test params as JSON payload
+        self._scan_json_body(url, params, baseline_errors, time_threshold)
+
+        # HTTP header injection — inject into common headers
+        self._scan_header_injection(url, baseline_errors, time_threshold)
 
     def _test_param_parallel(
         self,
@@ -340,12 +415,12 @@ class SQLInjectionScanner(BaseScanner):
                 p_name = inp.get("name")
                 if not p_name:
                     continue
-                found = self._test_form_param_parallel(
+                # Test ALL inputs — never stop early; multi-param forms may have
+                # several vulnerable fields (e.g. username AND password both injectable)
+                self._test_form_param_parallel(
                     action, method, inputs, p_name, payloads,
                     baseline_errors, time_threshold
                 )
-                if found:
-                    break
 
     def _test_form_param_parallel(
         self,
@@ -404,6 +479,157 @@ class SQLInjectionScanner(BaseScanner):
         for hit in hits:
             self.report_finding(severity="Critical", **hit)
         return bool(hits)
+
+    # -------------------------------------------------------------------------
+    # JSON body injection
+    # -------------------------------------------------------------------------
+
+    # Lightweight set of probes used exclusively for JSON/header injection.
+    # Full wordlist already covers GET/POST form params; these are targeted
+    # at the common REST API patterns where injection often lives undetected.
+    _SQLI_JSON_PROBES = [
+        "' OR '1'='1",
+        "' OR 1=1--",
+        "\" OR \"1\"=\"1",
+        "1' AND SLEEP(3)--",
+        "1 AND 1=CONVERT(int,@@version)--",
+        "1; SELECT pg_sleep(3)--",
+        "' AND extractvalue(1,concat(0x7e,version()))--",
+        "ws_so_' OR '1'='1",   # second-order marker
+    ]
+
+    def _scan_json_body(
+        self,
+        url: str,
+        params: List[Tuple[str, str]],
+        baseline_errors: set,
+        time_threshold: float,
+    ) -> None:
+        """
+        Re-send the same URL parameters as a JSON body (Content-Type: application/json).
+        Many REST APIs accept both forms; WAFs often miss JSON-body injection.
+        """
+        if not params:
+            return
+        base_json = {k: v for k, v in params}
+        for key in list(base_json.keys()):
+            for payload in self._SQLI_JSON_PROBES:
+                probe_json = dict(base_json)
+                probe_json[key] = payload
+                t0 = time.time()
+                try:
+                    res = self.session.post(
+                        url,
+                        json=probe_json,
+                        headers={"Content-Type": "application/json"},
+                        timeout=12,
+                    )
+                    elapsed = time.time() - t0
+                except _requests.exceptions.RequestException as exc:
+                    logger.debug(f"[SQLi/JSON] probe error {url}: {exc!r}")
+                    continue
+
+                new_errors = self._extract_error_fingerprints(res.text) - baseline_errors
+                if new_errors:
+                    db = next(iter(new_errors))[0]
+                    self.report_finding(
+                        vuln_type="SQL Injection (JSON Body/Error)",
+                        url=url,
+                        param=key,
+                        payload=payload,
+                        severity="Critical",
+                        evidence=f"DB: {db} — JSON body injection",
+                    )
+                    break  # one finding per key is enough
+
+                if self._is_time_payload(payload) and elapsed > time_threshold:
+                    self.report_finding(
+                        vuln_type="SQL Injection (JSON Body/Time)",
+                        url=url,
+                        param=key,
+                        payload=payload,
+                        severity="Critical",
+                        evidence=(
+                            f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
+                            f"(JSON body)"
+                        ),
+                    )
+                    break
+
+    # -------------------------------------------------------------------------
+    # HTTP header injection
+    # -------------------------------------------------------------------------
+
+    _INJECTABLE_HEADERS = [
+        "X-Forwarded-For",
+        "X-Real-IP",
+        "Referer",
+        "User-Agent",
+        "X-Originating-IP",
+        "X-Remote-IP",
+        "X-Remote-Addr",
+        "X-Client-IP",
+        "CF-Connecting-IP",
+        "True-Client-IP",
+    ]
+    _HEADER_PROBES = [
+        "' OR '1'='1",
+        "' OR 1=1--",
+        "1' AND SLEEP(3)--",
+        "' AND extractvalue(1,concat(0x7e,version()))--",
+        "1 AND 1=CONVERT(int,@@version)--",
+    ]
+
+    def _scan_header_injection(
+        self,
+        url: str,
+        baseline_errors: set,
+        time_threshold: float,
+    ) -> None:
+        """
+        Inject SQLi payloads into common HTTP headers (X-Forwarded-For, Referer, etc.).
+        Applications that log or DB-store request metadata are frequently vulnerable here.
+        """
+        for header in self._INJECTABLE_HEADERS:
+            for payload in self._HEADER_PROBES:
+                t0 = time.time()
+                try:
+                    res = self.session.get(
+                        url,
+                        headers={header: payload},
+                        timeout=12,
+                    )
+                    elapsed = time.time() - t0
+                except _requests.exceptions.RequestException as exc:
+                    logger.debug(f"[SQLi/Header] probe error {url} header={header}: {exc!r}")
+                    continue
+
+                new_errors = self._extract_error_fingerprints(res.text) - baseline_errors
+                if new_errors:
+                    db = next(iter(new_errors))[0]
+                    self.report_finding(
+                        vuln_type="SQL Injection (Header/Error)",
+                        url=url,
+                        param=f"[Header] {header}",
+                        payload=payload,
+                        severity="Critical",
+                        evidence=f"DB: {db} — header injection via {header}",
+                    )
+                    break
+
+                if self._is_time_payload(payload) and elapsed > time_threshold:
+                    self.report_finding(
+                        vuln_type="SQL Injection (Header/Time)",
+                        url=url,
+                        param=f"[Header] {header}",
+                        payload=payload,
+                        severity="Critical",
+                        evidence=(
+                            f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
+                            f"(header: {header})"
+                        ),
+                    )
+                    break
 
     # -------------------------------------------------------------------------
     # OS Command Injection — FAZ 6.1: CmdiScanner'a delege edildi

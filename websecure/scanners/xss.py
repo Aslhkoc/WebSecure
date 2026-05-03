@@ -1,3 +1,4 @@
+import html
 import logging
 import random
 import re
@@ -13,6 +14,87 @@ from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# HTML-context executability check
+# ---------------------------------------------------------------------------
+
+# Characters that must survive unescaped for an XSS payload to be executable.
+# Mapping: dangerous char → its HTML entity encodings
+_DANGEROUS_CHARS: Dict[str, List[str]] = {
+    "<":  ["&lt;", "&#60;", "&#x3c;", "&#x3C;", "%3c", "%3C"],
+    ">":  ["&gt;", "&#62;", "&#x3e;", "&#x3E;", "%3e", "%3E"],
+    '"':  ["&quot;", "&#34;", "&#x22;", "%22"],
+    "'":  ["&#39;", "&#x27;", "&apos;", "%27"],
+}
+
+# Chars that indicate an executable payload based on the payload type
+_SCRIPT_INDICATORS  = re.compile(r"<\s*script", re.I)
+_EVENT_INDICATORS   = re.compile(r"\bon\w+\s*=", re.I)
+_HREF_INDICATORS    = re.compile(r"href\s*=\s*['\"]?\s*javascript:", re.I)
+_SRC_INDICATORS     = re.compile(r"src\s*=\s*['\"]?\s*javascript:", re.I)
+
+
+def _is_xss_executable(payload: str, response_text: str) -> bool:
+    """
+    Return True only when the reflected payload retains its dangerous characters
+    in an unescaped form that a browser would actually execute.
+
+    Logic:
+    1. Find the exact reflected occurrence of `payload` in `response_text`.
+    2. For each dangerous character present in `payload`, verify it appears
+       as a raw character (not as an HTML entity) in the surrounding context.
+    3. Additionally require that the reflection context contains an executable
+       indicator (<script, on*=, javascript:) with unescaped angle brackets or
+       unquoted event handlers.
+
+    A payload like `<script>alert(1)</script>` reflected as
+    `&lt;script&gt;alert(1)&lt;/script&gt;` returns False.
+    The same payload reflected literally returns True.
+    """
+    if not payload or payload not in response_text:
+        return False
+
+    # Collect which dangerous chars appear in the payload
+    relevant_chars = [c for c in _DANGEROUS_CHARS if c in payload]
+    if not relevant_chars:
+        # Payload has no angle brackets / quotes (e.g. pure JS like alert(1))
+        # — still reflected, no encoding concern
+        return True
+
+    # Find the reflection position and inspect a window around it
+    pos = response_text.find(payload)
+    window_start = max(0, pos - 20)
+    window_end   = min(len(response_text), pos + len(payload) + 20)
+    window        = response_text[window_start:window_end]
+
+    for char in relevant_chars:
+        # Check: does the window contain the char's entity form instead of raw char?
+        for entity in _DANGEROUS_CHARS[char]:
+            if entity.lower() in window.lower():
+                # Found encoded form — this char is sanitised; payload won't execute
+                logger.debug(
+                    f"[XSS] Payload reflected but '{char}' is HTML-encoded "
+                    f"(found '{entity}') — skipping false positive"
+                )
+                return False
+
+    # Payload is reflected with raw dangerous chars — confirm an executable context
+    has_exec_context = (
+        _SCRIPT_INDICATORS.search(window)
+        or _EVENT_INDICATORS.search(window)
+        or _HREF_INDICATORS.search(window)
+        or _SRC_INDICATORS.search(window)
+    )
+    if not has_exec_context:
+        # Reflected inside plain text node or attribute value without event handler
+        logger.debug(
+            "[XSS] Payload reflected with raw chars but no executable context detected "
+            "— flagging as medium-confidence"
+        )
+        # Still return True — a penetration tester should verify; we just lower confidence
+        # via the caller (dom_verify step will confirm or deny execution)
+    return True
 
 
 class XSSScanner(BaseScanner):
@@ -128,6 +210,11 @@ class XSSScanner(BaseScanner):
                 return None
 
             if actual in res.text and actual not in baseline_text:
+                # Guard: check that dangerous chars are reflected RAW (unencoded).
+                # If the application HTML-encodes < > " ' the payload is harmless
+                # in a browser even though it appears in the source — skip it.
+                if not _is_xss_executable(actual, res.text):
+                    return None
                 return {
                     "vuln_type": "Reflected XSS",
                     "url": url,

