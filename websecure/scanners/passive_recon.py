@@ -1,11 +1,14 @@
 import os
 import re
 import math
+import json
+import socket
 import logging
+import concurrent.futures
 import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlparse
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 
 from .base import BaseScanner
 
@@ -408,61 +411,579 @@ class APISchemaDiscovery(BaseScanner):
         return results
 
 
+# ---------------------------------------------------------------------------
+# ShodanScanner — pasif servis/banner keşfi
+# ---------------------------------------------------------------------------
+
+class ShodanScanner(BaseScanner):
+    """
+    Shodan API ile hedef domain için açık port, banner ve CVE keşfi yapar.
+    SHODAN_API_KEY ortam değişkeni veya results['shodan_api_key'] ile çalışır.
+    Key yoksa sessizce atlar.
+    """
+    _BASE = "https://api.shodan.io"
+
+    def _key(self) -> Optional[str]:
+        return os.environ.get("SHODAN_API_KEY") or (self.results or {}).get("shodan_api_key")
+
+    def scan(self, domain: str) -> List[Dict[str, Any]]:
+        key = self._key()
+        if not key:
+            logger.debug("[Shodan] API key yok, atlanıyor.")
+            return []
+        findings: List[Dict[str, Any]] = []
+
+        # 1. DNS tabanlı subdomain keşfi
+        try:
+            r = self.session.get(f"{self._BASE}/dns/domain/{domain}?key={key}", timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                for sub in data.get("subdomains", []):
+                    fqdn = f"{sub}.{domain}"
+                    findings.append(self.create_finding(
+                        type="Shodan: Subdomain Keşfi",
+                        url=f"https://{fqdn}", severity="Info",
+                        details=f"Shodan DNS kaydında tespit: {fqdn}",
+                        evidence={"tags": data.get("tags", []), "source": "shodan_dns"},
+                    ))
+        except Exception as e:
+            logger.debug(f"[Shodan] DNS sorgu hatası: {e}")
+
+        # 2. Host bilgisi: açık portlar, banner'lar, CVE'ler
+        try:
+            ip = socket.gethostbyname(domain)
+            r2 = self.session.get(f"{self._BASE}/shodan/host/{ip}?key={key}", timeout=15)
+            if r2.status_code == 200:
+                h = r2.json()
+                ports = h.get("ports", [])
+                vulns = list(h.get("vulns", {}).keys())
+                banners = [d.get("product", "") for d in h.get("data", []) if d.get("product")]
+                os_str = h.get("os") or ""
+                risky_ports = {21, 22, 23, 25, 110, 143, 3306, 5432, 6379, 8080, 27017, 9200, 11211}
+                if ports:
+                    sev = "High" if any(p in risky_ports for p in ports) else ("Medium" if len(ports) > 5 else "Info")
+                    findings.append(self.create_finding(
+                        type="Shodan: Açık Port Tespiti",
+                        url=f"https://{domain}", severity=sev,
+                        details=f"IP {ip} — {len(ports)} açık port tespit edildi",
+                        evidence={"ports": sorted(ports), "banners": list(set(b for b in banners if b))[:10], "os": os_str, "ip": ip},
+                    ))
+                if vulns:
+                    findings.append(self.create_finding(
+                        type="Shodan: Bilinen CVE Tespiti",
+                        url=f"https://{domain}", severity="Critical",
+                        details=f"Shodan {len(vulns)} bilinen CVE tespit etti — derhal yamalayın",
+                        evidence={"cves": vulns[:20], "ip": ip},
+                    ))
+        except Exception as e:
+            logger.debug(f"[Shodan] Host sorgu hatası: {e}")
+
+        logger.info(f"[Shodan] {domain}: {len(findings)} bulgu")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# GitHubDorkScanner — GitHub Search API ile gizli bilgi sızıntısı
+# ---------------------------------------------------------------------------
+
+class GitHubDorkScanner(BaseScanner):
+    """
+    GitHub Search API kullanarak hedef domain/org'a ait açığa çıkmış
+    secret, password, API key gibi bilgileri arar.
+    GITHUB_TOKEN ile rate limit artırılır (opsiyonel).
+    """
+    _API = "https://api.github.com/search/code"
+    _DORK_TEMPLATES = [
+        '"{domain}" password',
+        '"{domain}" api_key',
+        '"{domain}" apiKey',
+        '"{domain}" secret',
+        '"{domain}" access_token',
+        '"{domain}" private_key',
+        '"{domain}" aws_access_key_id',
+        '"{domain}" db_password',
+        'org:{org} password filename:.env',
+        'org:{org} secret filename:config',
+        'org:{org} apikey',
+        'org:{org} BEGIN RSA PRIVATE KEY',
+    ]
+
+    def _headers(self) -> Dict[str, str]:
+        token = os.environ.get("GITHUB_TOKEN") or (self.results or {}).get("github_token", "")
+        h: Dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
+        if token:
+            h["Authorization"] = f"token {token}"
+        return h
+
+    def scan(self, domain: str) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        org = domain.split(".")[0]
+        dorks = [t.format(domain=domain, org=org) for t in self._DORK_TEMPLATES]
+
+        for dork in dorks:
+            try:
+                r = self.session.get(
+                    self._API,
+                    params={"q": dork, "per_page": 5},
+                    headers=self._headers(),
+                    timeout=15,
+                )
+                if r.status_code in (403, 422):
+                    logger.debug(f"[GitHub] Rate limit / hatalı dork: {dork}")
+                    continue
+                if r.status_code != 200:
+                    continue
+                items = r.json().get("items", [])
+                for item in items[:3]:
+                    html_url = item.get("html_url", "")
+                    repo = item.get("repository", {}).get("full_name", "")
+                    findings.append(self.create_finding(
+                        type="GitHub: Potansiyel Secret Sızıntısı",
+                        url=html_url,
+                        severity="High",
+                        details=f"GitHub'da gizli bilgi tespiti. Dork: '{dork}'",
+                        evidence={"dork": dork, "repository": repo, "file_url": html_url},
+                    ))
+            except Exception as e:
+                logger.debug(f"[GitHub] Dork hatası '{dork}': {e}")
+
+        logger.info(f"[GitHub] {domain}: {len(findings)} potansiyel sızıntı")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# WaybackScanner — Wayback Machine CDX API ile tarihi URL keşfi
+# ---------------------------------------------------------------------------
+
+class WaybackScanner(BaseScanner):
+    """
+    Web Archive CDX API ile hedef domain'in tüm arşivlenmiş URL'lerini keşfeder.
+    Auth gerektirmez. Keşfedilen endpoint'ler aktif tarayıcılar için
+    results['endpoints'] havuzuna eklenir.
+    """
+    _CDX = "https://web.archive.org/cdx/search/cdx"
+    _INTERESTING_RE = re.compile(
+        r"(?:/admin|/api|/backup|/config|/debug|/dev|/export|/hidden|/internal|"
+        r"/login|/manage|/panel|/secret|/staging|/swagger|/token|/upload|"
+        r"\.php|\.asp|\.aspx|\.jsp|\.env|\.json|\.xml|\.yaml|\.yml|"
+        r"/v\d+/|/graphql|/rest|/rpc)(?:[/?#]|$)",
+        re.IGNORECASE,
+    )
+
+    def scan(self, domain: str) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        try:
+            r = self.session.get(
+                self._CDX,
+                params={
+                    "url": f"*.{domain}/*",
+                    "output": "json",
+                    "fl": "original,statuscode,timestamp",
+                    "collapse": "urlkey",
+                    "limit": "2000",
+                    "filter": "statuscode:200",
+                },
+                timeout=30,
+            )
+            if r.status_code != 200:
+                return findings
+            rows = r.json()
+            if not rows or len(rows) < 2:
+                return findings
+
+            header = rows[0]
+            col = {h: i for i, h in enumerate(header)}
+            urls_seen: Set[str] = set()
+            interesting: List[str] = []
+
+            for row in rows[1:]:
+                try:
+                    url_str = row[col.get("original", 0)]
+                except (IndexError, TypeError):
+                    continue
+                if not url_str or url_str in urls_seen:
+                    continue
+                urls_seen.add(url_str)
+                if self._INTERESTING_RE.search(url_str):
+                    interesting.append(url_str)
+
+            # Aktif tarayıcılar için endpoint havuzuna ekle
+            if self.results is not None:
+                ep = self.results.setdefault("endpoints", [])
+                for u in list(urls_seen)[:500]:
+                    if u not in ep:
+                        ep.append(u)
+
+            if urls_seen:
+                findings.append(self.create_finding(
+                    type="Wayback: Tarihi URL Keşfi",
+                    url=f"https://{domain}",
+                    severity="Info",
+                    details=f"Wayback Machine: {len(urls_seen)} URL, {len(interesting)} ilginç endpoint",
+                    evidence={"total_urls": len(urls_seen), "interesting": interesting[:30]},
+                ))
+            logger.info(f"[Wayback] {domain}: {len(urls_seen)} URL, {len(interesting)} ilginç")
+        except Exception as e:
+            logger.debug(f"[Wayback] Hata: {e}")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# S3BucketScanner — S3 / GCS / Azure Blob bucket keşfi
+# ---------------------------------------------------------------------------
+
+class S3BucketScanner(BaseScanner):
+    """
+    Hedef domain'den türetilen isimlendirme kalıpları ile S3, GCS ve
+    Azure Blob bucket'larını test eder. Public erişim → Critical,
+    private (403) → Medium.
+    """
+    _SUFFIXES = [
+        "", "-prod", "-production", "-dev", "-development", "-staging",
+        "-stage", "-uat", "-qa", "-test", "-backup", "-bak", "-old",
+        "-static", "-assets", "-media", "-img", "-images", "-cdn",
+        "-files", "-data", "-storage", "-archive", "-public", "-private",
+        "-internal", "-api", "-app", "-web", "-frontend", "-backend",
+        "-upload", "-uploads", "-logs", "-log", "-www", "-resources",
+    ]
+    _S3_ENDPOINTS = [
+        "s3.amazonaws.com",
+        "s3.us-east-1.amazonaws.com",
+        "s3.us-west-2.amazonaws.com",
+        "s3.eu-west-1.amazonaws.com",
+    ]
+
+    def _gen_names(self, domain: str) -> List[str]:
+        base = domain.split(".")[0]           # example
+        full = domain.replace(".", "-")       # example-com
+        names: Set[str] = set()
+        for stem in [base, full]:
+            for suf in self._SUFFIXES:
+                names.add(f"{stem}{suf}")
+        return list(names)
+
+    def _check_s3(self, name: str) -> Optional[Dict]:
+        for ep in self._S3_ENDPOINTS:
+            url = f"https://{name}.{ep}"
+            try:
+                r = self.session.head(url, timeout=6, allow_redirects=False)
+                if r.status_code == 200:
+                    return self.create_finding(
+                        type="S3 Bucket: Herkese Açık (Critical)",
+                        url=url, severity="Critical",
+                        details=f"S3 bucket herkese açık okuma erişimine sahip: {name}",
+                        evidence={"bucket": name, "endpoint": ep},
+                    )
+                if r.status_code == 403:
+                    return self.create_finding(
+                        type="S3 Bucket: Tespit Edildi (Private)",
+                        url=url, severity="Medium",
+                        details=f"S3 bucket mevcut ancak kısıtlı: {name}",
+                        evidence={"bucket": name, "endpoint": ep},
+                    )
+            except Exception:
+                pass
+        return None
+
+    def _check_gcs(self, name: str) -> Optional[Dict]:
+        url = f"https://storage.googleapis.com/{name}"
+        try:
+            r = self.session.head(url, timeout=6, allow_redirects=False)
+            if r.status_code == 200:
+                return self.create_finding(
+                    type="GCS Bucket: Herkese Açık (Critical)",
+                    url=url, severity="Critical",
+                    details=f"GCS bucket herkese açık: {name}",
+                    evidence={"bucket": name},
+                )
+            if r.status_code == 403:
+                return self.create_finding(
+                    type="GCS Bucket: Tespit Edildi (Private)",
+                    url=url, severity="Medium",
+                    details=f"GCS bucket mevcut ancak kısıtlı: {name}",
+                    evidence={"bucket": name},
+                )
+        except Exception:
+            pass
+        return None
+
+    def _check_azure(self, name: str) -> Optional[Dict]:
+        url = f"https://{name}.blob.core.windows.net"
+        try:
+            r = self.session.head(url, timeout=6, allow_redirects=False)
+            if r.status_code == 200:
+                return self.create_finding(
+                    type="Azure Blob: Herkese Açık (Critical)",
+                    url=url, severity="Critical",
+                    details=f"Azure Blob herkese açık: {name}",
+                    evidence={"container": name},
+                )
+            if r.status_code in (400, 403, 404):
+                # 400 = container exists but requires auth
+                if r.status_code in (400, 403):
+                    return self.create_finding(
+                        type="Azure Blob: Tespit Edildi (Private)",
+                        url=url, severity="Low",
+                        details=f"Azure Blob mevcut ancak kısıtlı: {name}",
+                        evidence={"container": name},
+                    )
+        except Exception:
+            pass
+        return None
+
+    def scan(self, domain: str) -> List[Dict[str, Any]]:
+        names = self._gen_names(domain)
+        logger.info(f"[S3Scanner] {len(names)} bucket ismi × 3 cloud = {len(names)*3} kontrol")
+        findings: List[Dict[str, Any]] = []
+
+        def _probe(name: str) -> List[Optional[Dict]]:
+            return [self._check_s3(name), self._check_gcs(name), self._check_azure(name)]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+            for results_batch in ex.map(_probe, names):
+                for f in results_batch:
+                    if f:
+                        findings.append(f)
+
+        logger.info(f"[S3Scanner] {domain}: {len(findings)} bucket bulgusu")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# CloudDetector — HTTP yanıt başlıkları + CNAME ile cloud tespiti
+# ---------------------------------------------------------------------------
+
+class CloudDetector(BaseScanner):
+    """
+    HTTP response header'larını analiz ederek hedef sistemin hangi cloud
+    altyapısında çalıştığını tespit eder. Subdomain takeover riski de değerlendirilir.
+    """
+    _HEADER_SIGS: Dict[str, List[str]] = {
+        "AWS / EC2":        ["x-amzn-requestid", "x-amz-id-2", "x-amz-request-id"],
+        "AWS S3":           ["x-amz-bucket-region", "x-amz-delete-marker", "x-amz-version-id"],
+        "AWS CloudFront":   ["x-amz-cf-id", "x-amz-cf-pop"],
+        "GCP":              ["x-guploader-uploadid", "x-goog-generation"],
+        "Azure":            ["x-azure-ref", "x-ms-request-id", "x-ms-version"],
+        "Cloudflare":       ["cf-ray", "cf-cache-status"],
+        "Fastly":           ["x-fastly-request-id", "fastly-restarts"],
+        "Akamai":           ["x-check-cacheable", "x-akamai-transformed"],
+        "Vercel":           ["x-vercel-id", "x-vercel-cache"],
+        "Netlify":          ["x-nf-request-id"],
+        "Heroku":           ["x-heroku-queue-wait-time", "x-heroku-dynos-in-use"],
+    }
+    # CNAME suffixes → potential subdomain takeover targets
+    _TAKEOVER_CNAMES: Dict[str, str] = {
+        "s3.amazonaws.com":           "AWS S3 (subdomain takeover riski)",
+        "cloudfront.net":             "AWS CloudFront",
+        "github.io":                  "GitHub Pages (subdomain takeover riski)",
+        "azurewebsites.net":          "Azure App Service (subdomain takeover riski)",
+        "azurefd.net":                "Azure Front Door",
+        "googleusercontent.com":      "GCP",
+        "appspot.com":                "GCP App Engine (subdomain takeover riski)",
+        "netlify.app":                "Netlify (subdomain takeover riski)",
+        "vercel.app":                 "Vercel",
+        "fastly.net":                 "Fastly",
+        "herokudns.com":              "Heroku (subdomain takeover riski)",
+        "shopify.com":                "Shopify (subdomain takeover riski)",
+        "unbouncepages.com":          "Unbounce (subdomain takeover riski)",
+        "cargo.site":                 "Cargo (subdomain takeover riski)",
+    }
+
+    def scan(self, url: str) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        detected: Set[str] = set()
+        domain = urlparse(url).hostname or url
+
+        # 1. HTTP başlık analizi
+        try:
+            r = self.session.head(url, timeout=10, allow_redirects=True)
+            resp_headers_lower = {k.lower(): v.lower() for k, v in r.headers.items()}
+            for provider, sigs in self._HEADER_SIGS.items():
+                for sig in sigs:
+                    if any(sig in k or (sig in v if len(sig) > 4 else False)
+                           for k, v in resp_headers_lower.items()):
+                        detected.add(provider)
+                        break
+        except Exception as e:
+            logger.debug(f"[CloudDetect] HTTP hatası: {e}")
+
+        # 2. DNS CNAME analizi + subdomain takeover tespiti
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nslookup", "-type=CNAME", domain],
+                capture_output=True, text=True, timeout=8, errors="replace",
+            )
+            cname_output = (result.stdout or "").lower()
+            for cname_hint, provider in self._TAKEOVER_CNAMES.items():
+                if cname_hint in cname_output:
+                    detected.add(provider)
+                    # Takeover riski varsa ayrı bulgu üret
+                    if "takeover" in provider.lower():
+                        # Hedef gerçekten erişilebilir mi kontrol et
+                        try:
+                            probe = requests.head(f"https://{domain}", timeout=5)
+                            alive = probe.status_code not in (404, 410)
+                        except Exception:
+                            alive = False
+                        if not alive:
+                            findings.append(self.create_finding(
+                                type="Subdomain Takeover Riski",
+                                url=url, severity="Critical",
+                                details=f"CNAME {cname_hint} işaret ediyor ancak hedef servis yanıt vermiyor — takeover mümkün",
+                                evidence={"cname": cname_hint, "provider": provider, "domain": domain},
+                            ))
+        except Exception:
+            pass
+
+        if detected:
+            findings.append(self.create_finding(
+                type="Cloud Altyapı Tespiti",
+                url=url, severity="Info",
+                details=f"Tespit edilen cloud sağlayıcı(lar): {', '.join(sorted(detected))}",
+                evidence={"providers": sorted(detected), "domain": domain},
+            ))
+            logger.info(f"[CloudDetect] {url}: {', '.join(sorted(detected))}")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# EmailHarvester — sayfa tarama + Hunter.io API
+# ---------------------------------------------------------------------------
+
+class EmailHarvester(BaseScanner):
+    """
+    Hedef siteden ve opsiyonel olarak Hunter.io API'sinden e-posta adresleri toplar.
+    Bulunan adresler sosyal mühendislik & spear phishing riski taşır.
+    """
+    _PAGES = [
+        "", "/contact", "/about", "/team", "/careers", "/support",
+        "/contact-us", "/about-us", "/staff", "/people", "/press",
+        "/our-team", "/leadership", "/management",
+    ]
+    _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}")
+
+    def _hunter_key(self) -> Optional[str]:
+        return os.environ.get("HUNTER_API_KEY") or (self.results or {}).get("hunter_api_key")
+
+    def scan(self, target_url: str, domain: str) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        found_emails: Set[str] = set()
+        parsed = urlparse(target_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 1. Sayfa tarama
+        for path in self._PAGES:
+            page_url = origin + path
+            try:
+                r = self.session.get(page_url, timeout=8, allow_redirects=True)
+                if r.status_code == 200:
+                    for email in self._EMAIL_RE.findall(r.text):
+                        if domain in email:
+                            found_emails.add(email.lower())
+            except Exception:
+                pass
+
+        # 2. Hunter.io API (opsiyonel — key varsa)
+        key = self._hunter_key()
+        if key:
+            try:
+                r = requests.get(
+                    "https://api.hunter.io/v2/domain-search",
+                    params={"domain": domain, "api_key": key, "limit": 100},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    for em in r.json().get("data", {}).get("emails", []):
+                        em_val = em.get("value", "")
+                        if em_val:
+                            found_emails.add(em_val.lower())
+            except Exception as e:
+                logger.debug(f"[Hunter] API hatası: {e}")
+
+        if found_emails:
+            findings.append(self.create_finding(
+                type="Email Adresi Tespiti",
+                url=target_url, severity="Info",
+                details=f"{len(found_emails)} e-posta adresi tespit edildi — spear phishing riski",
+                evidence={"emails": sorted(found_emails), "count": len(found_emails)},
+            ))
+            logger.info(f"[EmailHarvester] {domain}: {len(found_emails)} email")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# Plugin API — run()
+# ---------------------------------------------------------------------------
+
 def run(target: str, session=None, results=None, **kwargs):
     if results is None:
         results = {}
     results.setdefault("passive", [])
+    results.setdefault("endpoints", [])
 
-    # 1. Content Discovery (robots, sitemap, sensitive files)
+    parsed = urlparse(target)
+    domain = parsed.hostname or target.split("://")[-1].split("/")[0].split(":")[0]
+
+    # 1. Content Discovery (robots.txt, sitemap.xml, hassas dosyalar)
     cd_scanner = ContentDiscoveryScanner(session, results)
-    findings_cd = cd_scanner.scan(target)
-    results["passive"].extend(findings_cd)
+    results["passive"].extend(cd_scanner.scan(target))
 
-    # 1b. API Schema Discovery (OpenAPI / Swagger)
+    # 2. API Schema Discovery (OpenAPI / Swagger)
     api_scanner = APISchemaDiscovery(session, results)
-    findings_api = api_scanner.scan(target)
-    results["passive"].extend(findings_api)
+    results["passive"].extend(api_scanner.scan(target))
 
-    # 2. JS Secret & Endpoint Scan
-    # Collect JS URLs from: discovery results, explicit kwarg, and page crawl
+    # 3. JS Secret & Endpoint Scan
     js_urls: List[str] = []
-
-    # From crawl/discovery results
     discovery = results.get("discovery", {})
     if isinstance(discovery, dict):
-        for u in discovery.get("js", []):
+        for u in discovery.get("js", []) + discovery.get("query", []):
             if isinstance(u, str) and u.endswith(".js"):
                 js_urls.append(u)
-        # Also scan any endpoint that looks like JS
-        for u in discovery.get("query", []):
-            if isinstance(u, str) and u.endswith(".js"):
-                js_urls.append(u)
-
-    # Explicit JS URL list from kwargs
     for u in kwargs.get("js_urls", []):
         if u not in js_urls:
             js_urls.append(u)
-
-    # If target itself is a JS file
     if target.endswith(".js") and target not in js_urls:
         js_urls.append(target)
-
-    # Probe the target page and extract referenced JS files
     if not js_urls and session:
         try:
             resp = session.get(target, timeout=8)
             if resp.status_code == 200:
-                for m in re.finditer(r'<script[^>]+src=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', resp.text, re.IGNORECASE):
-                    js_path = m.group(1)
-                    js_full = urljoin(target, js_path)
+                for m in re.finditer(
+                    r'<script[^>]+src=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']',
+                    resp.text, re.IGNORECASE,
+                ):
+                    js_full = urljoin(target, m.group(1))
                     if js_full not in js_urls:
                         js_urls.append(js_full)
         except Exception as e:
-            logger.debug(f"[PassiveRecon] JS extraction from page failed: {e}")
-
+            logger.debug(f"[PassiveRecon] JS çıkarımı başarısız: {e}")
     if js_urls:
-        logger.info(f"[PassiveRecon] Scanning {len(js_urls)} JS file(s)")
+        logger.info(f"[PassiveRecon] {len(js_urls)} JS dosyası taranıyor")
         js_scanner = PassiveJSScanner(session, results)
-        findings_js = js_scanner.scan(js_urls)
-        results["passive"].extend(findings_js)
+        results["passive"].extend(js_scanner.scan(js_urls))
+
+    # 4. Cloud Altyapı Tespiti
+    cloud_scanner = CloudDetector(session, results)
+    results["passive"].extend(cloud_scanner.scan(target))
+
+    # 5. Wayback Machine — tarihi URL keşfi
+    wayback_scanner = WaybackScanner(session, results)
+    results["passive"].extend(wayback_scanner.scan(domain))
+
+    # 6. S3 / GCS / Azure Bucket Discovery
+    s3_scanner = S3BucketScanner(session, results)
+    results["passive"].extend(s3_scanner.scan(domain))
+
+    # 7. GitHub Dorking (GITHUB_TOKEN ile en iyi sonuç)
+    gh_scanner = GitHubDorkScanner(session, results)
+    results["passive"].extend(gh_scanner.scan(domain))
+
+    # 8. Shodan (SHODAN_API_KEY gerekli)
+    shodan_scanner = ShodanScanner(session, results)
+    results["passive"].extend(shodan_scanner.scan(domain))
+
+    # 9. Email Harvesting
+    email_scanner = EmailHarvester(session, results)
+    results["passive"].extend(email_scanner.scan(target, domain))
 

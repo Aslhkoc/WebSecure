@@ -319,26 +319,307 @@ def _crtsh_enum(domain: str, timeout: int = 30) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# 5. HackerTarget API — ücretsiz pasif subdomain keşfi
+# ---------------------------------------------------------------------------
+
+class HackerTargetWrapper:
+    """
+    HackerTarget API ile subdomain enumeration.
+    Ücretsiz, auth gerektirmez (günlük rate limit var).
+    """
+    _URL = "https://api.hackertarget.com/hostsearch/?q={domain}"
+
+    def is_available(self) -> bool:
+        return True  # HTTP tabanlı, her zaman dene
+
+    def run(self, domain: str) -> List[Dict[str, Any]]:
+        if _requests is None:
+            return []
+        results_list: List[Dict[str, Any]] = []
+        try:
+            url = self._URL.format(domain=domain)
+            resp = _requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                return []
+            text = resp.text.strip()
+            if "error" in text[:100].lower() or "API count exceeded" in text:
+                logger.debug("[HackerTarget] Rate limit aşıldı.")
+                return []
+            for line in text.split("\n"):
+                if "," in line:
+                    parts = line.strip().split(",")
+                    sub = parts[0].strip()
+                    ip = parts[1].strip() if len(parts) > 1 else ""
+                    if sub and domain in sub:
+                        results_list.append({"subdomain": sub, "ip": ip, "method": "hackertarget"})
+            logger.info(f"[HackerTarget] {len(results_list)} subdomain bulundu")
+        except Exception as e:
+            logger.debug(f"[HackerTarget] Hata: {e}")
+        return results_list
+
+
+# ---------------------------------------------------------------------------
+# 6. SecurityTrails API — API key gerektiren premium enum
+# ---------------------------------------------------------------------------
+
+class SecurityTrailsWrapper:
+    """
+    SecurityTrails API ile kapsamlı subdomain keşfi.
+    SECURITYTRAILS_API_KEY ortam değişkeni veya cfg parametresi gerektirir.
+    """
+    _BASE = "https://api.securitytrails.com/v1"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.environ.get("SECURITYTRAILS_API_KEY", "")
+
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    def run(self, domain: str) -> List[Dict[str, Any]]:
+        if not self.api_key:
+            logger.debug("[SecurityTrails] API key yok, atlanıyor.")
+            return []
+        results_list: List[Dict[str, Any]] = []
+        try:
+            headers = {"APIKEY": self.api_key, "Content-Type": "application/json"}
+            url = f"{self._BASE}/domain/{domain}/subdomains?children_only=false&include_inactive=false"
+            resp = _requests.get(url, headers=headers, timeout=20)
+            if resp.status_code != 200:
+                logger.debug(f"[SecurityTrails] HTTP {resp.status_code}")
+                return []
+            data = resp.json()
+            for sub in data.get("subdomains", []):
+                fqdn = f"{sub}.{domain}"
+                ip = _resolve(fqdn)
+                results_list.append({"subdomain": fqdn, "ip": ip or "", "method": "securitytrails"})
+            logger.info(f"[SecurityTrails] {len(results_list)} subdomain bulundu")
+        except Exception as e:
+            logger.debug(f"[SecurityTrails] Hata: {e}")
+        return results_list
+
+
+# ---------------------------------------------------------------------------
+# 7. DNS Zone Transfer — kritik güvenlik açığı tespiti
+# ---------------------------------------------------------------------------
+
+class DNSZoneTransfer:
+    """
+    Hedef domain'in nameserver'larına AXFR (DNS zone transfer) isteği gönderir.
+    Başarılı olursa tüm DNS kayıtları açığa çıkar — kritik keşif vektörü.
+    Raw TCP AXFR: dnspython gerektirmez.
+    """
+
+    def _get_nameservers(self, domain: str) -> List[str]:
+        """Domain NS IP adreslerini toplar."""
+        ns_ips: List[str] = []
+        # Yöntem 1: nslookup / dig ile NS kayıtlarını al
+        for cmd in [
+            ["nslookup", "-type=NS", domain],
+            ["dig", "NS", domain, "+short"],
+        ]:
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=8, errors="replace",
+                )
+                output = result.stdout or ""
+                # NS host adlarını çıkar
+                for line in output.split("\n"):
+                    line = line.strip().rstrip(".")
+                    if "." in line and not line.startswith(";"):
+                        # Sadece NS gibi görünen satırları al
+                        parts = line.split()
+                        for part in parts:
+                            part = part.rstrip(".")
+                            if "." in part and not part.startswith("Server") and len(part) > 4:
+                                ip = _resolve(part)
+                                if ip and ip not in ns_ips:
+                                    ns_ips.append(ip)
+            except Exception:
+                pass
+
+        # Yöntem 2: Yaygın NS prefix'leri dene
+        if not ns_ips:
+            for prefix in ["ns1", "ns2", "ns3", "ns4", "dns", "dns1", "dns2"]:
+                fqdn = f"{prefix}.{domain}"
+                ip = _resolve(fqdn)
+                if ip and ip not in ns_ips:
+                    ns_ips.append(ip)
+
+        return ns_ips[:4]  # En fazla 4 NS
+
+    def _axfr_raw(self, ns_ip: str, domain: str, timeout: int = 8) -> List[str]:
+        """
+        Raw TCP AXFR isteği gönderir ve yanıttaki domain adlarını çıkarır.
+        """
+        import struct
+        records: List[str] = []
+        try:
+            def _encode_name(name: str) -> bytes:
+                encoded = b""
+                for label in name.rstrip(".").split("."):
+                    lbl = label.encode("ascii", errors="replace")
+                    encoded += bytes([len(lbl)]) + lbl
+                return encoded + b"\x00"
+
+            qname = _encode_name(domain)
+            # AXFR type=252, class=IN=1
+            question = qname + struct.pack(">HH", 252, 1)
+            # DNS header: TxID=0xABCD, flags=0, qdcount=1
+            header = struct.pack(">HHHHHH", 0xABCD, 0x0000, 1, 0, 0, 0)
+            message = header + question
+            tcp_msg = struct.pack(">H", len(message)) + message
+
+            with socket.create_connection((ns_ip, 53), timeout=timeout) as s:
+                s.sendall(tcp_msg)
+                data = b""
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if len(data) > 131072:  # 128 KB limit
+                        break
+
+            # Domain adlarını ham yanıttan çıkar
+            pattern = re.compile(
+                r"([a-zA-Z0-9\-_]{1,63}(?:\.[a-zA-Z0-9\-_]{1,63})*\." + re.escape(domain) + r")"
+            )
+            text = data.decode("latin-1", errors="replace")
+            found = set(pattern.findall(text))
+            records.extend(found)
+        except Exception as e:
+            logger.debug(f"[ZoneTransfer] Raw AXFR hatası {ns_ip}: {e}")
+        return list(set(records))
+
+    def run(self, domain: str) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        ns_ips = self._get_nameservers(domain)
+        if not ns_ips:
+            logger.debug(f"[ZoneTransfer] {domain} için NS bulunamadı")
+            return findings
+
+        for ns_ip in ns_ips:
+            logger.debug(f"[ZoneTransfer] AXFR deneniyor: {ns_ip} → {domain}")
+            records = self._axfr_raw(ns_ip, domain)
+            # Zone transfer başarılıysa genellikle 10+ kayıt döner
+            if len(records) >= 5:
+                findings.append({
+                    "type": "DNS Zone Transfer Açığı",
+                    "severity": "Critical",
+                    "url": f"dns://{domain}",
+                    "title": f"DNS Zone Transfer Başarılı: NS={ns_ip}",
+                    "message": (
+                        f"Nameserver {ns_ip} AXFR isteğine izin veriyor. "
+                        f"{len(records)} DNS kaydı açığa çıktı — saldırgan tüm altyapıyı haritalayabilir."
+                    ),
+                    "evidence": {"nameserver": ns_ip, "record_count": len(records), "records": records[:50]},
+                })
+                logger.warning(f"[ZoneTransfer] KRİTİK: {domain} @ {ns_ip} zone transfer'a açık!")
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# 8. ASNMapper — BGPView API ile ASN / IP blok haritalama
+# ---------------------------------------------------------------------------
+
+class ASNMapper:
+    """
+    BGPView API aracılığıyla hedef organizasyonun ASN'ini ve IP bloklarını tespit eder.
+    Ücretsiz, auth gerektirmez.
+    """
+    _BGPVIEW = "https://api.bgpview.io"
+
+    def run(self, domain: str) -> List[Dict[str, Any]]:
+        if _requests is None:
+            return []
+        findings: List[Dict[str, Any]] = []
+        try:
+            ip = _resolve(domain)
+            if not ip:
+                return findings
+
+            hdrs = {"User-Agent": "Mozilla/5.0 (WebSecure Scanner)"}
+
+            # 1. IP → ASN + prefix bilgisi
+            r = _requests.get(f"{self._BGPVIEW}/ip/{ip}", timeout=15, headers=hdrs)
+            asn_list: List[str] = []
+            prefix_list: List[str] = []
+            country: str = ""
+
+            if r.status_code == 200:
+                data = r.json().get("data", {})
+                # Prefix listesi
+                for pfx in data.get("prefixes", []):
+                    asn_obj = pfx.get("asn") or {}
+                    asn_num = asn_obj.get("asn", "")
+                    asn_name = asn_obj.get("name", "")
+                    if asn_num:
+                        entry = f"AS{asn_num} ({asn_name})"
+                        if entry not in asn_list:
+                            asn_list.append(entry)
+                    pfx_cidr = pfx.get("prefix")
+                    if pfx_cidr and pfx_cidr not in prefix_list:
+                        prefix_list.append(pfx_cidr)
+                country = (data.get("rir_allocation") or {}).get("country_code", "")
+
+            # 2. Org arama (domain prefix → company adı ile)
+            org = domain.split(".")[0]
+            r2 = _requests.get(
+                f"{self._BGPVIEW}/search", params={"query_term": org},
+                timeout=15, headers=hdrs,
+            )
+            if r2.status_code == 200:
+                search_data = r2.json().get("data", {})
+                for asn_obj in search_data.get("asns", [])[:5]:
+                    entry = f"AS{asn_obj.get('asn', '')} ({asn_obj.get('name', '')})"
+                    if entry not in asn_list:
+                        asn_list.append(entry)
+
+            if asn_list or prefix_list:
+                findings.append({
+                    "type": "ASN / IP Blok Haritalaması",
+                    "severity": "Info",
+                    "url": f"https://{domain}",
+                    "title": f"ASN Tespiti: {domain} ({ip})",
+                    "message": f"{len(asn_list)} ASN, {len(prefix_list)} IP bloğu tespit edildi",
+                    "evidence": {
+                        "ip": ip,
+                        "country": country,
+                        "asns": asn_list[:10],
+                        "ip_prefixes": prefix_list[:20],
+                    },
+                })
+                logger.info(f"[ASNMapper] {domain}: {asn_list[:2]}, {len(prefix_list)} prefix")
+        except Exception as e:
+            logger.debug(f"[ASNMapper] Hata: {e}")
+        return findings
+
+
+# ---------------------------------------------------------------------------
 # Ana Scanner sınıfı
 # ---------------------------------------------------------------------------
 
 class SubdomainScanner(BaseScanner):
     """
     Tüm subdomain enumeration yöntemlerini birleştirir:
-    DNS brute-force + Subfinder + Amass + crt.sh
+    crt.sh + HackerTarget + Subfinder + Amass + SecurityTrails + DNS brute-force
+    + DNS Zone Transfer + ASN Mapping
     """
     name: str = "subdomain"
 
-    def __init__(self,
-                 session=None,
-                 results=None,
-                 debug=False,
-                 wordlist_path: Optional[str] = None,
-                 threads: int = 50,
-                 use_subfinder: bool = True,
-                 use_amass: bool = True,
-                 use_crtsh: bool = True,
-                 passive_only: bool = True):
+    def __init__(
+        self,
+        session=None,
+        results=None,
+        debug=False,
+        wordlist_path: Optional[str] = None,
+        threads: int = 50,
+        use_subfinder: bool = True,
+        use_amass: bool = True,
+        use_crtsh: bool = True,
+        passive_only: bool = True,
+        securitytrails_key: Optional[str] = None,
+    ):
         super().__init__(session=session, results=results, debug=debug)
         self.wordlist_path = wordlist_path
         self.threads = threads
@@ -346,6 +627,7 @@ class SubdomainScanner(BaseScanner):
         self.use_amass = use_amass
         self.use_crtsh = use_crtsh
         self.passive_only = passive_only
+        self.securitytrails_key = securitytrails_key or os.environ.get("SECURITYTRAILS_API_KEY", "")
 
     def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
         """BaseScanner interface — delegates to scan."""
@@ -368,31 +650,49 @@ class SubdomainScanner(BaseScanner):
                     seen_subs.add(sub)
                     all_results.append(item)
 
-        # 1. crt.sh (en hızlı, passive, araç gerektirmez)
+        # 1. crt.sh — hızlı, pasif, araç gerektirmez
         if self.use_crtsh:
             _add(_crtsh_enum(domain))
 
-        # 2. Subfinder
+        # 2. HackerTarget — ücretsiz API
+        _add(HackerTargetWrapper().run(domain))
+
+        # 3. Subfinder — harici araç (kuruluysa)
         if self.use_subfinder:
             _add(SubfinderWrapper().run(domain))
 
-        # 3. Amass (passive mod)
+        # 4. Amass — harici araç (kuruluysa)
         if self.use_amass:
             _add(AmassWrapper().run(domain, passive=self.passive_only))
 
-        # 4. DNS brute-force (her zaman çalışır)
+        # 5. SecurityTrails — key varsa
+        if self.securitytrails_key:
+            _add(SecurityTrailsWrapper(api_key=self.securitytrails_key).run(domain))
+
+        # 6. DNS brute-force — her zaman çalışır
         brute = DNSBruteForce(wordlist_path=self.wordlist_path, threads=self.threads)
         _add(brute.run(domain))
 
         logger.info(f"[Subdomain] Toplam {len(all_results)} benzersiz subdomain bulundu")
 
-        # Sonuçları zenginleştir
+        # 7. DNS Zone Transfer — kritik güvenlik testi
+        zone_findings = DNSZoneTransfer().run(domain)
+        if zone_findings and isinstance(self.results, dict):
+            self.results.setdefault("passive", []).extend(zone_findings)
+
+        # 8. ASN / IP Blok haritalama
+        asn_findings = ASNMapper().run(domain)
+        if asn_findings and isinstance(self.results, dict):
+            self.results.setdefault("passive", []).extend(asn_findings)
+
+        # Sonuçları zenginleştir ve döndür
         for r in all_results:
-            r["severity"] = "info"
-            r["title"] = f"Subdomain: {r['subdomain']}"
-            r["domain"] = domain
-            r["url"] = f"https://{r['subdomain']}"
-            r["message"] = f"{r['subdomain']} ({r.get('ip', '')}) [{r.get('method', '')}]"
+            r.setdefault("severity", "info")
+            r.setdefault("title", f"Subdomain: {r['subdomain']}")
+            r.setdefault("domain", domain)
+            r.setdefault("url", f"https://{r['subdomain']}")
+            r.setdefault("message",
+                         f"{r['subdomain']} ({r.get('ip', '')}) [{r.get('method', '')}]")
 
         return all_results
 
@@ -405,12 +705,13 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None) -> List
     """
     Plugin entry point.
     cfg anahtarları:
-      subdomain.wordlist        — özel wordlist yolu
-      subdomain.threads         — brute-force thread sayısı (varsayılan: 50)
-      subdomain.use_subfinder   — subfinder kullan (varsayılan: True)
-      subdomain.use_amass       — amass kullan (varsayılan: True)
-      subdomain.use_crtsh       — crt.sh sorgula (varsayılan: True)
-      subdomain.passive_only    — sadece passive tarama (varsayılan: True)
+      subdomain.wordlist              — özel wordlist yolu
+      subdomain.threads               — brute-force thread sayısı (varsayılan: 50)
+      subdomain.use_subfinder         — subfinder kullan (varsayılan: True)
+      subdomain.use_amass             — amass kullan (varsayılan: True)
+      subdomain.use_crtsh             — crt.sh sorgula (varsayılan: True)
+      subdomain.passive_only          — sadece passive tarama (varsayılan: True)
+      subdomain.securitytrails_key    — SecurityTrails API key (opsiyonel)
     """
     cfg = cfg or {}
     sub_cfg = cfg.get("subdomain", {}) if isinstance(cfg, dict) else {}
@@ -422,6 +723,7 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None) -> List
         use_amass=bool(sub_cfg.get("use_amass", True)),
         use_crtsh=bool(sub_cfg.get("use_crtsh", True)),
         passive_only=bool(sub_cfg.get("passive_only", True)),
+        securitytrails_key=sub_cfg.get("securitytrails_key"),
     )
 
     return scanner.scan(target)
