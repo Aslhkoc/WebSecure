@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import statistics
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
@@ -70,6 +71,10 @@ class SQLInjectionScanner(BaseScanner):
     def __init__(self, session=None, results=None, debug=False):
         super().__init__(session, results, debug)
         self.payloads = self._load_payloads()
+        # Per-instance cache: url → (mean, stdev) so _measure_natural_variation
+        # runs 4 HTTP requests ONCE per URL instead of once per parameter
+        self._nat_var_cache: Dict[str, Tuple[float, float]] = {}
+        self._nat_var_lock = threading.Lock()
 
     def _load_payloads(self) -> List[str]:
         """Loads SQLi payloads. Falls back to built-in list if wordlist unavailable."""
@@ -162,9 +167,13 @@ class SQLInjectionScanner(BaseScanner):
     def _measure_natural_variation(self, url: str, n: int = 4) -> Tuple[float, float]:
         """
         Sample n benign baseline requests and return (mean_len, stddev_len).
-        This captures dynamic content churn (CSRF tokens, timestamps, ads, etc.)
-        so we never flag normal variation as a boolean difference.
+        Result is cached per URL so multiple parameters on the same endpoint
+        don't trigger redundant HTTP requests (saves ~4 requests per extra param).
         """
+        with self._nat_var_lock:
+            if url in self._nat_var_cache:
+                return self._nat_var_cache[url]
+
         lengths: List[int] = []
         for _ in range(n):
             try:
@@ -173,12 +182,16 @@ class SQLInjectionScanner(BaseScanner):
             except _requests.exceptions.RequestException:
                 pass
         if len(lengths) < 2:
-            # Fallback: no variation data — use a conservative 15% guard
-            mean = lengths[0] if lengths else 0
-            return float(mean), float(mean) * 0.15
-        mean = statistics.mean(lengths)
-        stdev = statistics.stdev(lengths)
-        return mean, stdev
+            mean = float(lengths[0]) if lengths else 0.0
+            result = (mean, mean * 0.15)
+        else:
+            mean = statistics.mean(lengths)
+            stdev = statistics.stdev(lengths)
+            result = (mean, stdev)
+
+        with self._nat_var_lock:
+            self._nat_var_cache[url] = result
+        return result
 
     def _is_boolean_blind(self, url: str, param: str,
                           baseline_len: int) -> Optional[Tuple[str, str]]:
@@ -257,6 +270,37 @@ class SQLInjectionScanner(BaseScanner):
             f"diff={diff_final}B | natural_stdev={nat_stdev:.1f}B, threshold={dynamic_threshold:.0f}B"
         )
         return true_pl, evidence
+
+    def _verify_time_based(
+        self,
+        url: str,
+        param_name: str,
+        payload: str,
+        time_threshold: float,
+        n: int = 3,
+        min_hits: int = 2,
+    ) -> bool:
+        """
+        Re-send the time-based payload n times; require at least min_hits to
+        exceed time_threshold.  Eliminates single-spike false positives caused
+        by transient network latency or server hiccups.
+        """
+        hits = 0
+        for _ in range(n):
+            injected = self.inject_param(url, param_name, payload)
+            t0 = time.time()
+            try:
+                self.session.get(injected, timeout=time_threshold + 5)
+                elapsed = time.time() - t0
+                if elapsed > time_threshold:
+                    hits += 1
+            except _requests.exceptions.Timeout:
+                hits += 1  # timeout itself is evidence of delay
+            except _requests.exceptions.RequestException:
+                pass
+            if hits >= min_hits:
+                return True
+        return hits >= min_hits
 
     def run(self, url, **kwargs):
         urls = url if isinstance(url, list) else [url]
@@ -371,15 +415,19 @@ class SQLInjectionScanner(BaseScanner):
                     "evidence": f"DB: {db} — new error signature in response",
                 }
 
-            # Time-based
+            # Time-based — first-pass flag only; cross-validate before reporting
             if self._is_time_payload(curr) and elapsed > time_threshold:
-                return {
-                    "vuln_type": "SQL Injection (Time-Based)",
-                    "url": url,
-                    "param": param_name,
-                    "payload": curr,
-                    "evidence": f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s",
-                }
+                if self._verify_time_based(url, param_name, curr, time_threshold):
+                    return {
+                        "vuln_type": "SQL Injection (Time-Based)",
+                        "url": url,
+                        "param": param_name,
+                        "payload": curr,
+                        "evidence": (
+                            f"Time-based (cross-validated): first={elapsed:.2f}s, "
+                            f"threshold={time_threshold:.2f}s"
+                        ),
+                    }
             return None
 
         hits = self.run_parallel_probes(probe, self.payloads, max_workers=self.MAX_WORKERS)

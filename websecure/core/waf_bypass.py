@@ -362,7 +362,43 @@ class WAFBypassSession(requests.Session):
         # concurrency=20 into ~20 s/round and makes aggressive mode impractical.
         # Callers that genuinely need stealth pacing should call
         # WAFBypassSession.phase_sleep() once per scan phase, not here.
-        return super().request(method, url, *args, **kwargs)
+        resp = super().request(method, url, *args, **kwargs)
+        # Feedback loop: track 403/429 and learn which bypass strategies are failing
+        if resp is not None:
+            self._record_response_code(resp.status_code)
+        return resp
+
+    def _record_response_code(self, status_code: int) -> None:
+        """
+        Track WAF block signals (403, 406, 429, 503) vs successes (2xx/3xx).
+        Used by get_bypass_effectiveness() to measure which strategies work.
+        """
+        import threading as _threading
+        if not hasattr(self, "_response_stats"):
+            self._response_stats: dict = {"blocked": 0, "allowed": 0, "total": 0}
+            self._stats_lock = _threading.Lock()
+        with self._stats_lock:
+            self._response_stats["total"] += 1
+            if status_code in (403, 406, 429, 503):
+                self._response_stats["blocked"] += 1
+            elif status_code < 400:
+                self._response_stats["allowed"] += 1
+
+    def get_bypass_effectiveness(self) -> dict:
+        """
+        Return a dict with block_rate, allow_rate and applied strategies.
+        Callers can use this to decide whether to switch bypass strategy.
+        """
+        stats = getattr(self, "_response_stats", {"blocked": 0, "allowed": 0, "total": 0})
+        total = max(stats["total"], 1)
+        return {
+            "total_requests":   stats["total"],
+            "blocked":          stats["blocked"],
+            "allowed":          stats["allowed"],
+            "block_rate":       round(stats["blocked"] / total, 3),
+            "allow_rate":       round(stats["allowed"] / total, 3),
+            "applied_strategies": getattr(self, "_applied_strategies", []),
+        }
 
     def phase_sleep(self) -> None:
         """

