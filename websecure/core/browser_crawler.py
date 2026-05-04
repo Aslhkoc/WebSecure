@@ -6,6 +6,7 @@ Used when the HTTP-only crawler finds few endpoints relative to <script> tags.
 """
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import random as _random
 import re
@@ -55,6 +56,9 @@ class BrowserCrawlResult:
     secrets_found: List[Dict] = field(default_factory=list)
     console_errors: List[str] = field(default_factory=list)
     screenshots: Dict[str, bytes] = field(default_factory=dict)
+    # Adım-2 eklentileri: SPA route discovery + full request interception
+    spa_routes: List[str] = field(default_factory=list)
+    intercepted_requests: List[Dict[str, Any]] = field(default_factory=list)
 
 
 _VIEWPORTS = [
@@ -106,7 +110,19 @@ class BrowserCrawler:
     """
     Playwright-powered crawler for JS-heavy web applications.
     Intercepts all network requests, detects framework, extracts forms.
+    Adım-2: SPA route extraction from JS bundles + deep XHR/fetch interception.
     """
+
+    # SPA route patterns: React Router / Vue Router / Angular Router / Next.js
+    _SPA_ROUTE_PATTERNS: List[re.Pattern] = [
+        re.compile(r'''path\s*:\s*['"`]([/][^'"`\s]{2,100})['"`]'''),
+        re.compile(r'''to\s*:\s*['"`]([/][a-z0-9/_:.*-]{2,80})['"`]''', re.I),
+        re.compile(
+            r'''(?:navigate|router\.push|router\.replace|history\.push|history\.replace)\s*\(\s*['"`]([/][^'"`\s]{2,80})['"`]''',
+            re.I,
+        ),
+        re.compile(r'''['"`]([/][a-z][a-z0-9/_:-]{3,60})['"`]''', re.I),
+    ]
 
     _FRAMEWORK_SIGNATURES = {
         "React": [r"react\.development\.js", r"react-dom", r"__REACT_DEVTOOLS_GLOBAL_HOOK__"],
@@ -130,6 +146,7 @@ class BrowserCrawler:
         self._visited: Set[str] = set()
         self._result = BrowserCrawlResult()
         self._api_requests: List[str] = []
+        self._intercepted_requests: List[Dict[str, Any]] = []
 
     def crawl_sync(self, base_url: str) -> BrowserCrawlResult:
         """Synchronous wrapper for use in non-async contexts."""
@@ -221,15 +238,33 @@ class BrowserCrawler:
 
             page: Page = await context.new_page()
 
-            # Intercept all network requests
+            # Enhanced network interceptor: captures method, headers, and POST body
             async def _on_request(request):
                 url = request.url
                 resource_type = request.resource_type
-                if resource_type in ("xhr", "fetch", "websocket"):
-                    self._api_requests.append(url)
-                if resource_type == "script" and url.endswith(".js"):
+                method = request.method
+
+                if resource_type in ("xhr", "fetch"):
+                    req_record: Dict[str, Any] = {
+                        "url": url,
+                        "method": method,
+                        "resource_type": resource_type,
+                        "headers": dict(request.headers) if request.headers else {},
+                    }
+                    try:
+                        body = request.post_data
+                        if body:
+                            req_record["body"] = body[:4096]
+                    except Exception:
+                        pass
+                    self._intercepted_requests.append(req_record)
+                    if url not in self._api_requests:
+                        self._api_requests.append(url)
+
+                if resource_type == "script" and ".js" in url:
                     if url not in self._result.js_files:
                         self._result.js_files.append(url)
+
                 if resource_type == "websocket":
                     if url not in self._result.ws_endpoints:
                         self._result.ws_endpoints.append(url)
@@ -355,6 +390,30 @@ class BrowserCrawler:
                 except Exception as e:
                     _logger.debug(f"[BrowserCrawler] Error on {url}: {e}")
 
+            # ── Phase 2: SPA route extraction from JS bundles ──────────────
+            spa_routes_discovered: List[str] = []
+            for js_url in self._result.js_files[:15]:
+                try:
+                    js_content = await page.evaluate(
+                        f"async () => {{ "
+                        f"try {{ return await (await fetch({json.dumps(js_url)})).text(); }}"
+                        f" catch(e) {{ return ''; }} }}"
+                    )
+                    if js_content:
+                        for route in self._extract_spa_routes_from_js(js_content, base_url):
+                            if route not in spa_routes_discovered:
+                                spa_routes_discovered.append(route)
+                except Exception as exc:
+                    _logger.debug(f"[BrowserCrawler] JS route extraction {js_url}: {exc}")
+
+            # ── Phase 3: Navigate to newly discovered SPA routes ────────────
+            for route in spa_routes_discovered[:25]:
+                if urlparse(route).netloc != base_domain:
+                    continue
+                if route in self._visited:
+                    continue
+                await self._simulate_spa_navigation(page, route, base_domain)
+
             await browser.close()
 
         # Merge api_requests into result
@@ -362,13 +421,81 @@ class BrowserCrawler:
             if ar not in self._result.api_endpoints:
                 self._result.api_endpoints.append(ar)
 
+        # Merge intercepted request records
+        self._result.intercepted_requests = list(self._intercepted_requests)
+
         self._result.endpoints = list(set(self._result.endpoints))
         _logger.info(
             f"[BrowserCrawler] Done: {len(self._result.endpoints)} pages, "
             f"{len(self._result.api_endpoints)} API endpoints, "
-            f"{len(self._result.js_files)} JS files"
+            f"{len(self._result.js_files)} JS files, "
+            f"{len(self._result.spa_routes)} SPA routes, "
+            f"{len(self._result.intercepted_requests)} intercepted XHR/fetch"
         )
         return self._result
+
+    def _extract_spa_routes_from_js(self, js_content: str, base_url: str) -> List[str]:
+        """
+        Parse a JS bundle for route path strings (React Router, Vue Router,
+        Angular Router, Next.js, plain history.push, etc.).
+        Returns absolute URLs on the same origin.
+        """
+        routes: List[str] = []
+        seen: Set[str] = set()
+        for pattern in self._SPA_ROUTE_PATTERNS:
+            for m in pattern.finditer(js_content):
+                path = m.group(1)
+                if len(path) < 2 or any(path.endswith(ext) for ext in (".js", ".css", ".png", ".jpg", ".svg")):
+                    continue
+                if path in seen:
+                    continue
+                seen.add(path)
+                full_url = urljoin(base_url, path)
+                if urlparse(full_url).netloc == urlparse(base_url).netloc:
+                    routes.append(full_url)
+        return routes
+
+    async def _simulate_spa_navigation(
+        self, page: "Page", route_url: str, base_domain: str
+    ) -> None:
+        """
+        Navigate to a SPA route via history.pushState (no full page reload).
+        Extracts new links and forms that appear after the client-side render.
+        """
+        parsed = urlparse(route_url)
+        spa_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        try:
+            await page.evaluate(
+                f"() => window.history.pushState(null, '', {json.dumps(spa_path)})"
+            )
+            await page.wait_for_timeout(800)
+
+            new_links = await page.evaluate("""
+                () => Array.from(document.querySelectorAll('a[href]'))
+                      .map(a => a.href)
+                      .filter(h => h.startsWith('http'))
+            """)
+            for link in new_links:
+                if urlparse(link).netloc == base_domain and link not in self._result.endpoints:
+                    self._result.endpoints.append(link)
+
+            new_forms = await page.evaluate("""
+                () => Array.from(document.querySelectorAll('form')).map(f => ({
+                    action: f.action || window.location.href,
+                    method: (f.method || 'GET').toUpperCase(),
+                    inputs: Array.from(f.querySelectorAll('input,textarea,select'))
+                              .map(i => ({name: i.name, type: i.type || 'text', value: i.value || ''}))
+                              .filter(i => i.name)
+                }))
+            """)
+            if new_forms:
+                self._result.forms_meta.append({"url": route_url + "#spa-nav", "forms": new_forms})
+
+            if route_url not in self._result.spa_routes:
+                self._result.spa_routes.append(route_url)
+            self._visited.add(route_url)
+        except Exception as exc:
+            _logger.debug(f"[BrowserCrawler] SPA nav {route_url}: {exc}")
 
     async def _detect_framework(self, page: "Page", url: str) -> List[str]:
         detected = []
