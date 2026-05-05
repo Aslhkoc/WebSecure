@@ -123,6 +123,19 @@ class DOMXSSScanner(BaseScanner):
         except Exception as exc:
             _logger.warning(f"[DOMXSSScanner] Event loop error: {exc!r}")
 
+        # ─── Adım 4: Stored XSS multi-endpoint correlation ────────────────
+        write_eps: List[Dict] = kwargs.get("write_endpoints") or []
+        read_eps: List[str]   = kwargs.get("read_endpoints")  or endpoints
+        if write_eps and self.session:
+            correlator = StoredXSSCorrelator(timeout_ms=self.timeout_ms)
+            for finding in correlator.correlate(write_eps, read_eps, self.session):
+                self._report(
+                    finding["write_url"],
+                    finding["write_param"],
+                    finding["payload"],
+                    finding["evidence"],
+                )
+
     async def _async_scan_all(self, endpoints: List[str]):
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=self.headless)
@@ -322,3 +335,157 @@ class DOMXSSScanner(BaseScanner):
 def run(target: str, session=None, results=None, debug=False, **kwargs):
     scanner = DOMXSSScanner(session=session, results=results, debug=debug)
     scanner.run(target, **kwargs)
+
+
+# ===========================================================================
+# Adım 4 — Stored XSS Multi-Endpoint Correlator
+# ===========================================================================
+
+_STORED_XSS_PAYLOADS: List[str] = [
+    "<img src=x id='ws_stored_{uid}' onerror=console.error('WSXSS_{uid}')>",
+    "<svg id='ws_stored_{uid}' onload=console.error('WSXSS_{uid}')>",
+    "<input id='ws_stored_{uid}' autofocus onfocus=console.error('WSXSS_{uid}')>",
+    "<details open ontoggle=console.error('WSXSS_{uid}') id='ws_stored_{uid}'>x</details>",
+    "ws_stored_{uid}<script>console.error('WSXSS_{uid}')</script>",
+]
+
+
+class StoredXSSCorrelator:
+    """
+    Multi-endpoint Stored XSS correlation.
+    Phase 1 (write): Inject canary payload on write endpoints (POST/PUT).
+    Phase 2 (read):  Check read endpoints via Playwright for unescaped execution.
+
+    Single Responsibility: stored XSS detection across endpoint pairs only.
+    Dependency Inversion: accepts session + page, no hard coupling to scanner.
+    """
+
+    def __init__(self, timeout_ms: int = 8000) -> None:
+        self.timeout_ms = timeout_ms
+
+    # ── Sync entry point ──────────────────────────────────────────────────
+
+    def correlate(
+        self,
+        write_endpoints: List[Dict[str, Any]],
+        read_endpoints: List[str],
+        session: Any,
+        debug: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        write_endpoints: list of dicts with keys:
+            url (str), method (str, POST|PUT|PATCH), params (dict)
+        read_endpoints: list of URLs to check after injection.
+        Returns list of finding dicts.
+        """
+        if not _PLAYWRIGHT_AVAILABLE:
+            _logger.warning("[StoredXSSCorrelator] Playwright not available — skipping")
+            return []
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(
+                self._async_correlate(write_endpoints, read_endpoints, session)
+            )
+            loop.close()
+            return result
+        except Exception as exc:
+            _logger.warning("[StoredXSSCorrelator] Event loop error: %r", exc)
+            return []
+
+    # ── Async implementation ──────────────────────────────────────────────
+
+    async def _async_correlate(
+        self,
+        write_endpoints: List[Dict[str, Any]],
+        read_endpoints: List[str],
+        session: Any,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+
+            for write_ep in write_endpoints[:10]:
+                url = write_ep.get("url", "")
+                method = (write_ep.get("method") or "POST").upper()
+                base_params: Dict[str, Any] = write_ep.get("params") or {}
+
+                for param_name in list(base_params.keys())[:5]:
+                    uid = random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8)
+                    uid_str = "".join(uid)
+
+                    for tpl in _STORED_XSS_PAYLOADS:
+                        payload = tpl.format(uid=uid_str)
+                        injected_params = dict(base_params)
+                        injected_params[param_name] = payload
+
+                        # Phase 1: write
+                        try:
+                            if method in ("POST", "PUT", "PATCH"):
+                                session.request(method, url, data=injected_params, timeout=8)
+                            else:
+                                session.get(url, params=injected_params, timeout=8)
+                        except Exception as exc:
+                            _logger.debug("[StoredXSSCorrelator] Write error %s: %r", url, exc)
+                            continue
+
+                        # Phase 2: read — check all read endpoints
+                        for read_url in read_endpoints[:10]:
+                            evidence = await self._check_stored(page, read_url, uid_str)
+                            if evidence:
+                                findings.append({
+                                    "type": "Stored XSS (Multi-Endpoint Correlation)",
+                                    "severity": "Critical",
+                                    "write_url": url,
+                                    "write_param": param_name,
+                                    "read_url": read_url,
+                                    "payload": payload,
+                                    "uid": uid_str,
+                                    "evidence": evidence,
+                                    "verified": True,
+                                    "confidence": "high",
+                                })
+                                _logger.warning(
+                                    "[StoredXSSCorrelator] Stored XSS: write=%s param=%s → read=%s",
+                                    url, param_name, read_url,
+                                )
+                                break  # found for this param, move on
+
+            await browser.close()
+        return findings
+
+    async def _check_stored(self, page: Any, url: str, uid: str) -> Optional[str]:
+        """Navigate to read_url and check for canary execution."""
+        canary = f"WSXSS_{uid}"
+        console_hits: List[str] = []
+
+        def on_console(msg: Any) -> None:
+            if canary in msg.text:
+                console_hits.append(f"console.{msg.type}: {msg.text[:120]}")
+
+        page.on("console", on_console)
+        try:
+            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            await page.wait_for_timeout(1200)
+
+            if console_hits:
+                return console_hits[0]
+
+            # Fallback: DOM check for unescaped canary
+            dom_hit = await page.evaluate(f"""
+                () => {{
+                    const uid = '{uid}';
+                    const body = document.body ? document.body.innerHTML : '';
+                    if (body.includes('ws_stored_' + uid)) return 'canary_in_dom_unescaped';
+                    return null;
+                }}
+            """)
+            return dom_hit or None
+        except Exception as exc:
+            _logger.debug("[StoredXSSCorrelator] Read error %s: %r", url, exc)
+            return None
+        finally:
+            page.remove_listener("console", on_console)
