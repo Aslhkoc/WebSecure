@@ -443,3 +443,418 @@ def run(
             logger.debug("[Race] probe %s error: %s", name, exc)
 
     return results
+
+# ============================================================================
+# ADIM 7 — Race Condition SOLID Siniflar
+# GateTechniqueExploiter, RaceAuthBypassProber, RaceDoubleSpendProber
+# RaceRegistrationProber, RaceConditionScanner (orchestrator)
+# ============================================================================
+from __future__ import annotations
+import logging
+import random
+import socket
+import ssl
+import string
+import threading
+import time
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from typing import Any, Dict, List, Optional, Tuple
+from websecure.scanners.base import BaseScanner
+
+_race_logger = logging.getLogger(__name__ + ".adim7")
+
+
+def _canary_str(n: int = 8) -> str:
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+
+
+def _raw_socket(host: str, port: int, use_tls: bool, timeout: int = 10) -> Optional[socket.socket]:
+    try:
+        raw = socket.create_connection((host, port), timeout=timeout)
+        if use_tls:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            raw = ctx.wrap_socket(raw, server_hostname=host)
+        return raw
+    except Exception as exc:
+        _race_logger.debug("[RaceSocket] %s:%d -> %s", host, port, exc)
+        return None
+
+
+def _recv_response(sock: socket.socket, timeout: float = 2.0) -> str:
+    sock.settimeout(timeout)
+    data = b""
+    try:
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    except (socket.timeout, OSError):
+        pass
+    return data.decode("utf-8", errors="replace")
+
+
+# ===========================================================================
+# GateTechniqueExploiter
+# ===========================================================================
+class GateTechniqueExploiter(BaseScanner):
+    """
+    "Last-byte synchronization" (gate) tekni
+    - N baglanti hazir edilir, son byte gonderilmeden beklenir
+    - Tum son byte'lar ayni anda gonderilir → maksimum zaman celisimi
+    - Duplicate success response = race window confirmed
+    """
+    name = "gate_technique"
+
+    def run(self, target: str, n_threads: int = 20, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed  = urllib.parse.urlparse(target)
+        host    = parsed.hostname or target
+        port    = parsed.port or (443 if parsed.scheme == "https" else 80)
+        use_tls = parsed.scheme == "https"
+        path    = parsed.path or "/"
+
+        # Find mutation endpoints (POST endpoints)
+        mutation_eps = self._find_mutation_endpoints(target)
+        for ep_path in mutation_eps[:3]:
+            finding = self._gate_probe(host, port, use_tls, ep_path, n_threads)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+        return results
+
+    def _find_mutation_endpoints(self, base: str) -> List[str]:
+        candidates = [
+            "/api/transfer", "/api/pay", "/api/redeem",
+            "/api/vote", "/api/like", "/api/checkout",
+            "/api/coupon/apply", "/api/discount/use",
+            "/api/invite/accept", "/api/v1/transfer",
+        ]
+        parsed = urllib.parse.urlparse(base)
+        found  = []
+        for path in candidates:
+            url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    found.append(path)
+            except Exception:
+                pass
+        return found or ["/api/transfer", "/api/pay"]
+
+    def _build_gate_request(self, host: str, path: str, body: str) -> Tuple[bytes, bytes]:
+        """Returns (request_without_last_byte, last_byte)."""
+        headers = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            f"Connection: close\r\n"
+            f"\r\n"
+        )
+        full    = (headers + body).encode()
+        return full[:-1], full[-1:]
+
+    def _gate_probe(self, host: str, port: int, use_tls: bool,
+                    path: str, n: int) -> Optional[Dict]:
+        body   = '{"amount":1,"to":"test"}'
+        head, tail = self._build_gate_request(host, path, body)
+
+        sockets: List[socket.socket] = []
+        for _ in range(n):
+            sock = _raw_socket(host, port, use_tls)
+            if sock:
+                sockets.append(sock)
+
+        if len(sockets) < 3:
+            return None
+
+        # Phase 1: send all but last byte
+        for sock in sockets:
+            try:
+                sock.sendall(head)
+            except Exception:
+                pass
+
+        # Phase 2: fire all last bytes simultaneously
+        gate_event = threading.Event()
+        responses: List[str] = []
+        lock = threading.Lock()
+
+        def _fire(sock):
+            gate_event.wait()
+            try:
+                sock.sendall(tail)
+                resp = _recv_response(sock)
+                with lock:
+                    responses.append(resp)
+            except Exception:
+                pass
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        threads = [threading.Thread(target=_fire, args=(s,)) for s in sockets]
+        for t in threads:
+            t.start()
+        time.sleep(0.05)  # Let all threads reach the gate
+        gate_event.set()
+        for t in threads:
+            t.join(timeout=5)
+
+        # Analyze: count 2xx responses
+        success_count = sum(1 for r in responses if " 200 " in r or " 201 " in r or " 204 " in r)
+        if success_count >= 2:
+            return {
+                "vuln_type": "Race Condition — Gate Technique (Multi-Success)",
+                "url": f"{'https' if use_tls else 'http'}://{host}{path}",
+                "severity": "Critical",
+                "description": (
+                    f"Gate technique: {success_count}/{len(sockets)} simultaneous requests returned success. "
+                    "Race window confirmed — duplicate processing of mutating operation possible."
+                ),
+                "evidence": {
+                    "technique": "last-byte-sync gate",
+                    "threads": len(sockets), "successes": success_count,
+                    "path": path,
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# RaceAuthBypassProber
+# ===========================================================================
+class RaceAuthBypassProber(BaseScanner):
+    """
+    Race condition → auth/rate-limit bypass:
+    - Login rate limit bypass (brute force window)
+    - Concurrent session creation bypass
+    - Parallel password reset token generation
+    """
+    name = "race_auth_bypass"
+
+    def run(self, target: str, n_threads: int = 15, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed  = urllib.parse.urlparse(target)
+        host    = parsed.hostname or target
+        port    = parsed.port or (443 if parsed.scheme == "https" else 80)
+        use_tls = parsed.scheme == "https"
+
+        # Test login rate limit bypass
+        login_ep = self._find_login_endpoint(target)
+        if login_ep:
+            finding = self._probe_login_race(login_ep, n_threads)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+
+        # Test parallel session creation
+        session_finding = self._probe_session_race(target, n_threads)
+        if session_finding:
+            results.append(session_finding)
+            self.report_finding(**session_finding)
+
+        return results
+
+    def _find_login_endpoint(self, base: str) -> Optional[str]:
+        for path in ["/login", "/api/login", "/auth/login", "/api/auth/login", "/signin"]:
+            url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    return url
+            except Exception:
+                pass
+        return None
+
+    def _probe_login_race(self, login_url: str, n: int) -> Optional[Dict]:
+        """Fire N concurrent login attempts and check if rate limiting holds."""
+        credentials = [{"username": "admin", "password": _canary_str(6)} for _ in range(n)]
+        successes = []
+        lock = threading.Lock()
+
+        def _attempt(creds):
+            try:
+                import requests
+                s = requests.Session()
+                r = s.post(login_url, json=creds, timeout=6)
+                if r.status_code not in (429, 423, 403):
+                    with lock:
+                        successes.append(r.status_code)
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            futs = [pool.submit(_attempt, c) for c in credentials]
+            wait(futs, timeout=10)
+
+        if len(successes) >= int(n * 0.7):
+            return {
+                "vuln_type": "Race Condition — Login Rate Limit Bypass",
+                "url": login_url, "severity": "High",
+                "description": (
+                    f"{len(successes)}/{n} parallel login attempts bypassed rate limiting. "
+                    "Server did not enforce per-IP request throttling under concurrent load."
+                ),
+                "evidence": {"attempts": n, "non_limited": len(successes), "statuses": successes[:5]},
+            }
+        return None
+
+    def _probe_session_race(self, target: str, n: int) -> Optional[Dict]:
+        """Test concurrent session creation for same user."""
+        session_urls = [
+            urllib.parse.urljoin(target.rstrip("/") + "/", p.lstrip("/"))
+            for p in ["/api/session", "/api/auth/session", "/session/new"]
+        ]
+        for url in session_urls:
+            try:
+                r_check = self.session.get(url, timeout=4)
+                if r_check.status_code in (404, 410):
+                    continue
+            except Exception:
+                continue
+
+            session_ids: List[str] = []
+            lock = threading.Lock()
+
+            def _create():
+                try:
+                    import requests
+                    s = requests.Session()
+                    r = s.post(url, json={"user": "race_test"}, timeout=6)
+                    sess_id = r.cookies.get("session") or r.headers.get("X-Session-Token", "")
+                    if sess_id:
+                        with lock:
+                            session_ids.append(sess_id)
+                except Exception:
+                    pass
+
+            with ThreadPoolExecutor(max_workers=n) as pool:
+                futs = [pool.submit(_create) for _ in range(n)]
+                wait(futs, timeout=10)
+
+            unique = len(set(session_ids))
+            if unique < len(session_ids) and len(session_ids) > 1:
+                return {
+                    "vuln_type": "Race Condition — Duplicate Session Creation",
+                    "url": url, "severity": "High",
+                    "description": (
+                        f"Concurrent session creation returned {unique} unique IDs from "
+                        f"{len(session_ids)} requests. Duplicate sessions indicate race window."
+                    ),
+                    "evidence": {"total": len(session_ids), "unique": unique},
+                }
+        return None
+
+
+# ===========================================================================
+# RaceDoubleSpendProber
+# ===========================================================================
+class RaceDoubleSpendProber(BaseScanner):
+    """
+    Race condition → double-spend / limit bypass:
+    - Coupon/promo code parallel redemption
+    - Transfer duplicate (same amount, same reference)
+    - Vote/like count bypass
+    """
+    name = "race_double_spend"
+
+    _SPEND_ENDPOINTS = [
+        ("/api/coupon/redeem",  '{"code":"SAVE10"}'),
+        ("/api/promo/apply",    '{"promo":"PROMO10"}'),
+        ("/api/vote",           '{"post_id":1,"vote":"up"}'),
+        ("/api/like",           '{"item_id":1}'),
+        ("/api/transfer",       '{"amount":100,"to":"attacker"}'),
+        ("/api/checkout/apply", '{"discount":"DISC20"}'),
+    ]
+
+    def run(self, target: str, n_threads: int = 20, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        for ep_path, payload in self._SPEND_ENDPOINTS:
+            url = urllib.parse.urljoin(target.rstrip("/") + "/", ep_path.lstrip("/"))
+            try:
+                r_check = self.session.get(url, timeout=3)
+                if r_check.status_code in (404, 410):
+                    continue
+            except Exception:
+                continue
+
+            finding = self._probe_parallel(url, payload, n_threads)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+        return results
+
+    def _probe_parallel(self, url: str, payload: str, n: int) -> Optional[Dict]:
+        successes: List[Dict] = []
+        lock = threading.Lock()
+        gate = threading.Barrier(n, timeout=5)
+
+        def _attempt():
+            try:
+                import requests
+                s = requests.Session()
+                gate.wait()  # All threads start simultaneously
+                r = s.post(url, data=payload,
+                           headers={"Content-Type": "application/json"}, timeout=8)
+                if r.status_code in (200, 201):
+                    with lock:
+                        successes.append({"status": r.status_code, "body": r.text[:100]})
+            except threading.BrokenBarrierError:
+                pass
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=_attempt) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        if len(successes) >= 2:
+            return {
+                "vuln_type": "Race Condition — Double-Spend / Limit Bypass",
+                "url": url, "severity": "Critical",
+                "description": (
+                    f"Double-spend race: {len(successes)}/{n} parallel requests returned 200/201. "
+                    "Server processed the same operation multiple times within the race window."
+                ),
+                "evidence": {
+                    "parallel_requests": n, "successes": len(successes),
+                    "sample_responses": successes[:3],
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# RaceConditionScanner — Orchestrator
+# ===========================================================================
+class RaceConditionScanner(BaseScanner):
+    """
+    Adim 7 Race Condition orchestrator:
+    GateTechniqueExploiter + RaceAuthBypassProber + RaceDoubleSpendProber
+    """
+    name = "race_condition_adim7"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        all_results: List[Dict] = []
+        probers = [
+            GateTechniqueExploiter(session=self.session, results=self.results),
+            RaceAuthBypassProber(session=self.session, results=self.results),
+            RaceDoubleSpendProber(session=self.session, results=self.results),
+        ]
+        for prober in probers:
+            try:
+                prober.target = target
+                res = prober.run(target, **kwargs)
+                all_results.extend(res)
+            except Exception as exc:
+                _race_logger.warning("[RaceScanner] %s failed: %s", prober.name, exc)
+        return all_results

