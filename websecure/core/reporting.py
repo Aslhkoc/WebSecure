@@ -3276,3 +3276,568 @@ from websecure.core.cvss import CVSSScorer, score_findings, _severity_label
 # HTML Dashboard → websecure/reporters/html_dashboard.py'e taşındı
 from websecure.reporters.html_dashboard import render_html_dashboard
 
+
+
+# ===========================================================================
+# ADIM 13 — Raporlama: OWASP Top 10, Compliance, Trend, Remediation, PDF
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# OWASP Top 10 (2021) Mapper
+# ---------------------------------------------------------------------------
+
+_OWASP_2021: Dict[str, Dict[str, Any]] = {
+    "A01:2021": {
+        "name": "Broken Access Control",
+        "keywords": ["idor", "bola", "privilege escalation", "path traversal",
+                     "broken access", "unauthorized", "access control", "lfi"],
+    },
+    "A02:2021": {
+        "name": "Cryptographic Failures",
+        "keywords": ["tls", "ssl", "weak cipher", "http not https", "beast", "poodle",
+                     "crime", "breach", "robot", "certificate", "hsts", "insecure transport"],
+    },
+    "A03:2021": {
+        "name": "Injection",
+        "keywords": ["sqli", "sql injection", "command injection", "cmdi", "ldap injection",
+                     "nosql", "xpath", "ssti", "template injection", "crlf injection",
+                     "log4shell", "xxe", "header injection"],
+    },
+    "A04:2021": {
+        "name": "Insecure Design",
+        "keywords": ["race condition", "logic flaw", "business logic", "mass assignment",
+                     "double spend", "missing rate limit"],
+    },
+    "A05:2021": {
+        "name": "Security Misconfiguration",
+        "keywords": ["cors", "csp", "misconfiguration", "default credential", "debug",
+                     "directory listing", "unnecessary feature", "open redirect",
+                     "cookie flag", "samesite", "httponly", "x-frame"],
+    },
+    "A06:2021": {
+        "name": "Vulnerable and Outdated Components",
+        "keywords": ["outdated", "cve-", "vulnerable component", "dependency", "library"],
+    },
+    "A07:2021": {
+        "name": "Identification and Authentication Failures",
+        "keywords": ["jwt", "session fixation", "session hijack", "brute force",
+                     "password reset", "2fa bypass", "oauth", "saml", "authentication",
+                     "credential", "entropy", "session entropy", "login"],
+    },
+    "A08:2021": {
+        "name": "Software and Data Integrity Failures",
+        "keywords": ["deserialization", "supply chain", "ci/cd", "update integrity",
+                     "unsigned", "package"],
+    },
+    "A09:2021": {
+        "name": "Security Logging and Monitoring Failures",
+        "keywords": ["log poisoning", "monitoring", "no logging", "audit trail",
+                     "blind xss", "oast"],
+    },
+    "A10:2021": {
+        "name": "Server-Side Request Forgery (SSRF)",
+        "keywords": ["ssrf", "server-side request", "internal network", "metadata",
+                     "cloud metadata", "imds"],
+    },
+}
+
+
+class OWASPTop10Mapper:
+    """
+    Maps security findings to OWASP Top 10 (2021) categories.
+    Returns per-category counts and affected findings.
+
+    SOLID/SRP: Only OWASP mapping logic.
+    """
+
+    def map(self, findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Map findings to OWASP Top 10 categories.
+        Returns {category_id: {name, count, findings}}.
+        """
+        category_map: Dict[str, Dict[str, Any]] = {
+            cat_id: {"name": info["name"], "count": 0, "findings": []}
+            for cat_id, info in _OWASP_2021.items()
+        }
+        unmapped: List[Dict] = []
+
+        for finding in findings:
+            search_text = " ".join([
+                str(finding.get("type") or ""),
+                str(finding.get("title") or ""),
+                str(finding.get("description") or ""),
+                str(finding.get("vulnerability") or ""),
+            ]).lower()
+
+            mapped = False
+            for cat_id, info in _OWASP_2021.items():
+                if any(kw in search_text for kw in info["keywords"]):
+                    category_map[cat_id]["count"] += 1
+                    category_map[cat_id]["findings"].append({
+                        "type": finding.get("type"),
+                        "severity": finding.get("severity"),
+                        "url": finding.get("url"),
+                    })
+                    mapped = True
+                    break
+            if not mapped:
+                unmapped.append(finding)
+
+        return {
+            "categories": category_map,
+            "total_mapped": sum(v["count"] for v in category_map.values()),
+            "unmapped_count": len(unmapped),
+            "top_categories": sorted(
+                [(k, v["count"]) for k, v in category_map.items() if v["count"] > 0],
+                key=lambda x: x[1], reverse=True,
+            )[:5],
+        }
+
+    def render_markdown(self, mapping: Dict[str, Any]) -> str:
+        lines = ["## OWASP Top 10 (2021) Eşleme\n"]
+        for cat_id, info in mapping["categories"].items():
+            count = info["count"]
+            if count == 0:
+                continue
+            lines.append(f"### {cat_id}: {info['name']} — {count} bulgu")
+            for f in info["findings"][:5]:
+                sev = f.get("severity", "?")
+                typ = f.get("type", "?")
+                url = f.get("url", "")
+                lines.append(f"- **{sev}** {typ} `{url}`")
+        if mapping["unmapped_count"]:
+            lines.append(f"\n*{mapping['unmapped_count']} bulgu kategoriyle eşleşmedi.*")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Compliance Report Builder
+# ---------------------------------------------------------------------------
+
+_COMPLIANCE_CONTROLS: Dict[str, List[Dict[str, Any]]] = {
+    "PCI-DSS v4.0": [
+        {"id": "Req 6.2.4", "name": "Web uygulama saldırılarına karşı koruma",
+         "owasp": ["A03:2021", "A01:2021"], "severity_threshold": "high"},
+        {"id": "Req 6.3.3", "name": "Güvenlik açıkları risk sıralama ve giderim",
+         "owasp": ["A06:2021"], "severity_threshold": "medium"},
+        {"id": "Req 6.4.2", "name": "WAF veya eşdeğer kontrol",
+         "owasp": ["A03:2021", "A05:2021"], "severity_threshold": "high"},
+        {"id": "Req 8.3.6", "name": "Kimlik doğrulama mekanizmaları güvenliği",
+         "owasp": ["A07:2021"], "severity_threshold": "high"},
+        {"id": "Req 11.3.1", "name": "Harici penetrasyon testi",
+         "owasp": [], "severity_threshold": "info"},
+    ],
+    "HIPAA Security Rule": [
+        {"id": "§164.312(a)(1)", "name": "Access Control",
+         "owasp": ["A01:2021", "A07:2021"], "severity_threshold": "medium"},
+        {"id": "§164.312(a)(2)(iv)", "name": "Encryption and Decryption",
+         "owasp": ["A02:2021"], "severity_threshold": "medium"},
+        {"id": "§164.312(c)(1)", "name": "Integrity Controls",
+         "owasp": ["A08:2021"], "severity_threshold": "medium"},
+        {"id": "§164.312(d)", "name": "Person/Entity Authentication",
+         "owasp": ["A07:2021"], "severity_threshold": "high"},
+        {"id": "§164.312(e)(1)", "name": "Transmission Security",
+         "owasp": ["A02:2021"], "severity_threshold": "medium"},
+    ],
+    "ISO 27001:2022": [
+        {"id": "A.8.24", "name": "Kriptografi kullanımı",
+         "owasp": ["A02:2021"], "severity_threshold": "medium"},
+        {"id": "A.8.25", "name": "Güvenli geliştirme yaşam döngüsü",
+         "owasp": ["A03:2021", "A04:2021"], "severity_threshold": "medium"},
+        {"id": "A.8.26", "name": "Uygulama güvenlik gereksinimleri",
+         "owasp": ["A01:2021", "A03:2021", "A07:2021"], "severity_threshold": "medium"},
+        {"id": "A.8.29", "name": "Geliştirmede güvenlik testi",
+         "owasp": ["A03:2021", "A05:2021"], "severity_threshold": "low"},
+        {"id": "A.8.9", "name": "Yapılandırma yönetimi",
+         "owasp": ["A05:2021"], "severity_threshold": "medium"},
+    ],
+}
+
+_SEV_RANKS_COMP = {"kritik": 5, "critical": 5, "yüksek": 4, "high": 4,
+                   "orta": 3, "medium": 3, "düşük": 2, "low": 2, "bilgi": 1, "info": 1}
+
+
+class ComplianceReportBuilder:
+    """
+    Maps OWASP Top 10 findings to PCI-DSS / HIPAA / ISO 27001 controls.
+    Determines PASS/FAIL status per control based on finding severity.
+
+    SOLID/SRP: Only compliance mapping and status determination.
+    """
+
+    def build(
+        self,
+        owasp_mapping: Dict[str, Any],
+        frameworks: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build compliance report for the given frameworks.
+        owasp_mapping: output of OWASPTop10Mapper.map()
+        frameworks: list of framework names (default: all)
+        """
+        all_frameworks = frameworks or list(_COMPLIANCE_CONTROLS.keys())
+        report: Dict[str, Any] = {}
+        categories = owasp_mapping.get("categories", {})
+
+        for fw in all_frameworks:
+            controls = _COMPLIANCE_CONTROLS.get(fw, [])
+            fw_results = []
+            for ctrl in controls:
+                affected = []
+                for owasp_cat in ctrl.get("owasp", []):
+                    cat_data = categories.get(owasp_cat, {})
+                    if cat_data.get("count", 0) > 0:
+                        for f in cat_data.get("findings", []):
+                            sev = str(f.get("severity") or "info").lower()
+                            min_rank = _SEV_RANKS_COMP.get(ctrl["severity_threshold"], 1)
+                            if _SEV_RANKS_COMP.get(sev, 1) >= min_rank:
+                                affected.append(f)
+                status = "FAIL" if affected else "PASS"
+                fw_results.append({
+                    "id": ctrl["id"],
+                    "name": ctrl["name"],
+                    "status": status,
+                    "affected_count": len(affected),
+                    "affected_samples": affected[:3],
+                })
+            passed = sum(1 for r in fw_results if r["status"] == "PASS")
+            report[fw] = {
+                "controls": fw_results,
+                "pass_count": passed,
+                "fail_count": len(fw_results) - passed,
+                "compliance_score": round(passed / max(len(fw_results), 1) * 100, 1),
+            }
+        return report
+
+    def render_markdown(self, compliance_report: Dict[str, Any]) -> str:
+        lines = ["## Uyumluluk Raporu\n"]
+        for fw, data in compliance_report.items():
+            score = data["compliance_score"]
+            lines.append(f"### {fw} — {score:.0f}% Uyumlu")
+            lines.append(f"✅ {data['pass_count']} PASS  ❌ {data['fail_count']} FAIL\n")
+            for ctrl in data["controls"]:
+                icon = "✅" if ctrl["status"] == "PASS" else "❌"
+                lines.append(f"- {icon} **{ctrl['id']}** {ctrl['name']} ({ctrl['affected_count']} bulgu)")
+            lines.append("")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Vulnerability Trend Analyzer
+# ---------------------------------------------------------------------------
+
+class VulnerabilityTrendAnalyzer:
+    """
+    Compares N scan results to detect vulnerability trends.
+    Reports: new findings, fixed findings, regressed findings, severity changes.
+
+    SOLID/SRP: Only trend analysis between scan snapshots.
+    """
+
+    @staticmethod
+    def _finding_key(f: Dict[str, Any]) -> str:
+        return f"{f.get('type','?')}|{f.get('url','?')}|{f.get('param','')}"
+
+    def compare(
+        self,
+        baseline: List[Dict[str, Any]],
+        current: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Compare baseline scan vs current scan findings.
+        Returns: new, fixed, persisted, severity_changes.
+        """
+        baseline_map = {self._finding_key(f): f for f in baseline}
+        current_map = {self._finding_key(f): f for f in current}
+
+        new_findings = [f for k, f in current_map.items() if k not in baseline_map]
+        fixed_findings = [f for k, f in baseline_map.items() if k not in current_map]
+        persisted = [f for k, f in current_map.items() if k in baseline_map]
+        severity_changes = []
+        for k, curr_f in current_map.items():
+            if k in baseline_map:
+                old_sev = str(baseline_map[k].get("severity") or "info").lower()
+                new_sev = str(curr_f.get("severity") or "info").lower()
+                if old_sev != new_sev:
+                    severity_changes.append({
+                        "key": k,
+                        "old_severity": old_sev,
+                        "new_severity": new_sev,
+                        "regression": _SEV_RANKS_COMP.get(new_sev, 1) > _SEV_RANKS_COMP.get(old_sev, 1),
+                    })
+
+        regressions = [c for c in severity_changes if c["regression"]]
+        return {
+            "new_count": len(new_findings),
+            "fixed_count": len(fixed_findings),
+            "persisted_count": len(persisted),
+            "severity_changes": len(severity_changes),
+            "regressions": len(regressions),
+            "new_findings": new_findings[:10],
+            "fixed_findings": fixed_findings[:10],
+            "severity_changes_detail": severity_changes[:10],
+            "trend": (
+                "İYİLEŞİYOR" if len(fixed_findings) > len(new_findings)
+                else "KÖTÜLEŞIYOR" if len(new_findings) > len(fixed_findings) or regressions
+                else "SABIT"
+            ),
+        }
+
+    def multi_scan_trend(self, scans: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Compare consecutive scan pairs. Returns list of compare results."""
+        results = []
+        for i in range(1, len(scans)):
+            comparison = self.compare(scans[i - 1], scans[i])
+            comparison["scan_index"] = i
+            results.append(comparison)
+        return results
+
+
+# ---------------------------------------------------------------------------
+# Remediation Guide Generator (CWE-based)
+# ---------------------------------------------------------------------------
+
+_CWE_REMEDIATION: Dict[str, str] = {
+    "CWE-79":  "XSS: Tüm kullanıcı girdilerini HTML context'e göre encode edin (htmlspecialchars). CSP uygulayın.",
+    "CWE-89":  "SQLi: Parametreli sorgular veya prepared statements kullanın. ORM'leri raw query'den kaçının.",
+    "CWE-22":  "Path Traversal: Kullanıcı girdisini dosya yoluna dahil etmeden önce normalize edip whitelist doğrulaması yapın.",
+    "CWE-78":  "CMDI: Kullanıcı girdisini shell komutlarına asla geçirmeyin. subprocess.run() ile liste argümanı kullanın.",
+    "CWE-611": "XXE: XML parser'da external entity processing'i devre dışı bırakın (FEATURE_SECURE_PROCESSING).",
+    "CWE-918": "SSRF: URL whitelist uygulayın. İç ağ CIDR'lerini (RFC1918) ve cloud metadata IP'sini (169.254.169.254) engelleyin.",
+    "CWE-384": "Session Fixation: Login sonrası session_regenerate_id(true) çağırın.",
+    "CWE-352": "CSRF: SameSite=Lax/Strict ve CSRF token kullanın.",
+    "CWE-287": "Auth Bypass: Tüm korumalı endpoint'lere authentication middleware uygulayın.",
+    "CWE-307": "Brute Force: Rate limiting, account lockout, CAPTCHA uygulayın.",
+    "CWE-444": "HTTP Smuggling: Backend sunucularda CL ve TE çakışmalarını reddedin.",
+    "CWE-601": "Open Redirect: Redirect hedeflerini whitelist ile doğrulayın.",
+    "CWE-116": "Encoding: Çıktı bağlamına uygun encoding kullanın (HTML/URL/SQL).",
+    "CWE-319": "Cleartext: HTTPS/TLS kullanın. HTTP redirect uygulayın. HSTS ekleyin.",
+    "CWE-311": "Şifreleme eksik: Hassas verileri AES-256-GCM ile şifreleyin.",
+    "CWE-330": "Zayıf rastgelelik: Kriptografik PRNG kullanın (os.urandom, secrets).",
+    "CWE-94":  "Code Injection: Eval/exec kullanmayın. Template engine'leri güvenli modda çalıştırın.",
+    "CWE-502": "Deserialization: Güvenilmeyen veriden deserialize etmeyin. İmzalı paketler kullanın.",
+    "CWE-200": "Bilgi ifşası: Hata mesajlarını kullanıcıya yansıtmayın. Stack trace gizleyin.",
+    "CWE-209": "Hata mesajı ifşası: Generic hata sayfaları gösterin, detayları logda tutun.",
+}
+
+_TYPE_TO_CWE: Dict[str, str] = {
+    "xss": "CWE-79", "reflected xss": "CWE-79", "stored xss": "CWE-79", "dom xss": "CWE-79",
+    "sqli": "CWE-89", "sql injection": "CWE-89", "blind sqli": "CWE-89",
+    "lfi": "CWE-22", "path traversal": "CWE-22", "directory traversal": "CWE-22",
+    "cmdi": "CWE-78", "command injection": "CWE-78", "rce": "CWE-78",
+    "xxe": "CWE-611",
+    "ssrf": "CWE-918", "server-side request forgery": "CWE-918",
+    "session fixation": "CWE-384",
+    "csrf": "CWE-352",
+    "authentication bypass": "CWE-287", "auth bypass": "CWE-287",
+    "brute force": "CWE-307",
+    "http smuggling": "CWE-444", "request smuggling": "CWE-444",
+    "open redirect": "CWE-601",
+    "ssti": "CWE-94", "template injection": "CWE-94",
+    "insecure deserialization": "CWE-502",
+    "information disclosure": "CWE-200",
+    "jwt expiry bypass": "CWE-287", "session entropy": "CWE-330",
+    "cookie injection via crlf": "CWE-116", "crlf injection": "CWE-116",
+}
+
+
+class RemediationGuideGenerator:
+    """
+    Generates CWE-based remediation guidance for each finding.
+    Enriches findings with CWE ID, OWASP category, and remediation text.
+
+    SOLID/SRP: Only remediation guide generation.
+    """
+
+    def enrich(self, finding: Dict[str, Any]) -> Dict[str, Any]:
+        """Add cwe, owasp_category, remediation fields to finding."""
+        finding = dict(finding)
+        ftype = str(finding.get("type") or "").lower().strip()
+        cwe = finding.get("cwe") or _TYPE_TO_CWE.get(ftype)
+        if not cwe:
+            # Partial match
+            for key, val in _TYPE_TO_CWE.items():
+                if key in ftype:
+                    cwe = val
+                    break
+        if cwe:
+            finding["cwe"] = cwe
+            if not finding.get("remediation") and cwe in _CWE_REMEDIATION:
+                finding["remediation"] = _CWE_REMEDIATION[cwe]
+        # OWASP category
+        if not finding.get("owasp_category"):
+            search = ftype
+            for cat_id, info in _OWASP_2021.items():
+                if any(kw in search for kw in info["keywords"]):
+                    finding["owasp_category"] = f"{cat_id}: {info['name']}"
+                    break
+        return finding
+
+    def enrich_batch(self, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [self.enrich(f) for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# PDF Report Builder (WeasyPrint / reportlab / HTML fallback)
+# ---------------------------------------------------------------------------
+
+class PDFReportBuilder:
+    """
+    Executive summary PDF report generator.
+
+    Tries backends in order:
+    1. WeasyPrint  (CSS-based, best quality)
+    2. reportlab   (programmatic)
+    3. HTML file   (fallback — always works)
+
+    SOLID/OCP: Add new PDF backends without modifying public API.
+    """
+
+    def __init__(self, title: str = "WebSecure Executive Report"):
+        self.title = title
+
+    def build(
+        self,
+        findings: List[Dict[str, Any]],
+        output_path: str,
+        owasp_mapping: Optional[Dict[str, Any]] = None,
+        compliance_report: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Generate PDF (or HTML fallback) at output_path.
+        Returns actual path written.
+        """
+        html_content = self._render_html(findings, owasp_mapping, compliance_report)
+
+        # Try WeasyPrint
+        if output_path.endswith(".pdf"):
+            if self._try_weasyprint(html_content, output_path):
+                return output_path
+            if self._try_reportlab(findings, output_path):
+                return output_path
+            # HTML fallback
+            html_path = output_path.replace(".pdf", ".html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                f"[PDF] PDF kütüphanesi bulunamadı — HTML olarak kaydedildi: {html_path}\n"
+                "PDF için: pip install weasyprint  veya  pip install reportlab"
+            )
+            return html_path
+        else:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            return output_path
+
+    def _render_html(
+        self,
+        findings: List[Dict[str, Any]],
+        owasp_mapping: Optional[Dict[str, Any]],
+        compliance_report: Optional[Dict[str, Any]],
+    ) -> str:
+        from datetime import datetime as _dt
+        sev_counts: Dict[str, int] = {}
+        for f in findings:
+            sev = str(f.get("severity") or "info").lower()
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
+
+        rows = "".join(
+            f"<tr><td>{html_esc(str(f.get('type','?')))}</td>"
+            f"<td class='sev-{str(f.get('severity','info')).lower()}'>{html_esc(str(f.get('severity','?')))}</td>"
+            f"<td>{html_esc(str(f.get('url',''))[:80])}</td>"
+            f"<td>{html_esc(str(f.get('cwe',''))[:30])}</td></tr>"
+            for f in findings[:50]
+        )
+        owasp_section = ""
+        if owasp_mapping:
+            cats = owasp_mapping.get("categories", {})
+            owasp_section = "<h2>OWASP Top 10 Eşleme</h2><ul>" + "".join(
+                f"<li><b>{cat_id}: {info['name']}</b> — {info['count']} bulgu</li>"
+                for cat_id, info in cats.items() if info["count"] > 0
+            ) + "</ul>"
+        compliance_section = ""
+        if compliance_report:
+            compliance_section = "<h2>Uyumluluk</h2>"
+            for fw, data in compliance_report.items():
+                compliance_section += (
+                    f"<h3>{html_esc(fw)}: {data['compliance_score']:.0f}% Uyumlu</h3>"
+                    f"<p>✅ {data['pass_count']} PASS &nbsp; ❌ {data['fail_count']} FAIL</p>"
+                )
+
+        return f"""<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8">
+<title>{html_esc(self.title)}</title>
+<style>
+  body{{font-family:Arial,sans-serif;margin:40px;color:#222}}
+  h1{{color:#1a237e}} h2{{color:#283593;border-bottom:2px solid #283593}}
+  table{{border-collapse:collapse;width:100%}}
+  th{{background:#283593;color:white;padding:8px}}
+  td{{border:1px solid #ccc;padding:6px;font-size:12px}}
+  .sev-kritik,.sev-critical{{color:#c62828;font-weight:bold}}
+  .sev-yüksek,.sev-high{{color:#e65100;font-weight:bold}}
+  .sev-orta,.sev-medium{{color:#f57f17}}
+  .sev-düşük,.sev-low{{color:#2e7d32}}
+  .summary-box{{display:inline-block;padding:16px;margin:8px;border-radius:8px;min-width:100px;text-align:center}}
+  .crit{{background:#ffcdd2}} .high{{background:#ffe0b2}}
+  .med{{background:#fff9c4}} .low{{background:#c8e6c9}}
+</style></head><body>
+<h1>🔒 {html_esc(self.title)}</h1>
+<p><i>Oluşturulma: {_dt.now().strftime('%Y-%m-%d %H:%M')}</i></p>
+<h2>Yönetici Özeti</h2>
+<div>
+  <div class="summary-box crit"><b>{sev_counts.get('kritik', sev_counts.get('critical', 0))}</b><br>Kritik</div>
+  <div class="summary-box high"><b>{sev_counts.get('yüksek', sev_counts.get('high', 0))}</b><br>Yüksek</div>
+  <div class="summary-box med"><b>{sev_counts.get('orta', sev_counts.get('medium', 0))}</b><br>Orta</div>
+  <div class="summary-box low"><b>{sev_counts.get('düşük', sev_counts.get('low', 0))}</b><br>Düşük</div>
+</div>
+<p><b>Toplam Bulgu:</b> {len(findings)}</p>
+{owasp_section}
+{compliance_section}
+<h2>Bulgular (ilk 50)</h2>
+<table><tr><th>Tür</th><th>Önem</th><th>URL</th><th>CWE</th></tr>{rows}</table>
+</body></html>"""
+
+    @staticmethod
+    def _try_weasyprint(html: str, path: str) -> bool:
+        try:
+            from weasyprint import HTML as _WHTML
+            _WHTML(string=html).write_pdf(path)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _try_reportlab(findings: List[Dict[str, Any]], path: str) -> bool:
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib import colors
+            doc = SimpleDocTemplate(path, pagesize=A4)
+            styles = getSampleStyleSheet()
+            story = [Paragraph("WebSecure Executive Report", styles["Title"]), Spacer(1, 12)]
+            data = [["Type", "Severity", "URL"]]
+            for f in findings[:30]:
+                data.append([
+                    str(f.get("type", "?"))[:40],
+                    str(f.get("severity", "?"))[:15],
+                    str(f.get("url", ""))[:60],
+                ])
+            t = Table(data)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.navy),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ]))
+            story.append(t)
+            doc.build(story)
+            return True
+        except Exception:
+            return False
+
+
+def html_esc(s: str) -> str:
+    import html as _html
+    return _html.escape(str(s))
