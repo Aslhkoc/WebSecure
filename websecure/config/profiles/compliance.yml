@@ -1,0 +1,135 @@
+# WebSecure Tarama Profili — Uyumluluk Denetimi
+# PCI-DSS v4 / HIPAA / ISO 27001:2022 / NIST SP 800-53
+
+name: "Uyumluluk Denetimi"
+profile_id: "compliance"
+description: >
+  OWASP Top 10 odakli uyumluluk denetimi profili.
+  PCI-DSS v4, HIPAA, ISO 27001:2022 standartlarina gore otomatik esleme.
+  Her bulgu icin CWE, CVSS, remediation rehberi ve compliance raporu uretilir.
+version: "2.0"
+author: "WebSecure"
+tags: [compliance, owasp, pci-dss, hipaa, iso27001, nist, gdpr, denetim]
+estimated_duration_min: 60
+
+# OWASP Top 10 (2021) kapsamasi
+owasp_coverage:
+  A01_broken_access_control:    [idor, csrf, mass_assignment]
+  A02_cryptographic_failures:   [tls, headers]
+  A03_injection:                [sqli, nosqli, cmdi, ssti, xxe, crlf_injection]
+  A04_insecure_design:          [auth_scanners, race_condition]
+  A05_security_misconfiguration:[cors, headers, xxe, graphql]
+  A06_vulnerable_components:    [owasp]
+  A07_auth_failures:            [auth_scanners, jwt_attacks]
+  A08_software_data_integrity:  [file_upload]
+  A09_logging_failures:         [headers]
+  A10_ssrf:                     [ssrf]
+
+scan:
+  enabled_modules:
+    # A01 - Broken Access Control
+    - idor
+    - csrf
+    - mass_assignment
+    # A02 - Cryptographic Failures
+    - tls
+    - headers
+    # A03 - Injection
+    - sqli
+    - nosqli
+    - cmdi
+    - ssti
+    - xxe
+    - crlf_injection
+    # A04 - Insecure Design
+    - auth_scanners
+    - race_condition
+    # A05 - Security Misconfiguration
+    - cors
+    - graphql
+    # A06 - Vulnerable Components
+    - owasp
+    # A07 - Auth Failures
+    - jwt_attacks
+    # A08 - Software Data Integrity
+    - file_upload
+    # A10 - SSRF
+    - ssrf
+    # Ek
+    - xss
+    - lfi
+    - open_redirect
+    - nmap
+    - subdomain
+  disabled_modules:
+    - passive_recon
+    - waf_fingerprint
+    - websocket_fuzz
+    - prototype_pollution
+  priority_modules:
+    - sqli
+    - auth_scanners
+    - xss
+    - idor
+    - ssrf
+    - xxe
+    - tls
+    - headers
+  rps: 5
+  concurrency: 8
+  per_param: 10
+  max_total_requests: 20000
+  owasp_mapping: true
+  cwe_mapping: true
+  generate_compliance_report: true
+  compliance_standards:
+    - "PCI-DSS v4"
+    - "HIPAA"
+    - "ISO 27001:2022"
+    - "NIST SP 800-53"
+    - "GDPR"
+
+filter:
+  min_severity: "medium"   # compliance'ta medium da raporlanir
+
+http:
+  timeout_seconds: 20
+  retries: 2
+
+tools:
+  sqlmap:
+    risk: 2
+    level: 3
+    threads: 4
+    extra_args: ["--random-agent", "--batch"]
+  nuclei:
+    rate_limit: 50
+    concurrency: 20
+    extra_args: ["-severity", "critical,high,medium"]
+  nmap:
+    enabled: true
+    mode: "normal"
+    extra_args: ["-T3"]
+  ffuf:
+    threads: 10
+    extra_args: ["-rate", "50"]
+
+waf_bypass:
+  enabled: true
+  max_variants_per_payload: 5
+
+oast:
+  enabled: true
+  max_injections_per_loc: 3
+
+reporting:
+  include_remediation: true
+  include_owasp_mapping: true
+  include_cwe: true
+  include_cvss: true
+  executive_summary: true
+  compliance_standards:
+    - "PCI-DSS v4"
+    - "HIPAA"
+    - "ISO 27001:2022"
+  # Rapor formati: websecure scan --format compliance

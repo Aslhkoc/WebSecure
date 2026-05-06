@@ -290,7 +290,11 @@ def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
 # ---------------------------------------------------------------------------
 
 def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
-    """Kullanıcıya Agresif / Stealth profilini sorar ve cfg'yi buna göre ayarlar."""
+    """
+    Kullaniciya tarama profilini sorar ve cfg'yi buna gore ayarlar.
+
+    Profil sistemi v2.0: 7 yerlesik profil + YAML ozel profiller.
+    """
 
     def _prompt(msg: str, default: str) -> str:
         try:
@@ -307,40 +311,114 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
         except Exception:
             return lambda c: c
 
-    while True:
-        print("""
-[?] Tarama modu:
-    1) Agresif  - Tum moduller + tum payloadlar + tum wordlistler, YUKSEK HIZ
-    2) Stealth  - Tum moduller + tum payloadlar + tum wordlistler, YAVAS & WAF bypass
-""".rstrip())
+    # Profil secenekleri: (numara, profil_id, etiket, aciklama)
+    MENU_ENTRIES = [
+        ("1", "aggressive",    "Agresif",           "Tam kapsam + maksimum hiz (~30 dk)"),
+        ("2", "stealth",       "Stealth",            "Tam kapsam + yavas + WAF bypass (~4 saat)"),
+        ("3", "cicd",          "CI/CD Pipeline",     "Hizli kritik tarama, < 5 dk"),
+        ("4", "bug_bounty",    "Bug Bounty",         "Min. false positive, OOB/OAST, WAF bypass (~90 dk)"),
+        ("5", "compliance",    "Uyumluluk Denetimi", "OWASP Top 10 + PCI-DSS/HIPAA/ISO27001 (~60 dk)"),
+        ("6", "api_only",      "API-Only",           "Sadece REST/GraphQL/gRPC yuzey (~25 dk)"),
+        ("7", "authenticated", "Kimlik Dogrulamali", "Login -> token -> tam tarama (~60 dk)"),
+    ]
 
-        sel = (_prompt("Seciminiz [1/2, varsayilan=1]: ", "1") or "1").strip()
-        if sel not in ("1", "2"):
-            print("Gecersiz secim.")
+    # Ek YAML profilleri listele
+    try:
+        from websecure.core.profiles import get_registry
+        registry = get_registry()
+        builtin_ids = {e[1] for e in MENU_ENTRIES}
+        extra_profiles = [
+            name for name in registry.list() if name not in builtin_ids
+        ]
+    except Exception:
+        extra_profiles = []
+
+    while True:
+        print("\n[?] Tarama Profili:")
+        print("-" * 60)
+        for num, pid, label, desc in MENU_ENTRIES:
+            print(f"    {num}) {label:<22} - {desc}")
+
+        if extra_profiles:
+            print("    --- YAML Ozel Profiller ---")
+            for i, name in enumerate(extra_profiles, start=len(MENU_ENTRIES) + 1):
+                print(f"    {i}) {name}")
+
+        print("-" * 60)
+        valid_nums = {e[0] for e in MENU_ENTRIES} | {
+            str(len(MENU_ENTRIES) + i + 1) for i in range(len(extra_profiles))
+        }
+
+        sel = (_prompt("Seciminiz [1-7, varsayilan=1]: ", "1") or "1").strip()
+
+        # YAML profil secimi
+        try:
+            sel_int = int(sel)
+            if sel_int > len(MENU_ENTRIES) and extra_profiles:
+                extra_idx = sel_int - len(MENU_ENTRIES) - 1
+                if 0 <= extra_idx < len(extra_profiles):
+                    profile_id = extra_profiles[extra_idx]
+                    try:
+                        from websecure.core.profiles import apply_profile
+                        cfg = apply_profile(profile_id, cfg)
+                    except Exception:
+                        pass
+                    return profile_id, cfg
+        except (ValueError, TypeError):
+            pass
+
+        # Yerlesik profil secimi
+        matched = next((e for e in MENU_ENTRIES if e[0] == sel), None)
+        if not matched:
+            print("Gecersiz secim. Lutfen listeden bir numara secin.")
             continue
 
-        if sel == "1":
-            lo, hi = _estimate_minutes(cfg, "aggressive")
-            print(f"[*] Agresif mod secildi. Yaklasik {lo}-{hi} dakika surebilir.")
-            ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
-            if ans.startswith("b"):
-                continue
-            cfg = _apply_aggressive_profile(cfg)
-            apply_active_profile = _get_apply_active_profile()
-            cfg = apply_active_profile(cfg)
-            return "aggressive", cfg
+        _, profile_id, label, desc = matched
 
-        # sel == "2"
-        lo, hi = _estimate_minutes(cfg, "stealth")
-        print(f"[*] Stealth mod secildi. Tam kapsam, cok yavas (~{lo * 4}-{hi * 6} dakika).")
-        print(f"    WAF bypass aktif, tum tamperler, dusuk RPS, rastgele gecikmeler.")
+        # Profile-specific onay mesaji
+        if profile_id == "aggressive":
+            lo, hi = _estimate_minutes(cfg, "aggressive")
+            print(f"\n[*] {label} secildi. Yaklasik {lo}-{hi} dakika surebilir.")
+        elif profile_id == "stealth":
+            lo, hi = _estimate_minutes(cfg, "stealth")
+            print(f"\n[*] {label} secildi. Tam kapsam, yavas (~{lo * 4}-{hi * 6} dk).")
+            print("    WAF bypass aktif, dusuk RPS, rastgele gecikmeler.")
+        elif profile_id == "cicd":
+            print(f"\n[*] {label} secildi. Hedef: < 5 dk, sadece Critical/High.")
+            print("    SQLMap devre disi. Fail-fast mod aktif.")
+        elif profile_id == "bug_bounty":
+            print(f"\n[*] {label} secildi. Min. false positive, OAST aktif, WAF bypass.")
+            print("    Sadece dogrulanmis Critical/High bulgular raporlanir.")
+        elif profile_id == "compliance":
+            print(f"\n[*] {label} secildi.")
+            print("    OWASP Top 10 + PCI-DSS/HIPAA/ISO27001 uyumluluk raporu uretilecek.")
+        elif profile_id == "api_only":
+            print(f"\n[*] {label} secildi.")
+            print("    Sadece REST/GraphQL/gRPC yuzey. Nmap/subdomain devre disi.")
+        elif profile_id == "authenticated":
+            print(f"\n[*] {label} secildi.")
+            print("    Giris kimlik bilgilerini --auth-user / --auth-pass ile verin.")
+        else:
+            print(f"\n[*] {label} secildi.")
+
         ans = (_prompt("Devam? [D]evam / [B]asa don: ", "D") or "D").lower()
         if ans.startswith("b"):
             continue
-        cfg = _apply_stealth_profile(cfg)
+
+        # Profili uygula
+        try:
+            from websecure.core.profiles import apply_profile
+            cfg = apply_profile(profile_id, cfg)
+        except Exception:
+            # Fallback: eski uygulamalar
+            if profile_id == "aggressive":
+                cfg = _apply_aggressive_profile(cfg)
+            else:
+                cfg = _apply_stealth_profile(cfg)
+
         apply_active_profile = _get_apply_active_profile()
         cfg = apply_active_profile(cfg)
-        return "stealth", cfg
+        return profile_id, cfg
 
 
 def _pick_from_config(cfg: dict, key: str, default=None):
@@ -383,6 +461,25 @@ def _choose_mode_from_config(config: dict | None) -> str:
     return _normal()
 
 
+def apply_profile_by_name(name: str, cfg: dict) -> dict:
+    """
+    Profil adina gore cfg'yi uygular.
+    Yeni ProfileRegistry sistemine kopru — geri uyumlu public API.
+
+    Desteklenen profil adlari:
+      aggressive, stealth, cicd, bug_bounty, compliance, api_only, authenticated
+      + websecure/config/profiles/ altindaki YAML profiller
+    """
+    try:
+        from websecure.core.profiles import apply_profile
+        return apply_profile(name, cfg)
+    except Exception as exc:
+        _logger.warning(f"[scan_profile] ProfileRegistry hatasi: {exc!r}. Fallback.")
+        if name == "aggressive":
+            return _apply_aggressive_profile(cfg)
+        return _apply_stealth_profile(cfg)
+
+
 __all__ = [
     "_estimate_minutes",
     "_apply_normal_profile",
@@ -391,4 +488,5 @@ __all__ = [
     "_offer_scan_profile_and_confirm",
     "_pick_from_config",
     "_choose_mode_from_config",
+    "apply_profile_by_name",
 ]

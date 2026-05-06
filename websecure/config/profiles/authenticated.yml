@@ -1,0 +1,134 @@
+# WebSecure Tarama Profili — Kimlik Dogrulamali Tarama
+# Login -> Token -> Tam Yetki Testi
+
+name: "Kimlik Dogrulamali Tarama"
+profile_id: "authenticated"
+description: >
+  Oturum acarak tam kapsamli kimlik dogrulamali tarama.
+  Privilege escalation, IDOR, BOLA, session hijacking odakli.
+  Birden fazla rol ile test destegi (user, admin, moderator).
+version: "2.0"
+author: "WebSecure"
+tags: [authenticated, idor, privesc, session, multi-role, pentest]
+estimated_duration_min: 60
+
+scan:
+  enabled_modules:
+    - auth_scanners
+    - idor
+    - mass_assignment
+    - jwt_attacks
+    - sqli
+    - xss
+    - ssrf
+    - csrf
+    - race_condition
+    - session_scanner
+    - cors
+    - headers
+    - lfi
+    - file_upload
+    - cmdi
+    - ssti
+    - nosqli
+    - open_redirect
+    - oast
+    - dom_xss
+    - graphql
+  disabled_modules:
+    - passive_recon
+  priority_modules:
+    - auth_scanners
+    - idor
+    - mass_assignment
+    - jwt_attacks
+    - sqli
+    - xss
+    - ssrf
+    - csrf
+    - race_condition
+  authenticated: true
+  test_privilege_escalation: true
+  test_horizontal_privesc: true   # diger kullanicilarin kaynaklari
+  test_vertical_privesc: true     # admin yetkisi kazanma
+  multi_role_testing: true
+  rps: 10
+  concurrency: 12
+  per_param: 15
+  max_total_requests: 60000
+
+filter:
+  min_severity: "medium"
+
+http:
+  timeout_seconds: 20
+  retries: 2
+  follow_redirects: true
+
+# Kimlik dogrulama yapilandirmasi
+# Asagidaki degerleri kendi uygulamaniza gore doldurun:
+auth:
+  type: "form"               # none / basic / bearer / cookie / form / oauth2 / apikey
+  login_url: ""              # orn: https://app.example.com/login
+  username_field: "username" # form field adi
+  password_field: "password" # form field adi
+  credentials:
+    username: ""             # test kullanicisi
+    password: ""             # test sifresi
+  success_indicator: ""      # giris basarisini gosteren string (orn: "dashboard")
+  token_header: "Authorization"
+  token_prefix: "Bearer "    # orn: "Token " veya "Bearer "
+
+  # Birden fazla rol icin:
+  roles:
+    - name: "normal_user"
+      username: ""
+      password: ""
+    - name: "admin"
+      username: ""
+      password: ""
+    # - name: "moderator"
+    #   username: ""
+    #   password: ""
+
+session:
+  test_fixation: true
+  test_entropy: true
+  test_concurrent: true
+  test_logout_invalidation: true
+
+idor:
+  multi_role: true
+  id_range: 200              # +/- 200 ID fuzzing
+  uuid_enumeration: true
+
+tools:
+  sqlmap:
+    risk: 2
+    level: 4
+    threads: 6
+    extra_args: ["--random-agent", "--batch", "--forms"]
+  nuclei:
+    rate_limit: 80
+    concurrency: 25
+    extra_args: ["-severity", "critical,high,medium"]
+  nmap:
+    enabled: true
+    mode: "normal"
+  ffuf:
+    threads: 20
+    extra_args: ["-rate", "80", "-recursion"]
+
+waf_bypass:
+  enabled: true
+  max_variants_per_payload: 6
+  rotate_headers: true
+
+oast:
+  enabled: true
+  max_injections_per_loc: 4
+
+# Kullanim ornegi:
+# websecure scan -u https://app.example.com --profile authenticated \
+#   --auth-url https://app.example.com/login \
+#   --auth-user testuser --auth-pass Test1234!
