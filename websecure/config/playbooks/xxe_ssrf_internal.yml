@@ -1,0 +1,34 @@
+# WebSecure Playbook — XXE → SSRF → Internal Keşif Zinciri
+name: "XXE → SSRF → İç Ağ Keşfi"
+chain_id: "xxe_ssrf_internal_discovery"
+severity: "Critical"
+confidence: "High"
+priority: 15
+
+required_types:
+  - xxe
+  - ssrf
+
+steps:
+  - type: xxe
+    label: "XML External Entity (XXE)"
+    description: >
+      XML girdisi işlenirken harici varlık referansı destekleniyor.
+      DOCTYPE tanımı üzerinden dosya okuma / SSRF tetiklenebilir.
+
+  - type: ssrf
+    label: "Server-Side Request Forgery (SSRF)"
+    description: >
+      XXE ile tetiklenen SSRF: sunucu iç ağa / metadata servisine istek gönderiyor.
+      `<!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]>`
+
+impact: >
+  XXE üzerinden SSRF tetiklenerek bulut metadata servisi erişilir.
+  AWS IAM credential, GCP service account token veya Azure IMDS bilgileri elde edilir.
+  Tüm bulut altyapısı ele geçirilebilir.
+
+remediation: |
+  1. XML parser'da external entity işlemeyi devre dışı bırakın (FEATURE_EXTERNAL_GENERAL_ENTITIES = false).
+  2. SSRF koruması için URL allowlist uygulayın.
+  3. 169.254.169.254 adresine ağ katmanında erişimi engelleyin.
+  4. IMDSv2 (token tabanlı) zorunlu hale getirin.

