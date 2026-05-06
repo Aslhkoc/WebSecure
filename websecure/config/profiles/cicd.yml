@@ -1,0 +1,86 @@
+# WebSecure Tarama Profili — CI/CD Pipeline
+# Bu profil kopyalanarak ozellestirilebilir.
+
+name: "CI/CD Pipeline Taramasi"
+profile_id: "cicd"
+description: >
+  CI/CD boru hatti icin optimize edilmis hizli tarama profili.
+  Hedef: 5 dakika icinde kritik ve yuksek bulgulari bulmak.
+version: "2.0"
+author: "WebSecure"
+tags: [cicd, fast, critical-first, pipeline, devops]
+estimated_duration_min: 5
+
+scan:
+  # Hizli moduller oncelikli — yavas moduller devre disi
+  enabled_modules:
+    - sqli
+    - xss
+    - ssrf
+    - cmdi
+    - auth_scanners
+    - idor
+    - cors
+    - headers
+    - jwt_attacks
+    - csrf
+  disabled_modules:
+    - nmap
+    - subdomain
+    - passive_recon
+    - waf_fingerprint
+    - infrastructure
+    - js_analyzer
+    - websocket_fuzz
+    - prototype_pollution
+    - race_condition
+  priority_modules:
+    - sqli
+    - xss
+    - ssrf
+    - cmdi
+    - auth_scanners
+    - idor
+  rps: 20
+  concurrency: 15
+  per_param: 5
+  max_total_requests: 5000
+  timeout_seconds: 300    # 5 dakika hard limit
+  fail_fast: true         # ilk Critical bulguda dur
+  max_pages: 50
+
+filter:
+  min_severity: "high"   # sadece High ve Critical raporla
+  max_false_positive_rate: 0.05
+
+http:
+  timeout_seconds: 10
+  retries: 1
+  follow_redirects: true
+
+tools:
+  sqlmap:
+    enabled: false         # cok yavas, CI/CD'de kullanilmaz
+  nuclei:
+    rate_limit: 300
+    concurrency: 100
+    extra_args: ["-severity", "critical,high", "-timeout", "5"]
+  nmap:
+    enabled: false
+  ffuf:
+    threads: 30
+    extra_args: ["-rate", "300", "-timeout", "5"]
+
+waf_bypass:
+  enabled: true
+  max_variants_per_payload: 3
+  rotate_headers: false    # hizli olmasi icin
+
+oast:
+  enabled: true
+  max_injections_per_loc: 2
+
+# CI/CD entegrasyon notlari:
+# - EXIT CODE 0: kritik/high bulgu yok
+# - EXIT CODE 1: en az bir kritik/high bulgu var
+# - JUnit/SARIF rapor ciktisi: --format junit veya --format sarif

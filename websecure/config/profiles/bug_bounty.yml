@@ -1,0 +1,105 @@
+# WebSecure Tarama Profili — Bug Bounty
+# Bu profil kopyalanarak hedef programa gore ozellestirilebilir.
+
+name: "Bug Bounty Taramasi"
+profile_id: "bug_bounty"
+description: >
+  Bug bounty programlari icin optimize edilmis profil.
+  Minimum false positive, OOB/OAST ile kör tespitler, güçlü WAF bypass.
+  Yalnizca dogrulanmis Critical ve High bulgular raporlanir.
+version: "2.0"
+author: "WebSecure"
+tags: [bug-bounty, low-fp, oast, waf-bypass, kor-tespit]
+estimated_duration_min: 90
+
+scan:
+  enabled_modules:
+    - ssrf
+    - sqli
+    - xss
+    - xxe
+    - auth_scanners
+    - idor
+    - file_upload
+    - cmdi
+    - ssti
+    - lfi
+    - open_redirect
+    - cors
+    - headers
+    - tls
+    - jwt_attacks
+    - csrf
+    - race_condition
+    - mass_assignment
+    - dom_xss
+    - oast
+    - subdomain_takeover
+    - waf_fingerprint
+  disabled_modules:
+    - infrastructure
+    - passive_recon
+  priority_modules:
+    - ssrf
+    - sqli
+    - xss
+    - xxe
+    - auth_scanners
+    - idor
+    - file_upload
+    - cmdi
+    - ssti
+  rps: 8
+  concurrency: 10
+  per_param: 15
+  max_total_requests: 50000
+  confirm_findings: true    # bulgu dogrulanmadan raporlanmaz
+  min_confidence: "high"    # sadece yuksek guvenlikli bulgular
+  max_pages: 200
+
+filter:
+  min_severity: "high"
+  max_false_positive_rate: 0.02
+
+http:
+  timeout_seconds: 20
+  retries: 3
+  follow_redirects: true
+
+tools:
+  sqlmap:
+    risk: 2
+    level: 3
+    threads: 5
+    extra_args: ["--random-agent", "--batch", "--flush-session"]
+  nuclei:
+    rate_limit: 100
+    concurrency: 30
+    extra_args: ["-severity", "critical,high"]
+  nmap:
+    enabled: true
+    mode: "normal"
+  ffuf:
+    threads: 20
+    extra_args: ["-rate", "100", "-recursion"]
+
+waf_bypass:
+  enabled: true
+  rotate_headers: true
+  max_variants_per_payload: 8
+  encoding_variants: true
+  case_variants: true
+  ml_scoring: true         # Bayesian ML ile bypass strateji secimi
+
+oast:
+  enabled: true
+  max_injections_per_loc: 5
+  protocols: [dns, http, smtp]
+  # interactsh veya burp collaborator
+  provider: "interactsh"
+
+# Bug bounty program notlari:
+# - Hedef programin kapsamini (scope) kontrol edin
+# - Rate limit'e dikkat edin — dusuk RPS degeri ile baslayin
+# - Blind XXE/SSRF icin OAST zorunlu
+# - Stored XSS icin farkli endpoint'leri de kontrol edin

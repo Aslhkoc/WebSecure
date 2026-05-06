@@ -1,0 +1,115 @@
+# WebSecure Tarama Profili — API-Only
+# REST / GraphQL / gRPC API guvenligi taramasi
+
+name: "API Guvenligi Taramasi"
+profile_id: "api_only"
+description: >
+  Yalnizca REST / GraphQL / gRPC API yuzeyini tarayan profil.
+  Browser-based scanner'lar, Nmap, subdomain devre disi.
+  Auth, IDOR, SQLi, NoSQLi, SSRF, Mass Assignment, Rate Limit odakli.
+version: "2.0"
+author: "WebSecure"
+tags: [api, rest, graphql, grpc, idor, auth, mass-assignment, jwt]
+estimated_duration_min: 25
+
+scan:
+  enabled_modules:
+    - sqli
+    - nosqli
+    - ssrf
+    - xxe
+    - idor
+    - auth_scanners
+    - jwt_attacks
+    - mass_assignment
+    - graphql
+    - cors
+    - race_condition
+    - cmdi
+    - ssti
+    - open_redirect
+    - oast
+    - crlf_injection
+    - lfi
+  disabled_modules:
+    - nmap
+    - subdomain
+    - passive_recon
+    - infrastructure
+    - dom_xss
+    - csrf
+    - prototype_pollution
+    - websocket_fuzz
+    - js_analyzer
+    - subdomain_takeover
+    - tls        # API icin ayri TLS testi yap
+  priority_modules:
+    - auth_scanners
+    - idor
+    - sqli
+    - nosqli
+    - ssrf
+    - mass_assignment
+    - jwt_attacks
+    - cors
+    - graphql
+    - race_condition
+  api_mode: true
+  follow_openapi: true       # OpenAPI/Swagger otomatik import
+  follow_graphql: true       # GraphQL schema introspection
+  rps: 25
+  concurrency: 20
+  per_param: 15
+  max_total_requests: 30000
+  max_pages: 20
+
+filter:
+  min_severity: "medium"
+
+http:
+  timeout_seconds: 15
+  retries: 2
+  content_type: "application/json"  # API varsayilan content type
+
+tools:
+  sqlmap:
+    risk: 2
+    level: 3
+    threads: 8
+    extra_args:
+      - "--random-agent"
+      - "--batch"
+      - "--headers"
+      - "Content-Type: application/json"
+  nuclei:
+    rate_limit: 150
+    concurrency: 40
+    extra_args: ["-severity", "critical,high,medium", "-tags", "api"]
+  nmap:
+    enabled: false
+  ffuf:
+    threads: 25
+    extra_args: ["-rate", "150", "-mc", "200,201,204,400,401,403,422,500"]
+
+graphql:
+  enabled: true
+  deep: true
+  introspection: true
+  mutation_fuzzing: true
+  batch_query_attack: true    # N+1 query, batch DoS
+  field_suggestion: true      # hata mesajinda field suggestion
+
+waf_bypass:
+  enabled: true
+  max_variants_per_payload: 5
+  rotate_headers: true
+
+oast:
+  enabled: true
+  max_injections_per_loc: 4
+
+# API tarama ipuclari:
+# - OpenAPI/Swagger dosyasini --swagger-url ile verin
+# - GraphQL endpoint'i --graphql-url ile belirtin
+# - Authenticated tarama icin --auth-token veya --auth-cookie kullanin
+# - Rate limit testleri icin --test-rate-limit ekleyin
