@@ -18,7 +18,7 @@ owasp_coverage:
   A02_cryptographic_failures:   [tls, headers]
   A03_injection:                [sqli, nosqli, cmdi, ssti, xxe, crlf_injection]
   A04_insecure_design:          [auth_scanners, race_condition]
-  A05_security_misconfiguration:[cors, headers, xxe, graphql]
+  A05_security_misconfiguration: [cors, headers, xxe, graphql]
   A06_vulnerable_components:    [owasp]
   A07_auth_failures:            [auth_scanners, jwt_attacks]
   A08_software_data_integrity:  [file_upload]
