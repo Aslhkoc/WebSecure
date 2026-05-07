@@ -464,13 +464,187 @@ def cleanup_checkpoints(
     return get_mgr(checkpoint_dir=checkpoint_dir).cleanup(max_age_days)
 
 
+# ---------------------------------------------------------------------------
+# Adım 20 — Tarama sonrası kalıcılık köprüsü
+# ---------------------------------------------------------------------------
+
+def post_scan_persist(
+    scan_id: str,
+    target: str,
+    findings: List[Dict[str, Any]],
+    profile: str = "default",
+    duration_s: float = 0.0,
+    tenant_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Tarama tamamlandıktan sonra:
+    1. Bulgular FPLearner ile filtrelenir (bilinen FP'ler çıkarılır)
+    2. Temiz bulgular DB'ye kaydedilir
+    3. Güvenlik skoru hesaplanır ve kaydedilir
+    4. Özet döndürülür
+
+    Parametreler
+    ------------
+    scan_id    : Tarama kimliği
+    target     : Hedef URL
+    findings   : Ham bulgu listesi (dict)
+    profile    : Tarama profili
+    duration_s : Tarama süresi (saniye)
+    tenant_id  : Tenant ID (çok kiracılı)
+    project_id : Proje ID
+
+    Döndürür
+    --------
+    dict — {scan_id, target, original, after_fp, score, risk_level, db_saved}
+    """
+    result: Dict[str, Any] = {
+        "scan_id": scan_id,
+        "target": target,
+        "original_count": len(findings),
+        "after_fp_count": len(findings),
+        "score": 100.0,
+        "risk_level": "Minimal",
+        "db_saved": False,
+        "fp_filtered": 0,
+    }
+
+    # 1. FP filtreleme
+    clean_findings = findings
+    try:
+        from websecure.core.fp_learner import get_fp_learner
+        learner = get_fp_learner()
+        clean_findings = learner.filter_findings(findings, tenant_id=tenant_id)
+        result["fp_filtered"] = len(findings) - len(clean_findings)
+        result["after_fp_count"] = len(clean_findings)
+        logger.info(
+            f"[scan_runner] FP filtresi: {result['fp_filtered']} bulgu çıkarıldı "
+            f"({len(clean_findings)}/{len(findings)} kaldı)"
+        )
+    except Exception as exc:
+        logger.debug(f"[scan_runner] FP filtresi atlandı: {exc}")
+
+    # 2. Skor hesaplama
+    try:
+        from websecure.core.score_tracker import get_score_tracker
+        from websecure.db import get_db as _get_db
+        _db = None
+        try:
+            _db = _get_db()
+        except Exception:
+            pass
+        tracker = get_score_tracker(db=_db)
+        snapshot = tracker.record(
+            scan_id=scan_id,
+            target=target,
+            findings=clean_findings,
+            project_id=project_id,
+            tenant_id=tenant_id,
+        )
+        result["score"] = snapshot.score
+        result["risk_level"] = snapshot.risk_level
+        logger.info(
+            f"[scan_runner] Güvenlik skoru: {snapshot.score:.1f}/100 "
+            f"({snapshot.risk_level})"
+        )
+    except Exception as exc:
+        logger.debug(f"[scan_runner] Skor kaydı atlandı: {exc}")
+
+    # 3. DB kayıt
+    try:
+        from websecure.db import get_db, ScanRepository, FindingRepository, Scan, Finding
+        import hashlib, datetime as _dt
+        db = get_db()
+        scan_repo = ScanRepository(db)
+        find_repo = FindingRepository(db)
+
+        # Scan kaydı
+        scan_obj = Scan(
+            id=scan_id,
+            target=target,
+            profile=profile,
+            status="completed",
+            completed_at=_dt.datetime.utcnow().isoformat(),
+            duration_s=duration_s,
+            finding_count=len(clean_findings),
+            score=result.get("score"),
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+        # Mevcut tarama varsa güncelle, yoksa oluştur
+        existing = scan_repo.get(scan_id)
+        if existing:
+            scan_repo.update(scan_obj)
+        else:
+            scan_repo.create(scan_obj)
+
+        # Bulgular
+        db_findings = []
+        for f in clean_findings:
+            fid = f.get("id") or hashlib.sha256(
+                f"{scan_id}{f.get('title','')}{f.get('url','')}".encode()
+            ).hexdigest()[:16]
+            fp = hashlib.sha256(
+                f"{f.get('title','')}{f.get('url','')}{f.get('type','')}".encode()
+            ).hexdigest()[:16]
+            db_findings.append(Finding(
+                id=fid,
+                scan_id=scan_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                fingerprint=f.get("fingerprint") or fp,
+                title=f.get("title") or f.get("type") or "Unknown",
+                severity=f.get("severity") or f.get("cvss_severity") or "Info",
+                url=f.get("url") or target,
+                tool=f.get("tool") or "websecure",
+                category=f.get("category") or f.get("type") or "",
+                description=str(f.get("description") or "")[:1000],
+                evidence=str(f.get("evidence") or f.get("payload") or "")[:500],
+                cwe=str(f.get("cwe") or ""),
+                cvss=f.get("cvss_score"),
+                verified=bool(f.get("verified")),
+                remediation=str(f.get("remediation") or "")[:500],
+                extra={"raw": {k: v for k, v in f.items()
+                               if k not in ("title","severity","url","tool","description",
+                                            "evidence","cwe","cvss_score","verified","remediation")}},
+            ))
+
+        saved = find_repo.bulk_create(db_findings)
+        result["db_saved"] = True
+        result["db_findings_saved"] = saved
+        logger.info(f"[scan_runner] DB: {saved}/{len(db_findings)} bulgu kaydedildi.")
+    except Exception as exc:
+        logger.warning(f"[scan_runner] DB kayıt atlandı: {exc}")
+
+    return result
+
+
+def filter_false_positives(
+    findings: List[Dict[str, Any]],
+    tenant_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Bulgular listesini FPLearner ile filtrele.
+    Bağımsız yardımcı — main.py veya diğer modüller doğrudan çağırabilir.
+    """
+    try:
+        from websecure.core.fp_learner import get_fp_learner
+        return get_fp_learner().filter_findings(findings, tenant_id=tenant_id)
+    except Exception as exc:
+        logger.debug(f"[scan_runner] FP filtre hatası: {exc}")
+        return findings
+
+
 __all__ = [
     # Orijinal yardımcılar
     "_call_scanner_if_available",
     "_bind_offensive",
-    # Yeni: oturum yönetimi
+    # Oturum yönetimi
     "ScanSession",
     "list_checkpoints",
     "cleanup_checkpoints",
     "_generate_scan_id",
+    # Adım 20 — Kalıcılık entegrasyonu
+    "post_scan_persist",
+    "filter_false_positives",
 ]

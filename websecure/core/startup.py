@@ -223,6 +223,46 @@ def ensure_nuclei(cfg: dict) -> bool:  # noqa: ARG001
         return False
 
 
+def initialize_persistence(cfg: dict = None) -> dict:
+    """
+    Adım 20 kalıcılık katmanını başlat:
+    DB, FPLearner, ScoreTracker singleton'ları oluştur.
+
+    Döndürür
+    --------
+    dict — başlatılan bileşenler
+    """
+    result = {"db": False, "fp_learner": False, "score_tracker": False}
+    cfg = cfg or {}
+
+    try:
+        from websecure.db import get_db
+        db = get_db()
+        result["db"] = True
+        print("[+] WebSecure DB başlatıldı.")
+    except Exception as exc:
+        print(f"[!] DB başlatılamadı: {exc}")
+        db = None
+
+    try:
+        from websecure.core.fp_learner import get_fp_learner
+        get_fp_learner()
+        result["fp_learner"] = True
+        print("[+] FP öğrenme motoru başlatıldı.")
+    except Exception as exc:
+        print(f"[!] FP learner başlatılamadı: {exc}")
+
+    try:
+        from websecure.core.score_tracker import get_score_tracker
+        get_score_tracker(db=db)
+        result["score_tracker"] = True
+        print("[+] Skor takip motoru başlatıldı.")
+    except Exception as exc:
+        print(f"[!] Score tracker başlatılamadı: {exc}")
+
+    return result
+
+
 def run_all_startup_checks(cfg: dict) -> dict[str, bool]:
     """Run all pre-scan dependency checks. Returns a status dict."""
     return {

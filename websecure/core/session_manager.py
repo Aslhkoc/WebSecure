@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.core.session_manager
 -------------------------------
 Session ve Cookie güvenlik analiz yardımcıları.

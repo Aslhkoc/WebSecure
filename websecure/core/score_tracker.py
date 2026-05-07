@@ -509,10 +509,23 @@ _tracker_instance: Optional[ScoreTracker] = None
 
 
 def get_score_tracker(db=None) -> ScoreTracker:
-    """Global ScoreTracker singleton'ını döndür."""
+    """
+    Global ScoreTracker singleton'ını döndür.
+    db parametresi verilirse ve singleton henüz DB'siz ise DB güncellenir.
+    """
     global _tracker_instance
     if _tracker_instance is None:
+        # DB verilmezse otomatik olarak get_db() dene
+        if db is None:
+            try:
+                from websecure.db import get_db
+                db = get_db()
+            except Exception:
+                pass
         _tracker_instance = ScoreTracker(db=db)
+    elif db is not None and _tracker_instance._db is None:
+        # Mevcut singleton'a DB bağla
+        _tracker_instance._db = db
     return _tracker_instance
 
 

@@ -6,6 +6,7 @@ This functionality has been moved to websecure.scanners.infrastructure.
 This file remains to support dynamic imports from config 'modules': ['headers'].
 """
 
+from __future__ import annotations
 from .infrastructure import get_security_headers, analyze_response_headers, HeaderScanner
 
 def scan(target: str, session=None, **kwargs):
@@ -25,7 +26,6 @@ def run(target: str, session=None, **kwargs):
 # ============================================================================
 # ADIM 9 — CSPAnalyzer, HSTSPreloadChecker, EmailSecurityAnalyzer, DNSCAAChecker
 # ============================================================================
-from __future__ import annotations
 import logging
 import re
 import socket

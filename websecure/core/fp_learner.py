@@ -227,10 +227,11 @@ class FPLearner:
         """FP işaretini kaldır."""
         url_pattern = self._make_url_pattern(finding.get("url", ""))
         title_pattern = re.escape(finding.get("title", "")[:80])
-        rule_fp = hashlib.sha256(
-            f"{title_pattern}{url_pattern}"
-            f"{finding.get('severity', '')}{finding.get('tool', '')}".encode()
-        ).hexdigest()[:16]
+        sev = finding.get("severity", "")
+        tool = finding.get("tool", "")
+        # fingerprint() ile aynı format: "|" ayırıcı
+        key = f"{title_pattern}|{url_pattern}|{sev}|{tool}"
+        rule_fp = hashlib.sha256(key.encode()).hexdigest()[:16]
 
         rule = None
         with self._lock:

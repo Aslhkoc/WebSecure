@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.scanners.subdomain_takeover
 ---------------------------------------
 Subdomain Takeover tespiti.

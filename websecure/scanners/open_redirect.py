@@ -15,8 +15,8 @@ Performans:
   - MAX_PROBE_REQUESTS: sonsuz döngü koruması
   - Per-path early exit: ilk bulgu sonrası o path atlanır
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 import re
 from concurrent.futures import TimeoutError as _FuturesTimeout
@@ -335,7 +335,6 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None,
 # ADIM 8 — Open Redirect Zincirleri (SOLID Siniflar)
 # OpenRedirectOAuthTheftChain, OpenRedirectSSRFChain, OpenRedirectAdim8Scanner
 # ============================================================================
-from __future__ import annotations
 import logging
 import re
 import urllib.parse

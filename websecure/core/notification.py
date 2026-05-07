@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.core.notification
 ----------------------------
 Harici bildirim entegrasyonlari: JIRA, GitHub Issues, Slack, Teams, PagerDuty.

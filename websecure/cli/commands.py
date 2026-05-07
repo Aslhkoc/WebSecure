@@ -286,7 +286,124 @@ def build_parser() -> argparse.ArgumentParser:
     comp_p.add_argument("shell", nargs="?", choices=["bash","zsh","fish"], default="bash")
     comp_p.add_argument("--install", action="store_true")
 
+    # --------------------------------------------------------
+    # api  (Adım 20 — REST API sunucusu)
+    # --------------------------------------------------------
+    api_p = subparsers.add_parser("api", help="REST API sunucusu başlat")
+    api_p.add_argument("--host",       default="127.0.0.1",
+                       help="Dinlenecek adres (varsayılan: 127.0.0.1)")
+    api_p.add_argument("--port", "-p", type=int, default=8888,
+                       help="Port numarası (varsayılan: 8888)")
+    api_p.add_argument("--no-auth",    action="store_true",
+                       help="API key doğrulamasını devre dışı bırak (geliştirme)")
+    api_p.add_argument("--no-db",      action="store_true",
+                       help="DB bağlantısını devre dışı bırak")
+
+    # --------------------------------------------------------
+    # db  (Adım 20 — DB yönetimi)
+    # --------------------------------------------------------
+    db_p = subparsers.add_parser("db", help="Veritabanı yönetimi")
+    db_p.add_argument("action", choices=["init","stats","vacuum","list-scans"],
+                      help="Yapılacak işlem")
+    db_p.add_argument("--limit", type=int, default=20)
+
     return parser
+
+
+# ---------------------------------------------------------------------------
+# Adım 20 — REST API & DB komut handler'ları
+# ---------------------------------------------------------------------------
+
+def _cmd_api(ns: argparse.Namespace) -> int:
+    """
+    `websecure api` — REST API sunucusunu başlat ve bekle.
+
+    Örnek
+    -----
+    websecure api --port 8888 --no-auth
+    """
+    try:
+        from websecure.api.server import APIServer
+        db = None
+        if not getattr(ns, "no_db", False):
+            try:
+                from websecure.db import get_db
+                db = get_db()
+            except Exception as exc:
+                logger.warning(f"[API] DB bağlantısı kurulamadı: {exc}  (no-db modda devam)")
+
+        server = APIServer(
+            host=ns.host,
+            port=ns.port,
+            no_auth=getattr(ns, "no_auth", False),
+            db=db,
+        )
+        server.start(daemon=False)   # blocking=False olduğunda daemon=False ile join bekler
+        print(f"[+] REST API: http://{ns.host}:{ns.port}/api/v1/")
+        print("    Durdurmak için Ctrl+C")
+        try:
+            import time
+            while server.is_running():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[*] API sunucusu durduruluyor...")
+            server.stop()
+        return 0
+    except Exception as exc:
+        logger.error(f"[API] Sunucu hatası: {exc!r}", exc_info=True)
+        print(f"[!] REST API başlatılamadı: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_db(ns: argparse.Namespace) -> int:
+    """
+    `websecure db` — Veritabanı yönetim komutları.
+
+    Kullanım
+    --------
+    websecure db init
+    websecure db stats
+    websecure db vacuum
+    websecure db list-scans [--limit N]
+    """
+    action = ns.action
+    try:
+        from websecure.db import get_db, ScanRepository
+        db = get_db()
+
+        if action == "init":
+            print(f"[+] Veritabanı başlatıldı.")
+            stats = db.stats()
+            for table, cnt in stats.items():
+                print(f"    {table}: {cnt} kayıt")
+
+        elif action == "stats":
+            stats = db.stats()
+            print("Veritabanı İstatistikleri:")
+            for table, cnt in stats.items():
+                print(f"  {table:20s}: {cnt:>6} kayıt")
+
+        elif action == "vacuum":
+            db.vacuum()
+            print("[+] VACUUM tamamlandı.")
+
+        elif action == "list-scans":
+            repo = ScanRepository(db)
+            scans = repo.list_recent(limit=ns.limit)
+            if not scans:
+                print("Henüz hiç tarama kaydedilmemiş.")
+            else:
+                print(f"{'ID':<16}  {'Hedef':<40}  {'Profil':<12}  {'Durum':<12}  {'Skor'}")
+                print("-" * 90)
+                for s in scans:
+                    score = f"{s.score:.1f}" if s.score is not None else "-"
+                    print(f"{s.id:<16}  {s.target[:40]:<40}  {s.profile:<12}  {s.status:<12}  {score}")
+
+        return 0
+    except Exception as exc:
+        logger.error(f"[DB] Komut hatası: {exc!r}", exc_info=True)
+        print(f"[!] DB hatası: {exc}", file=sys.stderr)
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +478,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             if ns.install:
                 comp_args.append("--install")
             return run_completion_cli(comp_args)
+
+        elif cmd == "api":
+            return _cmd_api(ns)
+
+        elif cmd == "db":
+            return _cmd_db(ns)
 
         else:
             parser.print_help()

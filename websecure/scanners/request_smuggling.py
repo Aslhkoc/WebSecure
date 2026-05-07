@@ -24,8 +24,8 @@ Detection methods
 
 All probes use raw sockets to bypass the requests library's header normalisation.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 import socket
 import ssl
@@ -557,7 +557,6 @@ def run(
 # ============================================================================
 # ADIM 7 — HTTP/2 Smuggling + h2c Upgrade (SOLID Siniflar)
 # ============================================================================
-from __future__ import annotations
 import socket
 import ssl
 import logging

@@ -86,11 +86,19 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
     """
     Verifies findings against OAST callbacks and applies CVSS scoring.
     Steps:
-      1. Deduplicate findings by (type, url, parameter)
-      2. Correlate with OAST events — mark verified=True on token match
-      3. Apply CVSS v3.1 scoring via cvss_scorer if available
-      4. Sort by CVSS score descending (Critical → Info)
+      1. FP filtreleme (Adım 20 — FPLearner)
+      2. Deduplicate findings by (type, url, parameter)
+      3. Correlate with OAST events — mark verified=True on token match
+      4. Apply CVSS v3.1 scoring via cvss_scorer if available
+      5. Sort by CVSS score descending (Critical → Info)
     """
+    # 0. FP filtreleme (Adım 20)
+    try:
+        from websecure.core.fp_learner import get_fp_learner
+        findings = get_fp_learner().filter_findings(findings)
+    except Exception:
+        pass  # FPLearner yoksa atla
+
     # 1. Deduplicate
     unique = _dedupe_findings(findings)
 

@@ -26,8 +26,8 @@ References
   • https://portswigger.net/web-security/race-conditions
   • https://portswigger.net/research/smashing-the-state-machine
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import logging
 import random
 import socket
@@ -449,7 +449,6 @@ def run(
 # GateTechniqueExploiter, RaceAuthBypassProber, RaceDoubleSpendProber
 # RaceRegistrationProber, RaceConditionScanner (orchestrator)
 # ============================================================================
-from __future__ import annotations
 import logging
 import random
 import socket

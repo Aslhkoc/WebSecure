@@ -13,6 +13,7 @@ Attacks:
 - Polyglot JPEG+PHP
 - Enhanced response analysis (JSON link extraction, execution verification)
 """
+from __future__ import annotations
 import io
 import json
 import logging
@@ -540,7 +541,6 @@ def run(
 # ============================================================================
 # ADIM 8 — Polyglot File Upload + ImageTragick (SOLID Siniflar)
 # ============================================================================
-from __future__ import annotations
 import io
 import os
 import random

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import ssl
 import socket
 import logging
@@ -170,7 +171,6 @@ run = scan_tls
 # TLSBEASTPoodleProber, TLSCRIMEBREACHProber, TLSROBOTProber,
 # HTTP2HTTP3Checker, CDNMisconfigProber, TLSAdim9Scanner
 # ============================================================================
-from __future__ import annotations
 import logging
 import socket
 import ssl

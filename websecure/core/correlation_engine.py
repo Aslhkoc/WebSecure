@@ -7,7 +7,7 @@ websecure.core.correlation_engine
 ----------
 * Fingerprint eşleşmesi (aynı bulgu farklı taramalarda)
 * Escalation tespiti (aynı URL, daha yüksek severity)
-* Zincir tespiti (SQLi+IDOR → Veri Sızıntısı, XSS+CSRF vb.)
+* Zincir tespiti (SQLi+IDOR -> Veri Sızıntısı, XSS+CSRF vb.)
 * Persistence tespiti (n tarama boyunca düzelmemiş bulgu)
 * Strategy Pattern — yeni korelasyon stratejisi eklemek OCP uyumlu
 
@@ -39,14 +39,14 @@ _SEV_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 _CHAIN_PAIRS: List[Tuple[Set[str], Set[str], str]] = [
     # (set1_keywords, set2_keywords, chain_name)
-    ({"sql injection", "sqli"},     {"idor", "broken access"},  "SQLi → IDOR → Data Leak"),
-    ({"xss", "cross-site script"},  {"csrf"},                    "XSS → CSRF"),
-    ({"lfi", "local file"},         {"rce", "remote code"},      "LFI → RCE"),
-    ({"ssrf"},                      {"cloud", "metadata"},       "SSRF → Cloud Metadata"),
-    ({"file upload", "unrestrict"}, {"rce", "remote code"},      "Upload → RCE"),
-    ({"auth bypass", "broken auth"},{"sql injection"},           "Auth Bypass → SQLi"),
-    ({"ssti", "template inject"},   {"rce", "remote code"},      "SSTI → RCE"),
-    ({"open redirect"},             {"xss", "cross-site script"},"Open Redirect → XSS"),
+    ({"sql injection", "sqli"},     {"idor", "broken access"},  "SQLi -> IDOR -> Data Leak"),
+    ({"xss", "cross-site script"},  {"csrf"},                    "XSS -> CSRF"),
+    ({"lfi", "local file"},         {"rce", "remote code"},      "LFI -> RCE"),
+    ({"ssrf"},                      {"cloud", "metadata"},       "SSRF -> Cloud Metadata"),
+    ({"file upload", "unrestrict"}, {"rce", "remote code"},      "Upload -> RCE"),
+    ({"auth bypass", "broken auth"},{"sql injection"},           "Auth Bypass -> SQLi"),
+    ({"ssti", "template inject"},   {"rce", "remote code"},      "SSTI -> RCE"),
+    ({"open redirect"},             {"xss", "cross-site script"},"Open Redirect -> XSS"),
 ]
 
 
@@ -107,7 +107,7 @@ class CorrelationStrategy(ABC):
 # ---------------------------------------------------------------------------
 
 class FingerprintCorrelation(CorrelationStrategy):
-    """Aynı SHA256 fingerprint → aynı bulgu, tekrar eden sorun."""
+    """Aynı SHA256 fingerprint -> aynı bulgu, tekrar eden sorun."""
 
     def correlate(
         self,
@@ -147,7 +147,7 @@ class FingerprintCorrelation(CorrelationStrategy):
 # ---------------------------------------------------------------------------
 
 class EscalationCorrelation(CorrelationStrategy):
-    """Aynı URL'de daha yüksek severity → risk tırmandı."""
+    """Aynı URL'de daha yüksek severity -> risk tırmandı."""
 
     def correlate(
         self,
@@ -156,7 +156,7 @@ class EscalationCorrelation(CorrelationStrategy):
         scan1_id: str,
         scan2_id: str,
     ) -> List[CorrelationMatch]:
-        # URL → (finding, severity_order)
+        # URL -> (finding, severity_order)
         url_map: Dict[str, Tuple[Dict, int]] = {}
         for f in findings1:
             url = f.get("url", "")
@@ -181,7 +181,7 @@ class EscalationCorrelation(CorrelationStrategy):
                         finding1_id=f1.get("id", ""),
                         finding2_id=f2.get("id", ""),
                         description=(
-                            f"Risk tırmandı: {f1.get('severity')} → {f2.get('severity')} "
+                            f"Risk tırmandı: {f1.get('severity')} -> {f2.get('severity')} "
                             f"({url})"
                         ),
                     ))
@@ -193,7 +193,7 @@ class EscalationCorrelation(CorrelationStrategy):
 # ---------------------------------------------------------------------------
 
 class ChainCorrelation(CorrelationStrategy):
-    """Tehlikeli bulgu kombinasyonu → exploit zinciri."""
+    """Tehlikeli bulgu kombinasyonu -> exploit zinciri."""
 
     def correlate(
         self,
@@ -248,7 +248,7 @@ class ChainCorrelation(CorrelationStrategy):
 # ---------------------------------------------------------------------------
 
 class PersistenceCorrelation(CorrelationStrategy):
-    """Birden fazla taramada düzelmeyen bulgu → kalıcı sorun."""
+    """Birden fazla taramada düzelmeyen bulgu -> kalıcı sorun."""
 
     def correlate(
         self,
@@ -405,7 +405,7 @@ class CorrelationEngine:
 
     @staticmethod
     def _finding_to_dict(finding) -> Dict[str, Any]:
-        """Finding dataclass → dict."""
+        """Finding dataclass -> dict."""
         try:
             from dataclasses import asdict
             return asdict(finding)

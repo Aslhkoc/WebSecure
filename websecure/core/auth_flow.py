@@ -31,7 +31,10 @@ __all__ = [
 # -----------------------------------------------------------------------------
 
 def _mod_available(mod: str) -> bool:
-    return find_spec(mod) is not None
+    try:
+        return find_spec(mod) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
 
 def _import_attr(mod: str, name: str) -> Optional[Any]:
     # MAINLINK v1: dual import (core.* → fallback to top-level)
@@ -40,8 +43,11 @@ def _import_attr(mod: str, name: str) -> Optional[Any]:
         candidates.append(mod.split('.', 1)[1])
     for m in candidates:
         if _mod_available(m):
-            module = __import__(m, fromlist=[name])
-            return getattr(module, name, None) if hasattr(module, name) else None
+            try:
+                module = __import__(m, fromlist=[name])
+                return getattr(module, name, None) if hasattr(module, name) else None
+            except Exception:
+                continue
     return None
 
 By = _import_attr("selenium.webdriver.common.by", "By")

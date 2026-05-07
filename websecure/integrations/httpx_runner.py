@@ -54,7 +54,6 @@ _SECURITY_SEVERITY_BY_STATUS = {
 # ProbeResult — tek URL prob sonucu
 # ---------------------------------------------------------------------------
 
-@dataclass_like = None  # Python 3.7+ dataclass kullanımı için
 from dataclasses import dataclass, field
 
 @dataclass
