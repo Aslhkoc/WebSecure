@@ -64,15 +64,37 @@ class ToolManager:
     # Araç tespiti yardımcıları
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _extra_search_dirs() -> List[Path]:
+        """Go, pdtm ve yaygın güvenlik araç dizinlerini döndür."""
+        home = Path.home()
+        candidates = [
+            # Go varsayılan bin dizini
+            home / "go" / "bin",
+            # GOPATH/bin (özel GOPATH varsa)
+            Path(os.environ.get("GOPATH", home / "go")) / "bin",
+            # ProjectDiscovery pdtm kurulum dizini
+            home / "AppData" / "Local" / "pdtm" / "go" / "bin",
+            home / ".pdtm" / "go" / "bin",
+            # Linux/Mac Go kurulumu
+            Path("/usr/local/go/bin"),
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+        ]
+        return [d for d in candidates if d.exists()]
+
     def _find_binary(self, tool_name: str) -> Optional[str]:
-        """Bir aracın binary yolunu bul (PATH + tools/ dizini)."""
+        """Bir aracın binary yolunu bul (PATH + tools/ + Go bin dizinleri)."""
         binaries = self._KNOWN_TOOLS.get(tool_name, [tool_name])
+        extra_dirs = self._extra_search_dirs()
+
         for binary in binaries:
-            # PATH'ta
+            # 1. Sistem PATH'ında
             found = shutil.which(binary)
             if found:
                 return found
-            # tools/ dizininde (alt dizinler dahil)
+
+            # 2. tools/ dizininde (alt dizinler dahil)
             for candidate in [
                 self.tools_dir / tool_name / binary,
                 self.tools_dir / binary,
@@ -80,6 +102,13 @@ class ToolManager:
             ]:
                 if candidate.exists():
                     return str(candidate)
+
+            # 3. Go bin / pdtm / yaygın güvenlik araç dizinleri
+            for extra_dir in extra_dirs:
+                candidate = extra_dir / binary
+                if candidate.exists():
+                    return str(candidate)
+
         return None
 
     def is_tool_available(self, tool_name: str) -> bool:
