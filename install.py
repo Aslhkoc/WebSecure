@@ -40,10 +40,21 @@ def pip_install(*packages: str, quiet: bool = False) -> bool:
 
 
 def is_importable(module: str) -> bool:
+    """Modülün import edilebilir olup olmadığını kontrol et.
+
+    ImportError dışında OSError (eksik sistem DLL/so) ve diğer
+    runtime hatalarını da yakalar — weasyprint gibi native bağımlılığı
+    olan paketler pip'ten kurulsa bile sistem kütüphanesi eksikse
+    OSError/AttributeError fırlatabilir.
+    """
     try:
         importlib.import_module(module)
         return True
-    except ImportError:
+    except (ImportError, ModuleNotFoundError):
+        return False
+    except Exception:
+        # OSError (libgobject, pango vb.), AttributeError, vs.
+        # Paket kurulu ama çalışmıyor → False döndür, çöktürme
         return False
 
 
@@ -163,18 +174,37 @@ def main():
                 note = "← Residential proxy için gerekli"
             warn(f"  {p} {note}")
 
-    # Önemli uyarı
+    # Önemli uyarılar
     if "curl-cffi" in failed_optional:
         print(f"""
 {YELLOW}⚠  curl-cffi kurulamadı!{RESET}
-   Cloudflare, Akamai gibi WAF'lar Python'un TLS imzasını tanır.
-   curl-cffi olmadan bu WAF'ları bypass etmek çok daha zordur.
+   Cloudflare, Akamai gibi WAF'lar Python'un TLS imzasını tanir.
+   curl-cffi olmadan bu WAF'lari bypass etmek cok daha zordur.
 
-   Çözüm (Windows):
+   Cozum (Windows):
      pip install curl-cffi --pre
 
-   Çözüm (Linux/Mac):
+   Cozum (Linux/Mac):
      pip install curl-cffi
+""")
+
+    if "weasyprint" in failed_optional:
+        print(f"""
+{YELLOW}⚠  weasyprint PDF motoru calismiyor!{RESET}
+   WeasyPrint Windows'ta GTK/Pango sistem kutuphanelerine ihtiyac duyar.
+   Bu kutuphaneler Python ile gelmiyor, ayri kurulumu gerekiyor.
+
+   Cozum A — GTK for Windows Runtime kur (onerilir):
+     1. https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer/releases
+     2. GTK3-Runtime-*.exe indirip kur
+     3. Bilgisayari yeniden baslat, sonra tekrar: python install.py
+
+   Cozum B — weasyprint'i atla, PDF yerine HTML raporu kullan:
+     python -m websecure scan --target https://hedef.com --format html
+
+   Cozum C — Linux/WSL kullan:
+     sudo apt install libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
+     pip install weasyprint
 """)
 
     if not failed_critical:
