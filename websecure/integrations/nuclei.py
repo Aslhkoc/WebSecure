@@ -371,3 +371,77 @@ def update_nuclei_templates(force: bool = False) -> bool:
     """Standalone helper: update Nuclei templates. Returns True on success."""
     wrapper = NucleiWrapper()
     return wrapper.update_templates(force=force)
+
+
+def run_nuclei_with_correlation(
+    target: str,
+    existing_fingerprints: Optional[set] = None,
+    tech_stack: Optional[List[str]] = None,
+    rate_limit: int = 150,
+    sarif_output: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Nuclei taraması yap + WebSecure bulguları ile çakışma kontrolü yap.
+
+    Parametreler
+    ------------
+    existing_fingerprints : Mevcut WebSecure bulgu parmak izleri (set)
+    sarif_output          : SARIF dosya yolu (belirtilirse SARIF de yazar)
+
+    Döndürür
+    --------
+    List[Dict] — Yeni (çakışmayan) Nuclei bulgularının native formatı.
+    """
+    try:
+        from websecure.integrations.base import FindingCorrelator, ToolFinding, ToolSeverity
+        from websecure.integrations.sarif import SARIFNormalizer
+
+        wrapper = NucleiWrapper()
+        if not wrapper.is_available():
+            return []
+
+        raw_findings = wrapper.scan(target, tech_stack=tech_stack, rate_limit=rate_limit)
+
+        # ToolFinding'e dönüştür
+        tool_findings = []
+        for f in raw_findings:
+            ev = f.get("evidence") or {}
+            tf = ToolFinding(
+                title=f.get("type", "Nuclei Finding"),
+                severity=ToolSeverity.from_str(f.get("severity", "info")),
+                url=f.get("url", target),
+                tool="nuclei",
+                description=f.get("detail", ""),
+                evidence=str(ev.get("curl", ""))[:300] if isinstance(ev, dict) else "",
+                cve_ids=ev.get("cve_id", []) if isinstance(ev, dict) and ev.get("cve_id") else [],
+                cvss_score=ev.get("cvss_score") if isinstance(ev, dict) else None,
+                confidence=f.get("confidence", "high"),
+                verified=f.get("verified", True),
+                tags=ev.get("tags", []) if isinstance(ev, dict) else [],
+                raw=f,
+            )
+            tool_findings.append(tf)
+
+        # Deduplication
+        fps = frozenset(existing_fingerprints or set())
+        new_findings = [f for f in tool_findings if f.fingerprint() not in fps]
+
+        deduped = len(tool_findings) - len(new_findings)
+        if deduped:
+            logger.info(f"[Nuclei] Korelasyon: {deduped} çakışan bulgu çıkarıldı")
+
+        # SARIF çıktı
+        if sarif_output:
+            try:
+                norm = SARIFNormalizer()
+                for tf in new_findings:
+                    norm._report.add_findings([tf])
+                norm.save(sarif_output)
+            except Exception as exc:
+                logger.debug(f"[Nuclei] SARIF yazma hatası: {exc!r}")
+
+        return [f.raw for f in new_findings]
+
+    except ImportError:
+        # base.py yoksa klasik yola dön
+        return run_nuclei_scan(target, tech_stack=tech_stack, rate_limit=rate_limit)

@@ -523,3 +523,222 @@ class FeroxbusterWrapper:
                     os.remove(temp_output)
                 except OSError:
                     pass
+
+
+# ============================================================================
+# SECTION 3: Parametre Keşif Pipeline (Step 17 — Arjun tarzı)
+# ============================================================================
+
+# Yaygın GET/POST parametre isimleri (built-in)
+_COMMON_PARAMS = [
+    "id", "user", "username", "name", "email", "password", "pass", "token",
+    "key", "api_key", "apikey", "api-key", "auth", "session", "sid", "uid",
+    "page", "limit", "offset", "start", "size", "count", "order", "sort",
+    "search", "query", "q", "term", "keyword", "filter", "type", "category",
+    "file", "path", "url", "uri", "redirect", "return", "callback", "next",
+    "prev", "lang", "locale", "format", "view", "mode", "action", "method",
+    "data", "payload", "content", "body", "message", "text", "value", "val",
+    "param", "field", "input", "output", "response", "result", "status",
+    "code", "ref", "source", "dest", "target", "host", "port", "protocol",
+    "version", "v", "debug", "test", "dev", "admin", "config", "setting",
+    "from", "to", "date", "time", "start_date", "end_date", "timestamp",
+    "access_token", "refresh_token", "bearer", "jwt", "csrf", "nonce",
+    "phone", "mobile", "address", "city", "country", "zip", "state",
+    "first_name", "last_name", "full_name", "display_name", "nickname",
+    "role", "permission", "scope", "group", "org", "company", "account",
+    "product", "item", "cart", "order_id", "transaction_id", "invoice",
+    "amount", "price", "quantity", "currency", "discount", "coupon",
+    "latitude", "longitude", "location", "coords", "geo",
+    "cmd", "exec", "command", "shell", "template",
+]
+
+_HIGH_VALUE_PARAMS = {
+    "redirect", "url", "uri", "return", "next", "callback",
+    "file", "path", "include", "page",
+    "id", "user_id", "uid", "account",
+    "debug", "test", "admin", "dev",
+    "token", "key", "api_key", "auth", "password", "pass",
+    "cmd", "exec", "command", "shell",
+    "query", "search", "q",
+    "template", "lang", "locale",
+}
+
+
+class ParamDiscoveryResult:
+    """Parametre keşif sonucu."""
+
+    def __init__(
+        self,
+        url: str,
+        method: str = "GET",
+        params: Optional[List[str]] = None,
+        interesting_params: Optional[List[str]] = None,
+        raw_results: Optional[List[Dict]] = None,
+    ) -> None:
+        self.url = url
+        self.method = method
+        self.params: List[str] = params or []
+        self.interesting_params: List[str] = interesting_params or []
+        self.raw_results: List[Dict] = raw_results or []
+
+    def to_websecure_feed(self) -> List[Dict[str, Any]]:
+        """
+        Keşfedilen parametreleri WebSecure scanner için URL listesine dönüştür.
+
+        Döndürür
+        --------
+        List[Dict] — {url, param, method} formatı
+        """
+        feed: List[Dict[str, Any]] = []
+        separator = "&" if "?" in self.url else "?"
+        for param in self.params:
+            if self.method.upper() == "GET":
+                feed.append({
+                    "url": f"{self.url}{separator}{param}=",
+                    "param": param,
+                    "method": "GET",
+                })
+            else:
+                feed.append({
+                    "url": self.url,
+                    "param": param,
+                    "method": "POST",
+                    "data": f"{param}=",
+                })
+        return feed
+
+    def __repr__(self) -> str:
+        return (
+            f"<ParamDiscoveryResult url={self.url!r}  "
+            f"params={len(self.params)}  interesting={len(self.interesting_params)}>"
+        )
+
+
+class ParamDiscoveryPipeline:
+    """
+    FFUF tabanlı parametre keşif pipeline'ı (Arjun tarzı).
+
+    URL'deki gizli GET/POST parametrelerini keşfeder ve
+    bu parametreleri WebSecure scanner'larına besler.
+
+    Kullanım
+    --------
+    ```python
+    pipeline = ParamDiscoveryPipeline()
+    result = pipeline.discover("https://example.com/api/user", method="GET")
+    # result.params → ["id", "token", "debug", ...]
+    # result.to_websecure_feed() → WebSecure scanner feed
+    ```
+    """
+
+    def __init__(
+        self,
+        ffuf_wrapper: Optional[FFUFWrapper] = None,
+        threads: int = 50,
+        proxy: Optional[str] = None,
+    ) -> None:
+        self._ffuf = ffuf_wrapper or FFUFWrapper()
+        self.threads = threads
+        self.proxy = proxy
+
+    def is_available(self) -> bool:
+        return self._ffuf.is_available()
+
+    def discover(
+        self,
+        url: str,
+        method: str = "GET",
+        wordlist: Optional[str] = None,
+        cookie: str = "",
+        headers: Optional[Dict[str, str]] = None,
+    ) -> ParamDiscoveryResult:
+        """
+        Parametre keşfi yap.
+
+        Parametreler
+        ------------
+        url       : Hedef URL
+        method    : "GET" veya "POST"
+        wordlist  : Param wordlist dosyası (None → built-in)
+        cookie    : Oturum cookie'si
+        headers   : Ek HTTP başlıkları
+
+        Döndürür
+        --------
+        ParamDiscoveryResult
+        """
+        if not self.is_available():
+            logger.warning("[ParamDiscovery] FFUF binary bulunamadı.")
+            return ParamDiscoveryResult(url=url, method=method)
+
+        _temp_wl = None
+        if not wordlist or not os.path.isfile(wordlist):
+            fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_params_")
+            with os.fdopen(fd, "w") as fh:
+                fh.write("\n".join(_COMMON_PARAMS))
+            wordlist = _temp_wl
+
+        try:
+            if method.upper() == "GET":
+                raw = self._discover_get(url, wordlist, cookie, headers or {})
+            else:
+                raw = self._discover_post(url, wordlist, cookie, headers or {})
+
+            params = [item["input"] for item in raw if item.get("input")]
+            interesting = [p for p in params if p.lower() in _HIGH_VALUE_PARAMS]
+
+            logger.info(
+                f"[ParamDiscovery] {url}: {len(params)} parametre  "
+                f"{len(interesting)} yüksek değerli"
+            )
+            return ParamDiscoveryResult(
+                url=url, method=method,
+                params=params,
+                interesting_params=interesting,
+                raw_results=raw,
+            )
+        finally:
+            if _temp_wl and os.path.exists(_temp_wl):
+                try:
+                    os.remove(_temp_wl)
+                except OSError:
+                    pass
+
+    def _discover_get(
+        self, url: str, wordlist: str, cookie: str, headers: Dict[str, str]
+    ) -> List[Dict]:
+        separator = "&" if "?" in url else "?"
+        fuzz_url = f"{url}{separator}FUZZ=ws_probe_value"
+        custom_args = ["-mr", "ws_probe_value"]
+        if cookie:
+            custom_args.extend(["-H", f"Cookie: {cookie}"])
+        for h, v in headers.items():
+            custom_args.extend(["-H", f"{h}: {v}"])
+        if self.proxy:
+            custom_args.extend(["-x", self.proxy])
+        return self._ffuf.run_scan(
+            url=fuzz_url, wordlist=wordlist, threads=self.threads,
+            match_codes="200,201,204,301,302,400,401,403,422",
+            custom_args=custom_args,
+        )
+
+    def _discover_post(
+        self, url: str, wordlist: str, cookie: str, headers: Dict[str, str]
+    ) -> List[Dict]:
+        custom_args = [
+            "-X", "POST",
+            "-d", "FUZZ=ws_probe_value",
+            "-H", "Content-Type: application/x-www-form-urlencoded",
+            "-mr", "ws_probe_value",
+        ]
+        if cookie:
+            custom_args.extend(["-H", f"Cookie: {cookie}"])
+        for h, v in headers.items():
+            custom_args.extend(["-H", f"{h}: {v}"])
+        if self.proxy:
+            custom_args.extend(["-x", self.proxy])
+        return self._ffuf.run_scan(
+            url=url, wordlist=wordlist, threads=self.threads,
+            match_codes="200,201,204,301,302,400,401,403,422",
+            custom_args=custom_args,
+        )
