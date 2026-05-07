@@ -29,6 +29,11 @@ if __name__ == "__main__":
             "jinja2>=3.1.0",
             "cvss>=3.2",
         ],
+        entry_points={
+            "console_scripts": [
+                "websecure=websecure.cli.commands:cli_entry",
+            ],
+        },
         extras_require={
             "js": ["playwright>=1.46.0"],
             "selenium": ["selenium>=4.23.1", "webdriver-manager>=4.0.2"],
@@ -45,6 +50,7 @@ if __name__ == "__main__":
                 "requests[socks]>=2.32.0",
                 "PySocks>=1.7.1",
             ],
+            "tui": ["rich>=13.0.0"],
             "full": [
                 "playwright>=1.46.0",
                 "weasyprint>=61.0",
@@ -53,6 +59,7 @@ if __name__ == "__main__":
                 "cloudscraper>=1.2.71",
                 "requests[socks]>=2.32.0",
                 "PySocks>=1.7.1",
+                "rich>=13.0.0",
             ],
         },
     )

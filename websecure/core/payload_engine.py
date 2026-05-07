@@ -1118,8 +1118,8 @@ class EncodingVariantGenerator:
     - Double URL (%25XX)
     - HTML entity (&lt; vb.)
     - Base64   (eval/atob)
-    - Unicode  (\uXXXX)
-    - Hex      (\xXX)
+    - Unicode  (\\uXXXX)
+    - Hex      (\\xXX)
     - UTF-16 LE/BE  (BOM ile)
     - Big5 / GBK    (unicode surrogate attack — opsiyonel)
     - Null byte      (\x00)
@@ -1201,11 +1201,11 @@ class EncodingVariantGenerator:
     def _enc_big5_bypass(self, p: str) -> str:
         """
         Big5/GBK unicode surrogate saldırısı.
-        İkinci byte'ı 0x5C (\) olan çok-byte karakterlerin ardına
-        eklenen özel karakter kaçış mekanizmasını atlatır.
+        Ikinci byte 0x5C olan cok-byte karakterlerin ardina
+        eklenen ozel karakter kacis mekanizmasini atlatir.
         """
-        # 0xBF%27 → Big5 encoding saldırısı (addslashes bypass)
-        return "\xbf\x27" + p.replace("'", "\xbf\x27")
+        # 0xBF%27 -> Big5 encoding saldirisi (addslashes bypass)
+        return b"\xbf\x27".decode("latin-1") + p.replace("'", b"\xbf\x27".decode("latin-1"))
 
     def _enc_null_space(self, p: str) -> str:
         """Boşlukları null byte ile değiştir."""
