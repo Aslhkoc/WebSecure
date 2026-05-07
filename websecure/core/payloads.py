@@ -584,3 +584,34 @@ BUILTIN_PAYLOADS = {
 def get_builtin_payloads(category: str) -> List[str]:
     """Return hardcoded advanced payloads for a given category."""
     return list(BUILTIN_PAYLOADS.get(category, []))
+
+
+# ---------------------------------------------------------------------------
+# Adım 18 — PayloadEngine yeniden ihraç (backward compat)
+# ---------------------------------------------------------------------------
+# payload_engine.py içindeki yeni bileşenleri buradan da erişilebilir kıl.
+# Mevcut kodda `from websecure.core.payloads import get_payloads` çalışmaya
+# devam eder; yeni API için doğrudan `payload_engine` import edilebilir.
+
+try:
+    from websecure.core.payload_engine import (  # noqa: F401  (re-export)
+        CMSFingerprinter,
+        CMSPayloadProfile,
+        CVEPayloadMap,
+        EncodingVariantGenerator,
+        MutationStrategy,
+        PayloadEngine,
+        PayloadMutationEngine,
+        PayloadScorer,
+        WordlistUpdater,
+        cms_payloads,
+        cve_payloads,
+        detect_cms,
+        encode_payload,
+        get_engine,
+        get_payloads_v2,
+        mutate_payload,
+    )
+    _HAS_PAYLOAD_ENGINE = True
+except ImportError:
+    _HAS_PAYLOAD_ENGINE = False
