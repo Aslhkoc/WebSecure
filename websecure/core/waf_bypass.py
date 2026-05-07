@@ -131,7 +131,7 @@ class WAFBypassAdapter(HTTPAdapter):
                         sess.proxies.update(new_proxy)
                         proxy_str = list(new_proxy.values())[0]
                         logger.debug(
-                            "[WAFBypass] Continuous rotation: proxy → %s (req#%d)",
+                            "[WAFBypass] Continuous rotation: proxy -> %s (req#%d)",
                             proxy_str, sess._req_counter,
                         )
                         try:
@@ -163,7 +163,7 @@ class WAFBypassAdapter(HTTPAdapter):
             parsed = urlparse(request.url)
             path = parsed.path or "/"
 
-            # 3a. Double URL encoding (e.g. %27 → %2527)
+            # 3a. Double URL encoding (e.g. %27 -> %2527)
             if self._get_flag("_bypass_double_encode"):
                 path = _double_encode_path(path)
 
@@ -684,7 +684,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Profil Haritası  (websecure profil adı → curl_cffi impersonate değeri)
+# Profil Haritası  (websecure profil adı -> curl_cffi impersonate değeri)
 # ---------------------------------------------------------------------------
 CFFI_PROFILE_MAP: Dict[str, str] = {
     # Chrome
@@ -859,7 +859,7 @@ class CurlCffiDriver:
             raw = self._session.request(method.upper(), url, **kw)
             elapsed = time.monotonic() - t0
             _logger.debug(
-                f"[TLSDriver] {method.upper()} {url} → {raw.status_code} ({elapsed*1000:.0f}ms)"
+                f"[TLSDriver] {method.upper()} {url} -> {raw.status_code} ({elapsed*1000:.0f}ms)"
             )
             return CffiResponse(raw)
         except Exception as exc:
@@ -917,7 +917,7 @@ Desteklenen vendor formatları:
 
 Özellikler:
   - Sağlık kontrolü (paralel, zaman aşımlı)
-  - Başarısızlık sayacı → otomatik devre dışı bırakma
+  - Başarısızlık sayacı -> otomatik devre dışı bırakma
   - Çoklu strateji: round_robin, weighted_random, sticky, lru
   - Ülke bazlı hedefleme
   - Vendor'a özel URL oluşturucu
@@ -1583,7 +1583,7 @@ class EgressManager:
     def record_failure(self, proxy_url: str) -> None:
         """Kullanılan proxy'nin başarısızlığını kaydet."""
         if proxy_url == self._tor_proxy_url:
-            # Tor başarısızlığı → yeni kimlik iste
+            # Tor başarısızlığı -> yeni kimlik iste
             self.rotate_tor()
             return
         if self._pool:
@@ -2025,8 +2025,8 @@ class WAFBypassMLScorer:
         """
         Record the outcome of applying a bypass strategy.
 
-        blocked=False → request got through (success).
-        blocked=True  → WAF still blocked (failure).
+        blocked=False -> request got through (success).
+        blocked=True  -> WAF still blocked (failure).
         """
         with self._lock:
             st = self._stats[strategy]
@@ -2144,7 +2144,7 @@ class AdaptiveMutationEngine:
     # --- Mutation strategies ---
 
     def _case_mutate(self, p: str) -> List[str]:
-        """Random case: SELECT → SeLeCt"""
+        """Random case: SELECT -> SeLeCt"""
         variants = []
         for _ in range(3):
             variants.append("".join(
@@ -2153,7 +2153,7 @@ class AdaptiveMutationEngine:
         return variants
 
     def _comment_mutate(self, p: str) -> List[str]:
-        """SQL comment injection: SELECT → SE/**/LECT, SELECT → SE/*!*/LECT"""
+        """SQL comment injection: SELECT -> SE/**/LECT, SELECT -> SE/*!*/LECT"""
         if len(p) < 4:
             return []
         mid = len(p) // 2
@@ -2165,7 +2165,7 @@ class AdaptiveMutationEngine:
         ]
 
     def _whitespace_mutate(self, p: str) -> List[str]:
-        """Whitespace substitution: space → tab, newline, vertical tab"""
+        """Whitespace substitution: space -> tab, newline, vertical tab"""
         return [
             p.replace(" ", "\t"),
             p.replace(" ", "\n"),
@@ -2186,27 +2186,27 @@ class AdaptiveMutationEngine:
         return result
 
     def _double_encode_mutate(self, p: str) -> List[str]:
-        """Double URL-encode: %27 → %2527"""
+        """Double URL-encode: %27 -> %2527"""
         import re as _re
         return [_re.sub(r'%([0-9A-Fa-f]{2})', lambda m: f'%25{m.group(1)}', p)]
 
     def _unicode_mutate(self, p: str) -> List[str]:
         """Unicode fullwidth equivalents for ASCII letters."""
         _map = {
-            'a': 'ａ', 'e': 'ｅ', 'i': 'ｉ', 'o': 'ｏ',
-            's': 'ｓ', 'l': 'ｌ', 'n': 'ｎ', 'r': 'ｒ',
+            'a': 'a', 'e': 'e', 'i': 'i', 'o': 'o',
+            's': 's', 'l': 'l', 'n': 'n', 'r': 'r',
         }
         return ["".join(_map.get(c.lower(), c) for c in p)]
 
     def _hex_mutate(self, p: str) -> List[str]:
-        """Hex-encode chars for SQL context: a → 0x61"""
+        """Hex-encode chars for SQL context: a -> 0x61"""
         if len(p) > 20:
             return []
         hex_str = "0x" + p.encode().hex()
         return [hex_str]
 
     def _concat_mutate(self, p: str) -> List[str]:
-        """String concatenation bypass: 'admin' → 'adm'||'in' (Oracle/Postgres)"""
+        """String concatenation bypass: 'admin' -> 'adm'||'in' (Oracle/Postgres)"""
         if len(p) < 4 or "'" not in p:
             return []
         mid = len(p) // 2

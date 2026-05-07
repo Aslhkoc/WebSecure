@@ -5,25 +5,25 @@ Scan-level circuit breaker. Monitors HTTP response stream in real-time and
 halts scanning when blocking thresholds are exceeded.
 
 State machine
-─────────────
-  CLOSED    → normal scanning
-  OPEN      → scanning halted; raises CircuitBreakerTripped on every request
-  HALF_OPEN → recovery probe mode; limited requests allowed to test target
+-------------
+  CLOSED    -> normal scanning
+  OPEN      -> scanning halted; raises CircuitBreakerTripped on every request
+  HALF_OPEN -> recovery probe mode; limited requests allowed to test target
 
-Thresholds that trip CLOSED → OPEN
-────────────────────────────────────
-  • 403 ratio ≥ 50 % over a sliding window of the last N responses
-  • Consecutive 429s ≥ max_consecutive_429 (default 10)
-  • Consecutive connection errors ≥ max_consecutive_errors (default 5)
+Thresholds that trip CLOSED -> OPEN
+------------------------------------
+  • 403 ratio >= 50 % over a sliding window of the last N responses
+  • Consecutive 429s >= max_consecutive_429 (default 10)
+  • Consecutive connection errors >= max_consecutive_errors (default 5)
 
 Recovery path
-─────────────
-  OPEN → HALF_OPEN  after recovery_timeout seconds
-  HALF_OPEN → CLOSED   on first 2xx probe response
-  HALF_OPEN → OPEN     on any non-2xx probe response (timer reset)
+-------------
+  OPEN -> HALF_OPEN  after recovery_timeout seconds
+  HALF_OPEN -> CLOSED   on first 2xx probe response
+  HALF_OPEN -> OPEN     on any non-2xx probe response (timer reset)
 
 Integration
-───────────
+-----------
   Call cb_check()       before every HTTP request (auto-wired in http._smart_request)
   Call cb_record(status) after every HTTP response
   Call cb_record_error() on ConnectionError / Timeout
@@ -139,9 +139,9 @@ class ScanCircuitBreaker:
         """
         Called before every HTTP request.
 
-        - CLOSED     → passes silently.
-        - HALF_OPEN  → passes if probe budget not exhausted; increments probe counter.
-        - OPEN       → transitions to HALF_OPEN if recovery timeout elapsed;
+        - CLOSED     -> passes silently.
+        - HALF_OPEN  -> passes if probe budget not exhausted; increments probe counter.
+        - OPEN       -> transitions to HALF_OPEN if recovery timeout elapsed;
                        otherwise raises CircuitBreakerTripped.
         """
         with self._lock:
@@ -288,9 +288,9 @@ class ScanCircuitBreaker:
             }
             self._trip_log.append(trip_event)
             _logger.warning(
-                "[CircuitBreaker] %s → OPEN: %s", old.value.upper(), reason
+                "[CircuitBreaker] %s -> OPEN: %s", old.value.upper(), reason
             )
-            print(f"[CircuitBreaker] ⛔ OPEN — {reason}")
+            print(f"[CircuitBreaker] [STOP] OPEN — {reason}")
             # Emit to global reporting without importing reporting (avoids circular import)
             try:
                 from websecure.core.reporting import add_result as _ar
@@ -310,8 +310,8 @@ class ScanCircuitBreaker:
 
         elif new_state == CBState.HALF_OPEN:
             self._half_open_probes = 0
-            _logger.info("[CircuitBreaker] OPEN → HALF_OPEN: %s", reason)
-            print(f"[CircuitBreaker] 🔶 HALF_OPEN — {reason}")
+            _logger.info("[CircuitBreaker] OPEN -> HALF_OPEN: %s", reason)
+            print(f"[CircuitBreaker] [warn] HALF_OPEN — {reason}")
 
         elif new_state == CBState.CLOSED:
             self._consecutive_429    = 0
@@ -319,8 +319,8 @@ class ScanCircuitBreaker:
             self._window.clear()
             self._open_reason        = ""
             self._opened_at          = None
-            _logger.info("[CircuitBreaker] → CLOSED: %s", reason)
-            print(f"[CircuitBreaker] ✅ CLOSED — {reason}")
+            _logger.info("[CircuitBreaker] -> CLOSED: %s", reason)
+            print(f"[CircuitBreaker] [OK] CLOSED — {reason}")
 
 
 # ---------------------------------------------------------------------------

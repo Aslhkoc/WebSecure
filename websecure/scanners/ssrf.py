@@ -109,7 +109,7 @@ _IP_OBFUSCATIONS: Dict[str, List[str]] = {
         "localhost.",                  # trailing dot
         "LOCALHOST",                   # uppercase
         "0:0:0:0:0:ffff:7f00:0001",   # IPv6 mapped
-        "localtest.me",               # public DNS → 127.0.0.1
+        "localtest.me",               # public DNS -> 127.0.0.1
     ],
     "169.254.169.254": [
         "2852039166",                  # decimal
@@ -157,7 +157,7 @@ def _ssrf_detected_in_response(resp, indicator: str) -> bool:
 # ===========================================================================
 class SSRFCloudMetadataChain(BaseScanner):
     """
-    SSRF → Cloud Metadata → Credential Extraction zinciri.
+    SSRF -> Cloud Metadata -> Credential Extraction zinciri.
     AWS IMDSv1/v2, GCP, Azure, Alibaba Cloud destekler.
     """
     name = "ssrf_cloud_metadata"
@@ -193,7 +193,7 @@ class SSRFCloudMetadataChain(BaseScanner):
                             if "AccessKeyId" in cred_body or "SecretAccessKey" in cred_body:
                                 credential_data = {"role": role_name, "cred_body_snippet": cred_body[:300]}
                 return {
-                    "vuln_type": f"SSRF → Cloud Metadata ({meta['cloud']})",
+                    "vuln_type": f"SSRF -> Cloud Metadata ({meta['cloud']})",
                     "url": test_url, "severity": "Critical",
                     "description": (
                         f"SSRF successful — {meta['name']} accessible. "
@@ -321,7 +321,7 @@ class SSRFFilterBypassProber(BaseScanner):
 # ===========================================================================
 class SSRFLateralMovementProber(BaseScanner):
     """
-    SSRF → Internal network scanning + service fingerprinting.
+    SSRF -> Internal network scanning + service fingerprinting.
     Docker API, Elasticsearch, Redis, MySQL, MongoDB probe.
     """
     name = "ssrf_lateral"
@@ -347,7 +347,7 @@ class SSRFLateralMovementProber(BaseScanner):
                     if resp.status_code in (200, 401, 403):
                         service = self._identify_service(body)
                         finding = {
-                            "vuln_type": "SSRF → Internal Service Discovery",
+                            "vuln_type": "SSRF -> Internal Service Discovery",
                             "url": test_url, "severity": "High",
                             "description": (
                                 f"SSRF reached internal target {internal_url}. "
@@ -378,7 +378,7 @@ class SSRFLateralMovementProber(BaseScanner):
 class SSRFScanner(BaseScanner):
     """
     Adim 7 SSRF orchestrator:
-    CloudMetadataChain → ProtocolExpander → FilterBypassProber → LateralMovementProber
+    CloudMetadataChain -> ProtocolExpander -> FilterBypassProber -> LateralMovementProber
     """
     name = "ssrf"
 

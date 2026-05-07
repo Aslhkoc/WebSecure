@@ -244,7 +244,7 @@ class MassAssignmentScanner(BaseScanner):
 
         str_val = str(val).lower()
 
-        # ── Access control bypass ──────────────────────────────────────────
+        # -- Access control bypass ------------------------------------------
         if base_resp.status_code == 403 and attack_resp.status_code == 200:
             return {
                 "type": "Mass Assignment — Access Control Bypass",
@@ -255,7 +255,7 @@ class MassAssignmentScanner(BaseScanner):
                 "details": f"Injecting '{key}={val}' changed response from 403 to 200",
             }
 
-        # ── JSON key reflection ────────────────────────────────────────────
+        # -- JSON key reflection --------------------------------------------
         if isinstance(attack_json, dict):
             # Check top-level and nested under "data", "user", "profile"
             for container in [attack_json,
@@ -277,7 +277,7 @@ class MassAssignmentScanner(BaseScanner):
                             ),
                         }
 
-        # ── Text-based reflection fallback ────────────────────────────────
+        # -- Text-based reflection fallback --------------------------------
         elif (attack_resp.status_code == 200
               and key in (attack_resp.text or "")
               and str_val in (attack_resp.text or "").lower()

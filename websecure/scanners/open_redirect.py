@@ -248,7 +248,7 @@ class OpenRedirectScanner(BaseScanner):
         parsed_base = urlparse(base_url)
         origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
-        # ── 1. Crawler URL'lerindeki redirect parametrelerini paralel test et ──
+        # -- 1. Crawler URL'lerindeki redirect parametrelerini paralel test et --
         crawler_tasks: List[Tuple] = []
         for url in (urls or []):
             for param in _find_redirect_params(url):
@@ -270,7 +270,7 @@ class OpenRedirectScanner(BaseScanner):
                 findings.append(hit)
                 logger.info(f"[OpenRedirect] BULUNDU: {hit['url']} param={hit['param']}")
 
-        # ── 2. Probe endpoint'leri paralel test et (MAX_PROBE_REQUESTS ile kısıtlı) ──
+        # -- 2. Probe endpoint'leri paralel test et (MAX_PROBE_REQUESTS ile kısıtlı) --
         probe_tasks: List[Tuple] = []
         for path in _PROBE_PATHS:
             probe_url = origin + path
@@ -380,9 +380,9 @@ _OAUTH_THEFT_PAYLOADS = [
 # ===========================================================================
 class OpenRedirectOAuthTheftChain(BaseScanner):
     """
-    Open Redirect → OAuth token theft zinciri:
+    Open Redirect -> OAuth token theft zinciri:
     1. OAuth authorization endpoint'te redirect_uri bypass
-    2. Auth code / access_token Location header'a inject edilirse hedef → attacker
+    2. Auth code / access_token Location header'a inject edilirse hedef -> attacker
     3. State CSRF ile birlikte exploit zinciri
     """
     name = "open_redirect_oauth"
@@ -408,7 +408,7 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
                         code  = re.search(r"[?&]code=([^&]+)", loc)
                         token = re.search(r"[?&](access_token|token)=([^&]+)", loc)
                         results.append({
-                            "vuln_type": "Open Redirect → OAuth Token Theft",
+                            "vuln_type": "Open Redirect -> OAuth Token Theft",
                             "url": test_url, "severity": "Critical",
                             "description": (
                                 f"OAuth redirect_uri bypass accepted: {evil_uri!r}. "
@@ -429,7 +429,7 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
                     # Partial bypass: redirected without rejecting evil host
                     if resp.status_code in (301, 302, 303, 307) and "error" not in loc.lower():
                         results.append({
-                            "vuln_type": "Open Redirect → OAuth redirect_uri Bypass (Probable)",
+                            "vuln_type": "Open Redirect -> OAuth redirect_uri Bypass (Probable)",
                             "url": test_url, "severity": "High",
                             "description": (
                                 f"OAuth endpoint accepted redirect_uri={evil_uri!r} "
@@ -500,9 +500,9 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
 # ===========================================================================
 class OpenRedirectSSRFChain(BaseScanner):
     """
-    Open Redirect → SSRF gecis testi:
+    Open Redirect -> SSRF gecis testi:
     Server-side redirect takibi yapan endpoint'lerde
-    open redirect → internal SSRF'e donusebilir.
+    open redirect -> internal SSRF'e donusebilir.
     """
     name = "open_redirect_ssrf"
 
@@ -524,7 +524,7 @@ class OpenRedirectSSRFChain(BaseScanner):
                         r"ami-|instanceId|accountId|iam|169\.254|metadata", body, re.I
                     ):
                         results.append({
-                            "vuln_type": "Open Redirect → SSRF (Cloud Metadata)",
+                            "vuln_type": "Open Redirect -> SSRF (Cloud Metadata)",
                             "url": url, "severity": "Critical",
                             "description": (
                                 f"Open redirect param '{param}' followed as SSRF to {ssrf_target}. "
@@ -541,7 +541,7 @@ class OpenRedirectSSRFChain(BaseScanner):
                     if resp.status_code == 200 and len(body) > 30 and \
                        not re.search(r"<html|<!doctype", body[:100], re.I):
                         results.append({
-                            "vuln_type": "Open Redirect → SSRF (Internal Service)",
+                            "vuln_type": "Open Redirect -> SSRF (Internal Service)",
                             "url": url, "severity": "High",
                             "description": (
                                 f"Param '{param}' caused server to fetch {ssrf_target}. "

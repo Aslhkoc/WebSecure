@@ -37,7 +37,7 @@ def _mod_available(mod: str) -> bool:
         return False
 
 def _import_attr(mod: str, name: str) -> Optional[Any]:
-    # MAINLINK v1: dual import (core.* → fallback to top-level)
+    # MAINLINK v1: dual import (core.* -> fallback to top-level)
     candidates = [mod]
     if mod.startswith('core.'):
         candidates.append(mod.split('.', 1)[1])
@@ -61,7 +61,7 @@ _has_selenium = all(v is not None for v in (By, WebDriverWait, EC))
 # -----------------------------------------------------------------------------
 
 def _import_optional(module: str, names: Iterable[str]) -> List[Optional[Any]]:
-    # MAINLINK v1: dual import (core.* → fallback to top-level) and merge hits
+    # MAINLINK v1: dual import (core.* -> fallback to top-level) and merge hits
     candidates = [module]
     if module.startswith('core.'):
         candidates.append(module.split('.', 1)[1])
@@ -278,23 +278,23 @@ def _run_flow_dsl(driver, config: Dict[str, Any], debug: bool = False) -> None:
             base = getattr(driver, "current_url", "")
             driver.get(url if _is_http_url(str(url)) else urljoin(str(base), str(url)))
             if debug:
-                logging.debug(f"[flow_dsl] Navigate → {url}")
+                logging.debug(f"[flow_dsl] Navigate -> {url}")
         elif "type" in step:
             selector = step["type"]["selector"]
             el = _find_first(driver, [(By.CSS_SELECTOR, selector)], timeout=6) if _has_selenium else None  # type: ignore[arg-type]
             if _type_safe(el, step["type"]["value"]) and debug:
-                logging.debug(f"[flow_dsl] Type → {selector}")
+                logging.debug(f"[flow_dsl] Type -> {selector}")
         elif "click" in step:
             selector = step["click"]["selector"]
             el = _find_first(driver, [(By.CSS_SELECTOR, selector)], timeout=6) if _has_selenium else None  # type: ignore[arg-type]
             if _click_safe(el) and debug:
-                logging.debug(f"[flow_dsl] Click → {selector}")
+                logging.debug(f"[flow_dsl] Click -> {selector}")
         elif "wait" in step:
             # İstisnasız bekleme: element görünüp görünmediğine hızlı bak ve geç
             selector = step["wait"]["selector"]
             _ = _find_first(driver, [(By.CSS_SELECTOR, selector)], timeout=int(step["wait"].get("timeout", 8))) if _has_selenium else None  # type: ignore[arg-type]
             if debug:
-                logging.debug(f"[flow_dsl] Wait-ish → {selector}")
+                logging.debug(f"[flow_dsl] Wait-ish -> {selector}")
 
 # -----------------------------------------------------------------------------
 # WebDriver ile sezgisel form login
@@ -720,7 +720,7 @@ def build_role_sessions(base_session: requests.Session, cfg: Dict[str, Any], deb
         if login_cfg.get("url") and (rcfg.get("username") and rcfg.get("password")):
             res = _login_with_form(s, login_cfg, str(rcfg["username"]), str(rcfg["password"]), debug=debug)
             if not res["ok"] and debug:
-                logging.debug(f"[auth_flow] {name} login başarısız olabilir → code={res['code']}")
+                logging.debug(f"[auth_flow] {name} login başarısız olabilir -> code={res['code']}")
 
         sessions[name] = s
 

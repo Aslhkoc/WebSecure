@@ -7,10 +7,10 @@ Tarama durumu kaydetme / devam ettirme (Checkpoint & Resume) sistemi.
 ----------
 * **CheckpointState** — Atomik JSON serileştirme, dataclass tabanlı durum.
 * **ScanCheckpoint** — Tek bir tarama için kaydet/yükle işlemleri.
-  - Atomik yazma: temp dosya oluştur → rename (POSIX + Windows).
+  - Atomik yazma: temp dosya oluştur -> rename (POSIX + Windows).
   - Otomatik kaydetme aralığı (auto_save_interval_s).
 * **CheckpointManager** — Çok-tarama yönetimi: liste, temizleme, devam.
-  - `resume(scan_id, deduplicator)` → ScanDeduplicator'a tamamlanan
+  - `resume(scan_id, deduplicator)` -> ScanDeduplicator'a tamamlanan
     görev hash'lerini enjekte eder; tarama kaldığı yerden devam eder.
 * **CheckpointHook** — scan_runner ile entegrasyon için callback arayüzü.
 
@@ -196,7 +196,7 @@ def _migrate(raw: Dict[str, Any]) -> None:
     """Eski format versiyonlarını güncel formata dönüştürür."""
     ver = raw.get("format_version", "0.0")
     if ver == "0.0":
-        # v0 → v1: 'done_hashes' → 'completed_tasks'
+        # v0 -> v1: 'done_hashes' -> 'completed_tasks'
         if "done_hashes" in raw and "completed_tasks" not in raw:
             raw["completed_tasks"] = raw.pop("done_hashes")
         raw["format_version"] = "1.0"
@@ -284,7 +284,7 @@ class ScanCheckpoint:
             self._last_save = time.monotonic()
 
         logger.info(
-            f"[checkpoint] Kaydedildi → {self._path.name}  "
+            f"[checkpoint] Kaydedildi -> {self._path.name}  "
             f"(%{self._state.progress_pct:.1f}  "
             f"{self._state.completed_count}/{self._state.total_tasks} görev)"
         )
@@ -301,7 +301,7 @@ class ScanCheckpoint:
             state = self._serializer.loads(data)
             self._state = state
             logger.info(
-                f"[checkpoint] Yüklendi ← {self._path.name}  "
+                f"[checkpoint] Yüklendi <- {self._path.name}  "
                 f"(%{state.progress_pct:.1f}  "
                 f"{state.completed_count}/{state.total_tasks} görev)"
             )
@@ -518,7 +518,7 @@ class CheckpointManager:
                 injected += 1
 
         logger.info(
-            f"[checkpoint] Resume ← {scan_id}  "
+            f"[checkpoint] Resume <- {scan_id}  "
             f"{injected} tamamlanan görev enjekte edildi  "
             f"(%{state.progress_pct:.1f} daha önce yapıldı)"
         )
@@ -736,9 +736,9 @@ def make_checkpoint(
     scan_id               : Tarama kimliği
     target                : Hedef URL
     profile               : Profil adı
-    checkpoint_dir        : Checkpoint dizini (None → ev dizini)
+    checkpoint_dir        : Checkpoint dizini (None -> ev dizini)
     auto_save_interval_s  : Otomatik kaydetme aralığı
-    enabled               : False → NoopCheckpoint döner
+    enabled               : False -> NoopCheckpoint döner
     """
     if not enabled:
         return NoopCheckpoint(scan_id=scan_id)

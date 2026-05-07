@@ -159,7 +159,7 @@ class PriorityTaskQueue:
     - Kritik görevler (TaskPriority.CRITICAL=0) önce çalışır.
     - Aynı öncelikte FIFO (created_at ile tie-break).
     - put() / get() / qsize() / empty() API.
-    - Opsiyonel boyut sınırı (max_size=0 → sınırsız).
+    - Opsiyonel boyut sınırı (max_size=0 -> sınırsız).
     """
 
     def __init__(self, max_size: int = 0) -> None:
@@ -247,8 +247,8 @@ class ScanDeduplicator:
 
     - SHA256 tabanlı fingerprint
     - Thread-safe
-    - LRU boyut sınırı (max_entries=0 → sınırsız)
-    - is_new(): True → daha önce görülmedi, test edilebilir
+    - LRU boyut sınırı (max_entries=0 -> sınırsız)
+    - is_new(): True -> daha önce görülmedi, test edilebilir
     """
 
     def __init__(self, max_entries: int = 500_000) -> None:
@@ -277,8 +277,8 @@ class ScanDeduplicator:
         category: str = "",
     ) -> bool:
         """
-        True döner → bu kombinasyon daha önce görülmedi (test edilebilir).
-        False döner → zaten test edildi (atla).
+        True döner -> bu kombinasyon daha önce görülmedi (test edilebilir).
+        False döner -> zaten test edildi (atla).
         """
         fp = self.fingerprint(module, url, param, category)
         with self._lock:
@@ -433,17 +433,17 @@ class AdaptiveConcurrencyCtrl:
     AIMD (Additive Increase, Multiplicative Decrease) tabanlı adaptive concurrency.
 
     Kurallar:
-      - Response time < LOW_MS  → concurrency += 1  (additive increase)
-      - Response time > HIGH_MS → concurrency = max(min_c, concurrency // 2) (mult. decrease)
-      - Error rate > 30%        → concurrency = max(min_c, concurrency // 2)
-      - 429 / 503 aldı          → concurrency = min_c (acil düşüş)
+      - Response time < LOW_MS  -> concurrency += 1  (additive increase)
+      - Response time > HIGH_MS -> concurrency = max(min_c, concurrency // 2) (mult. decrease)
+      - Error rate > 30%        -> concurrency = max(min_c, concurrency // 2)
+      - 429 / 503 aldı          -> concurrency = min_c (acil düşüş)
 
     Thread-safe: tüm erişimler _lock ile korunur.
     """
 
     LOW_MS      = 300    # ms — bu altında hız artır
     HIGH_MS     = 2000   # ms — bu üstünde hızı yavaşlat
-    ERROR_RATE  = 0.30   # 30% hata → yavaşla
+    ERROR_RATE  = 0.30   # 30% hata -> yavaşla
     WINDOW      = 30     # son N ölçüm
 
     def __init__(
@@ -481,7 +481,7 @@ class AdaptiveConcurrencyCtrl:
         if status in (429, 503):
             new = max(self._min_c, self._current // 2)
             if new != self._current:
-                _logger.debug(f"[AdaptiveCC] {status} alındı → concurrency {self._current} → {new}")
+                _logger.debug(f"[AdaptiveCC] {status} alındı -> concurrency {self._current} -> {new}")
                 self._current = new
                 self._adj_count += 1
             return
@@ -492,7 +492,7 @@ class AdaptiveConcurrencyCtrl:
             if err_rate > self.ERROR_RATE:
                 new = max(self._min_c, self._current // 2)
                 if new != self._current:
-                    _logger.debug(f"[AdaptiveCC] Hata oranı {err_rate:.0%} → {self._current} → {new}")
+                    _logger.debug(f"[AdaptiveCC] Hata oranı {err_rate:.0%} -> {self._current} -> {new}")
                     self._current = new
                     self._adj_count += 1
                 return
@@ -502,13 +502,13 @@ class AdaptiveConcurrencyCtrl:
         if median_ms > self.HIGH_MS:
             new = max(self._min_c, self._current - max(1, self._current // 4))
             if new != self._current:
-                _logger.debug(f"[AdaptiveCC] Yavaş ({median_ms:.0f}ms) → {self._current} → {new}")
+                _logger.debug(f"[AdaptiveCC] Yavaş ({median_ms:.0f}ms) -> {self._current} -> {new}")
                 self._current = new
                 self._adj_count += 1
         elif median_ms < self.LOW_MS:
             new = min(self._max_c, self._current + 1)
             if new != self._current:
-                _logger.debug(f"[AdaptiveCC] Hızlı ({median_ms:.0f}ms) → {self._current} → {new}")
+                _logger.debug(f"[AdaptiveCC] Hızlı ({median_ms:.0f}ms) -> {self._current} -> {new}")
                 self._current = new
                 self._adj_count += 1
 
@@ -540,8 +540,8 @@ class AdaptiveThreadPool:
     """
     AdaptiveConcurrencyCtrl ile entegre ThreadPoolExecutor wrapper.
 
-    - submit() → future döner
-    - map() → sonuç generator döner
+    - submit() -> future döner
+    - map() -> sonuç generator döner
     - Periyodik olarak worker sayısını ayarlar (auto_resize=True)
     - ETA tracking entegre (ETACalculator)
     - Deduplication entegre (ScanDeduplicator)
@@ -579,7 +579,7 @@ class AdaptiveThreadPool:
     ) -> Optional[Future]:
         """
         Dedup kontrolü yaparak görevi pool'a gönderir.
-        Daha önce görülmüş kombinasyon → None döner.
+        Daha önce görülmüş kombinasyon -> None döner.
         """
         if self._dedup and not self._dedup.is_new(module, url, param, category):
             return None
@@ -654,7 +654,7 @@ class AdaptiveThreadPool:
                 old = self._executor
                 self._executor = ThreadPoolExecutor(max_workers=target)
                 old.shutdown(wait=False)
-                _logger.debug(f"[AdaptivePool] Workers {current_max} → {target}")
+                _logger.debug(f"[AdaptivePool] Workers {current_max} -> {target}")
         finally:
             self._resize_lock.release()
 
@@ -687,7 +687,7 @@ class StreamingURLProcessor:
     - Iterator / generator tabanlı — hepsini RAM'e yükleme
     - Opsiyonel RAM limiti kontrolü (psutil gerekli)
     - Batch size adaptif: RAM kullanımı yüksekse batch küçülür
-    - process() → her batch için callback çağırır
+    - process() -> her batch için callback çağırır
     """
 
     DEFAULT_BATCH  = 100
@@ -780,7 +780,7 @@ class StreamingURLProcessor:
                 if new < current:
                     _logger.debug(
                         f"[StreamingURL] RAM {ram_pct:.0f}% > {self._ram_limit_pct}%"
-                        f" → batch {current} → {new}"
+                        f" -> batch {current} -> {new}"
                     )
                 return new
         except Exception:
@@ -831,7 +831,7 @@ class NoopCoordinator(_BaseCoordinator):
     """
 
     def __init__(self) -> None:
-        _logger.info("[Coordinator] Redis bulunamadı → Noop koordinatör kullanılıyor.")
+        _logger.info("[Coordinator] Redis bulunamadı -> Noop koordinatör kullanılıyor.")
 
     def enqueue(self, task_data: Dict[str, Any]) -> bool:
         return True
@@ -860,11 +860,11 @@ class DistributedScanCoordinator(_BaseCoordinator):
     Redis tabanlı çok makineli tarama koordinasyonu.
 
     Redis veri yapıları:
-      {prefix}:queue:{scan_id}   → LIST  — bekleyen görev JSON'ları
-      {prefix}:lock:{task_id}    → STRING (TTL) — görev kilidi
-      {prefix}:results:{scan_id} → LIST  — tamamlanmış sonuçlar
-      {prefix}:workers:{scan_id} → HASH  — worker heartbeat'leri
-      {prefix}:meta:{scan_id}    → HASH  — tarama meta verileri
+      {prefix}:queue:{scan_id}   -> LIST  — bekleyen görev JSON'ları
+      {prefix}:lock:{task_id}    -> STRING (TTL) — görev kilidi
+      {prefix}:results:{scan_id} -> LIST  — tamamlanmış sonuçlar
+      {prefix}:workers:{scan_id} -> HASH  — worker heartbeat'leri
+      {prefix}:meta:{scan_id}    -> HASH  — tarama meta verileri
 
     Kullanım:
       coordinator = DistributedScanCoordinator.create(
@@ -904,10 +904,10 @@ class DistributedScanCoordinator(_BaseCoordinator):
             _logger.info(f"[Coordinator] Redis bağlantısı kuruldu: {host}:{port}")
             return cls(client, scan_id)
         except Exception as exc:
-            _logger.warning(f"[Coordinator] Redis bağlantısı başarısız: {exc!r} → Noop")
+            _logger.warning(f"[Coordinator] Redis bağlantısı başarısız: {exc!r} -> Noop")
             return NoopCoordinator()
 
-    # ── Kuyruk işlemleri ────────────────────────────────────────────────
+    # -- Kuyruk işlemleri ------------------------------------------------
 
     def _queue_key(self) -> str:
         return f"{self.KEY_PREFIX}:queue:{self._scan_id}"
@@ -965,13 +965,13 @@ class DistributedScanCoordinator(_BaseCoordinator):
         except Exception:
             return 0
 
-    # ── Görev kilitleme ────────────────────────────────────────────────
+    # -- Görev kilitleme ------------------------------------------------
 
     def lock_task(self, task_id: str, ttl: int = 60) -> bool:
         """
         Görevi kilitle (SET NX EX).
-        True → kilit alındı (bu worker işleyecek).
-        False → başka worker zaten işliyor.
+        True -> kilit alındı (bu worker işleyecek).
+        False -> başka worker zaten işliyor.
         """
         try:
             return bool(self._redis.set(
@@ -994,7 +994,7 @@ class DistributedScanCoordinator(_BaseCoordinator):
         except Exception:
             pass
 
-    # ── Sonuç yönetimi ─────────────────────────────────────────────────
+    # -- Sonuç yönetimi -------------------------------------------------
 
     def publish_result(self, scan_id: str, result: Dict[str, Any]) -> None:
         import json
@@ -1011,7 +1011,7 @@ class DistributedScanCoordinator(_BaseCoordinator):
         except Exception:
             return []
 
-    # ── Worker heartbeat ───────────────────────────────────────────────
+    # -- Worker heartbeat -----------------------------------------------
 
     def heartbeat(self, worker_id: str, scan_id: str) -> None:
         try:
@@ -1033,7 +1033,7 @@ class DistributedScanCoordinator(_BaseCoordinator):
         except Exception:
             return {}
 
-    # ── Meta yönetimi ──────────────────────────────────────────────────
+    # -- Meta yönetimi --------------------------------------------------
 
     def set_meta(self, key: str, value: Any) -> None:
         try:

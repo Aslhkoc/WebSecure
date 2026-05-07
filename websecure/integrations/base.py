@@ -163,12 +163,12 @@ class ToolIntegration(ABC):
 
     Alt sınıflar şu metotları implement etmelidir:
     - `tool_name` property
-    - `is_available()` → araç sistemde kurulu mu?
-    - `run(target, **kwargs)` → ToolResult
+    - `is_available()` -> araç sistemde kurulu mu?
+    - `run(target, **kwargs)` -> ToolResult
 
     Opsiyonel override:
-    - `to_sarif(result)` → SARIF formatında dict
-    - `correlate(result, existing_findings)` → deduplicated ToolResult
+    - `to_sarif(result)` -> SARIF formatında dict
+    - `correlate(result, existing_findings)` -> deduplicated ToolResult
     """
 
     def __init__(self, binary_name: str = "") -> None:
@@ -272,7 +272,7 @@ class ToolIntegration(ABC):
         return self._binary_path or self._binary_name
 
     def __repr__(self) -> str:
-        avail = "✓" if self.is_available() else "✗"
+        avail = "[OK]" if self.is_available() else "[FAIL]"
         return f"<{self.__class__.__name__} [{avail}] binary={self.binary!r}>"
 
 
@@ -385,7 +385,7 @@ class ToolRegistry:
         Parametreler
         ------------
         target     : Hedef URL
-        tools      : None → tüm mevcut araçlar
+        tools      : None -> tüm mevcut araçlar
         correlator : Varsa tekilleştirme yapılır
         """
         names = tools or self.available_tools()

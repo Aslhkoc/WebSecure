@@ -587,7 +587,7 @@ def _try_mutate_roles(payload: Dict[str, Any]) -> Dict[str, Any]:
     - 'role', 'roles' (dize veya liste)
     - 'scope' (boşluk ayrımlı dizge), 'scopes' (liste)
     - 'permissions' (liste)
-    Bu fonksiyon *rol düşürme* yapar: admin→user→guest; scope/permission'ları daraltır.
+    Bu fonksiyon *rol düşürme* yapar: admin->user->guest; scope/permission'ları daraltır.
     """
     p = json.loads(json.dumps(payload))  # deep copy
 

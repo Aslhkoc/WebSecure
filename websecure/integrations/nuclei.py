@@ -96,7 +96,7 @@ class NucleiWrapper:
                 return (time.time() - last) > _TEMPLATE_STALENESS_SECONDS
         except Exception:
             pass
-        return True  # No marker → assume stale
+        return True  # No marker -> assume stale
 
     def _mark_updated(self) -> None:
         """Write current timestamp to the last-update marker file."""

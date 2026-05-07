@@ -28,11 +28,11 @@ import requests
 _logger = logging.getLogger(__name__)
 
 _SEV_EMOJI = {
-    "kritik": "🔴", "critical": "🔴",
-    "yüksek": "🟠", "high": "🟠",
-    "orta": "🟡", "medium": "🟡",
-    "düşük": "🟢", "low": "🟢",
-    "bilgi": "⚪", "info": "⚪",
+    "kritik": "[Critical]", "critical": "[Critical]",
+    "yüksek": "[High]", "high": "[High]",
+    "orta": "[Medium]", "medium": "[Medium]",
+    "düşük": "[Info]", "low": "[Info]",
+    "bilgi": "[o]", "info": "[o]",
 }
 
 _SEV_PD_PRIORITY = {
@@ -238,7 +238,7 @@ class GitHubIssueNotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        emoji = _SEV_EMOJI.get(sev, "⚪")
+        emoji = _SEV_EMOJI.get(sev, "[o]")
         title = f"{emoji} {_finding_title(finding)}"[:255]
         body = _finding_body(finding)
         body += f"\n\n---\n*Auto-created by [WebSecure](https://github.com/Aslhkoc/WebSecure)*"
@@ -287,7 +287,7 @@ class SlackNotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        emoji = _SEV_EMOJI.get(sev, "⚪")
+        emoji = _SEV_EMOJI.get(sev, "[o]")
         color_map = {"kritik": "#FF0000", "critical": "#FF0000",
                      "yüksek": "#FF6600", "high": "#FF6600",
                      "orta": "#FFCC00", "medium": "#FFCC00",
@@ -343,7 +343,7 @@ class TeamsNotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        emoji = _SEV_EMOJI.get(sev, "⚪")
+        emoji = _SEV_EMOJI.get(sev, "[o]")
         title = f"{emoji} {_finding_title(finding)}"
         facts = []
         for key in ("severity", "url", "param", "description", "cwe", "cvss_score", "remediation"):

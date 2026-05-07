@@ -208,7 +208,7 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
     perm = _header(resp, "Permissions-Policy")
     cov.perm_policy = "PASS" if perm else "WARN"
 
-    # ── CORS Analysis ──────────────────────────────────────────────────────
+    # -- CORS Analysis ------------------------------------------------------
     acao = _header(resp, "Access-Control-Allow-Origin")
     acac = _header(resp, "Access-Control-Allow-Credentials")
     acao_methods = _header(resp, "Access-Control-Allow-Methods")
@@ -252,7 +252,7 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
             tags=["CORS"],
         ))
 
-    # ── Cookie Security Analysis ────────────────────────────────────────────
+    # -- Cookie Security Analysis --------------------------------------------
     set_cookie_headers = []
     raw_headers = getattr(resp, "headers", {})
     if hasattr(raw_headers, "getlist"):
@@ -301,7 +301,7 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
                 tags=["Cookie"],
             ))
 
-    # ── Referrer-Policy Analysis ────────────────────────────────────────────
+    # -- Referrer-Policy Analysis --------------------------------------------
     referrer = _header(resp, "Referrer-Policy")
     if referrer:
         if referrer.lower() in ("unsafe-url", "no-referrer-when-downgrade", ""):

@@ -123,7 +123,7 @@ def _render_ports_section(results: Dict) -> str:
                 parts.append(f"{key}: {first}")
         for k, v in scripts.items():
             if v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-")):
-                parts.append(f"⚠️ {k}: {v.strip().split(chr(10))[0][:120]}")
+                parts.append(f"[!] {k}: {v.strip().split(chr(10))[0][:120]}")
         return " // ".join(parts)
 
     for k in cand_keys:
@@ -187,7 +187,7 @@ def _render_ssl_section(results: Dict) -> str:
     if not cert: return ""
     
     out = ["## SSL/TLS Yapılandırma", "", "| Özellik | Değer |", "|-|-|"]
-    out.append(f"| Geçerlilik | {'✅ Geçerli' if cert.get('valid') else '❌ Geçersiz'} |")
+    out.append(f"| Geçerlilik | {'[OK] Geçerli' if cert.get('valid') else '[X] Geçersiz'} |")
     out.append(f"| Subject | `{cert.get('subject_CN') or '-'}` |")
     out.append(f"| Issuer | `{cert.get('issuer_CN') or '-'}` |")
     return "\n".join(out)

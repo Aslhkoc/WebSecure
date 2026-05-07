@@ -155,7 +155,7 @@ class ScanProfile(ABC):
             estimated_duration_min=self.ESTIMATED_MIN,
         )
 
-    # ── Paylasilmis yardimci metotlar ────────────────────────────────────
+    # -- Paylasilmis yardimci metotlar ------------------------------------
 
     def _enable_modules(self, cfg: dict, modules: List[str]) -> None:
         off = cfg.setdefault("offensive", {})
@@ -968,10 +968,10 @@ class AdaptiveProfileEngine:
       - Hata orani
 
     Ayarlama kurallari:
-      - Yavas hedef (>2000ms) → RPS'i dusurkonsurrency'i azalt
-      - WAF tespit edildi → WAF bypass etkinlestir, daha az RPS
-      - Yuksek hata orani → retry artir, concurrency azalt
-      - Hizli hedef (<200ms) → RPS artir
+      - Yavas hedef (>2000ms) -> RPS'i dusurkonsurrency'i azalt
+      - WAF tespit edildi -> WAF bypass etkinlestir, daha az RPS
+      - Yuksek hata orani -> retry artir, concurrency azalt
+      - Hizli hedef (<200ms) -> RPS artir
     """
 
     PROBE_COUNT       = 5    # kac probe isteği atilacak
@@ -1078,13 +1078,13 @@ class AdaptiveProfileEngine:
                 "max_variants_per_payload": 8,
                 "encoding_variants": True,
             })
-            _logger.info("[AdaptiveEngine] WAF tespit edildi → bypass etkinlestirildi.")
+            _logger.info("[AdaptiveEngine] WAF tespit edildi -> bypass etkinlestirildi.")
 
         if metrics.is_slow_target:
             cfg.setdefault("http", {})["timeout_seconds"] = 30
             _logger.info(
                 f"[AdaptiveEngine] Yavas hedef ({metrics.avg_response_ms:.0f}ms) "
-                f"→ timeout=30s, RPS={metrics.recommended_rps}"
+                f"-> timeout=30s, RPS={metrics.recommended_rps}"
             )
 
         cfg["_adaptive_metrics"] = {
@@ -1143,7 +1143,7 @@ class ProfileRegistry:
     def instance(cls) -> "ProfileRegistry":
         return cls()
 
-    # ── Kayit yonetimi ────────────────────────────────────────────────────
+    # -- Kayit yonetimi ----------------------------------------------------
 
     def register(self, profile: ScanProfile) -> None:
         self._profiles[profile.NAME] = profile
@@ -1166,7 +1166,7 @@ class ProfileRegistry:
             return cfg
         return profile.apply(cfg)
 
-    # ── Dahili kayit ──────────────────────────────────────────────────────
+    # -- Dahili kayit ------------------------------------------------------
 
     def _register_builtins(self) -> None:
         for profile_cls in [

@@ -71,7 +71,7 @@ class SQLInjectionScanner(BaseScanner):
     def __init__(self, session=None, results=None, debug=False):
         super().__init__(session, results, debug)
         self.payloads = self._load_payloads()
-        # Per-instance cache: url → (mean, stdev) so _measure_natural_variation
+        # Per-instance cache: url -> (mean, stdev) so _measure_natural_variation
         # runs 4 HTTP requests ONCE per URL instead of once per parameter
         self._nat_var_cache: Dict[str, Tuple[float, float]] = {}
         self._nat_var_lock = threading.Lock()
@@ -317,7 +317,7 @@ class SQLInjectionScanner(BaseScanner):
             if all_forms:
                 self.scan_forms(all_forms)
 
-        # ─── Adım 3 eklentileri: OOB / Stacked / Adaptive / SQLMap ─────────
+        # --- Adım 3 eklentileri: OOB / Stacked / Adaptive / SQLMap ---------
         self._run_oob_phase(urls)
         self._run_stacked_query_phase(urls)
         self._run_adaptive_scan(urls)
@@ -708,7 +708,7 @@ class SQLInjectionScanner(BaseScanner):
             logger.warning("[SQLi] cmdi modülü yüklenemedi, CMDI taraması atlanıyor")
             return False
 
-    # ─── Adım 3 — SQLInjectionScanner eklenti metodları ─────────────────────
+    # --- Adım 3 — SQLInjectionScanner eklenti metodları ---------------------
 
     def _run_oob_phase(self, urls: List[str]) -> None:
         """OOB DNS SQLi via interactsh OAST. Callback doğrulaması async."""
@@ -731,7 +731,7 @@ class SQLInjectionScanner(BaseScanner):
                         payload=sent[0]["payload"],
                         severity="High",
                         evidence=(
-                            f"OOB payloads sent → {oob_host}. "
+                            f"OOB payloads sent -> {oob_host}. "
                             f"Check OAST server for DNS/HTTP callbacks. "
                             f"Payloads tried: {len(sent)}"
                         ),
@@ -902,10 +902,10 @@ class OOBSQLiProber:
     """
     Out-of-band DNS SQLi via OAST callback URL.
 
-    MySQL:      LOAD_FILE(UNC path) → DNS lookup
-    MSSQL:      xp_dirtree / xp_fileexist → DNS lookup
-    Oracle:     UTL_HTTP.REQUEST → HTTP callback
-    PostgreSQL: COPY TO PROGRAM 'nslookup' → DNS lookup
+    MySQL:      LOAD_FILE(UNC path) -> DNS lookup
+    MSSQL:      xp_dirtree / xp_fileexist -> DNS lookup
+    Oracle:     UTL_HTTP.REQUEST -> HTTP callback
+    PostgreSQL: COPY TO PROGRAM 'nslookup' -> DNS lookup
 
     Actual confirmation is async — check the OAST server for incoming requests.
     """
@@ -993,7 +993,7 @@ class StackedQueryProber:
                     pass
             if hits >= confirm_n:
                 evidence = (
-                    f"Stacked query confirmed ({hits}/{confirm_n} shots ≥ {time_threshold}s) "
+                    f"Stacked query confirmed ({hits}/{confirm_n} shots >= {time_threshold}s) "
                     f"— db_hint: {db_hint}"
                 )
                 return payload, db_hint, evidence
@@ -1003,7 +1003,7 @@ class StackedQueryProber:
 class SchemaExtractor:
     """
     Non-destructive DB schema extraction via UNION-based SQLi.
-    Extracts table names → column names for sensitive tables.
+    Extracts table names -> column names for sensitive tables.
     Only uses SELECT queries — never modifies data.
     """
 

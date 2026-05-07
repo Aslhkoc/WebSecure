@@ -4,14 +4,14 @@ websecure.scanners.prototype_pollution
 JavaScript Prototype Pollution vulnerability detector.
 
 Techniques
-──────────
+----------
   1. JSON body injection  — POST/PUT with __proto__, constructor.prototype keys
   2. Query-string pollution — ?__proto__[x]=1, ?constructor[prototype][x]=1
   3. Deep-merge sink probe  — nested JSON objects that trigger polluted keys
   4. Reflected-property check — response body searched for canary value
 
 References
-──────────
+----------
   • https://portswigger.net/web-security/prototype-pollution
   • https://github.com/nicehash/node-prototype-pollution-test
 """
@@ -152,7 +152,7 @@ def run(
             logger.warning("[ProtoPollution] requests not available")
             return results
 
-    # ── 1. JSON body injection ──────────────────────────────────────────────
+    # -- 1. JSON body injection ----------------------------------------------
     for payload in _json_payloads(canary):
         for method in ("POST", "PUT", "PATCH"):
             try:
@@ -178,7 +178,7 @@ def run(
     if results:
         return results
 
-    # ── 2. Query-string injection ───────────────────────────────────────────
+    # -- 2. Query-string injection -------------------------------------------
     for test_url in _qs_payloads(url, canary):
         try:
             resp = session.get(test_url, timeout=10, allow_redirects=True)
@@ -194,7 +194,7 @@ def run(
     if results:
         return results
 
-    # ── 3. Deep-merge probe (JSON PATCH) ───────────────────────────────────
+    # -- 3. Deep-merge probe (JSON PATCH) -----------------------------------
     deep_payload = {
         "data": {
             "__proto__": {"polluted": canary},

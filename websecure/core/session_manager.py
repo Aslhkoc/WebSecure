@@ -83,12 +83,12 @@ class CookieSecurityAnalyzer:
     Analyzes Set-Cookie headers for missing security flags and their impact.
 
     Checks:
-    - HttpOnly missing → XSS cookie theft risk
-    - Secure missing   → MITM session hijack risk
-    - SameSite missing → CSRF risk
-    - SameSite=None without Secure → cross-site leak
-    - Overly broad Domain → subdomain cookie theft
-    - No expiry on session cookie → session persistence
+    - HttpOnly missing -> XSS cookie theft risk
+    - Secure missing   -> MITM session hijack risk
+    - SameSite missing -> CSRF risk
+    - SameSite=None without Secure -> cross-site leak
+    - Overly broad Domain -> subdomain cookie theft
+    - No expiry on session cookie -> session persistence
 
     SOLID/SRP: Only cookie security flag analysis.
     """
@@ -221,7 +221,7 @@ class SessionEntropyAnalyzer:
     Collects N session tokens from the target and calculates Shannon entropy
     to estimate session ID predictability.
 
-    Low entropy → session IDs are guessable / brute-forceable.
+    Low entropy -> session IDs are guessable / brute-forceable.
 
     Scoring:
     - < 32 bits: CRITICAL (trivially guessable)
@@ -346,7 +346,7 @@ class SessionLifecycleProber:
         credentials: Dict[str, str],
     ) -> Dict[str, Any]:
         """
-        1. Login → save session cookies
+        1. Login -> save session cookies
         2. Logout
         3. Re-use saved session cookies on protected_url
         Returns whether old session is still valid (vulnerability).

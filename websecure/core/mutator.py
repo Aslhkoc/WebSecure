@@ -150,7 +150,7 @@ class Mutator:
             variants.add(payload.replace("1=1", "1=1e0")) # Scientific notation
 
         # 9. [NIGHTMARE] Unicode Fullwidth Evasion
-        # 'admin' -> 'ａｄｍｉｎ' (WAF normalization often maps these back to ASCII, bypassing regex)
+        # 'admin' -> 'admin' (WAF normalization often maps these back to ASCII, bypassing regex)
         variants.add(Mutator._to_fullwidth(payload))
         
         # 10. [NIGHTMARE] Null Byte Injection

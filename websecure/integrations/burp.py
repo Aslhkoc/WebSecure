@@ -14,9 +14,9 @@ Burp Suite Professional REST API entegrasyonu.
 
 KURULUM
 -------
-Burp Suite Pro → User Options → REST API → Enable REST API
+Burp Suite Pro -> User Options -> REST API -> Enable REST API
 Varsayılan: http://127.0.0.1:1337
-API Key: User Options → REST API → API Key
+API Key: User Options -> REST API -> API Key
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 _BURP_DEFAULT_HOST = "http://127.0.0.1:1337"
 _BURP_API_PREFIX   = "/v0.1"
 
-# Burp severity → ToolSeverity
+# Burp severity -> ToolSeverity
 _BURP_SEV_MAP: Dict[str, ToolSeverity] = {
     "high":            ToolSeverity.HIGH,
     "medium":          ToolSeverity.MEDIUM,
@@ -51,14 +51,14 @@ _BURP_SEV_MAP: Dict[str, ToolSeverity] = {
     "false_positive":  ToolSeverity.INFO,
 }
 
-# Burp confidence → WebSecure confidence
+# Burp confidence -> WebSecure confidence
 _BURP_CONF_MAP: Dict[str, str] = {
     "certain":   "high",
     "firm":      "medium",
     "tentative": "low",
 }
 
-# Burp issue type → CWE eşleme (yaygın tipler)
+# Burp issue type -> CWE eşleme (yaygın tipler)
 _BURP_TYPE_TO_CWE: Dict[int, str] = {
     1048832:  "CWE-89",   # SQL injection
     2097920:  "CWE-79",   # XSS reflected
@@ -182,7 +182,7 @@ class BurpSuiteAPIClient:
             or result.get("task_id")
         )
         if scan_id:
-            logger.info(f"[Burp] Tarama başlatıldı: {scan_id}  →  {target_url}")
+            logger.info(f"[Burp] Tarama başlatıldı: {scan_id}  ->  {target_url}")
         return str(scan_id) if scan_id else None
 
     def get_scan_status(self, scan_id: str) -> Optional[Dict[str, Any]]:
@@ -237,7 +237,7 @@ class BurpSuiteAPIClient:
 
         Parametreler
         ------------
-        scan_id : None → tüm geçmiş bulgular; str → belirli tarama
+        scan_id : None -> tüm geçmiş bulgular; str -> belirli tarama
 
         Döndürür
         --------
@@ -336,7 +336,7 @@ class BurpIntegration(ToolIntegration):
     def import_findings(self, scan_id: Optional[str] = None) -> ToolResult:
         """
         Mevcut Burp bulgularını import et.
-        scan_id = None → tüm geçmiş bulgular.
+        scan_id = None -> tüm geçmiş bulgular.
         """
         return self._import_existing("", scan_id=scan_id)
 

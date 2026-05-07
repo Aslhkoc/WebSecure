@@ -295,7 +295,7 @@ _ADMIN_PATH_INDICATORS = [
 class AuthMatrixScanner(BaseScanner):
     """
     Tests endpoint access control across multiple roles.
-    Produces an authorization matrix: endpoint × role → HTTP status.
+    Produces an authorization matrix: endpoint × role -> HTTP status.
     Flags privilege escalations and missing access controls.
     """
 
@@ -1237,7 +1237,7 @@ class PrivilegeEscalationProber(BaseScanner):
       - Kullanici tokeni ile admin endpoint testi (vertical PrivEsc)
       - Rol parametresi manipülasyonu (JSON body / query param)
       - Mass assignment zafiyeti (admin flag enjeksiyonu)
-      - HTTP method override (GET → PUT/DELETE via X-HTTP-Method-Override)
+      - HTTP method override (GET -> PUT/DELETE via X-HTTP-Method-Override)
     """
     name = "privilege_escalation"
 
@@ -1362,7 +1362,7 @@ class BOLAIDORChain(BaseScanner):
       - UUID/GUID enumeration (v1 timestamp prediction)
       - Response comparison (unauthorized vs authorized user)
       - Cross-user resource access detection
-      - Horizontal PrivEsc: user A token → user B resource
+      - Horizontal PrivEsc: user A token -> user B resource
     """
     name = "bola_idor"
 

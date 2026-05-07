@@ -61,10 +61,10 @@ class CronParser:
 
     Örnekler
     --------
-    "0 2 * * *"    → Her gece 02:00
-    "*/15 * * * *" → Her 15 dakikada bir
-    "0 9 * * 1-5"  → Hafta içi 09:00
-    "0 0 1 * *"    → Her ayın 1'i gece yarısı
+    "0 2 * * *"    -> Her gece 02:00
+    "*/15 * * * *" -> Her 15 dakikada bir
+    "0 9 * * 1-5"  -> Hafta içi 09:00
+    "0 0 1 * *"    -> Her ayın 1'i gece yarısı
     """
 
     def __init__(self, expr: str) -> None:
@@ -347,7 +347,7 @@ class CronScheduler:
             due_entries = [e for e in self._entries.values() if e.is_due()]
 
         for entry in due_entries:
-            logger.info(f"[Scheduler] Çalıştırılıyor: {entry.label}  →  {entry.target}")
+            logger.info(f"[Scheduler] Çalıştırılıyor: {entry.label}  ->  {entry.target}")
             self._run_entry(entry)
 
     def _run_entry(self, entry: ScheduleEntry) -> None:
@@ -470,25 +470,25 @@ def run_scheduler_cli(args: list) -> int:
                 label=ns.label,
                 enabled=not ns.disabled,
             )
-            print(f"[✓] Zamanlama eklendi — ID: {e.id}  Sonraki: {e.next_run}")
+            print(f"[[OK]] Zamanlama eklendi — ID: {e.id}  Sonraki: {e.next_run}")
         except ValueError as exc:
             print(f"[!] Hata: {exc}")
             return 1
 
     elif ns.subcmd == "remove":
         if sched.remove(ns.id):
-            print(f"[✓] Silindi: {ns.id}")
+            print(f"[[OK]] Silindi: {ns.id}")
         else:
             print(f"[!] Bulunamadı: {ns.id}")
             return 1
 
     elif ns.subcmd == "enable":
         sched.enable(ns.id)
-        print(f"[✓] Etkinleştirildi: {ns.id}")
+        print(f"[[OK]] Etkinleştirildi: {ns.id}")
 
     elif ns.subcmd == "disable":
         sched.disable(ns.id)
-        print(f"[✓] Devre dışı: {ns.id}")
+        print(f"[[OK]] Devre dışı: {ns.id}")
 
     elif ns.subcmd == "list":
         entries = sched.list_entries()
@@ -496,7 +496,7 @@ def run_scheduler_cli(args: list) -> int:
             print("  Kayıtlı zamanlama yok.")
             return 0
         print(f"\n  {'ID':<8}  {'Durum':<8}  {'Cron':<15}  {'Label':<30}  Sonraki")
-        print("  " + "─" * 80)
+        print("  " + "-" * 80)
         for e in entries:
             status = "aktif" if e.enabled else "pasif"
             label = (e.label or e.target)[:30]

@@ -282,7 +282,7 @@ class JSAnalyzer:
                 # Shannon entropy kontrolü — düşük entropi = placeholder (false positive)
                 if len(value) > 8:
                     unique = len(set(value))
-                    if unique < 4:  # "AAAAAAAAAAAAAAAA" gibi placeholder → atla
+                    if unique < 4:  # "AAAAAAAAAAAAAAAA" gibi placeholder -> atla
                         continue
                 redacted = value[:6] + "****" + value[-2:] if len(value) > 10 else "****"
                 findings.append({
@@ -304,7 +304,7 @@ class JSAnalyzer:
         findings.extend(source_map_findings)
 
         logger.info(
-            f"[JSAnalyzer] {js_url} → {len(endpoints)} endpoints, "
+            f"[JSAnalyzer] {js_url} -> {len(endpoints)} endpoints, "
             f"{secret_count} secrets, {len(source_map_findings)} sourcemap"
         )
         return findings

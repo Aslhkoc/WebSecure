@@ -12,7 +12,7 @@ websecure.cli.diff
 
 Eşleştirme Algoritması
 ----------------------
-SHA256(title + url + severity) → fingerprint bazlı dedup.
+SHA256(title + url + severity) -> fingerprint bazlı dedup.
 Gerileme: aynı title+url, severity yükselmiş.
 
 Çıktı Formatları
@@ -51,11 +51,11 @@ _SEVERITY_ORDER: Dict[str, int] = {
 }
 
 _SEVERITY_EMOJI: Dict[str, str] = {
-    "Critical": "🔴",
-    "High":     "🟠",
-    "Medium":   "🟡",
-    "Low":      "🔵",
-    "Info":     "🟢",
+    "Critical": "[Critical]",
+    "High":     "[High]",
+    "Medium":   "[Medium]",
+    "Low":      "[Low]",
+    "Info":     "[Info]",
 }
 
 
@@ -215,7 +215,7 @@ class ScanDiff:
         findings1: List[Dict[str, Any]],
         findings2: List[Dict[str, Any]],
     ) -> DiffResult:
-        # Fingerprint → bulgu haritaları
+        # Fingerprint -> bulgu haritaları
         map1: Dict[str, Dict[str, Any]] = {_fingerprint(f): f for f in findings1}
         map2: Dict[str, Dict[str, Any]] = {_fingerprint(f): f for f in findings2}
 
@@ -286,9 +286,9 @@ class DiffRenderer:
 
     @staticmethod
     def _print_plain(diff: DiffResult) -> None:
-        sep = "─" * 60
+        sep = "-" * 60
         print(f"\n{sep}")
-        print(f"  WebSecure Diff: {diff.scan1_path}  →  {diff.scan2_path}")
+        print(f"  WebSecure Diff: {diff.scan1_path}  ->  {diff.scan2_path}")
         print(sep)
         s = diff.summary
         delta = diff.risk_delta
@@ -298,7 +298,7 @@ class DiffRenderer:
         print(sep)
 
         if diff.new_findings:
-            print("\n🔴 Yeni Bulgular:")
+            print("\n[Critical] Yeni Bulgular:")
             for f in sorted(diff.new_findings,
                             key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
                             reverse=True):
@@ -307,17 +307,17 @@ class DiffRenderer:
                       f"— {f.get('url','')}")
 
         if diff.fixed_findings:
-            print("\n✅ Düzelen Bulgular:")
+            print("\n[OK] Düzelen Bulgular:")
             for f in diff.fixed_findings:
                 sev = f.get("severity", "Info")
                 print(f"  [{sev}] {f.get('title','?')}  — {f.get('url','')}")
 
         if diff.regressed_findings:
-            print("\n⚠️  Kötüleşen Bulgular:")
+            print("\n[!]  Kötüleşen Bulgular:")
             for f in diff.regressed_findings:
                 old = f.get("_old_severity", "?")
                 new = f.get("severity", "?")
-                print(f"  {old} → {new}  {f.get('title','?')}  — {f.get('url','')}")
+                print(f"  {old} -> {new}  {f.get('title','?')}  — {f.get('url','')}")
 
         print()
 
@@ -363,9 +363,9 @@ class DiffRenderer:
                 )
             console.print(t)
 
-        _table("🔴 Yeni Bulgular",      diff.new_findings,       "red")
-        _table("✅ Düzelen Bulgular",   diff.fixed_findings,     "green")
-        _table("⚠️  Kötüleşen Bulgular", diff.regressed_findings, "yellow")
+        _table("[Critical] Yeni Bulgular",      diff.new_findings,       "red")
+        _table("[OK] Düzelen Bulgular",   diff.fixed_findings,     "green")
+        _table("[!]  Kötüleşen Bulgular", diff.regressed_findings, "yellow")
 
     # ------------------------------------------------------------------
     # JSON
@@ -399,9 +399,9 @@ class DiffRenderer:
             f"**Yeni Tarama:** `{diff.scan2_path}`\n",
             f"| Kategori | Sayı |",
             f"|---|---|",
-            f"| 🔴 Yeni Bulgular | {s['new']} |",
-            f"| ✅ Düzelen Bulgular | {s['fixed']} |",
-            f"| ⚠️ Kötüleşen | {s['regressed']} |",
+            f"| [Critical] Yeni Bulgular | {s['new']} |",
+            f"| [OK] Düzelen Bulgular | {s['fixed']} |",
+            f"| [!] Kötüleşen | {s['regressed']} |",
             f"| Değişmeyen | {s['unchanged']} |",
             f"| **Risk Delta** | **{delta_str}** |\n",
         ]
@@ -420,9 +420,9 @@ class DiffRenderer:
                 url = f.get("url", "")
                 lines.append(f"| {_SEVERITY_EMOJI.get(sev,'')} {sev} | {title_f} | {url} |")
 
-        _section("🔴 Yeni Bulgular",     diff.new_findings)
-        _section("✅ Düzelen Bulgular",  diff.fixed_findings)
-        _section("⚠️ Kötüleşen",        diff.regressed_findings)
+        _section("[Critical] Yeni Bulgular",     diff.new_findings)
+        _section("[OK] Düzelen Bulgular",  diff.fixed_findings)
+        _section("[!] Kötüleşen",        diff.regressed_findings)
 
         return "\n".join(lines)
 
@@ -458,7 +458,7 @@ class DiffRenderer:
                 if "_old_severity" in f:
                     old_sev_html = (
                         f' <small style="color:#6c757d">'
-                        f'({f["_old_severity"]} → {sev})</small>'
+                        f'({f["_old_severity"]} -> {sev})</small>'
                     )
                 rows.append(
                     f'<tr><td><span class="badge" style="background:{c}">'
@@ -498,15 +498,15 @@ td{{padding:.6rem;border-bottom:1px solid #dee2e6}}
   <div class="stat"><span style="color:{delta_color}">{'+' if delta>0 else ''}{delta}</span>Risk Delta</div>
 </div>
 
-{f'''<h2>🔴 Yeni Bulgular ({s['new']})</h2>
+{f'''<h2>[Critical] Yeni Bulgular ({s['new']})</h2>
 <table><tr><th>Önem</th><th>Başlık</th><th>URL</th></tr>
 {_rows(diff.new_findings, "danger")}</table>''' if diff.new_findings else ''}
 
-{f'''<h2>✅ Düzelen Bulgular ({s['fixed']})</h2>
+{f'''<h2>[OK] Düzelen Bulgular ({s['fixed']})</h2>
 <table><tr><th>Önem</th><th>Başlık</th><th>URL</th></tr>
 {_rows(diff.fixed_findings, "success")}</table>''' if diff.fixed_findings else ''}
 
-{f'''<h2>⚠️ Kötüleşen Bulgular ({s['regressed']})</h2>
+{f'''<h2>[!] Kötüleşen Bulgular ({s['regressed']})</h2>
 <table><tr><th>Önem</th><th>Başlık</th><th>URL</th></tr>
 {_rows(diff.regressed_findings, "warning")}</table>''' if diff.regressed_findings else ''}
 
@@ -568,20 +568,20 @@ def run_diff_cli(args: list) -> int:
         out = DiffRenderer.to_json(diff)
         if ns.output:
             Path(ns.output).write_text(out, encoding="utf-8")
-            print(f"[✓] JSON diff kaydedildi: {ns.output}")
+            print(f"[[OK]] JSON diff kaydedildi: {ns.output}")
         else:
             print(out)
     elif fmt == "markdown":
         out = DiffRenderer.to_markdown(diff)
         if ns.output:
             DiffRenderer.save_markdown(diff, ns.output)
-            print(f"[✓] Markdown diff kaydedildi: {ns.output}")
+            print(f"[[OK]] Markdown diff kaydedildi: {ns.output}")
         else:
             print(out)
     elif fmt == "html":
         if ns.output:
             DiffRenderer.save_html(diff, ns.output)
-            print(f"[✓] HTML diff kaydedildi: {ns.output}")
+            print(f"[[OK]] HTML diff kaydedildi: {ns.output}")
         else:
             print(DiffRenderer.to_html(diff))
 

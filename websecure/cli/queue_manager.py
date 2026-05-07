@@ -216,7 +216,7 @@ class ScanQueue:
 
         Parametreler
         ------------
-        blocking : True → tüm worker'lar bitene kadar bekle (CLI için)
+        blocking : True -> tüm worker'lar bitene kadar bekle (CLI için)
         """
         self._running = True
         pending = self.list_entries(status=QueueStatus.PENDING)
@@ -307,7 +307,7 @@ class ScanQueue:
 
         self._save()
         logger.info(
-            f"[Queue] {'✓' if success else '✗'} {entry.target}  "
+            f"[Queue] {'[OK]' if success else '[FAIL]'} {entry.target}  "
             f"{duration:.1f}s  {finding_count} bulgu"
         )
 
@@ -407,11 +407,11 @@ def run_queue_cli(args: list) -> int:
 
     if ns.subcmd == "add":
         e = q.add(target=ns.target, priority=ns.priority, label=ns.label)
-        print(f"[✓] Eklendi — ID: {e.id}  Öncelik: P{e.priority}  Hedef: {e.target}")
+        print(f"[[OK]] Eklendi — ID: {e.id}  Öncelik: P{e.priority}  Hedef: {e.target}")
 
     elif ns.subcmd == "cancel":
         if q.cancel(ns.id):
-            print(f"[✓] İptal edildi: {ns.id}")
+            print(f"[[OK]] İptal edildi: {ns.id}")
         else:
             print(f"[!] İptal edilemedi (bulunamadı veya çalışıyor): {ns.id}")
             return 1
@@ -422,7 +422,7 @@ def run_queue_cli(args: list) -> int:
             print("  Giriş bulunamadı.")
             return 0
         print(f"\n  {'ID':<8}  {'P':<2}  {'Durum':<12}  {'Hedef':<40}  Eklenme")
-        print("  " + "─" * 80)
+        print("  " + "-" * 80)
         for e in entries:
             added = e.added_at[:16]
             target = (e.label or e.target)[:40]
@@ -431,13 +431,13 @@ def run_queue_cli(args: list) -> int:
     elif ns.subcmd == "stats":
         s = q.stats()
         print("\n  Kuyruk İstatistikleri")
-        print("  " + "─" * 30)
+        print("  " + "-" * 30)
         for k, v in s.items():
             print(f"  {k:<12}: {v}")
 
     elif ns.subcmd == "clear":
         removed = q.remove_completed()
-        print(f"[✓] {removed} tamamlanan giriş temizlendi.")
+        print(f"[[OK]] {removed} tamamlanan giriş temizlendi.")
 
     elif ns.subcmd == "run":
         q._max_workers = ns.workers
@@ -448,7 +448,7 @@ def run_queue_cli(args: list) -> int:
             return 0
         print(f"[*] {pending} giriş işleniyor — {ns.workers} worker...")
         q.run(blocking=True)
-        print(f"[✓] Tamamlandı.")
+        print(f"[[OK]] Tamamlandı.")
         for k, v in q.stats().items():
             print(f"  {k:<12}: {v}")
 

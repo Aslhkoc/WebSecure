@@ -5,7 +5,7 @@ Otomatik False Positive (FP) öğrenme motoru.
 
 Özellikler
 ----------
-* FP onayı → kural üretimi (title pattern + url pattern + severity)
+* FP onayı -> kural üretimi (title pattern + url pattern + severity)
 * Bir sonraki taramada yeni bulgulara otomatik FP damgası
 * Bayesian güven skoru (onay sayısına göre confidence artar)
 * Joker kural desteği (URL path pattern, domain wildcard)
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _FP_DB_PATH = Path.home() / ".websecure" / "fp_rules.json"
 
-# Minimum onay sayısı → kural aktifleşir
+# Minimum onay sayısı -> kural aktifleşir
 _MIN_CONFIRMATIONS = 2
 # Maksimum FP kuralı sayısı (bellek koruması)
 _MAX_RULES = 5000
@@ -166,7 +166,7 @@ class FPLearner:
         tenant_id: Optional[str] = None,
     ) -> FPRule:
         """
-        Bir bulguyu FP olarak işaretle → kural üret veya güncelle.
+        Bir bulguyu FP olarak işaretle -> kural üret veya güncelle.
 
         Parametreler
         ------------

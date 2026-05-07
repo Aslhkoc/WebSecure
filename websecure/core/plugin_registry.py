@@ -23,12 +23,12 @@ if TYPE_CHECKING:
 class PluginRegistry:
     """
     Central registry for scanner plugins.
-    Maps scanner name → class.
+    Maps scanner name -> class.
     """
 
     def __init__(self):
         self._registry: Dict[str, type] = {}
-        self._phase_map: Dict[str, List[str]] = {}  # phase → [scanner names]
+        self._phase_map: Dict[str, List[str]] = {}  # phase -> [scanner names]
 
     def register(self, cls: type, phase: str = "offensive") -> None:
         """Register a scanner class."""
@@ -37,7 +37,7 @@ class PluginRegistry:
         self._phase_map.setdefault(phase, [])
         if name not in self._phase_map[phase]:
             self._phase_map[phase].append(name)
-        _logger.debug(f"[PluginRegistry] Registered: {name} → {cls.__name__} (phase={phase})")
+        _logger.debug(f"[PluginRegistry] Registered: {name} -> {cls.__name__} (phase={phase})")
 
     def get(self, name: str) -> Optional[type]:
         return self._registry.get(name)

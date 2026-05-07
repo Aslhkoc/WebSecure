@@ -243,7 +243,7 @@ class CORSSubdomainTrustProber(BaseScanner):
                             "url": url, "severity": "High" if with_creds else "Medium",
                             "description": (
                                 f"CORS trusts subdomain pattern — '{origin}' reflected. "
-                                + ("Combined with Subdomain Takeover → full ATO." if with_creds else
+                                + ("Combined with Subdomain Takeover -> full ATO." if with_creds else
                                    "Subdomain XSS + CORS = potential data theft.")
                             ),
                             "evidence": {

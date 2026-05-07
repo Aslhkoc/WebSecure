@@ -276,13 +276,13 @@ def _apply_stealth_profile(cfg: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Geriye dönük uyumluluk: _apply_normal_profile → stealth'e yönlendir
+# Geriye dönük uyumluluk: _apply_normal_profile -> stealth'e yönlendir
 # ---------------------------------------------------------------------------
 
 def _apply_normal_profile(config: dict) -> tuple[dict, list[str]]:
     """Eski isim; stealth profiline yönlendirildi. Her iki mod da tam kapsamlı."""
     cfg = _apply_stealth_profile(config)
-    return cfg, ["Normal profil kaldırıldı → Stealth profili uygulandı (tam kapsam, yavaş)"]
+    return cfg, ["Normal profil kaldırıldı -> Stealth profili uygulandı (tam kapsam, yavaş)"]
 
 
 # ---------------------------------------------------------------------------

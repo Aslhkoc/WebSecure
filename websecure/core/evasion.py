@@ -9,7 +9,7 @@ Provides self-contained primitives that are used by:
   - Individual scanners       (request_smuggling, crlf_injection, …)
 
 Components
-──────────
+----------
   ChunkedBodyBuilder    — variable-chunk-size body encoding for chunk-boundary
                           payload splitting
   OverlongUTF8Encoder   — generates non-canonical (overlong) UTF-8 byte sequences
@@ -37,16 +37,16 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ChunkedBodyBuilder
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ChunkedBodyBuilder:
     """
     Build a valid chunked-transfer-encoded body from a payload.
 
     WAF evasion value
-    ─────────────────
+    -----------------
     • Splits payload across arbitrary chunk boundaries — WAFs that only inspect
       the first chunk will miss signatures spanning two chunks.
     • Variable chunk sizes defeat static pattern-matching rules.
@@ -107,7 +107,7 @@ class ChunkedBodyBuilder:
 
         Useful for splitting a known WAF signature across chunk boundaries::
 
-            # "UNION" detected by WAF → split so "UNI" is chunk 1, "ON" is chunk 2
+            # "UNION" detected by WAF -> split so "UNI" is chunk 1, "ON" is chunk 2
             build_split_at(b"UNION SELECT 1", split_points=[3])
         """
         if isinstance(payload, str):
@@ -137,9 +137,9 @@ class ChunkedBodyBuilder:
         return self.build(payload, min_chunk=1, max_chunk=1, add_extensions=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # OverlongUTF8Encoder
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class OverlongUTF8Encoder:
     """
@@ -192,7 +192,7 @@ class OverlongUTF8Encoder:
         """
         Return a percent-encoded overlong UTF-8 representation.
 
-        Example: '/' (0x2F) → ``%C0%AF``  (Cloudflare/old IIS bypass)
+        Example: '/' (0x2F) -> ``%C0%AF``  (Cloudflare/old IIS bypass)
         """
         result = []
         for ch in text:
@@ -219,9 +219,9 @@ class OverlongUTF8Encoder:
         return "".join(result)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CRLFInjector
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class CRLFInjector:
     """
@@ -320,9 +320,9 @@ class CRLFInjector:
         return variants
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # EncodingChain
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class EncodingChain:
     """
@@ -334,7 +334,7 @@ class EncodingChain:
     Example::
 
         EncodingChain().apply("<script>", ["html_entity", "url"])
-        # → "%26%2360%3Bscript%26%2362%3B"
+        # -> "%26%2360%3Bscript%26%2362%3B"
     """
 
     _TECHNIQUES = frozenset([
@@ -372,7 +372,7 @@ class EncodingChain:
             return OverlongUTF8Encoder().url_encode_overlong(s)
         if tech == "case_random":
             return "".join(c.upper() if random.random() > 0.5 else c.lower() for c in s)
-        return s  # unknown technique → pass through
+        return s  # unknown technique -> pass through
 
     def generate_variants(self, payload: str, depth: int = 2) -> List[str]:
         """
@@ -403,9 +403,9 @@ class EncodingChain:
         return sorted(variants, key=len)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # PathMutator
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class PathMutator:
     """
@@ -451,7 +451,7 @@ class PathMutator:
         # Tab in path (some WAFs skip; servers normalize)
         variants.append(path.replace("/", "/%09", 1))
 
-        # Trailing-dot segment (Windows IIS normalizes /admin. → /admin)
+        # Trailing-dot segment (Windows IIS normalizes /admin. -> /admin)
         variants.append(path.rstrip("/") + ".")
 
         # Unicode fullwidth slash
@@ -460,9 +460,9 @@ class PathMutator:
         return list(dict.fromkeys(variants))  # deduplicate, preserve order
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ParamFragmentor
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ParamFragmentor:
     """
@@ -476,7 +476,7 @@ class ParamFragmentor:
     Example::
 
         fragment("cmd", "SELECT+*+FROM+users", n=2)
-        → [("cmd", "SELECT+*"), ("cmd", "+FROM+users")]
+        -> [("cmd", "SELECT+*"), ("cmd", "+FROM+users")]
     """
 
     def fragment(self, name: str, payload: str, n: int = 2) -> List[Tuple[str, str]]:
@@ -514,9 +514,9 @@ class ParamFragmentor:
         return {"__proto__": {key: value}}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # JSONUnicodeEscaper
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class JSONUnicodeEscaper:
     """
@@ -569,9 +569,9 @@ class JSONUnicodeEscaper:
         return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HTTP/2 Evasion Helper
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class HTTP2EvasionHelper:
     """
@@ -609,7 +609,7 @@ class HTTP2EvasionHelper:
         HTTP/2 requires lowercase header names; some WAFs inspect casing
         before the HTTP/2 layer normalizes it.
 
-        Example: ``content-type`` → ``Content-Type`` (which httpx will
+        Example: ``content-type`` -> ``Content-Type`` (which httpx will
         lower-case on the wire, but curl_cffi may preserve).
         """
         result: Dict[str, str] = {}
@@ -657,9 +657,9 @@ class HTTP2EvasionHelper:
         return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Module-level singletons + convenience functions
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _chunker  = ChunkedBodyBuilder()
 _overlong = OverlongUTF8Encoder()

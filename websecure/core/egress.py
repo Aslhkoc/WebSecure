@@ -65,7 +65,7 @@ def _egress_health_check(session, cfg: dict, results: dict) -> None:
         # Proxy BYPASS gerekiyorsa call-level override yap
         call_kwargs = dict(timeout=6, allow_redirects=True, verify=ver)
         if any_proxy and not proxy_alive:
-            # Proxy configured fakat **up değil** → bypass
+            # Proxy configured fakat **up değil** -> bypass
             call_kwargs['proxies'] = {}
 
         try:

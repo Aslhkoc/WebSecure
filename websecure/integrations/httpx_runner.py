@@ -364,7 +364,7 @@ class HttpxWrapper(ToolIntegration):
         findings: List[ToolFinding] = []
 
         for pr in probes:
-            # Teknoloji tespiti → bilgi bulgusu
+            # Teknoloji tespiti -> bilgi bulgusu
             if pr.tech:
                 findings.append(ToolFinding(
                     title=f"Teknoloji Tespiti — {', '.join(pr.tech[:5])}",

@@ -4,14 +4,14 @@ websecure.scanners.request_smuggling
 HTTP Request Smuggling detector.
 
 Techniques
-──────────
+----------
   CL.TE  — Front-end uses Content-Length; back-end uses Transfer-Encoding.
   TE.CL  — Front-end uses Transfer-Encoding; back-end uses Content-Length.
   TE.TE  — Both sides support Transfer-Encoding but one can be confused with
             an obfuscated header value.
 
 Detection methods
-─────────────────
+-----------------
   1. Timing attack   — send a request whose CL > actual body; measure whether
                        the back-end replies faster than the timeout (it already
                        processed the TE-terminated body and didn't wait for the
@@ -36,9 +36,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Raw socket helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _make_socket(host: str, port: int, use_ssl: bool, timeout: float = 8.0):
     ctx = ssl.create_default_context()
@@ -107,9 +107,9 @@ def _response_body(raw: bytes) -> bytes:
     return raw[idx + 4 :] if idx != -1 else b""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Finding dataclass
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class SmugglingFinding:
@@ -130,9 +130,9 @@ class SmugglingFinding:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CL.TE Probe
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _probe_cl_te(
     host: str, port: int, use_ssl: bool, path: str, url: str
@@ -180,9 +180,9 @@ def _probe_cl_te(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # TE.CL Probe
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _probe_te_cl(
     host: str, port: int, use_ssl: bool, path: str, url: str
@@ -200,7 +200,7 @@ def _probe_te_cl(
     """
     # Body structure:
     #   8\r\n
-    #   XXXXXXXX\r\n     ← 8 bytes of data
+    #   XXXXXXXX\r\n     <- 8 bytes of data
     #   0\r\n
     #   \r\n
     # CL=4 covers "8\r\n" only; back-end expects 4 bytes, gets the chunk header
@@ -218,7 +218,7 @@ def _probe_te_cl(
     raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=12.0, read_timeout=8.0)
     st = _status_code(raw)
 
-    # If we timed out waiting (elapsed ≈ read_timeout), the back-end was stalling
+    # If we timed out waiting (elapsed ~= read_timeout), the back-end was stalling
     if elapsed >= 7.0:
         return SmugglingFinding(
             technique   = "TE.CL",
@@ -234,9 +234,9 @@ def _probe_te_cl(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # TE.TE Probe (obfuscated Transfer-Encoding)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _TE_OBFUSCATIONS: List[str] = [
     "chunked, identity",          # List value — non-compliant parsers accept
@@ -299,9 +299,9 @@ def _probe_te_te(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Differential evidence probe
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _probe_differential(
     host: str, port: int, use_ssl: bool, path: str, url: str
@@ -376,9 +376,9 @@ def _probe_differential(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# H2.CL Probe (HTTP/2 → HTTP/1.1 downgrade, Content-Length confusion)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# H2.CL Probe (HTTP/2 -> HTTP/1.1 downgrade, Content-Length confusion)
+# -----------------------------------------------------------------------------
 
 def _probe_h2_cl(
     host: str, port: int, use_ssl: bool, path: str, url: str
@@ -392,7 +392,7 @@ def _probe_h2_cl(
     body length, creating a desync.
 
     We simulate this with an HTTP/1.1 request that carries both a TE header
-    and a deliberately short Content-Length, mimicking what a naive H2→H1
+    and a deliberately short Content-Length, mimicking what a naive H2->H1
     downgrade proxy would produce.
     """
     # Smuggled body: "GET /ws-h2cl-probe HTTP/1.1\r\nHost: …\r\n\r\n"
@@ -435,9 +435,9 @@ def _probe_h2_cl(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# H2.TE Probe (HTTP/2 → HTTP/1.1 downgrade, Transfer-Encoding confusion)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# H2.TE Probe (HTTP/2 -> HTTP/1.1 downgrade, Transfer-Encoding confusion)
+# -----------------------------------------------------------------------------
 
 def _probe_h2_te(
     host: str, port: int, use_ssl: bool, path: str, url: str
@@ -482,7 +482,7 @@ def _probe_h2_te(
                 description=(
                     f"Possible H2.TE desynchronisation: server accepted duplicate "
                     f"Transfer-Encoding header ({obf!r}) with status {st}. "
-                    "In H2→H1 downgrade scenarios the front-end strips the second TE "
+                    "In H2->H1 downgrade scenarios the front-end strips the second TE "
                     "header (per RFC 9113) while the back-end processes it, enabling "
                     "request smuggling."
                 ),
@@ -496,9 +496,9 @@ def _probe_h2_te(
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Main entry point
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def run(
     url: str,
@@ -619,7 +619,7 @@ def _h2_settings_ack() -> bytes:
 # ===========================================================================
 class H2CLSmugglingProber(BaseScanner):
     """
-    h2.CL smuggling: HTTP/2 → HTTP/1.1 downgrade with Content-Length desync.
+    h2.CL smuggling: HTTP/2 -> HTTP/1.1 downgrade with Content-Length desync.
     The front-end trusts HTTP/2 framing; back-end uses Content-Length.
     """
     name = "h2_cl_smuggling"
@@ -717,8 +717,8 @@ class H2CLSmugglingProber(BaseScanner):
 # ===========================================================================
 class H2TESmugglingProber(BaseScanner):
     """
-    h2.TE smuggling: HTTP/2 → HTTP/1.1 with obfuscated Transfer-Encoding.
-    Front-end ignores TE (uses h2 framing); back-end uses TE → desync.
+    h2.TE smuggling: HTTP/2 -> HTTP/1.1 with obfuscated Transfer-Encoding.
+    Front-end ignores TE (uses h2 framing); back-end uses TE -> desync.
     """
     name = "h2_te_smuggling"
 
@@ -847,7 +847,7 @@ class H2CUpgradeProber(BaseScanner):
                     "url": f"{'https' if use_tls else 'http'}://{host}{path}",
                     "severity": "High",
                     "description": (
-                        "Server accepted HTTP/1.1 → h2c upgrade (101 Switching Protocols). "
+                        "Server accepted HTTP/1.1 -> h2c upgrade (101 Switching Protocols). "
                         "Attacker can smuggle HTTP/2 frames to back-end through proxy, "
                         "potentially bypassing WAF/access controls."
                     ),

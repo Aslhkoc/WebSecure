@@ -94,7 +94,7 @@ def _call_scanner_if_available(
             logger.warning(f"[scan_runner] {mod_name} import edilemedi: {exc!r}")
             return None
     else:
-        # Fallback: "websecure.scanners.xxx" → "scanners.xxx" → "xxx"
+        # Fallback: "websecure.scanners.xxx" -> "scanners.xxx" -> "xxx"
         if "." in mod_name:
             fallback = mod_name.split(".", 1)[1]
             fb_spec = _spec_exists(fallback)
@@ -281,7 +281,7 @@ class ScanSession:
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_dir=checkpoint_dir,
         )
-        logger.info(f"[scan_runner] Yeni oturum başlatıldı: {scan_id}  →  {target}")
+        logger.info(f"[scan_runner] Yeni oturum başlatıldı: {scan_id}  ->  {target}")
         return session
 
     @classmethod

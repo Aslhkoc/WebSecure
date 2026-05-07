@@ -45,8 +45,8 @@ class AmassWrapper(ToolIntegration):
 
     Parametreler
     ------------
-    binary_path  : Amass binary yolu (None → otomatik keşif)
-    passive_only : True → sadece pasif kaynaklar (aktif DNS yok)
+    binary_path  : Amass binary yolu (None -> otomatik keşif)
+    passive_only : True -> sadece pasif kaynaklar (aktif DNS yok)
     timeout_s    : Maksimum tarama süresi (saniye)
     """
 
@@ -216,7 +216,7 @@ class AmassWrapper(ToolIntegration):
         if config_path and Path(config_path).exists():
             cmd.extend(["-config", config_path])
 
-        logger.info(f"[Amass] enum başlatılıyor → domain={domain}  passive={passive}")
+        logger.info(f"[Amass] enum başlatılıyor -> domain={domain}  passive={passive}")
         proc = subprocess.run(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -309,7 +309,7 @@ class AmassWrapper(ToolIntegration):
     ) -> List[ToolFinding]:
         findings: List[ToolFinding] = []
 
-        # Keşfedilen subdomain'ler → tek bir bilgi bulgusu
+        # Keşfedilen subdomain'ler -> tek bir bilgi bulgusu
         if subdomains:
             findings.append(ToolFinding(
                 title=f"Subdomain Keşfi — {len(subdomains)} subdomain",

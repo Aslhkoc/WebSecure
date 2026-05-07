@@ -544,11 +544,11 @@ class TwoCaptchaProvider(ImageCaptchaSolver):
     2captcha.com API entegrasyonu.
 
     Desteklenen tipler:
-      - Resim CAPTCHA  → solve(img_bytes, cfg)
-      - reCAPTCHA v2   → solve_recaptcha(site_key, site_url, cfg)
-      - reCAPTCHA v3   → solve_recaptcha_v3(site_key, site_url, cfg)
-      - hCaptcha       → solve_hcaptcha(site_key, site_url, cfg)
-      - Turnstile      → solve_turnstile(site_key, site_url, cfg)
+      - Resim CAPTCHA  -> solve(img_bytes, cfg)
+      - reCAPTCHA v2   -> solve_recaptcha(site_key, site_url, cfg)
+      - reCAPTCHA v3   -> solve_recaptcha_v3(site_key, site_url, cfg)
+      - hCaptcha       -> solve_hcaptcha(site_key, site_url, cfg)
+      - Turnstile      -> solve_turnstile(site_key, site_url, cfg)
     """
 
     # --- Ortak polling yardımcısı ---
@@ -696,16 +696,16 @@ class CapSolverProvider(ImageCaptchaSolver):
     CapSolver API entegrasyonu (api.capsolver.com).
 
     CapSolver, 2captcha'dan farklı bir REST yapısı kullanır:
-      POST /createTask  → {"taskId": "..."}
-      POST /getTaskResult → {"status": "ready", "solution": {...}}
+      POST /createTask  -> {"taskId": "..."}
+      POST /getTaskResult -> {"status": "ready", "solution": {...}}
 
     Desteklenen tipler:
-      - Resim CAPTCHA       → ImageToTextTask
-      - reCAPTCHA v2        → ReCaptchaV2TaskProxyless
-      - reCAPTCHA v3        → ReCaptchaV3TaskProxyless
-      - hCaptcha            → HCaptchaTaskProxyless
-      - Cloudflare Turnstile→ AntiCloudflareTask
-      - Funcaptcha          → FunCaptchaTaskProxyless
+      - Resim CAPTCHA       -> ImageToTextTask
+      - reCAPTCHA v2        -> ReCaptchaV2TaskProxyless
+      - reCAPTCHA v3        -> ReCaptchaV3TaskProxyless
+      - hCaptcha            -> HCaptchaTaskProxyless
+      - Cloudflare Turnstile-> AntiCloudflareTask
+      - Funcaptcha          -> FunCaptchaTaskProxyless
     """
 
     def _create_task(self, cfg: CaptchaConfig, task: Dict[str, Any]) -> Optional[str]:
@@ -1459,10 +1459,10 @@ def get_applicable_attacks(context: InputContext) -> List[str]:
 
 def format_analysis_log(name: str, result: ContextAnalysisResult) -> str:
     attacks = ", ".join(result.applicable_attacks) if result.applicable_attacks else "SKIP"
-    info = f"[Context] {name} → {result.context.name}"
+    info = f"[Context] {name} -> {result.context.name}"
     if result.confidence > 0.8:
-        info += " 🔥"
-    info += f" → {attacks}"
+        info += " [fire]"
+    info += f" -> {attacks}"
     if result.skip_reason:
         info += f" ({result.skip_reason})"
     return info

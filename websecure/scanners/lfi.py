@@ -5,8 +5,8 @@ LFI (Local File Inclusion) tam exploit zinciri.
 
 Adim 8 - Siniflar:
   LFIScanner(BaseScanner)        -- orchestrator
-  LFILogPoisoningChain           -- Apache/Nginx log + webshell + LFI trigger → RCE
-  LFIProcEnvironRCE              -- /proc/self/environ injection → RCE
+  LFILogPoisoningChain           -- Apache/Nginx log + webshell + LFI trigger -> RCE
+  LFIProcEnvironRCE              -- /proc/self/environ injection -> RCE
   LFIPHPFilterChain              -- PHP filter chain base64 RCE (convert.* chain)
   LFISSHKeyReader                -- ~/.ssh/id_rsa + known_hosts exfil
   LFIDirectoryTraversalProber    -- ../ traversal, null byte, encoding bypass
@@ -142,7 +142,7 @@ class LFIDirectoryTraversalProber(BaseScanner):
                                 "vuln_type": "LFI — Directory Traversal",
                                 "url": test_url, "severity": "Critical",
                                 "description": (
-                                    f"LFI via path traversal: {payload!r} → {tfile}. "
+                                    f"LFI via path traversal: {payload!r} -> {tfile}. "
                                     f"Content detected: {hit!r}"
                                 ),
                                 "evidence": {"payload": payload, "file": tfile,
@@ -172,7 +172,7 @@ class LFIDirectoryTraversalProber(BaseScanner):
                             finding = {
                                 "vuln_type": "LFI — PHP Wrapper",
                                 "url": test_url, "severity": "Critical",
-                                "description": f"LFI via PHP wrapper {wrapper!r} → {tfile}. Hit: {hit!r}",
+                                "description": f"LFI via PHP wrapper {wrapper!r} -> {tfile}. Hit: {hit!r}",
                                 "evidence": {"wrapper": wrapper, "file": tfile,
                                              "decoded_snippet": decoded[:200]},
                             }
@@ -189,7 +189,7 @@ class LFIDirectoryTraversalProber(BaseScanner):
 # ===========================================================================
 class LFILogPoisoningChain(BaseScanner):
     """
-    LFI → Log Poisoning → RCE zinciri:
+    LFI -> Log Poisoning -> RCE zinciri:
     1. Webshell'i User-Agent ile log dosyasina yaz
     2. LFI ile log dosyasini yukle (PHP execute)
     3. Komut calistirma dogrula
@@ -231,7 +231,7 @@ class LFILogPoisoningChain(BaseScanner):
                         rce_body = getattr(rce_resp, "text", "")[:1000]
                         rce_hit  = re.search(r"uid=\d+\(|root:|www-data", rce_body)
                         finding = {
-                            "vuln_type": "LFI → Log Poisoning → RCE",
+                            "vuln_type": "LFI -> Log Poisoning -> RCE",
                             "url": test_url, "severity": "Critical",
                             "description": (
                                 f"LFI log poisoning chain: webshell injected into {log_path} "
@@ -286,7 +286,7 @@ class LFIProcEnvironRCE(BaseScanner):
                     rce_body = getattr(rce_resp, "text", "")[:500]
                     rce_ok   = bool(re.search(r"uid=\d+\(|root:|www-data", rce_body))
                     finding  = {
-                        "vuln_type": "LFI → /proc/self/environ RCE",
+                        "vuln_type": "LFI -> /proc/self/environ RCE",
                         "url": test_url, "severity": "Critical",
                         "description": (
                             "LFI of /proc/self/environ with webshell in User-Agent. "
@@ -350,7 +350,7 @@ class LFIPHPFilterChain(BaseScanner):
 # ===========================================================================
 class LFISSHKeyReader(BaseScanner):
     """
-    LFI → SSH private key exfiltration:
+    LFI -> SSH private key exfiltration:
     Hedef: ~/.ssh/id_rsa, ~/.ssh/id_ed25519, /root/.ssh/authorized_keys
     """
     name = "lfi_ssh_key"
@@ -376,7 +376,7 @@ class LFISSHKeyReader(BaseScanner):
                         body = getattr(resp, "text", "")[:3000]
                         if re.search(r"-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----|ssh-rsa AAAA", body):
                             finding = {
-                                "vuln_type": "LFI → SSH Private Key Exfiltration",
+                                "vuln_type": "LFI -> SSH Private Key Exfiltration",
                                 "url": test_url, "severity": "Critical",
                                 "description": (
                                     f"LFI successfully read SSH private key: {ssh_file}. "
@@ -402,7 +402,7 @@ class LFISSHKeyReader(BaseScanner):
 class LFIScanner(BaseScanner):
     """
     Adim 8 LFI orchestrator:
-    Traversal → LogPoison → ProcEnviron → PHPFilterChain → SSHKey
+    Traversal -> LogPoison -> ProcEnviron -> PHPFilterChain -> SSHKey
     """
     name = "lfi"
 

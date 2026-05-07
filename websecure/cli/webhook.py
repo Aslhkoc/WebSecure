@@ -9,7 +9,7 @@ Finding ve tarama olaylarını dış sistemlere HTTP webhook olarak iletir.
 * on_critical — sadece Critical/High bulgular için
 * on_complete — tarama tamamlandığında
 * on_error    — hata oluştuğunda
-* Retry: 3 deneme, üstel geri çekilme (1s → 2s → 4s)
+* Retry: 3 deneme, üstel geri çekilme (1s -> 2s -> 4s)
 * HMAC-SHA256 imzalama (opsiyonel — X-WebSecure-Signature header)
 * Asenkron gönderim (arka plan thread)
 * Çoklu endpoint desteği
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAX_RETRIES   = 3
-_RETRY_BASE_S  = 1.0      # 1s → 2s → 4s
+_RETRY_BASE_S  = 1.0      # 1s -> 2s -> 4s
 _TIMEOUT_S     = 10
 _QUEUE_SIZE    = 1000
 _WORKER_COUNT  = 2
@@ -158,7 +158,7 @@ class WebhookSender:
                 with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
                     if 200 <= resp.status < 300:
                         logger.debug(
-                            f"[Webhook] ✓ {event.event_type} → {endpoint.url}  "
+                            f"[Webhook] [OK] {event.event_type} -> {endpoint.url}  "
                             f"HTTP {resp.status}"
                         )
                         return True

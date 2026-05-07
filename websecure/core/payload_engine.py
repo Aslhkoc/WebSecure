@@ -5,11 +5,11 @@ websecure.core.payload_engine
 
 Bileşenler
 ----------
-* **CMSFingerprinter**   — Tespit edilen teknoloji → CMS/framework eşleme
+* **CMSFingerprinter**   — Tespit edilen teknoloji -> CMS/framework eşleme
 * **CMSPayloadProfile**  — CMS özel payload profili (WP, Drupal, Laravel vb.)
-* **PayloadMutationEngine** — Base payload → n mutant varyant üretici
+* **PayloadMutationEngine** — Base payload -> n mutant varyant üretici
 * **PayloadScorer**      — Başarı geçmişi tabanlı Bayesian payload sıralaması
-* **CVEPayloadMap**      — CVE ID → PoC payload haritası
+* **CVEPayloadMap**      — CVE ID -> PoC payload haritası
 * **EncodingVariantGenerator** — UTF-16, Base64, HTML entity, URL çift kodlama vb.
 * **WordlistUpdater**    — Git/HTTP wordlist güncelleme mekanizması
 * **PayloadEngine**      — Tüm bileşenleri birleştiren Facade
@@ -75,11 +75,11 @@ class CMSFingerprinter:
     ```python
     fp = CMSFingerprinter()
     cms = fp.detect(["WordPress/6.4", "PHP/8.2", "Apache"])
-    # cms → "wordpress"
+    # cms -> "wordpress"
     ```
     """
 
-    # tech_tag (küçük harf, substring) → cms_name
+    # tech_tag (küçük harf, substring) -> cms_name
     _CMS_MAP: Dict[str, str] = {
         # WordPress
         "wordpress":  "wordpress",
@@ -145,7 +145,7 @@ class CMSFingerprinter:
             tag_lower = (tag or "").lower()
             for key, cms in self._CMS_MAP.items():
                 if key in tag_lower:
-                    logger.debug(f"[CMSFingerprint] Tespit: {cms!r} ← tag={tag!r}")
+                    logger.debug(f"[CMSFingerprint] Tespit: {cms!r} <- tag={tag!r}")
                     return cms
         return None
 
@@ -489,7 +489,7 @@ class CommentInjectionMutation(MutationStrategy):
     def apply(self, payload: str) -> List[str]:
         variants = []
         p = payload
-        # SQL comment: SELECT → SE/**/LECT
+        # SQL comment: SELECT -> SE/**/LECT
         for kw in self._SQL_KEYWORDS:
             if kw in p.upper():
                 variants.append(re.sub(re.escape(kw), kw[:2] + "/**/" + kw[2:], p, flags=re.IGNORECASE, count=1))
@@ -580,9 +580,9 @@ class UnicodeEscapeMutation(MutationStrategy):
         )
         if escaped != payload:
             variants.append(escaped)
-        # Homoglyph replacement (örn. а→a, Cyrillic)
-        # Basit: 'a' → 'а' (Kiril a)
-        homogl = payload.replace("a", "а").replace("e", "е")
+        # Homoglyph replacement (örn. a->a, Cyrillic)
+        # Basit: 'a' -> 'a' (Kiril a)
+        homogl = payload.replace("a", "a").replace("e", "e")
         if homogl != payload:
             variants.append(homogl)
         return variants[:3]
@@ -610,11 +610,11 @@ class ConcatenationMutation(MutationStrategy):
         if len(payload) < 6:
             return []
         mid = len(payload) // 2
-        # SQL: 'ab' → 'a'||'b'
+        # SQL: 'ab' -> 'a'||'b'
         sql_concat = f"'{payload[:mid]}'||'{payload[mid:]}'"
-        # JS: 'ab' → 'a'+'b'
+        # JS: 'ab' -> 'a'+'b'
         js_concat = f"'{payload[:mid]}'"+"+'"+ payload[mid:]+"'"
-        # PHP: 'ab' → 'a'.'b'
+        # PHP: 'ab' -> 'a'.'b'
         php_concat = f"'{payload[:mid]}'"+"."+"'{payload[mid:]}'"
         return [sql_concat, js_concat][:2]
 
@@ -747,7 +747,7 @@ class PayloadScorer:
     -------------
     score = (success_count + alpha) / (total_count + alpha + beta)
 
-    alpha=1, beta=1 → Laplace düzeltmesi (sıfır-deneme sorunu önleme)
+    alpha=1, beta=1 -> Laplace düzeltmesi (sıfır-deneme sorunu önleme)
     """
 
     _ALPHA = 1.0   # Bayesian prior — başarı
@@ -799,7 +799,7 @@ class PayloadScorer:
         top_k: Optional[int] = None,
     ) -> List[str]:
         """
-        Payload listesini başarı skoruna göre sırala (yüksek → düşük).
+        Payload listesini başarı skoruna göre sırala (yüksek -> düşük).
 
         Parametreler
         ------------
@@ -890,7 +890,7 @@ class PayloadScorer:
 # 5. CVE Payload Map
 # ============================================================================
 
-# Yerleşik CVE → PoC payload haritası (en yaygın web CVE'leri)
+# Yerleşik CVE -> PoC payload haritası (en yaygın web CVE'leri)
 _BUILTIN_CVE_PAYLOADS: Dict[str, Dict[str, Any]] = {
     "CVE-2021-44228": {
         "name": "Log4Shell",
@@ -1007,7 +1007,7 @@ _BUILTIN_CVE_PAYLOADS: Dict[str, Dict[str, Any]] = {
 
 class CVEPayloadMap:
     """
-    CVE ID → PoC payload haritası.
+    CVE ID -> PoC payload haritası.
 
     Yerleşik CVE listesi + harici JSON dosyasından yükleme destekler.
     """
@@ -1194,7 +1194,7 @@ class EncodingVariantGenerator:
         return "".join(f"\\x{ord(c):02x}" if ord(c) < 128 and c in "<>\"';&/ " else c for c in p)
 
     def _enc_utf16le(self, p: str) -> str:
-        """UTF-16 LE BOM + encoded bytes → %XX%XX formatı."""
+        """UTF-16 LE BOM + encoded bytes -> %XX%XX formatı."""
         raw = p.encode("utf-16-le")
         return "".join(f"%{b:02X}" for b in raw)
 
@@ -1276,8 +1276,8 @@ class WordlistUpdater:
 
         Parametreler
         ------------
-        sources : None → tüm kaynaklar; list → sadece bu kaynaklar
-        dry_run : True → sadece rapor ver, dosya değiştirme
+        sources : None -> tüm kaynaklar; list -> sadece bu kaynaklar
+        dry_run : True -> sadece rapor ver, dosya değiştirme
 
         Döndürür
         --------
@@ -1417,8 +1417,8 @@ class PayloadEngine:
     """
     Tüm payload alt sistemlerini birleştiren Facade sınıfı.
 
-    Sorumluluğu: CMS tespiti → profil seçimi → payload yükleme →
-    mutasyon → encoding → sıralama → hazır payload listesi üretimi.
+    Sorumluluğu: CMS tespiti -> profil seçimi -> payload yükleme ->
+    mutasyon -> encoding -> sıralama -> hazır payload listesi üretimi.
 
     Kullanım
     --------
@@ -1476,9 +1476,9 @@ class PayloadEngine:
         tech_tags        : Tespit edilen teknoloji etiketleri
         base_payloads    : Ek temel payload'lar
         cve_ids          : Eklenmesi istenen CVE payload'ları
-        apply_mutations  : True → PayloadMutationEngine ile varyantlar ekle
-        apply_encoding   : True → EncodingVariantGenerator ile encoding varyantları
-        rank_by_score    : True → PayloadScorer ile sıralama yap
+        apply_mutations  : True -> PayloadMutationEngine ile varyantlar ekle
+        apply_encoding   : True -> EncodingVariantGenerator ile encoding varyantları
+        rank_by_score    : True -> PayloadScorer ile sıralama yap
         callback_url     : OOB callback URL (Log4Shell vb. için)
         limit            : Maksimum toplam payload sayısı
         mutation_variants: Her payload için maksimum mutant sayısı

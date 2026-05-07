@@ -163,7 +163,7 @@ class KatanaWrapper(ToolIntegration):
                 known_files=known_files,
             )
 
-            logger.info(f"[katana] Crawling → {target}  depth={depth}  js={js_crawl}")
+            logger.info(f"[katana] Crawling -> {target}  depth={depth}  js={js_crawl}")
             proc = subprocess.run(
                 cmd,
                 stdout=subprocess.DEVNULL,

@@ -2,7 +2,7 @@
 websecure.reporters.pdf
 ------------------------
 Professional PDF report generator.
-Uses Jinja2 for HTML templating and WeasyPrint for HTML→PDF conversion.
+Uses Jinja2 for HTML templating and WeasyPrint for HTML->PDF conversion.
 """
 from __future__ import annotations
 import logging

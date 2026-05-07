@@ -218,9 +218,9 @@ class XXEErrorBasedExtractor(BaseScanner):
 class XXEOOBDataExfilChain(BaseScanner):
     """
     OOB (Out-of-Band) XXE data exfiltration:
-    - DNS OOB (canary subdomain → DNS lookup tespiti)
-    - FTP OOB (file content → ftp:// channel)
-    - HTTP OOB (file content → http://attacker/exfil?d=...)
+    - DNS OOB (canary subdomain -> DNS lookup tespiti)
+    - FTP OOB (file content -> ftp:// channel)
+    - HTTP OOB (file content -> http://attacker/exfil?d=...)
     """
     name = "xxe_oob"
 
@@ -259,7 +259,7 @@ class XXEOOBDataExfilChain(BaseScanner):
             if resp is None:
                 return None
             body = getattr(resp, "text", "")[:1000]
-            # If request takes longer → DNS resolution attempted (OOB)
+            # If request takes longer -> DNS resolution attempted (OOB)
             if elapsed > 3 or oob_url in body:
                 return {
                     "vuln_type": "XXE — OOB DNS Exfiltration",
@@ -333,7 +333,7 @@ class XXEParameterEntityProber(BaseScanner):
     """
     Parameter entity injection:
     - Nested parameter entities (Billion Laughs lite — max 3 levels, safe)
-    - External parameter entity → /etc/passwd fetch
+    - External parameter entity -> /etc/passwd fetch
     - Parameter entity in attribute value
     """
     name = "xxe_param_entity"
@@ -432,7 +432,7 @@ class XXEParameterEntityProber(BaseScanner):
 class XXEScanner(BaseScanner):
     """
     Adim 7 XXE orchestrator:
-    ErrorBasedExtractor → OOBDataExfilChain → ParameterEntityProber
+    ErrorBasedExtractor -> OOBDataExfilChain -> ParameterEntityProber
     """
     name = "xxe"
 

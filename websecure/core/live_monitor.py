@@ -36,27 +36,27 @@ class LiveMonitor:
     _B   = "\033[1m"    # bold
     _RS  = "\033[0m"    # reset
 
-    # Teknik → simge eşlemesi
+    # Teknik -> simge eşlemesi
     _TECH_ICON: Dict[str, str] = {
-        "sql":       "💉",
-        "sqli":      "💉",
-        "xss":       "⚡",
-        "ssti":      "🔥",
-        "ssrf":      "🌐",
-        "lfi":       "📂",
-        "rce":       "💥",
-        "idor":      "🔑",
-        "csrf":      "🔓",
-        "crlf":      "↩",
-        "smuggling": "🚢",
-        "race":      "🏁",
-        "prototype": "🧬",
-        "jwt":       "🎫",
-        "upload":    "📤",
-        "redirect":  "↪",
-        "discovery": "🔍",
-        "crawler":   "🕷",
-        "nmap":      "🗺",
+        "sql":       "[inject]",
+        "sqli":      "[inject]",
+        "xss":       "[!]",
+        "ssti":      "[fire]",
+        "ssrf":      "[web]",
+        "lfi":       "[dir]",
+        "rce":       "[!]",
+        "idor":      "[key]",
+        "csrf":      "[unlock]",
+        "crlf":      "<-",
+        "smuggling": "[ship]",
+        "race":      "[done]",
+        "prototype": "[bio]",
+        "jwt":       "[ticket]",
+        "upload":    "[send]",
+        "redirect":  "->",
+        "discovery": "[search]",
+        "crawler":   "[spider]",
+        "nmap":      "[map]",
     }
 
     def __init__(self, verbose: bool = True) -> None:
@@ -81,7 +81,7 @@ class LiveMonitor:
         else:
             print(line)
 
-    # ── public API ────────────────────────────────────────────────────────
+    # -- public API --------------------------------------------------------
 
     def log_request(
         self,
@@ -101,7 +101,7 @@ class LiveMonitor:
 
         short_url = url if len(url) <= 80 else url[:77] + "…"
         tech      = phase.lower()
-        icon      = self._TECH_ICON.get(tech, "→")
+        icon      = self._TECH_ICON.get(tech, "->")
 
         parts = [
             f"{self._DIM}[{self._ts()}]{self._RS}",
@@ -121,10 +121,10 @@ class LiveMonitor:
         """IP / proxy rotasyonu olayını yazar."""
         with self._lock:
             self._counters["rotations"] += 1
-        proxy_hint = f" → {proxy}" if proxy else ""
+        proxy_hint = f" -> {proxy}" if proxy else ""
         self._print(
             f"{self._DIM}[{self._ts()}]{self._RS}  "
-            f"{self._M}↻ IP ROTATED{self._RS}  "
+            f"{self._M}-> IP ROTATED{self._RS}  "
             f"req#{req_count}{proxy_hint}"
         )
 
@@ -133,7 +133,7 @@ class LiveMonitor:
         short = url if len(url) <= 70 else url[:67] + "…"
         self._print(
             f"{self._DIM}[{self._ts()}]{self._RS}  "
-            f"{self._Y}⚠ BAN DETECTED{self._RS}  "
+            f"{self._Y}[!] BAN DETECTED{self._RS}  "
             f"HTTP {status}  {short}"
         )
 
@@ -141,7 +141,7 @@ class LiveMonitor:
         """Checkpoint'ten devam olayını yazar."""
         self._print(
             f"{self._DIM}[{self._ts()}]{self._RS}  "
-            f"{self._G}⟳ RESUME{self._RS}  "
+            f"{self._G}-> RESUME{self._RS}  "
             f"Checkpoint'ten devam: {pages_crawled} sayfa tarandı"
             + (f"  son={url}" if url else "")
         )
@@ -150,7 +150,7 @@ class LiveMonitor:
         """Tarama fazı değişikliğini yazar."""
         self._print(
             f"\n{self._DIM}[{self._ts()}]{self._RS}  "
-            f"{self._B}{self._C}{'─'*10} PHASE: {phase.upper()} {'─'*10}{self._RS}\n"
+            f"{self._B}{self._C}{'-'*10} PHASE: {phase.upper()} {'-'*10}{self._RS}\n"
         )
 
     def log_finding(self, bucket: str, item: dict) -> None:
@@ -166,26 +166,26 @@ class LiveMonitor:
         payload = str(item.get("payload") or "")[:60]
 
         if "critical" in sev or "kritik" in sev:
-            color, icon = self._R, "🔴"
+            color, icon = self._R, "[Critical]"
         elif "high" in sev or "yüksek" in sev:
-            color, icon = self._Y, "🟠"
+            color, icon = self._Y, "[High]"
         elif "medium" in sev or "orta" in sev:
-            color, icon = self._C, "🟡"
+            color, icon = self._C, "[Medium]"
         else:
-            color, icon = self._G, "🟢"
+            color, icon = self._G, "[Info]"
 
         # Ekstra bilgi: message veya details (url yoksa göster)
         msg = str(item.get("message") or item.get("details") or "")[:120]
 
         self._print(
             f"\n{color}{self._B}"
-            f"{'▓'*60}\n"
+            f"{'#'*60}\n"
             f"  {icon} VULN #{n}: {vtype.upper()}  [{sev.upper()}]\n"
             + (f"  URL    : {url}\n" if url else "")
             + (f"  PARAM  : {param}\n" if param else "")
             + (f"  PAYLOAD: {payload}\n" if payload else "")
             + (f"  DETAY  : {msg}\n" if msg and not url else "")
-            + f"{'▓'*60}"
+            + f"{'#'*60}"
             f"{self._RS}\n"
         )
 
@@ -247,20 +247,20 @@ def console_alert(bucket: str, item: Dict[str, Any]) -> None:
 
     icon = "[!]"
     if "critical" in sev:
-        icon = "[⚡]"
+        icon = "[[!]]"
     elif "high" in sev:
-        icon = "[🔥]"
+        icon = "[[fire]]"
     elif "medium" in sev:
-        icon = "[⚠️]"
+        icon = "[[!]]"
 
     title   = item.get("type") or item.get("title") or "Vulnerability"
     url     = item.get("url") or item.get("target") or "N/A"
     payload = item.get("payload") or "N/A"
 
     print(f"\n{color}{BOLD}{icon} {title.upper()} DETECTED!{RESET}")
-    print(f"{color} ├─ Target:  {url}{RESET}")
-    print(f"{color} ├─ Payload: {payload}{RESET}")
-    print(f"{color} └─ Severity: {sev.upper()}{RESET}\n")
+    print(f"{color} +- Target:  {url}{RESET}")
+    print(f"{color} +- Payload: {payload}{RESET}")
+    print(f"{color} +- Severity: {sev.upper()}{RESET}\n")
 
 
 __all__ = [

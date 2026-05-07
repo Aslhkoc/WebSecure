@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Severity → CVSS ağırlığı
+# Severity -> CVSS ağırlığı
 # ---------------------------------------------------------------------------
 
 _CVSS_WEIGHTS: Dict[str, float] = {
@@ -85,7 +85,7 @@ class ScoreSnapshot:
 
     @property
     def risk_level(self) -> str:
-        """Skor → risk seviyesi etiketi."""
+        """Skor -> risk seviyesi etiketi."""
         if self.score >= 90:
             return "Minimal"
         if self.score >= 70:

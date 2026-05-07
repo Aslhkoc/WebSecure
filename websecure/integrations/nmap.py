@@ -2,7 +2,7 @@
 WebSecure — Nmap Entegrasyonu (Maksimum Kapsam)
 
 Tarama Stratejisi (2 Faz):
-  Faz 1 — Port Keşfi : -p- --open -T4  → tüm 65535 TCP portunu hızlıca tara, açıkları bul
+  Faz 1 — Port Keşfi : -p- --open -T4  -> tüm 65535 TCP portunu hızlıca tara, açıkları bul
   Faz 2 — Derin Analiz: bulunan portlarda -sV --version-intensity 9 + kapsamlı NSE scriptler
 
 Stealth profilde:
@@ -141,7 +141,7 @@ class NmapWrapper:
     """
     İki fazlı, servis-farkındalıklı, UDP destekli maksimum Nmap tarayıcısı.
 
-    Faz 1 — Hızlı keşif  : tüm TCP portlarını hızla tara → açık portlar tespit
+    Faz 1 — Hızlı keşif  : tüm TCP portlarını hızla tara -> açık portlar tespit
     Faz 2 — Derin analiz : tespit edilen portlara -sV + servis özelinde NSE scriptler
     UDP   — (root) kritik UDP servisleri
     """
@@ -185,9 +185,9 @@ class NmapWrapper:
              proxy: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Akıllı iki fazlı tarama.
-        mode="aggressive" → 2-faz + UDP (root varsa)
-        mode="stealth"    → TCP connect, yavaş, gizli
-        mode="fast"       → tek faz, hızlı
+        mode="aggressive" -> 2-faz + UDP (root varsa)
+        mode="stealth"    -> TCP connect, yavaş, gizli
+        mode="fast"       -> tek faz, hızlı
         """
         if not self.is_available():
             print("\033[31m[Nmap] Bulunamadı. sudo apt install nmap\033[0m")
@@ -218,7 +218,7 @@ class NmapWrapper:
                         proxy: Optional[str] = None, timeout: int = 900,
                         all_ports: bool = False) -> List[Dict[str, Any]]:
         """
-        Faz 1: Tüm TCP portlarını hızlıca tara → açık portları bul
+        Faz 1: Tüm TCP portlarını hızlıca tara -> açık portları bul
         Faz 2: Bulunan portlarda derin servis + NSE script analizi
         UDP:   Root varsa kritik UDP portları
         """

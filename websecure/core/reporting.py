@@ -90,7 +90,7 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
       2. Deduplicate findings by (type, url, parameter)
       3. Correlate with OAST events — mark verified=True on token match
       4. Apply CVSS v3.1 scoring via cvss_scorer if available
-      5. Sort by CVSS score descending (Critical → Info)
+      5. Sort by CVSS score descending (Critical -> Info)
     """
     # 0. FP filtreleme (Adım 20)
     try:
@@ -102,7 +102,7 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
     # 1. Deduplicate
     unique = _dedupe_findings(findings)
 
-    # 2. Build OAST event index: token string → event dict
+    # 2. Build OAST event index: token string -> event dict
     oast_index: Dict[str, Dict] = {}
     for ev in (oast_events or []):
         ev_str = str(ev)
@@ -143,7 +143,7 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
                              "OAST server not configured — out-of-band callback verification unavailable. "
                              "Finding is potential only; manual confirmation required.")
             else:
-                # OAST available but no token matched → still unconfirmed
+                # OAST available but no token matched -> still unconfirmed
                 f.setdefault("confidence", "medium")
                 f.setdefault("verification_note",
                              "No OAST callback received for this finding. "
@@ -155,7 +155,7 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
     except Exception as exc:
         log_warn(f"[reporting] CVSS scoring skipped: {exc!r}")
 
-    # 5. Sort: Critical (9+) → High (7+) → Medium (4+) → Low → Info
+    # 5. Sort: Critical (9+) -> High (7+) -> Medium (4+) -> Low -> Info
     _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3,
                        "Info": 4, "Informational": 4}
 
@@ -433,7 +433,7 @@ def render_auth_coverage_md():
     c = AUTH_COVERAGE.counters
     total = sum(c.values()) or 0
     return ("\n### Auth Coverage Delta\n"
-            f"- WAF: {c['WAF']}\n- Auth: {c['Auth']}\n- Rate‑Limit: {c['RateLimit']}\n"
+            f"- WAF: {c['WAF']}\n- Auth: {c['Auth']}\n- Rate-Limit: {c['RateLimit']}\n"
             f"- Toplam 401/403: {total}\n")
 
 
@@ -511,7 +511,7 @@ def _normalize_item(item: Any) -> Dict[str, Any]:
     if hasattr(item, "__dict__") and isinstance(getattr(item, "__dict__"), dict):
         return dict(vars(item))
 
-    # Bytes → metin (hatasız, ignore)
+    # Bytes -> metin (hatasız, ignore)
     if isinstance(item, (bytes, bytearray)):
         return {"message": bytes(item).decode("utf-8", "ignore")}
 
@@ -791,7 +791,7 @@ def _generate_charts(results: Dict, out_dir: str) -> List[Dict[str, str]]:
 
 # -------------------- Markdown Render --------------------
 def _percentile(arr, p):
-    # Guard: boş veya sayıya indirgenemeyen dizi → 0.0
+    # Guard: boş veya sayıya indirgenemeyen dizi -> 0.0
     if not arr:
         return 0.0
 
@@ -980,7 +980,7 @@ def _render_ports(results: Dict) -> str:
                 parts.append(f"{key}: {first}")
         for k, v in scripts.items():
             if v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-")):
-                parts.append(f"⚠️ {k}: {v.strip().split(chr(10))[0][:120]}")
+                parts.append(f"[!] {k}: {v.strip().split(chr(10))[0][:120]}")
         return " // ".join(parts)
 
     for k in cand_keys:
@@ -1052,15 +1052,15 @@ def _render_ssl_table(results: Dict) -> str:
 
     # Status
     if cert.get("self_signed"):
-        valid_icon = "⚠️ Self-Signed (Güvensiz)"
+        valid_icon = "[!] Self-Signed (Güvensiz)"
     elif cert.get("valid"):
-        valid_icon = "✅ Geçerli"
+        valid_icon = "[OK] Geçerli"
     else:
-        valid_icon = "❌ Geçersiz"
+        valid_icon = "[X] Geçersiz"
     out.append(f"| Durum | {valid_icon} |")
 
     # HSTS
-    hsts = "✅ Aktif" if (cert.get("hsts") or tls.get("hsts")) else "❌ Eksik"
+    hsts = "[OK] Aktif" if (cert.get("hsts") or tls.get("hsts")) else "[X] Eksik"
     out.append(f"| HSTS | {hsts} |")
 
     # Certificate fields
@@ -1073,9 +1073,9 @@ def _render_ssl_table(results: Dict) -> str:
     days = cert.get("days_remaining")
     if isinstance(days, int):
         if days < 0:
-            days_str = f"❌ **Süresi Dolmuş** ({abs(days)} gün önce)"
+            days_str = f"[X] **Süresi Dolmuş** ({abs(days)} gün önce)"
         elif days < 30:
-            days_str = f"⚠️ {days} gün (Kritik — Yakında Doluyor)"
+            days_str = f"[!] {days} gün (Kritik — Yakında Doluyor)"
         else:
             days_str = f"{days} gün"
     else:
@@ -1185,7 +1185,7 @@ def _render_markdown_report_inline(results: Dict) -> str:
     lines.append("### Saldırı Başarı Özeti")
     lines.append("")
     lines.append(f"- Denenen modül/faz: **{len(tried)}**")
-    lines.append(f"- Başarılı (en az 1 bulgu üreten): **{len(success)}**  → **%{pct:.1f}**")
+    lines.append(f"- Başarılı (en az 1 bulgu üreten): **{len(success)}**  -> **%{pct:.1f}**")
     if tried:
         lines.append(f"- Dene(n)en: " + ", ".join(f"`{tried_map[k]}`" for k in tried))
     if success:
@@ -2659,7 +2659,7 @@ def _e_autofill_repro_steps(it: Dict[str, Any]) -> list[str]:
     ev = it.get("evidence") or {}
     if isinstance(ev, dict) and (ev.get("callback_type") or ev.get("indicator")):
         ind = ev.get("indicator") or ev.get("callback_type")
-        steps.append(f"4) Doğrulama: Gözlenen belirti → {ind}")
+        steps.append(f"4) Doğrulama: Gözlenen belirti -> {ind}")
     return steps
 
 
@@ -2767,7 +2767,7 @@ def _e_table_ports(results: Dict) -> str:
         for k, v in scripts.items():
             if k not in parts and v and any(w in v.lower() for w in ("vuln", "vulnerable", "cve-", "exploit")):
                 first_line = v.strip().split("\n")[0].strip()
-                parts.append(f"⚠️ **{k}**: {first_line[:120]}")
+                parts.append(f"[!] **{k}**: {first_line[:120]}")
         return " | ".join(parts)
 
     rows: list[dict] = []
@@ -2844,7 +2844,7 @@ def _e_table_tls_headers(results: Dict[str, Any]) -> str:
             "host": tls_raw.get("host") or cert.get("host") or "",
             "tls_version": cert.get("tls_version") or tls_raw.get("tls_version") or "",
             "cn": cert.get("subject_CN") or cert.get("common_name") or cert.get("cn") or "",
-            "status": "Geçerli ✓" if cert.get("valid") else ("Geçersiz ✗" if "valid" in cert else ""),
+            "status": "Geçerli [OK]" if cert.get("valid") else ("Geçersiz [FAIL]" if "valid" in cert else ""),
             "issues": tls_raw.get("issues") or [],
         })
     elif isinstance(tls_raw, list):
@@ -2858,7 +2858,7 @@ def _e_table_tls_headers(results: Dict[str, Any]) -> str:
                     "host": item.get("host") or cert.get("host") or "",
                     "tls_version": cert.get("tls_version") or item.get("tls_version") or "",
                     "cn": cert.get("subject_CN") or cert.get("common_name") or cert.get("cn") or "",
-                    "status": "Geçerli ✓" if cert.get("valid") else ("Geçersiz ✗" if "valid" in cert else ""),
+                    "status": "Geçerli [OK]" if cert.get("valid") else ("Geçersiz [FAIL]" if "valid" in cert else ""),
                     "issues": item.get("issues") or [],
                 })
             elif item.get("tls_version") or item.get("host") or item.get("cn"):
@@ -2973,7 +2973,7 @@ def _e_glossary() -> str:
         "- **XSS (Cross-Site Scripting):** Zararlı JavaScript’in kullanıcı tarayıcısında çalıştırılmasıyla oturum çalma, sahte arayüz vb.\n"
         "- **SSRF (Server-Side Request Forgery):** Sunucunun iç ağ/metadata gibi beklenmeyen hedeflere istek atmaya zorlanması.\n"
         "- **XXE (XML External Entity):** XML parser’ın harici entity okuması sonucu dosya sızdırma veya SSRF etkisine yol açması.\n"
-        "- **JWT:** JSON Web Token üzerinde doğrulama/alg/manipülasyon zaafiyetleri (ör. RS256→HS256, kid injection).\n"
+        "- **JWT:** JSON Web Token üzerinde doğrulama/alg/manipülasyon zaafiyetleri (ör. RS256->HS256, kid injection).\n"
         "- **NoSQL Injection:** Şema-esnek veritabanlarında (Mongo/Elasticsearch vb.) operatör enjeksiyonu ile yetkisiz veri erişimi.\n"
         "- **GraphQL:** Şema/rol sızıntısı, alias-storm, persisted query kötüye kullanımı, introspection kaçakları vb.\n"
     )
@@ -3277,11 +3277,11 @@ def _pull_metrics(ctx) -> dict:
 
 
 # ===========================================================================
-# CVSS scoring → websecure/core/cvss.py'e taşındı
+# CVSS scoring -> websecure/core/cvss.py'e taşındı
 from websecure.core.cvss import CVSSScorer, score_findings, _severity_label
 
 # ===========================================================================
-# HTML Dashboard → websecure/reporters/html_dashboard.py'e taşındı
+# HTML Dashboard -> websecure/reporters/html_dashboard.py'e taşındı
 from websecure.reporters.html_dashboard import render_html_dashboard
 
 
@@ -3523,9 +3523,9 @@ class ComplianceReportBuilder:
         for fw, data in compliance_report.items():
             score = data["compliance_score"]
             lines.append(f"### {fw} — {score:.0f}% Uyumlu")
-            lines.append(f"✅ {data['pass_count']} PASS  ❌ {data['fail_count']} FAIL\n")
+            lines.append(f"[OK] {data['pass_count']} PASS  [X] {data['fail_count']} FAIL\n")
             for ctrl in data["controls"]:
-                icon = "✅" if ctrl["status"] == "PASS" else "❌"
+                icon = "[OK]" if ctrl["status"] == "PASS" else "[X]"
                 lines.append(f"- {icon} **{ctrl['id']}** {ctrl['name']} ({ctrl['affected_count']} bulgu)")
             lines.append("")
         return "\n".join(lines)
@@ -3771,7 +3771,7 @@ class PDFReportBuilder:
             for fw, data in compliance_report.items():
                 compliance_section += (
                     f"<h3>{html_esc(fw)}: {data['compliance_score']:.0f}% Uyumlu</h3>"
-                    f"<p>✅ {data['pass_count']} PASS &nbsp; ❌ {data['fail_count']} FAIL</p>"
+                    f"<p>[OK] {data['pass_count']} PASS &nbsp; [X] {data['fail_count']} FAIL</p>"
                 )
 
         return f"""<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8">
@@ -3790,7 +3790,7 @@ class PDFReportBuilder:
   .crit{{background:#ffcdd2}} .high{{background:#ffe0b2}}
   .med{{background:#fff9c4}} .low{{background:#c8e6c9}}
 </style></head><body>
-<h1>🔒 {html_esc(self.title)}</h1>
+<h1>[lock] {html_esc(self.title)}</h1>
 <p><i>Oluşturulma: {_dt.now().strftime('%Y-%m-%d %H:%M')}</i></p>
 <h2>Yönetici Özeti</h2>
 <div>

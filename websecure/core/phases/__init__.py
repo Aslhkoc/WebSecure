@@ -341,9 +341,9 @@ def phase_portscan(ctx: dict):
     """
     Nmap port taraması.
     Tarama modu config'deki scan_profile'a göre otomatik seçilir:
-      STEALTH  → stealth mod (SYN -T2)
-      NORMAL   → standard (servis+script)
-      AGGRESSIVE → deep (OS+script+aggressive)
+      STEALTH  -> stealth mod (SYN -T2)
+      NORMAL   -> standard (servis+script)
+      AGGRESSIVE -> deep (OS+script+aggressive)
     """
     nmap_cfg = ctx.get("config", {}).get("nmap", {}) or {}
     if not nmap_cfg.get("enabled", True):
@@ -842,7 +842,7 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
 
-    # OAST taraması başlamadan interactsh'e kayıt ol → subdomain al
+    # OAST taraması başlamadan interactsh'e kayıt ol -> subdomain al
     oast_domain = _setup_oast_domain(ctx)
 
     scan = getattr(mod, "scan")
@@ -1331,18 +1331,6 @@ def _runner_scanners_graphql(ctx) -> None:
     res = scanner.run(base_url)
     _merge_results(ctx, res)
 
-def _runner_scanners_ws_fuzz(ctx) -> None:
-    mod = _opt_import("scanners.ws_fuzz")
-    if not mod or not hasattr(mod, "run"):
-        return
-    base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
-    sess = getattr(ctx, "session", None)
-    # run(url, session, debug, auth_ctx) -> List[Dict]
-    findings = mod.run(base_url, session=sess, debug=bool(getattr(ctx, "debug", False)), auth_ctx=getattr(ctx, "auth_ctx", None))
-    if findings:
-        for f in findings:
-            add_result("ws_fuzz", f)
-
 def _runner_scanners_tls(ctx) -> None:
     # Use scanners.tls if available
     mod = _opt_import("scanners.tls")
@@ -1509,7 +1497,7 @@ def _offensive_phases(ctx) -> List[Phase]:
     off = cfg.get("offensive", {}) if isinstance(cfg, dict) else {}
 
     base_enabled = bool(_get(off, "enabled", True))
-    # aggressive override: ctx.mode AGGRESSIVE ⇒ always evaluate offensive set
+    # aggressive override: ctx.mode AGGRESSIVE => always evaluate offensive set
     mode = str(getattr(ctx, "mode", getattr(getattr(ctx, "config", {}), "mode", "")).upper())
     if mode in ("AGGRESSIVE","DEEP"):
         base_enabled = True
@@ -1702,7 +1690,7 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
     base: List[Phase] = []
     existing = getattr(ctx, "base_plan", None)
     if isinstance(existing, list):
-    # Plan: discovery → headers → tls → offensive → finalize
+    # Plan: discovery -> headers -> tls -> offensive -> finalize
         for item in existing:
             if isinstance(item, Phase):
                 base.append(item)
@@ -2300,7 +2288,7 @@ def run_discovery_extended(ctx) -> None:
         
         ctx.results = current_res
 
-    # ── Endpoint Seeding: probe parameterized paths when crawler found few ──
+    # -- Endpoint Seeding: probe parameterized paths when crawler found few --
     _seed_parameterized_endpoints(ctx)
 
     add_result("meta", {"stage": "discovery_extended", "count": len(getattr(ctx, "results", {}).get("endpoints", []))})
@@ -2312,7 +2300,7 @@ def run_discovery_extended(ctx) -> None:
 # Technology-specific paths are selected dynamically based on detected stack.
 # ---------------------------------------------------------------------------
 
-# ── Generic (works on any web app) ──────────────────────────────────────────
+# -- Generic (works on any web app) ------------------------------------------
 _GENERIC_PARAM_TEMPLATES: List[str] = [
     # Root-level search / query params — ubiquitous SQLi/XSS surface
     "/?q={val}",
@@ -2385,7 +2373,7 @@ _GENERIC_PARAM_TEMPLATES: List[str] = [
     "/?_format=json",
 ]
 
-# ── REST API (version-agnostic) ──────────────────────────────────────────────
+# -- REST API (version-agnostic) ----------------------------------------------
 _REST_API_TEMPLATES: List[str] = [
     # Core CRUD resources — IDOR/SQLi/Mass Assignment surface
     "/api/users?id=1",
@@ -2434,7 +2422,7 @@ _REST_API_TEMPLATES: List[str] = [
     "/api/docs",
 ]
 
-# ── GraphQL ──────────────────────────────────────────────────────────────────
+# -- GraphQL ------------------------------------------------------------------
 _GRAPHQL_TEMPLATES: List[str] = [
     "/graphql?query={val}",
     "/graphql/v1?query={val}",
@@ -2443,7 +2431,7 @@ _GRAPHQL_TEMPLATES: List[str] = [
     "/query?query={val}",
 ]
 
-# ── WordPress ────────────────────────────────────────────────────────────────
+# -- WordPress ----------------------------------------------------------------
 _WORDPRESS_TEMPLATES: List[str] = [
     "/?p=1",
     "/?page_id=1",
@@ -2462,7 +2450,7 @@ _WORDPRESS_TEMPLATES: List[str] = [
     "/wp-admin/admin-ajax.php?action=test",
 ]
 
-# ── Laravel / PHP frameworks ──────────────────────────────────────────────────
+# -- Laravel / PHP frameworks --------------------------------------------------
 _LARAVEL_TEMPLATES: List[str] = [
     "/api/user?id=1",
     "/api/posts?id=1",
@@ -2474,7 +2462,7 @@ _LARAVEL_TEMPLATES: List[str] = [
     "/nova/api/users?page=1",
 ]
 
-# ── Django / Python frameworks ────────────────────────────────────────────────
+# -- Django / Python frameworks ------------------------------------------------
 _DJANGO_TEMPLATES: List[str] = [
     "/api/?format=json",
     "/api/users/?format=json",
@@ -2486,7 +2474,7 @@ _DJANGO_TEMPLATES: List[str] = [
     "/silk/requests/",
 ]
 
-# ── Ruby on Rails ─────────────────────────────────────────────────────────────
+# -- Ruby on Rails -------------------------------------------------------------
 _RAILS_TEMPLATES: List[str] = [
     "/users/1",
     "/users/1.json",
@@ -2501,7 +2489,7 @@ _RAILS_TEMPLATES: List[str] = [
     "/rails/info/properties",
 ]
 
-# ── ASP.NET / .NET Core ───────────────────────────────────────────────────────
+# -- ASP.NET / .NET Core -------------------------------------------------------
 _ASPNET_TEMPLATES: List[str] = [
     "/api/values?id=1",
     "/api/product/1",
@@ -2515,7 +2503,7 @@ _ASPNET_TEMPLATES: List[str] = [
     "/trace.axd",
 ]
 
-# ── Spring Boot / Java ────────────────────────────────────────────────────────
+# -- Spring Boot / Java --------------------------------------------------------
 _SPRING_TEMPLATES: List[str] = [
     "/api/v1/users?id=1",
     "/api/v1/products?id=1",
@@ -2531,7 +2519,7 @@ _SPRING_TEMPLATES: List[str] = [
     "/swagger-ui/index.html",
 ]
 
-# ── Node.js / Express ─────────────────────────────────────────────────────────
+# -- Node.js / Express ---------------------------------------------------------
 _NODE_TEMPLATES: List[str] = [
     "/api/users?id=1",
     "/api/posts?id=1",
@@ -2541,7 +2529,7 @@ _NODE_TEMPLATES: List[str] = [
     "/.well-known/security.txt",
 ]
 
-# ── Generic CMS / eCommerce ───────────────────────────────────────────────────
+# -- Generic CMS / eCommerce ---------------------------------------------------
 _CMS_TEMPLATES: List[str] = [
     # Magento
     "/index.php/catalog/product/view/id/1",
@@ -2568,7 +2556,7 @@ _CMS_TEMPLATES: List[str] = [
     "/?add-to-cart=1",
 ]
 
-# Technology → additional template list mapping
+# Technology -> additional template list mapping
 _TECH_TEMPLATE_MAP: Dict[str, List[str]] = {
     "wordpress":   _WORDPRESS_TEMPLATES,
     "drupal":      _CMS_TEMPLATES,
@@ -3344,7 +3332,7 @@ def run_oast_verification(ctx) -> None:
     import time as _time
     import requests as _requests
 
-    # interactsh'e kayıt ol → benzersiz correlation ID al
+    # interactsh'e kayıt ol -> benzersiz correlation ID al
     try:
         reg_resp = _requests.post(
             f"{server}/register",
@@ -3717,7 +3705,7 @@ _reporting = _opt_import("websecure.core.reporting")
 _requests = _opt_import("requests")
 
 
-# ScanMode + ScanContext → extracted to websecure.core.phases._context (imported at top)
+# ScanMode + ScanContext -> extracted to websecure.core.phases._context (imported at top)
 
 # ------------------------- Raporlama köprüleri -------------------------
 def _report(bucket: str, item: Dict[str, Any]) -> None:
@@ -3781,7 +3769,7 @@ def incremental_targets(all_links: list[str], previous: list[str] | None = None)
     return [u for u in (all_links or []) if u not in prev]
 
 
-# HProfilePolicy + HProfileManager + hpm_* → extracted to websecure.core.phases._hprofile (imported at top)
+# HProfilePolicy + HProfileManager + hpm_* -> extracted to websecure.core.phases._hprofile (imported at top)
 
 def run_mode(context: 'ScanContext', mode: str) -> 'Optional[Dict[str, Any]]':
     """
@@ -3981,7 +3969,7 @@ def _should_extend(name: str, attempt: int, timeout_sec: int, cfg: 'RunnerConfig
         if hasattr(sys, "stdin") and sys.stdin is not None and sys.stdin.isatty():
             ans = (input(f"[?] '{name}' zaman aşımına uğradı. Süreyi uzatalım mı? (E/h): ").strip().lower() or "")
             return not ans.startswith("h")
-        # TTY yoksa “ask” mümkün değil → uzatma yok
+        # TTY yoksa “ask” mümkün değil -> uzatma yok
         return False
 
     return decision in ("extend", "retry")

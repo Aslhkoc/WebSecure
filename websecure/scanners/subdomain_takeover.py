@@ -5,7 +5,7 @@ Subdomain Takeover tespiti.
 
 Adim 9 - Siniflar:
   SubdomainTakeoverScanner(BaseScanner) -- orchestrator
-  CNAMEDanglingChecker                  -- dangling CNAME → bulut servis kontrol
+  CNAMEDanglingChecker                  -- dangling CNAME -> bulut servis kontrol
   CloudServiceFingerprintDB             -- 25+ bulut servis imzasi
 """
 from __future__ import annotations
@@ -148,7 +148,7 @@ class CNAMEDanglingChecker(BaseScanner):
                         "vuln_type": "Subdomain Takeover" + (" — Confirmed" if takeover_confirmed else " — Potential"),
                         "url": f"http://{candidate}", "severity": sev,
                         "description": (
-                            f"Subdomain '{candidate}' → CNAME → '{cname}' ({fp['service']}). "
+                            f"Subdomain '{candidate}' -> CNAME -> '{cname}' ({fp['service']}). "
                             + ("NXDOMAIN: CNAME target doesn't resolve. " if dangling else "")
                             + ("Error page confirms unclaimed service. " if takeover_confirmed else "")
                             + f"Attacker can claim '{cname}' on {fp['service']} and serve arbitrary content."

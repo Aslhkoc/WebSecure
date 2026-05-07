@@ -6,9 +6,9 @@ Session & Cookie güvenlik tarayıcıları.
 Adim 12 — Siniflar:
   CookieFlagScanner            — HttpOnly/Secure/SameSite eksiklik tespiti
   SessionFixationExploiter     — session fixation tam exploit zinciri
-  CookieInjectionProber        — CRLF → Set-Cookie injection tespiti
+  CookieInjectionProber        — CRLF -> Set-Cookie injection tespiti
   JWTExpiryBypassProber        — expired JWT token kabul kontrolü
-  BrowserFingerprintBypassProber — UA/Accept değişikliği → session bypass testi
+  BrowserFingerprintBypassProber — UA/Accept değişikliği -> session bypass testi
   ConcurrentSessionBypassProber  — concurrent session limit bypass testi
   SessionScanner               — orchestrator (Adim 12)
 """
@@ -51,9 +51,9 @@ class CookieFlagScanner(BaseScanner):
     headers. Analyzes each cookie for missing HttpOnly / Secure / SameSite flags.
 
     Reports:
-    - Missing HttpOnly → XSS cookie theft
-    - Missing Secure   → HTTP transmission, MITM risk
-    - Missing SameSite → CSRF risk
+    - Missing HttpOnly -> XSS cookie theft
+    - Missing Secure   -> HTTP transmission, MITM risk
+    - Missing SameSite -> CSRF risk
     - SameSite=None without Secure
     - Overly broad Domain
 
@@ -116,9 +116,9 @@ class CookieFlagScanner(BaseScanner):
 class SessionFixationExploiter(BaseScanner):
     """
     Tests session fixation vulnerability:
-    1. GET /login → record pre-auth session token
-    2. POST credentials → check if session token changed
-    3. If same token → session fixation confirmed
+    1. GET /login -> record pre-auth session token
+    2. POST credentials -> check if session token changed
+    3. If same token -> session fixation confirmed
 
     Also tests forced session injection via URL (sid= parameter).
 
@@ -284,7 +284,7 @@ class JWTExpiryBypassProber(BaseScanner):
     Steps:
     1. Collect a valid JWT from the target (via cookie/header)
     2. Manually set exp claim to epoch 0 (past)
-    3. Send the tampered JWT → if 200 returned, vulnerability confirmed
+    3. Send the tampered JWT -> if 200 returned, vulnerability confirmed
 
     Also tests: exp claim removal entirely.
 
@@ -406,8 +406,8 @@ class JWTExpiryBypassProber(BaseScanner):
 class BrowserFingerprintBypassProber(BaseScanner):
     """
     Tests whether the server relies on browser fingerprinting to protect sessions.
-    If session remains valid after UA/Accept header swap → fingerprint not enforced.
-    If session invalidated → fingerprint-based protection detected (defensive behavior).
+    If session remains valid after UA/Accept header swap -> fingerprint not enforced.
+    If session invalidated -> fingerprint-based protection detected (defensive behavior).
 
     Also tests session token reuse from a different IP (via X-Forwarded-For spoofing).
 
@@ -557,7 +557,7 @@ class SessionScanner(BaseScanner):
     Runs:
     1. CookieFlagScanner         — HttpOnly/Secure/SameSite flag audit
     2. SessionFixationExploiter  — Pre/post-auth token rotation test
-    3. CookieInjectionProber     — CRLF → Set-Cookie injection
+    3. CookieInjectionProber     — CRLF -> Set-Cookie injection
     4. JWTExpiryBypassProber     — Expired JWT accepted?
     5. BrowserFingerprintBypassProber — UA/IP swap session bypass
     6. ConcurrentSessionBypassProber  — Concurrent session limit test

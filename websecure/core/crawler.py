@@ -8,9 +8,9 @@ Components (SOLID — one responsibility per class):
   CrawlResult           — unified output from all crawler components
   CrawlerBase           — abstract interface (LSP-safe)
   HTTPCrawler           — fast requests-based BFS crawl with link/form/JS extraction
-  OpenAPIImporter       — Swagger / OpenAPI 2.x & 3.x schema → EndpointMeta list
-  GraphQLSchemaImporter — GraphQL introspection → query / mutation / subscription map
-  GRPCProber            — gRPC reflection API → service / method list
+  OpenAPIImporter       — Swagger / OpenAPI 2.x & 3.x schema -> EndpointMeta list
+  GraphQLSchemaImporter — GraphQL introspection -> query / mutation / subscription map
+  GRPCProber            — gRPC reflection API -> service / method list
   APIVersionScanner     — /v1/ /v2/ /api/ /rest/ brute-force discovery
   ParameterMiner        — arjun-style hidden GET / POST param differential analysis
   FormMutationFuzzer    — select / checkbox / radio value combination generator
@@ -474,7 +474,7 @@ class APIVersionScanner:
                             method="GET",
                             source=f"version_scan:{r.status_code}",
                         ))
-                        _logger.debug(f"[APIVersionScanner] {url} → {r.status_code}")
+                        _logger.debug(f"[APIVersionScanner] {url} -> {r.status_code}")
                 except Exception:
                     continue
 
@@ -491,9 +491,9 @@ class ParameterMiner:
     Discovers hidden GET / POST parameters via differential analysis.
 
     Algorithm:
-      1. Baseline request → (status_code, body_length)
+      1. Baseline request -> (status_code, body_length)
       2. Chunk-probe: send N params with canary values, compare to baseline
-      3. If chunk causes difference → narrow down one-by-one
+      3. If chunk causes difference -> narrow down one-by-one
       4. Active params = those that individually shift status or body size
     """
 
@@ -555,7 +555,7 @@ class ParameterMiner:
                 s_len, s_code = single
                 if abs(s_len - base_len) > self.threshold_bytes or s_code != base_code:
                     found.append(param)
-                    _logger.debug(f"[ParameterMiner] [{method}] {url} → active: {param}")
+                    _logger.debug(f"[ParameterMiner] [{method}] {url} -> active: {param}")
         return found
 
     def _request(
@@ -708,8 +708,8 @@ class SitemapGenerator:
 class CrawlerOrchestrator:
     """
     Coordinates all crawler components in a single pipeline:
-      HTTPCrawler → OpenAPIImporter → GraphQLSchemaImporter →
-      GRPCProber → APIVersionScanner → ParameterMiner → SitemapGenerator
+      HTTPCrawler -> OpenAPIImporter -> GraphQLSchemaImporter ->
+      GRPCProber -> APIVersionScanner -> ParameterMiner -> SitemapGenerator
     """
 
     def __init__(

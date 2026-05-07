@@ -285,7 +285,7 @@ class SessionHunter(BaseScanner):
         Covers MD5/SHA256/base64/uid-hash variants used by weak generators.
         """
         now = int(time.time())
-        seeds = list(range(now - 900, now, 30))  # every 30s over 15 min → ~30 seeds
+        seeds = list(range(now - 900, now, 30))  # every 30s over 15 min -> ~30 seeds
         ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
 
         logger.info("[SessionHunter] Testing %d timestamp seeds against %s", len(seeds), url)

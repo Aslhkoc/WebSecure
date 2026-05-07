@@ -29,8 +29,8 @@ except ImportError:
 class BrowserCrawlConfig:
     headless: bool = True
     """
-    True  → Chrome arka planda çalışır (görünmez, daha hızlı).
-    False → Chrome görünür pencerede açılır; test adımlarını, form
+    True  -> Chrome arka planda çalışır (görünmez, daha hızlı).
+    False -> Chrome görünür pencerede açılır; test adımlarını, form
             doldurmayı ve payload denemelerini gerçek zamanlı izleyebilirsiniz.
     CLI'dan --show-browser / config: browser.headless=false ile değiştirin.
     """
@@ -172,7 +172,7 @@ class BrowserCrawler:
         self._visited = set()
         self._result = BrowserCrawlResult()
 
-        # show_browser=True → headless=False (görünür Chrome)
+        # show_browser=True -> headless=False (görünür Chrome)
         use_headless = self.config.headless and not self.config.show_browser
         launch_opts: Dict[str, Any] = {"headless": use_headless}
         if self.config.slow_mo_ms > 0 and not use_headless:
@@ -390,7 +390,7 @@ class BrowserCrawler:
                 except Exception as e:
                     _logger.debug(f"[BrowserCrawler] Error on {url}: {e}")
 
-            # ── Phase 2: SPA route extraction from JS bundles ──────────────
+            # -- Phase 2: SPA route extraction from JS bundles --------------
             spa_routes_discovered: List[str] = []
             for js_url in self._result.js_files[:15]:
                 try:
@@ -406,7 +406,7 @@ class BrowserCrawler:
                 except Exception as exc:
                     _logger.debug(f"[BrowserCrawler] JS route extraction {js_url}: {exc}")
 
-            # ── Phase 3: Navigate to newly discovered SPA routes ────────────
+            # -- Phase 3: Navigate to newly discovered SPA routes ------------
             for route in spa_routes_discovered[:25]:
                 if urlparse(route).netloc != base_domain:
                     continue

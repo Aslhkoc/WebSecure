@@ -36,7 +36,7 @@ _URL_STRING_PAYLOADS_CORE: List[Tuple[str, str]] = [
 ]
 
 def _load_nosqli_payloads() -> List[Tuple[str, str]]:
-    """nosqli.txt'i yükle: JSON satırları → _JSON_OPERATOR_PAYLOADS, string satırları → _URL_STRING_PAYLOADS."""
+    """nosqli.txt'i yükle: JSON satırları -> _JSON_OPERATOR_PAYLOADS, string satırları -> _URL_STRING_PAYLOADS."""
     seen_str = {p for p, _ in _URL_STRING_PAYLOADS_CORE}
     extra_str: List[Tuple[str, str]] = []
     extra_json: List[Tuple[Any, str]] = []
@@ -126,7 +126,7 @@ class NoSQLiScanner(BaseScanner):
     - JSON body operator injection ({"field": {"$ne": null}})
     - Array-based bypass ({"field": ["admin"]})
     - JavaScript injection via $where / $expr
-    - Auth bypass detection (401/403 → 200)
+    - Auth bypass detection (401/403 -> 200)
     - MongoDB/NoSQL error message fingerprinting
     - Multi-signal response anomaly detection
     - Parallel payload testing via BaseScanner.run_parallel_probes()
@@ -155,7 +155,7 @@ class NoSQLiScanner(BaseScanner):
             if any(x in lower for x in ("api", "auth", "login", "signin", "user", "v1", "v2", "account")):
                 self._fuzz_json_body(ep, bucket)
 
-        # ─── Adım 5: JS injection + data extraction ───────────────────────
+        # --- Adım 5: JS injection + data extraction -----------------------
         self._run_js_injection_phase(endpoints)
         return self.results
 
@@ -221,8 +221,8 @@ class NoSQLiScanner(BaseScanner):
                         "payload": payload_str,
                         "severity": "High",
                         "evidence": (
-                            f"Status: {base_resp.status_code}→{resp.status_code}, "
-                            f"len: {len(base_resp.content)}→{len(resp.content)}"
+                            f"Status: {base_resp.status_code}->{resp.status_code}, "
+                            f"len: {len(base_resp.content)}->{len(resp.content)}"
                         ),
                         "extra": {"payload_type": pay_type},
                     }
@@ -247,7 +247,7 @@ class NoSQLiScanner(BaseScanner):
                         "param": f"{param}{op}",
                         "payload": op,
                         "severity": "High",
-                        "evidence": f"Status: {base_resp.status_code}→{resp.status_code}",
+                        "evidence": f"Status: {base_resp.status_code}->{resp.status_code}",
                         "extra": {"payload_type": label},
                     }
             except _requests.exceptions.Timeout as exc:
@@ -315,7 +315,7 @@ class NoSQLiScanner(BaseScanner):
                         "param": key,
                         "payload": json.dumps(op_payload),
                         "severity": "Critical",
-                        "evidence": f"Auth bypass: {base_resp.status_code}→200",
+                        "evidence": f"Auth bypass: {base_resp.status_code}->200",
                         "extra": {"payload_type": pay_type},
                     }
                 if self._is_anomaly(base_resp, resp):
@@ -326,8 +326,8 @@ class NoSQLiScanner(BaseScanner):
                         "payload": json.dumps(op_payload),
                         "severity": "High",
                         "evidence": (
-                            f"Status: {base_resp.status_code}→{resp.status_code}, "
-                            f"len: {len(base_resp.content)}→{len(resp.content)}"
+                            f"Status: {base_resp.status_code}->{resp.status_code}, "
+                            f"len: {len(base_resp.content)}->{len(resp.content)}"
                         ),
                         "extra": {"payload_type": pay_type},
                     }
@@ -361,8 +361,8 @@ class NoSQLiScanner(BaseScanner):
         """
         Returns True if the attack response differs from baseline in a meaningful way:
         1. NoSQL/MongoDB error fingerprint in attack but not baseline
-        2. Auth bypass: 401/403 → 200
-        3. Server error only on attack (200 → 500)
+        2. Auth bypass: 401/403 -> 200
+        3. Server error only on attack (200 -> 500)
         4. Significant content length change with 200 response
         """
         atk_text = attack_resp.text or ""
@@ -486,10 +486,10 @@ class NoSQLiJSInjectionProber:
                             "payload": json.dumps(payload),
                             "severity": "Critical" if is_bypass else "High",
                             "evidence": (
-                                f"Auth bypass {base_status}→{resp.status_code}" if is_bypass
+                                f"Auth bypass {base_status}->{resp.status_code}" if is_bypass
                                 else f"JS timing: {elapsed:.2f}s" if is_timing
                                 else f"JS error in response" if is_error
-                                else f"Response size changed: {base_len}→{len(resp.content)}"
+                                else f"Response size changed: {base_len}->{len(resp.content)}"
                             ),
                         })
                         break  # one hit per field

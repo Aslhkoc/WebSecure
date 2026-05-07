@@ -6,8 +6,8 @@ Metasploit RPC (MSGRPC) entegrasyonu — kritik CVE exploit doğrulama.
 Özellikler
 ----------
 * MSGRPC üzerinden Metasploit'e bağlanma (msgpack veya JSON-RPC)
-* CVE ID → Metasploit modül eşleme
-* Exploit sonucu → WebSecure finding dönüşümü
+* CVE ID -> Metasploit modül eşleme
+* Exploit sonucu -> WebSecure finding dönüşümü
 * Oturum yönetimi (meterpreter / shell)
 * Güvenli sandbox mod (check only — gerçek exploit yok)
 * ToolIntegration arayüzü (SOLID OCP/DIP)
@@ -38,7 +38,7 @@ from websecure.integrations.base import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CVE → Metasploit modül eşleme (yaygın web CVE'leri)
+# CVE -> Metasploit modül eşleme (yaygın web CVE'leri)
 # ---------------------------------------------------------------------------
 
 _CVE_TO_MODULE: Dict[str, str] = {
@@ -73,7 +73,7 @@ _CVE_TO_MODULE: Dict[str, str] = {
     "CVE-2014-6271":  "exploit/multi/http/apache_mod_cgi_bash_env_exec",  # Shellshock
 }
 
-# Modül → check komutu desteği (False → sadece info alınır)
+# Modül -> check komutu desteği (False -> sadece info alınır)
 _MODULE_SUPPORTS_CHECK: Dict[str, bool] = {
     "exploit/multi/http/apache_normalize_path_rce": True,
     "exploit/multi/http/log4shell_header_injection": True,
@@ -273,7 +273,7 @@ class MetasploitIntegration(ToolIntegration):
         Anahtar argümanlar
         ------------------
         cve_ids     : List[str] — test edilecek CVE ID'leri
-        check_only  : bool — True → sadece check, False → tam exploit izni sor
+        check_only  : bool — True -> sadece check, False -> tam exploit izni sor
         """
         cve_ids: List[str] = kwargs.get("cve_ids", [])
         if not cve_ids:
@@ -342,7 +342,7 @@ class MetasploitIntegration(ToolIntegration):
             status = "info_only" if info else None
 
         if status is None:
-            logger.debug(f"[Metasploit] {cve_id} → {module}: check sonuç yok")
+            logger.debug(f"[Metasploit] {cve_id} -> {module}: check sonuç yok")
             return None
 
         if status == "vulnerable":

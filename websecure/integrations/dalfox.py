@@ -177,7 +177,7 @@ class DalfoxWrapper(ToolIntegration):
                 blind_callback=blind_callback or self.blind_callback,
             )
 
-            logger.info(f"[dalfox] URL taranıyor → {url}")
+            logger.info(f"[dalfox] URL taranıyor -> {url}")
             proc = subprocess.run(
                 cmd,
                 stdout=subprocess.DEVNULL,

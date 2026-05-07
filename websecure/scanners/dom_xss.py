@@ -123,7 +123,7 @@ class DOMXSSScanner(BaseScanner):
         except Exception as exc:
             _logger.warning(f"[DOMXSSScanner] Event loop error: {exc!r}")
 
-        # ─── Adım 4: Stored XSS multi-endpoint correlation ────────────────
+        # --- Adım 4: Stored XSS multi-endpoint correlation ----------------
         write_eps: List[Dict] = kwargs.get("write_endpoints") or []
         read_eps: List[str]   = kwargs.get("read_endpoints")  or endpoints
         if write_eps and self.session:
@@ -363,7 +363,7 @@ class StoredXSSCorrelator:
     def __init__(self, timeout_ms: int = 8000) -> None:
         self.timeout_ms = timeout_ms
 
-    # ── Sync entry point ──────────────────────────────────────────────────
+    # -- Sync entry point --------------------------------------------------
 
     def correlate(
         self,
@@ -393,7 +393,7 @@ class StoredXSSCorrelator:
             _logger.warning("[StoredXSSCorrelator] Event loop error: %r", exc)
             return []
 
-    # ── Async implementation ──────────────────────────────────────────────
+    # -- Async implementation ----------------------------------------------
 
     async def _async_correlate(
         self,
@@ -449,7 +449,7 @@ class StoredXSSCorrelator:
                                     "confidence": "high",
                                 })
                                 _logger.warning(
-                                    "[StoredXSSCorrelator] Stored XSS: write=%s param=%s → read=%s",
+                                    "[StoredXSSCorrelator] Stored XSS: write=%s param=%s -> read=%s",
                                     url, param_name, read_url,
                                 )
                                 break  # found for this param, move on

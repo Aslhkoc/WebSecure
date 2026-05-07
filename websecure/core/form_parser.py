@@ -227,7 +227,7 @@ def extract_cookie_params(cookie_header: str) -> List[Dict[str, Any]]:
     fuzzable input descriptor.
 
         extract_cookie_params("session=abc123; lang=en; cart_id=99")
-        → [{"name": "session", "type": "cookie", ...}, ...]
+        -> [{"name": "session", "type": "cookie", ...}, ...]
     """
     inputs = []
     for part in cookie_header.split(";"):

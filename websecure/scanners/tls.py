@@ -558,8 +558,8 @@ class CDNMisconfigProber(BaseScanner):
                         "url": url, "severity": "High",
                         "description": (
                             f"CDN cached authenticated response at path '{suffix}'. "
-                            "Cache deception: attacker tricks victim to visit URL → "
-                            "CDN caches their private page → attacker retrieves it."
+                            "Cache deception: attacker tricks victim to visit URL -> "
+                            "CDN caches their private page -> attacker retrieves it."
                         ),
                         "evidence": {"suffix": suffix, "age": age,
                                      "x_cache": x_cache, "status": resp.status_code},

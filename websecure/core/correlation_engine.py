@@ -352,7 +352,7 @@ class CorrelationEngine:
         result.sort(key=lambda m: m.confidence, reverse=True)
 
         logger.info(
-            f"[Correlation] {scan1_id} ↔ {scan2_id}: "
+            f"[Correlation] {scan1_id} <-> {scan2_id}: "
             f"{len(result)} eşleşme ({len(findings1)} + {len(findings2)} bulgu)"
         )
         return result

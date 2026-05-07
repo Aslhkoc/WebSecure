@@ -107,7 +107,7 @@ def _tpl(s: str, state: Dict[str, Any]) -> str:
         return str(state.get(key, m.group(0)))
     return _VAR_RE.sub(rep, s)
 
-# Extractor: response.text regex yakala → state['var']=value
+# Extractor: response.text regex yakala -> state['var']=value
 def _apply_extractors(text: str, extractors: List[Dict[str, Any]], state: Dict[str, Any]):
     for ex in (extractors or []):
         var = ex.get("var")

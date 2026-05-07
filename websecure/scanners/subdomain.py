@@ -150,7 +150,7 @@ class DNSBruteForce:
                     res = fut.result()
                     if res:
                         found.append(res)
-                        logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} → {res['ip']}")
+                        logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} -> {res['ip']}")
                 except Exception as exc:
                     pass
 
@@ -499,7 +499,7 @@ class DNSZoneTransfer:
             return findings
 
         for ns_ip in ns_ips:
-            logger.debug(f"[ZoneTransfer] AXFR deneniyor: {ns_ip} → {domain}")
+            logger.debug(f"[ZoneTransfer] AXFR deneniyor: {ns_ip} -> {domain}")
             records = self._axfr_raw(ns_ip, domain)
             # Zone transfer başarılıysa genellikle 10+ kayıt döner
             if len(records) >= 5:
@@ -540,7 +540,7 @@ class ASNMapper:
 
             hdrs = {"User-Agent": "Mozilla/5.0 (WebSecure Scanner)"}
 
-            # 1. IP → ASN + prefix bilgisi
+            # 1. IP -> ASN + prefix bilgisi
             r = _requests.get(f"{self._BGPVIEW}/ip/{ip}", timeout=15, headers=hdrs)
             asn_list: List[str] = []
             prefix_list: List[str] = []
@@ -562,7 +562,7 @@ class ASNMapper:
                         prefix_list.append(pfx_cidr)
                 country = (data.get("rir_allocation") or {}).get("country_code", "")
 
-            # 2. Org arama (domain prefix → company adı ile)
+            # 2. Org arama (domain prefix -> company adı ile)
             org = domain.split(".")[0]
             r2 = _requests.get(
                 f"{self._BGPVIEW}/search", params={"query_term": org},

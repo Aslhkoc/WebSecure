@@ -166,7 +166,7 @@ class BashCompletionGenerator(BaseCompletionGenerator):
                     flat.append(f[1])
             cmd_flags[cmd] = " ".join(flat)
 
-        # choice listesi (--flag → değerler)
+        # choice listesi (--flag -> değerler)
         choice_cases: List[str] = []
         for cmd, spec in _CLI_TREE.items():
             for flag, vals in spec.get("choices", {}).items():
@@ -518,7 +518,7 @@ def run_completion_cli(args: list) -> int:
     if ns.install:
         path = gen.install()
         if path:
-            print(f"[✓] Tamamlama betiği kuruldu: {path}")
+            print(f"[[OK]] Tamamlama betiği kuruldu: {path}")
             print(f"    Aktifleştirmek için shell'i yeniden başlatın veya:")
             if ns.shell == "bash":
                 print(f"    source {path}")

@@ -308,7 +308,7 @@ def _parse_sqlmap_output(text: str, target: str) -> List[Dict[str, Any]]:
         if m:
             db_users.append(m.group(1).strip())
 
-        # ── Parameter block start ─────────────────────────────────────────
+        # -- Parameter block start -----------------------------------------
         m = re.match(r"Parameter:\s+(.+?)\s+\((\w+)\)", stripped)
         if m:
             if current:

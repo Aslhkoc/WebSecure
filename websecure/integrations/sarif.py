@@ -38,7 +38,7 @@ _SARIF_VERSION  = "2.1.0"
 _TOOL_NAME      = "WebSecure"
 _TOOL_VERSION   = "2.0"
 
-# WebSecure severity → SARIF level
+# WebSecure severity -> SARIF level
 _SEV_TO_SARIF_LEVEL: Dict[ToolSeverity, str] = {
     ToolSeverity.CRITICAL: "error",
     ToolSeverity.HIGH:     "error",
@@ -47,7 +47,7 @@ _SEV_TO_SARIF_LEVEL: Dict[ToolSeverity, str] = {
     ToolSeverity.INFO:     "none",
 }
 
-# WebSecure severity → SARIF security-severity (CVSS benzeri 0-10)
+# WebSecure severity -> SARIF security-severity (CVSS benzeri 0-10)
 _SEV_TO_SECURITY_SEVERITY: Dict[ToolSeverity, float] = {
     ToolSeverity.CRITICAL: 9.5,
     ToolSeverity.HIGH:     7.5,
@@ -317,7 +317,7 @@ class SARIFReport:
 
 
 # ---------------------------------------------------------------------------
-# SARIFNormalizer — ToolResult → SARIF (tek adım)
+# SARIFNormalizer — ToolResult -> SARIF (tek adım)
 # ---------------------------------------------------------------------------
 
 class SARIFNormalizer:

@@ -98,7 +98,7 @@ class APIHandler(BaseHTTPRequestHandler):
             return {}
 
     def _auth(self) -> Optional[str]:
-        """API key → tenant_id. None → auth başarısız."""
+        """API key -> tenant_id. None -> auth başarısız."""
         key = (
             self.headers.get("X-API-Key", "")
             or self._parse_url()[1].get("api_key", "")
@@ -165,17 +165,17 @@ class APIHandler(BaseHTTPRequestHandler):
 
 class RouteTable:
     """
-    Pattern → handler eşleştirme tablosu.
+    Pattern -> handler eşleştirme tablosu.
 
     Pattern formatı: ``/api/v1/scans/{id}/findings``
-    {id} → named capture group
+    {id} -> named capture group
     """
 
     def __init__(self) -> None:
         self._routes: List[Tuple[str, str, re.Pattern, _HandlerFn]] = []
 
     def add(self, method: str, pattern: str, handler: _HandlerFn) -> None:
-        # {name} → (?P<name>[^/]+)
+        # {name} -> (?P<name>[^/]+)
         regex = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern)
         self._routes.append((method.upper(), pattern, re.compile(f"^{regex}$"), handler))
 
@@ -279,7 +279,7 @@ class APIServer:
         return handler(ctx)
 
     def resolve_tenant(self, api_key: str) -> Optional[str]:
-        """API key → tenant_id. no_auth modda default döner."""
+        """API key -> tenant_id. no_auth modda default döner."""
         if self.no_auth:
             return "default"
         try:

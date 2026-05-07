@@ -129,7 +129,7 @@ def wrap_requests_error(
         return ConnectionRefusedError(
             str(exc), url=url, param=param, payload=payload, original_exc=exc
         )
-    # Genel requests hatası → NetworkError
+    # Genel requests hatası -> NetworkError
     return NetworkError(
         str(exc), url=url, param=param, payload=payload, original_exc=exc
     )

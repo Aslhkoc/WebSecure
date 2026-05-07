@@ -93,7 +93,7 @@ _REMEDIATION: Dict[str, str] = {
     "xxe": "Disable external entity processing in XML parsers. Use JSON where possible. Validate XML schemas strictly.",
     "idor": "Enforce object-level authorization checks on every resource access. Use indirect references (UUIDs) instead of sequential IDs.",
     "csrf": "Implement CSRF tokens on all state-changing requests. Use SameSite=Strict cookies. Validate Origin/Referer headers.",
-    "jwt": "Never use the 'none' algorithm. Validate the algorithm on the server side. Use strong secrets (≥256 bits) or RS256.",
+    "jwt": "Never use the 'none' algorithm. Validate the algorithm on the server side. Use strong secrets (>=256 bits) or RS256.",
     "request smuggling": "Normalize HTTP requests at the load balancer. Configure consistent timeout settings. Prefer HTTP/2 end-to-end.",
     "file upload": "Validate file type server-side using magic bytes. Store uploads outside webroot. Randomize filenames and serve via CDN.",
     "tls": "Disable TLS 1.0 and 1.1. Enable TLS 1.3. Use strong cipher suites (AEAD). Enable HSTS with a long max-age.",
@@ -135,7 +135,7 @@ class CVSSScorer:
     """
 
     def __init__(self, auth_required: bool = False, waf_detected: bool = False):
-        self.auth_required = auth_required  # If True, finding requires auth → adjust PR
+        self.auth_required = auth_required  # If True, finding requires auth -> adjust PR
         self.waf_detected = waf_detected    # If True, adjust AC
 
     def score(self, finding: Dict) -> Dict:

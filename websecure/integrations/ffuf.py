@@ -193,9 +193,9 @@ class FFUFWrapper:
             logger.error(f"FFUF result parsing error: {e}")
         return results
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
     # Header fuzzing mode
-    # ─────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
 
     # Common security-relevant headers to fuzz for auth bypass / WAF bypass
     _SECURITY_HEADERS = [
@@ -626,8 +626,8 @@ class ParamDiscoveryPipeline:
     ```python
     pipeline = ParamDiscoveryPipeline()
     result = pipeline.discover("https://example.com/api/user", method="GET")
-    # result.params → ["id", "token", "debug", ...]
-    # result.to_websecure_feed() → WebSecure scanner feed
+    # result.params -> ["id", "token", "debug", ...]
+    # result.to_websecure_feed() -> WebSecure scanner feed
     ```
     """
 
@@ -659,7 +659,7 @@ class ParamDiscoveryPipeline:
         ------------
         url       : Hedef URL
         method    : "GET" veya "POST"
-        wordlist  : Param wordlist dosyası (None → built-in)
+        wordlist  : Param wordlist dosyası (None -> built-in)
         cookie    : Oturum cookie'si
         headers   : Ek HTTP başlıkları
 

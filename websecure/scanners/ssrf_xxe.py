@@ -398,7 +398,7 @@ class SSRFScanner(BaseScanner):
                             "evidence": f"HTTP 200 with {len(text)} bytes in {elapsed:.2f}s",
                         })
                     elif elapsed > baseline + threshold:
-                        # Timeout → port is filtered → still SSRF-reachable (blind)
+                        # Timeout -> port is filtered -> still SSRF-reachable (blind)
                         self.add(bucket, {
                             "type": f"SSRF — Blind Internal Port Probe: {ip}:{port}",
                             "severity": "Medium",

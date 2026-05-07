@@ -11,7 +11,7 @@ SOLID
 - SRP  : TUI görüntüleme tek sorumluluk.
 - OCP  : Yeni widget eklemek mevcut kodu değiştirmez.
 - LSP  : PlainTUI / RichTUI her ikisi de BaseTUI'dan türer.
-- DIP  : ScanTUI(BaseTUI factory) → Rich/Plain seçimini runtime'da yapar.
+- DIP  : ScanTUI(BaseTUI factory) -> Rich/Plain seçimini runtime'da yapar.
 """
 from __future__ import annotations
 
@@ -39,11 +39,11 @@ _SEVERITY_COLORS = {
 }
 
 _SEVERITY_EMOJI = {
-    "Critical": "🔴",
-    "High":     "🟠",
-    "Medium":   "🟡",
-    "Low":      "🔵",
-    "Info":     "🟢",
+    "Critical": "[Critical]",
+    "High":     "[High]",
+    "Medium":   "[Medium]",
+    "Low":      "[Low]",
+    "Info":     "[Info]",
 }
 
 
@@ -111,12 +111,12 @@ class PlainTUI(BaseTUI):
     Tüm çıktı stdout'a gider. İlerleme ve bulgular anlık yazdırılır.
     """
 
-    _SEP = "─" * 60
+    _SEP = "-" * 60
     _LEVEL_PREFIX = {
         "info":    "[*]",
         "warning": "[!]",
-        "error":   "[✗]",
-        "success": "[✓]",
+        "error":   "[[FAIL]]",
+        "success": "[[OK]]",
         "debug":   "[~]",
     }
 
@@ -144,7 +144,7 @@ class PlainTUI(BaseTUI):
     def add_finding(self, finding: TUIFinding) -> None:
         with self._lock:
             self._findings.append(finding)
-        emoji = _SEVERITY_EMOJI.get(finding.severity, "⚪")
+        emoji = _SEVERITY_EMOJI.get(finding.severity, "[o]")
         print(
             f"  {emoji} [{finding.severity:<8}] {finding.title[:55]:<55} "
             f"({finding.tool})  {finding.timestamp}"
@@ -164,7 +164,7 @@ class PlainTUI(BaseTUI):
         pct = int(completed / total * 100) if total else 0
         bar_len = 30
         filled = int(bar_len * pct / 100)
-        bar = "█" * filled + "░" * (bar_len - filled)
+        bar = "#" * filled + "." * (bar_len - filled)
         eta_str = f"  ETA: {eta_s:.0f}s" if eta_s else ""
         task_str = f"  {current_task[:35]}" if current_task else ""
         print(f"\r  [{bar}] {pct:3d}%{task_str}{eta_str}", end="", flush=True)
@@ -204,13 +204,13 @@ class RichTUI(BaseTUI):
     Rich kütüphanesini kullanan canlı TUI.
 
     Layout:
-    ┌─────────────────────────────────┐
-    │           HEADER (banner)       │
-    ├──────────────────┬──────────────┤
-    │  FINDINGS TABLE  │  LOG PANEL   │
-    ├──────────────────┴──────────────┤
-    │         PROGRESS BAR            │
-    └─────────────────────────────────┘
+    +---------------------------------+
+    |           HEADER (banner)       |
+    +------------------+--------------+
+    |  FINDINGS TABLE  |  LOG PANEL   |
+    +------------------+--------------+
+    |         PROGRESS BAR            |
+    +---------------------------------+
     """
 
     # Maksimum log satırı sayısı
@@ -381,7 +381,7 @@ class RichTUI(BaseTUI):
 
         for f in findings[-40:]:
             color = _SEVERITY_COLORS.get(f.severity, "white")
-            emoji = _SEVERITY_EMOJI.get(f.severity, "⚪")
+            emoji = _SEVERITY_EMOJI.get(f.severity, "[o]")
             table.add_row(
                 f.timestamp,
                 f"[{color}]{emoji} {f.severity}[/{color}]",
@@ -398,7 +398,7 @@ class RichTUI(BaseTUI):
         pct = int(completed / total * 100) if total else 0
         bar_width = 40
         filled = int(bar_width * pct / 100)
-        bar = "█" * filled + "░" * (bar_width - filled)
+        bar = "#" * filled + "." * (bar_width - filled)
         footer_text = f"[cyan]{bar}[/cyan] [bold]{pct}%[/bold]"
         self._layout["footer"].update(Panel(footer_text))
 
@@ -407,7 +407,7 @@ class RichTUI(BaseTUI):
         from rich.console import Console
 
         console = Console()
-        console.print("\n[bold cyan]═══ Tarama Tamamlandı ═══[/bold cyan]")
+        console.print("\n[bold cyan]=== Tarama Tamamlandı ===[/bold cyan]")
 
         counts: Dict[str, int] = {}
         for f in self._findings:
@@ -458,7 +458,7 @@ class ScanTUI:
 
         Parametreler
         ------------
-        force_plain : True → Rich yoksa/istemiyorsa PlainTUI kullan
+        force_plain : True -> Rich yoksa/istemiyorsa PlainTUI kullan
         """
         if force_plain:
             return PlainTUI()

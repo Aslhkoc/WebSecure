@@ -292,8 +292,8 @@ class InteractshClient(_BaseOSAT, IOSATClient):
     interactsh sunucusu (interact.sh / oast.fun) RSA-OAEP + AES-GCM
     tabanlı şifreli polling kullanır:
 
-    1. Kayıt: RSA public key + secret → sunucu correlation_id + domain döner
-    2. Polling: /poll?id=...&secret=... → {"aes_key": "<b64>", "data": [...]}
+    1. Kayıt: RSA public key + secret -> sunucu correlation_id + domain döner
+    2. Polling: /poll?id=...&secret=... -> {"aes_key": "<b64>", "data": [...]}
        - aes_key, RSA-OAEP ile şifreli AES anahtarıdır
        - data öğeleri AES-GCM ile şifreli JSON eventlerdir (nonce ilk 12 byte)
     """
@@ -927,7 +927,7 @@ class OASTMultiProtocolProber:
 
 class OASTCorrelationEngine:
     """
-    Maps injection tokens → (payload, endpoint, param, inject_ts)
+    Maps injection tokens -> (payload, endpoint, param, inject_ts)
     and correlates with OAST callback events to produce confirmed findings.
 
     Provides timing analysis: latency between injection and callback.
@@ -1087,8 +1087,8 @@ class DNSRebindingAttacker:
     """
     DNS rebinding attack automation.
 
-    Phase 1: Victim browser resolves attacker domain → attacker IP (serves JS)
-    Phase 2: DNS TTL expires; attacker domain now resolves → target internal IP
+    Phase 1: Victim browser resolves attacker domain -> attacker IP (serves JS)
+    Phase 2: DNS TTL expires; attacker domain now resolves -> target internal IP
     Phase 3: Browser JS makes same-origin requests to internal service
 
     Generates attack payloads and instructions for common rebinding services.

@@ -189,11 +189,11 @@ def render_html_dashboard(results: dict) -> str:
             for f in js_secrets
         )
 
-        secret_warning = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>⚠️ {len(js_secrets)} hardcoded secret(s) detected in JavaScript files!</div>" if js_secrets else ""
+        secret_warning = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] {len(js_secrets)} hardcoded secret(s) detected in JavaScript files!</div>" if js_secrets else ""
 
         js_files_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">📜 JavaScript File Analysis</h3>
+            <h3 style="margin-top:0;">[scroll] JavaScript File Analysis</h3>
             {secret_warning}
             <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem;">
                 <div class="stat-card" style="padding:1rem; text-align:center;">
@@ -211,7 +211,7 @@ def render_html_dashboard(results: dict) -> str:
             </div>
             {"<h4>JS Files</h4><div class='table-container'><table><thead><tr><th>URL</th><th>Info</th></tr></thead><tbody>" + rows_files + "</tbody></table></div>" if rows_files else ""}
             {"<h4 style='margin-top:1rem;'>Hidden Endpoints / API Paths</h4><div class='table-container'><table><thead><tr><th>Path</th><th>Found In</th></tr></thead><tbody>" + rows_endpoints + "</tbody></table></div>" if rows_endpoints else ""}
-            {"<h4 style='margin-top:1rem; color:var(--sev-high);'>⚠️ Hardcoded Secrets</h4><div class='table-container'><table><thead><tr><th>Severity</th><th>Type</th><th>File</th><th>Detail</th></tr></thead><tbody>" + rows_secrets + "</tbody></table></div>" if rows_secrets else ""}
+            {"<h4 style='margin-top:1rem; color:var(--sev-high);'>[!] Hardcoded Secrets</h4><div class='table-container'><table><thead><tr><th>Severity</th><th>Type</th><th>File</th><th>Detail</th></tr></thead><tbody>" + rows_secrets + "</tbody></table></div>" if rows_secrets else ""}
         </div>
         """
 
@@ -229,10 +229,10 @@ def render_html_dashboard(results: dict) -> str:
             for f in file_items if isinstance(f, dict) and f.get("url")
         )
         if all_file_rows:
-            sen_warn = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>⚠️ {len(sensitive_files)} sensitive file(s) exposed!</div>" if sensitive_files else ""
+            sen_warn = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] {len(sensitive_files)} sensitive file(s) exposed!</div>" if sensitive_files else ""
             files_html = f"""
             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">📁 Discovered Files ({len(file_items)} total, {len(sensitive_files)} sensitive)</h3>
+                <h3 style="margin-top:0;">[dir] Discovered Files ({len(file_items)} total, {len(sensitive_files)} sensitive)</h3>
                 {sen_warn}
                 <div class="table-container">
                     <table>
@@ -273,7 +273,7 @@ def render_html_dashboard(results: dict) -> str:
     _SEV_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
     _EFFORT_COLOR = {"Low": "var(--sev-low)", "Medium": "var(--sev-medium)", "High": "var(--sev-high)"}
 
-    # Build type → {max_sev, count, advice, effort}
+    # Build type -> {max_sev, count, advice, effort}
     type_map = {}
     for f in findings:
         raw_type = f["type"].split(" (")[0] if " (" in f["type"] else f["type"]
@@ -316,7 +316,7 @@ def render_html_dashboard(results: dict) -> str:
     if _rem_rows_html:
         remediation_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">🎯 Remediation Priority Matrix</h3>
+            <h3 style="margin-top:0;">[target] Remediation Priority Matrix</h3>
             <p style="color:var(--text-muted); font-size:0.88rem; margin:0 0 1rem;">Ordered by severity and frequency. Fix Critical/High items first.</p>
             <div class="table-container">
                 <table>
@@ -360,7 +360,7 @@ def render_html_dashboard(results: dict) -> str:
         if rows:
              ports_html = f"""
              <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">🌐 Open Ports (Nmap)</h3>
+                <h3 style="margin-top:0;">[web] Open Ports (Nmap)</h3>
                 <div class="table-container">
                     <table>
                         <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Service</th><th>State</th></tr></thead>
@@ -406,7 +406,7 @@ def render_html_dashboard(results: dict) -> str:
 
     traffic_html = f"""
     <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-        <h3 style="margin-top:0;">🚦 Attack Traffic & Efficiency</h3>
+        <h3 style="margin-top:0;">[signal] Attack Traffic & Efficiency</h3>
         <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom:0;">
             <div class="stat-card" style="padding:1rem;">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--text-main)">{total_req}</span>
@@ -466,7 +466,7 @@ def render_html_dashboard(results: dict) -> str:
         )
         subdomain_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">🌍 Discovered Subdomains ({len(subdomains)})</h3>
+            <h3 style="margin-top:0;">[globe] Discovered Subdomains ({len(subdomains)})</h3>
             <div class="table-container">
                 <table>
                     <thead><tr><th>Subdomain</th></tr></thead>
@@ -486,9 +486,9 @@ def render_html_dashboard(results: dict) -> str:
         tls_data = tls_raw
     cert = tls_data.get("certificate") or {}
     if cert:
-        valid_icon = "✅ Valid" if cert.get("valid") else "❌ Invalid"
+        valid_icon = "[OK] Valid" if cert.get("valid") else "[X] Invalid"
         if cert.get("self_signed"):
-            valid_icon = "⚠️ Self-Signed"
+            valid_icon = "[!] Self-Signed"
 
         probs = cert.get("problems") or []
         probs_html = (
@@ -520,11 +520,11 @@ def render_html_dashboard(results: dict) -> str:
             )
             san_html = f"<div class='label'>Alt Names (SAN)</div><div>{san_items}</div>"
 
-        hsts_icon = "✅" if (cert.get("hsts") or tls_data.get("hsts")) else "❌"
+        hsts_icon = "[OK]" if (cert.get("hsts") or tls_data.get("hsts")) else "[X]"
 
         ssl_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">🔒 SSL/TLS Certificate</h3>
+            <h3 style="margin-top:0;">[lock] SSL/TLS Certificate</h3>
             <div class="kv-grid" style="grid-template-columns: 200px 1fr; gap:0.5rem; margin-bottom:0;">
                 <div class="label">Status</div>     <div>{valid_icon} {probs_html}{warnings_html}</div>
                 <div class="label">HSTS</div>        <div>{hsts_icon} Strict-Transport-Security</div>
@@ -556,7 +556,7 @@ def render_html_dashboard(results: dict) -> str:
         )
         phase_errors_html = f"""
         <div class="card" style="background:rgba(210,153,34,0.07); border:1px solid var(--sev-high); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0; color:var(--sev-high);">⚠️ Scan Phase Errors ({len(phase_errors)})</h3>
+            <h3 style="margin-top:0; color:var(--sev-high);">[!] Scan Phase Errors ({len(phase_errors)})</h3>
             <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Some scan phases encountered errors. Results from these phases may be incomplete.</p>
             <div class="table-container">
                 <table>
@@ -771,10 +771,10 @@ def render_html_dashboard(results: dict) -> str:
 
 <header>
     <div>
-        <h1>🛡️ WebSecure Report</h1>
+        <h1>[shield] WebSecure Report</h1>
     </div>
     <div style="display:flex; gap:10px; align-items:center;">
-        <button class="btn" onclick="showSessions()">🔑 Captured Sessions ({len(sessions)})</button>
+        <button class="btn" onclick="showSessions()">[key] Captured Sessions ({len(sessions)})</button>
         <div class="header-meta">
             <div>Target: <strong>{ _escape(target) }</strong> <span style="font-family:monospace; color:var(--accent)">[{_escape(target_ip)}]</span></div>
             <div>Date: { scan_date }</div>
@@ -828,7 +828,7 @@ def render_html_dashboard(results: dict) -> str:
     { phase_errors_html }
 
     <!-- Findings Table -->
-    <h2>🔍 Findings ({total_issues} total)</h2>
+    <h2>[search] Findings ({total_issues} total)</h2>
     <div class="controls">
         <input type="text" id="searchInput" class="search" placeholder="Filter by URL, type, param, severity...">
         <select id="sevFilter" onchange="applyFilters()" style="background:var(--bg-header); border:1px solid var(--border); color:var(--text-main); padding:0.5rem 1rem; border-radius:6px;">
@@ -878,7 +878,7 @@ def render_html_dashboard(results: dict) -> str:
 <div id="sessionsModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>🔑 Captured Sessions</h2>
+            <h2>[key] Captured Sessions</h2>
             <span class="close" onclick="closeModal('sessionsModal')">&times;</span>
         </div>
         <div class="modal-body" id="sessionsBody">
@@ -986,12 +986,12 @@ def render_html_dashboard(results: dict) -> str:
 
         if (hasEvidence) {{
             html += `<div style="margin-top:20px; border:1px solid var(--accent); border-radius:6px; overflow:hidden;">`;
-            html += `<div style="background:var(--accent); color:#000; padding:10px; font-weight:bold;">🔎 FACES OF EVIDENCE (FORENSICS)</div>`;
+            html += `<div style="background:var(--accent); color:#000; padding:10px; font-weight:bold;">[search] FACES OF EVIDENCE (FORENSICS)</div>`;
             html += `<div style="padding:15px; background:var(--bg-card);">`;
 
             // 1. Database Extraction (SQLMap)
             if (ev.database_banner || ev.extracted_data_type || ev.dumped_data) {{
-                html += `<h4 style="color:var(--sev-high); margin-top:0;">🩸 Database Extraction Detected</h4>`;
+                html += `<h4 style="color:var(--sev-high); margin-top:0;">[blood] Database Extraction Detected</h4>`;
                 html += `<div class="kv-grid" style="margin-bottom:10px;">`;
                 if(ev.database_banner) html += `<div class="label">DB Banner</div> <div><code>${{escapeHtml(ev.database_banner)}}</code></div>`;
                 if(ev.extracted_data_type) html += `<div class="label">Extracted Type</div> <div>${{escapeHtml(ev.extracted_data_type)}}</div>`;
@@ -1005,7 +1005,7 @@ def render_html_dashboard(results: dict) -> str:
 
             // 2. XSS Alerts / Screenshots
             if (ev.alert_text || ev.screenshot_path) {{
-                html += `<h4 style="color:var(--sev-med); margin-top:20px;">📸 DOM Exploitation Proof</h4>`;
+                html += `<h4 style="color:var(--sev-med); margin-top:20px;">[snap] DOM Exploitation Proof</h4>`;
                 html += `<div class="kv-grid">`;
                 if(ev.alert_text) html += `<div class="label">Alert Box</div> <div><code>${{escapeHtml(ev.alert_text)}}</code></div>`;
                 if(ev.screenshot_path) html += `<div class="label">Screenshot</div> <div><a href="${{escapeHtml(ev.screenshot_path)}}" target="_blank">View File</a></div>`;
@@ -1014,7 +1014,7 @@ def render_html_dashboard(results: dict) -> str:
 
             // 3. Raw Response (Universal)
             if (ev.raw_response) {{
-                html += `<h4 style="margin-top:20px;">📄 Raw Server Response</h4>`;
+                html += `<h4 style="margin-top:20px;">[doc] Raw Server Response</h4>`;
                 html += `<pre style="max-height:200px; overflow:auto; font-size:0.8rem;">${{escapeHtml(ev.raw_response)}}</pre>`;
             }}
 
@@ -1023,7 +1023,7 @@ def render_html_dashboard(results: dict) -> str:
 
             // 2. XSS Proof (Alerts)
             if (ev.alert_text || ev.mechanism) {{
-                html += `<h4 style="color:var(--sev-critical); margin-top:10px;">📸 Verified Payload Execution</h4>`;
+                html += `<h4 style="color:var(--sev-critical); margin-top:10px;">[snap] Verified Payload Execution</h4>`;
                 html += `<div style="background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); padding:10px; border-radius:4px;">`;
                 html += `<div><strong>Mechanism:</strong> ${{escapeHtml(ev.mechanism || "Browser Event")}}</div>`;
                 if(ev.alert_text) html += `<div><strong>Alert Content:</strong> <span style="font-family:monospace; background:#000; padding:2px 5px; color:#fff;">${{escapeHtml(ev.alert_text)}}</span></div>`;
@@ -1032,7 +1032,7 @@ def render_html_dashboard(results: dict) -> str:
 
             // 3. Raw Response (File Link or Snippet)
             if (ev.raw_response) {{
-                 html += `<h4 style="margin-top:15px;">📜 Raw Server Response (Snapshot)</h4>`;
+                 html += `<h4 style="margin-top:15px;">[scroll] Raw Server Response (Snapshot)</h4>`;
                  // Truncate if too long for modal
                  let raw = ev.raw_response;
                  if (raw.length > 2000) raw = raw.substring(0, 2000) + "... [truncated]";
@@ -1041,7 +1041,7 @@ def render_html_dashboard(results: dict) -> str:
 
             // 4. Screenshots
             if (ev.screenshot_path) {{
-                 html += `<h4 style="margin-top:15px;">🖼️ Screen Capture</h4>`;
+                 html += `<h4 style="margin-top:15px;">[img] Screen Capture</h4>`;
                  html += `<img src="${{escapeHtml(ev.screenshot_path)}}" style="max-width:100%; border:1px solid #555;">`;
             }}
 
@@ -1049,7 +1049,7 @@ def render_html_dashboard(results: dict) -> str:
             let usedKeys = ["database_banner", "extracted_data_type", "dumped_data", "alert_text", "mechanism", "raw_response", "screenshot_path"];
             let otherKeys = Object.keys(ev).filter(k => !usedKeys.includes(k));
             if(otherKeys.length > 0) {{
-                 html += `<h4 style="margin-top:15px;">📂 Other Artifacts</h4><ul>`;
+                 html += `<h4 style="margin-top:15px;">[dir] Other Artifacts</h4><ul>`;
                  otherKeys.forEach(k => {{
                      let val = ev[k];
                      if(typeof val === 'object') val = JSON.stringify(val);
@@ -1092,7 +1092,7 @@ setTimeout(() => location.reload(), 1000);
                 html += `<div class="card" style="margin-bottom:1rem; padding:1rem; background:var(--bg-body);">`;
                 html += `<div style="display:flex; justify-content:space-between; align-items:flex-start;">`;
                 html += `<div><strong>User:</strong> ${{escapeHtml(s.user)}} <span class="tag ${{s.verified ? 'Low' : 'Info'}}">${{s.verified ? 'Verified' : 'Unverified'}}</span></div>`;
-                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${{safeCmdAttr}}" style="font-size:0.8rem; padding:4px 8px;">📋 Copy Hijack Script</button>`;
+                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${{safeCmdAttr}}" style="font-size:0.8rem; padding:4px 8px;">[list] Copy Hijack Script</button>`;
                 html += `</div>`;
 
                 html += `<div><strong>Time:</strong> ${{s.timestamp}}</div>`;

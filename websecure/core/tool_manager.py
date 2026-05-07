@@ -27,7 +27,7 @@ class ToolManager:
     ToolRegistry ile entegre — araçlar otomatik kayıt edilir.
     """
 
-    # Araç adı → binary isimleri (birden fazla olabilir)
+    # Araç adı -> binary isimleri (birden fazla olabilir)
     _KNOWN_TOOLS: Dict[str, List[str]] = {
         "sqlmap":      ["sqlmapapi.py"],
         "ffuf":        ["ffuf", "ffuf.exe"],
@@ -190,12 +190,12 @@ class ToolManager:
             logger.error("[ToolManager] SQLMap API dosyası bulunamadı!")
             return False
 
-        print(f"🚀 SQLMap API Başlatılıyor... ({api_path})")
+        print(f"[launch] SQLMap API Başlatılıyor... ({api_path})")
         try:
             # Check if port 8775 is already in use
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(('127.0.0.1', 8775)) == 0:
-                    print("⚠️  Port 8775 zaten dolu. SQLMap API zaten çalışıyor olabilir.")
+                    print("[!]  Port 8775 zaten dolu. SQLMap API zaten çalışıyor olabilir.")
                     return True
 
             # Start process
@@ -214,14 +214,14 @@ class ToolManager:
                         # Extra Check: Use Client
                          cli = self.get_sqlmap_client()
                          if cli and cli.is_alive():
-                             print("✅ SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
+                             print("[OK] SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
                          else:
-                             print("✅ SQLMap API Portu Açık (Servis Yanıt Veriyor)")
+                             print("[OK] SQLMap API Portu Açık (Servis Yanıt Veriyor)")
                          
                          print("   (Program bu servisi otomatik kullanacaktır.)")
                          return True
             
-            print("❌ SQLMap API başlatılamadı (Timeout).")
+            print("[X] SQLMap API başlatılamadı (Timeout).")
             return False
 
         except Exception as e:
@@ -233,7 +233,7 @@ class ToolManager:
         Stops all started subprocesses.
         """
         if self.sqlmap_process:
-            print("\n🛑 SQLMap API kapatılıyor...")
+            print("\n[stop] SQLMap API kapatılıyor...")
             self.sqlmap_process.terminate()
             try:
                 self.sqlmap_process.wait(timeout=2)

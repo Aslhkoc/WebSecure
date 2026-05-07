@@ -82,7 +82,7 @@ class IDORScanner(BaseScanner):
     def _dual_role_test(self, url: str):
         """
         Compare responses: session A vs session B for same URL.
-        If A sees more data → IDOR.
+        If A sees more data -> IDOR.
         """
         body_a = self._fetch(url, self.session)
         body_b = self._fetch(url, self.session_b)
@@ -161,7 +161,7 @@ class IDORScanner(BaseScanner):
                         },
                     )
 
-        # Path-based IDs: /api/user/123 → /api/user/124
+        # Path-based IDs: /api/user/123 -> /api/user/124
         path_parts = parsed.path.split("/")
         for i, part in enumerate(path_parts):
             if re.match(r"^\d+$", part):

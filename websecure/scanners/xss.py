@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Characters that must survive unescaped for an XSS payload to be executable.
-# Mapping: dangerous char → its HTML entity encodings
+# Mapping: dangerous char -> its HTML entity encodings
 _DANGEROUS_CHARS: Dict[str, List[str]] = {
     "<":  ["&lt;", "&#60;", "&#x3c;", "&#x3C;", "%3c", "%3C"],
     ">":  ["&gt;", "&#62;", "&#x3e;", "&#x3E;", "%3e", "%3E"],
@@ -77,7 +77,7 @@ def _detect_reflection_context(html_text: str, canary: str) -> str:
     last_tag_start = before.rfind("<")
     if last_tag_start != -1:
         tag_section = before[last_tag_start:]
-        # Count quotes — if odd number of " or ' → we're inside an attribute value
+        # Count quotes — if odd number of " or ' -> we're inside an attribute value
         if tag_section.count('"') % 2 == 1:
             return "attr_double"
         if tag_section.count("'") % 2 == 1:
@@ -240,7 +240,7 @@ class XSSScanner(BaseScanner):
             if all_forms:
                 self.scan_forms(all_forms)
 
-        # ─── Adım 4 eklentileri ───────────────────────────────────────────
+        # --- Adım 4 eklentileri -------------------------------------------
         self._run_advanced_xss_phase(urls)
 
     def scan_url(self, url: str):
@@ -353,7 +353,7 @@ class XSSScanner(BaseScanner):
                 confidence="high" if dom_confirmed else "medium",
                 **hit,
             )
-            # XSS → ATO PoC for every confirmed finding
+            # XSS -> ATO PoC for every confirmed finding
             if dom_confirmed:
                 ato = ato_gen.generate_poc(url, param_name, hit.get("payload", ""))
                 self.report_finding(severity="Critical", **ato)
@@ -398,7 +398,7 @@ class XSSScanner(BaseScanner):
             logger.debug(f"[XSS] DOM doğrulama hatası ({test_url}): {exc!r}")
             return False
 
-    # ─── Adım 4: Advanced XSS Integration ────────────────────────────────
+    # --- Adım 4: Advanced XSS Integration --------------------------------
 
     def _inject_param_fn(self, url: str, param: str, payload: str) -> str:
         """Adapter: wraps inject_param for use as Callable by standalone probers."""
@@ -408,7 +408,7 @@ class XSSScanner(BaseScanner):
         """
         Orchestrates Adım 4 advanced XSS probers:
         mXSS, DOM Clobbering, CSP bypass, Trusted Types,
-        Prototype Pollution, Template Literal, Blind XSS, XSS→ATO.
+        Prototype Pollution, Template Literal, Blind XSS, XSS->ATO.
         """
         mxss_prober    = MutationXSSProber()
         clobber_prober = DOMClobberingProber()
@@ -433,7 +433,7 @@ class XSSScanner(BaseScanner):
                 csp_info = csp_analyzer.analyze(resp0)
                 csp_bypasses = csp_analyzer.get_bypass_payloads(csp_info)
                 if csp_bypasses:
-                    logger.info("[XSS] CSP detected on %s → %d bypass payloads", url, len(csp_bypasses))
+                    logger.info("[XSS] CSP detected on %s -> %d bypass payloads", url, len(csp_bypasses))
             except Exception:
                 pass
 
@@ -948,7 +948,7 @@ class TrustedTypesBypassProber:
 
 class PrototypePollutionXSSProber:
     """
-    Prototype Pollution → XSS gadget chain prober.
+    Prototype Pollution -> XSS gadget chain prober.
     Injects __proto__ / constructor.prototype keys into query string.
     Single Responsibility: PP-based XSS surface detection.
     """
@@ -972,7 +972,7 @@ class PrototypePollutionXSSProber:
                 resp = session.get(test_url, timeout=timeout)
                 if any(sig in resp.text for sig in self._XSS_SIGS):
                     findings.append({
-                        "vuln_type": "Prototype Pollution → XSS",
+                        "vuln_type": "Prototype Pollution -> XSS",
                         "url": url,
                         "param": key,
                         "payload": payload,
@@ -1083,7 +1083,7 @@ class BlindXSSProber:
 
 class XSSToATOChain:
     """
-    XSS → Account Takeover PoC generator.
+    XSS -> Account Takeover PoC generator.
     Given a confirmed XSS, produces cookie-steal, CSRF-token-steal,
     localStorage-steal, and email-change PoC payloads.
     Single Responsibility: ATO exploitation chain generation only.
@@ -1099,7 +1099,7 @@ class XSSToATOChain:
         uid = uuid.uuid4().hex[:8]
         h = attacker_host
         return {
-            "vuln_type": "XSS → Account Takeover (PoC)",
+            "vuln_type": "XSS -> Account Takeover (PoC)",
             "source_xss_url": xss_url,
             "source_param": param,
             "source_payload": payload,

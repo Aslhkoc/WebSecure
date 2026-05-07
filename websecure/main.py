@@ -80,11 +80,11 @@ import random as _banner_random, platform as _banner_platform
 _BANNER_VERSION = "2.0.4-dev"
 _BANNER_CODENAME = "GhostProtocol"
 _BANNERS = [r"""
-  ██████  ███████ ███    ██ ███████ ███████ ██████  ██      ██████  ██ ████████
- ██  ████ ██      ████   ██ ██      ██      ██   ██ ██     ██    ██ ██    ██
- ██   ███ █████   ██ ██  ██ ███████ █████   ██████  ██     ██    ██ ██    ██
- ██  ████ ██      ██  ██ ██      ██ ██      ██      ██     ██    ██ ██    ██
-  ██████  ███████ ██   ████ ███████ ███████ ██      ██████  ██████  ██    ██
+  ######  ####### ###    ## ####### ####### ######  ##      ######  ## ########
+ ##  #### ##      ####   ## ##      ##      ##   ## ##     ##    ## ##    ##
+ ##   ### #####   ## ##  ## ####### #####   ######  ##     ##    ## ##    ##
+ ##  #### ##      ##  ## ##      ## ##      ##      ##     ##    ## ##    ##
+  ######  ####### ##   #### ####### ####### ##      ######  ######  ##    ##
 
                       [ SYSTEM: COMPROMISED ]
                [ TARGET: ACQUIRED | VECTOR: LETHAL ]
@@ -244,7 +244,7 @@ if __package__ is None or __package__ == "":
 
 
 
-# FAZ-EK: URL normalizasyon → core/url_utils.py'e taşındı
+# FAZ-EK: URL normalizasyon -> core/url_utils.py'e taşındı
 from websecure.core.url_utils import (
     _ws3_is_ipv6_literal,
     _ws3_looks_like_host,
@@ -873,7 +873,7 @@ file_upload_scan = getattr(_fu_mod, "run", None) if _fu_mod else None
 # ------------------ Yardımcılar ------------------
 
 # ------------------ Tarama yoğunluğu (Agresif/Normal) teklifi ------------------
-# FAZ-EK: Profil seçme/uygulama helpers → core/scan_profile.py'e taşındı
+# FAZ-EK: Profil seçme/uygulama helpers -> core/scan_profile.py'e taşındı
 from websecure.core.scan_profile import (
     _estimate_minutes,
     _apply_normal_profile,
@@ -883,7 +883,7 @@ from websecure.core.scan_profile import (
 )
 
 
-# FAZ-EK: Proxy/session helpers + ensure_session → core/session_factory.py'e taşındı
+# FAZ-EK: Proxy/session helpers + ensure_session -> core/session_factory.py'e taşındı
 from websecure.core.session_factory import (
     ensure_session,
     _parse_host_port_from_proxy,
@@ -1133,7 +1133,7 @@ def _passive_js_analyze(session: requests.Session, js_urls: list[str], results: 
                 continue
 
             # -L (redirect), --max-time 5s, -sS sessiz, -w kodu yaz, içerik stdout'a düşer
-            # not: check=False → istisna yok; returncode üzerinden karar
+            # not: check=False -> istisna yok; returncode üzerinden karar
             cp = subprocess.run(
                 [curl_bin, "-L", "--max-time", "5", "-sS", u, "-w", "\n%{http_code}\n"],
                 stdout=subprocess.PIPE,
@@ -1219,7 +1219,7 @@ def _run_phase_plan(ctx, *, skip_legacy_offensive=True):
     return {"ran": ran, "enabled": enabled}
 
 # ------------------ Ana akış ------------------
-# FAZ-EK: Egress policy helpers → core/egress.py'e taşındı
+# FAZ-EK: Egress policy helpers -> core/egress.py'e taşındı
 from websecure.core.egress import (
     _enforce_egress_policy,
     _egress_health_check,
@@ -1328,7 +1328,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-# ─── Phase helper functions (extracted from main()) ──────────────────────────
+# --- Phase helper functions (extracted from main()) --------------------------
 
 def _print_banner() -> None:
     """Print the WebSecure ASCII art startup banner."""
@@ -1393,7 +1393,7 @@ def _startup_phase(cfg: dict) -> None:
     is_wizard      = "--wizard" in sys.argv
     if is_wizard:
         try:
-            from websecure.core.wizard import run_wizard  # noqa: PLC0415
+            from websecure.cli.wizard import run_wizard  # noqa: PLC0415
             if not run_wizard():
                 sys.exit(0)
         except ImportError:
@@ -1565,7 +1565,7 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
     return profile, cfg
 
 
-# ─── Slim main entry point ────────────────────────────────────────────────────
+# --- Slim main entry point ----------------------------------------------------
 
 def main() -> None:
     """
@@ -1610,7 +1610,7 @@ def main() -> None:
     _run_scan_phases(cfg, args, url, scheme, profile, results)
 
 
-# ─── Scan execution (extracted from main) ────────────────────────────────────
+# --- Scan execution (extracted from main) ------------------------------------
 
 def _run_scan_phases(
     cfg:     dict,
@@ -1622,7 +1622,7 @@ def _run_scan_phases(
 ) -> None:
     """
     Execute all scan phases in order:
-      session setup → auth flow → context → unified plan → reporting → fuzzing.
+      session setup -> auth flow -> context -> unified plan -> reporting -> fuzzing.
 
     All scanner module globals are accessible because this function lives in
     the same module where they are dynamically loaded at import time.
@@ -2457,13 +2457,13 @@ def _as_int(x, default: int = 0) -> int:
 
 
 if __name__ == "__main__":
-    # from websecure.core.scan_modes import hpm_bootstrap_from_file
+    # scan_modes modülü kaldırıldı — işlevsellik scan_runner.py içinde
     # hpm_bootstrap_from_file('config.json')
 
     # [WS3] Interactive Mode (Wizard)
     if len(_sys.argv) < 2:
         try:
-            from websecure.core.wizard import run_wizard
+            from websecure.cli.wizard import run_wizard
             # Run wizard and if it returns True (Run Now selected)
             if run_wizard():
                 # We need to simulate CLI args for main() to be happy

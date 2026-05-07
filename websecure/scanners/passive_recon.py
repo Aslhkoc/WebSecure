@@ -635,8 +635,8 @@ class WaybackScanner(BaseScanner):
 class S3BucketScanner(BaseScanner):
     """
     Hedef domain'den türetilen isimlendirme kalıpları ile S3, GCS ve
-    Azure Blob bucket'larını test eder. Public erişim → Critical,
-    private (403) → Medium.
+    Azure Blob bucket'larını test eder. Public erişim -> Critical,
+    private (403) -> Medium.
     """
     _SUFFIXES = [
         "", "-prod", "-production", "-dev", "-development", "-staging",
@@ -771,7 +771,7 @@ class CloudDetector(BaseScanner):
         "Netlify":          ["x-nf-request-id"],
         "Heroku":           ["x-heroku-queue-wait-time", "x-heroku-dynos-in-use"],
     }
-    # CNAME suffixes → potential subdomain takeover targets
+    # CNAME suffixes -> potential subdomain takeover targets
     _TAKEOVER_CNAMES: Dict[str, str] = {
         "s3.amazonaws.com":           "AWS S3 (subdomain takeover riski)",
         "cloudfront.net":             "AWS CloudFront",

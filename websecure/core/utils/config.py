@@ -244,7 +244,7 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "safe_full": {
             "rps": 4,
             "concurrency": 8,
-            "description": "Safe Full → Stealth'e eslendi (Built-in)",
+            "description": "Safe Full -> Stealth'e eslendi (Built-in)",
             "modules": ["*"],
             "offensive": _FULL_SCOPE_OFFENSIVE,
             "http": {"timeout_seconds": 30, "retries": 3},
@@ -252,14 +252,14 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "deep": {
             "rps": 15,
             "concurrency": 20,
-            "description": "Deep → Agresif'e eslendi (Built-in)",
+            "description": "Deep -> Agresif'e eslendi (Built-in)",
             "modules": ["*"],
             "offensive": _FULL_SCOPE_OFFENSIVE,
         },
         "normal": {
             "rps": 10,
             "concurrency": 10,
-            "description": "Normal → Stealth'e eslendi (Built-in)",
+            "description": "Normal -> Stealth'e eslendi (Built-in)",
             "modules": ["*"],
             "offensive": _FULL_SCOPE_OFFENSIVE,
         },
@@ -294,7 +294,7 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
             # Direct overwrite
             cfg[key] = val
             
-    # 3. Normalize http.timeout → http.timeout_seconds
+    # 3. Normalize http.timeout -> http.timeout_seconds
     # Profiles set "timeout" but http.py reads "timeout_seconds"
     http_sec = cfg.get("http")
     if isinstance(http_sec, dict) and "timeout" in http_sec and "timeout_seconds" not in http_sec:

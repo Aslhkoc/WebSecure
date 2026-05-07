@@ -217,7 +217,7 @@ class ConfigWizard:
 
         if BoolQuestion("confirm", "Yapılandırmayı kaydet?", default=True).ask():
             self._save(cfg)
-            print(f"\n[✓] Config kaydedildi: {self.output_path.resolve()}")
+            print(f"\n[[OK]] Config kaydedildi: {self.output_path.resolve()}")
         else:
             print("[!] Config kaydedilmedi.")
 
@@ -230,26 +230,26 @@ class ConfigWizard:
     def _collect_answers(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {}
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  1/10 — Hedef")
-        print("═" * 60)
+        print("=" * 60)
         cfg["target"] = TextQuestion(
             "target", "Tarama hedefi URL",
             default="http://localhost",
             validator=_validate_url,
         ).ask()
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  2/10 — Tarama Profili")
-        print("═" * 60)
+        print("=" * 60)
         cfg["profile"] = ChoiceQuestion(
             "profile", "Tarama profili",
             self._PROFILES, default="default",
         ).ask()
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  3/10 — Kimlik Doğrulama")
-        print("═" * 60)
+        print("=" * 60)
         auth_type = ChoiceQuestion(
             "auth_type", "Kimlik doğrulama tipi",
             self._AUTH_TYPES, default="none",
@@ -275,9 +275,9 @@ class ConfigWizard:
             cfg["auth"]["username_val"] = TextQuestion("username_val", "Kullanıcı adı").ask()
             print("    [i] Şifre için WS_PASSWORD ortam değişkenini kullanın.")
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  4/10 — Proxy")
-        print("═" * 60)
+        print("=" * 60)
         use_proxy = BoolQuestion("use_proxy", "Proxy kullan?", default=False).ask()
         if use_proxy:
             cfg["proxy"] = TextQuestion(
@@ -287,9 +287,9 @@ class ConfigWizard:
         else:
             cfg["proxy"] = None
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  5/10 — Rapor Formatı")
-        print("═" * 60)
+        print("=" * 60)
         cfg["report_formats"] = MultiChoiceQuestion(
             "report_formats", "Rapor formatları",
             self._REPORT_FORMATS, default=["json", "html"],
@@ -299,9 +299,9 @@ class ConfigWizard:
             default="./websecure_reports",
         ).ask()
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  6/10 — Bildirimler")
-        print("═" * 60)
+        print("=" * 60)
         notify_channels = MultiChoiceQuestion(
             "notify", "Bildirim kanalları",
             self._NOTIFY_CHANNELS, default=["none"],
@@ -330,9 +330,9 @@ class ConfigWizard:
                         ).ask(),
                     }
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  7/10 — Wordlist Senkronizasyonu")
-        print("═" * 60)
+        print("=" * 60)
         cfg["payloads"] = {
             "sync": BoolQuestion("sync", "Wordlist'leri otomatik güncelle?", default=False).ask(),
             "max_per_category": IntQuestion(
@@ -341,9 +341,9 @@ class ConfigWizard:
             ).ask(),
         }
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  8/10 — Performans")
-        print("═" * 60)
+        print("=" * 60)
         cfg["concurrency"] = IntQuestion(
             "threads", "Paralel thread sayısı",
             default=10, min_val=1, max_val=200,
@@ -353,9 +353,9 @@ class ConfigWizard:
             default=15, min_val=1, max_val=120,
         ).ask()
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  9/10 — Gelişmiş")
-        print("═" * 60)
+        print("=" * 60)
         cfg["verify_ssl"]  = BoolQuestion("ssl", "SSL sertifikasını doğrula?", default=True).ask()
         cfg["follow_redirects"] = BoolQuestion("redir", "Yönlendirmeleri takip et?", default=True).ask()
         cfg["user_agent"]  = TextQuestion(
@@ -363,9 +363,9 @@ class ConfigWizard:
             default="Mozilla/5.0 (WebSecure Scanner/2.0)",
         ).ask()
 
-        print("\n" + "═" * 60)
+        print("\n" + "=" * 60)
         print("  10/10 — Tarama Kapsamı")
-        print("═" * 60)
+        print("=" * 60)
         cfg["scope"] = {
             "included_paths": TextQuestion(
                 "inc_paths",
@@ -396,9 +396,9 @@ class ConfigWizard:
         print("=" * 60)
 
     def _print_summary(self, cfg: Dict[str, Any]) -> None:
-        print("\n" + "─" * 60)
+        print("\n" + "-" * 60)
         print("  Yapılandırma Özeti")
-        print("─" * 60)
+        print("-" * 60)
         print(f"  Hedef   : {cfg.get('target')}")
         print(f"  Profil  : {cfg.get('profile')}")
         print(f"  Auth    : {cfg.get('auth', {}).get('type', 'none')}")
@@ -407,7 +407,7 @@ class ConfigWizard:
         print(f"  Thread  : {cfg.get('concurrency')}")
         print(f"  Timeout : {cfg.get('timeout')}s")
         print(f"  Çıktı   : {cfg.get('output_dir')}")
-        print("─" * 60)
+        print("-" * 60)
 
     def _save(self, cfg: Dict[str, Any]) -> None:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)

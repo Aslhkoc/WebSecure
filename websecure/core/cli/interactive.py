@@ -114,13 +114,13 @@ def setup_tor(cfg: dict, args: Namespace) -> None:
             cfg["_tor_proxy"] = None
     else:
         print("")
-        print("  ╔══════════════════════════════════════════════════════╗")
-        print("  ║  ⚠  GIZLILIK UYARISI                                ║")
-        print("  ║  Tor kullanilmiyor!                                  ║")
-        print("  ║  IP adresiniz hedef sunucuya acikca gorunuyor.       ║")
-        print("  ║  ISP ve ag dinleyicileri tarama yaptigınızı biliyor. ║")
-        print("  ║  Sadece yetkili olduguz sistemlerde devam edin.      ║")
-        print("  ╚══════════════════════════════════════════════════════╝")
+        print("  +======================================================+")
+        print("  |  [!]  GIZLILIK UYARISI                                |")
+        print("  |  Tor kullanilmiyor!                                  |")
+        print("  |  IP adresiniz hedef sunucuya acikca gorunuyor.       |")
+        print("  |  ISP ve ag dinleyicileri tarama yaptigınızı biliyor. |")
+        print("  |  Sadece yetkili olduguz sistemlerde devam edin.      |")
+        print("  +======================================================+")
         print("")
         cfg["_tor_proxy"] = None
 
@@ -152,19 +152,19 @@ def setup_auth(cfg: dict, args: Namespace) -> None:
     print("  Hedef sitede hesap varsa login bilgilerini girin.")
     print("  Login gerektiren sayfalar da taranacak.")
     print("")
-    print("  ╔══════════════════════════════════════════════════════╗")
-    print("  ║  ⚠  OPERASYONEL GUVENLIK (OpSec) UYARISI           ║")
-    print("  ║                                                      ║")
-    print("  ║  GERCEK hesabinizla giris yaparsaniz:               ║")
-    print("  ║   • Hesabiniz hedef sunucu LOGLARINDA gorunur       ║")
-    print("  ║   • IP adresiniz hesabinizla ESLESTIRILIR           ║")
-    print("  ║   • Anormal istek paterni hesaba BAGLANIR           ║")
-    print("  ║   • Hesabiniz banlanabilir / kimliginiz ifsa olur   ║")
-    print("  ║                                                      ║")
-    print("  ║  → Mutlaka OZEL BIR TEST HESABI olusturun!         ║")
-    print("  ║  → Test hesabi: test_scan@gecici-mail.com gibi      ║")
-    print("  ║  → Gercek isim / gercek mail KULLANMAYIN            ║")
-    print("  ╚══════════════════════════════════════════════════════╝")
+    print("  +======================================================+")
+    print("  |  [!]  OPERASYONEL GUVENLIK (OpSec) UYARISI           |")
+    print("  |                                                      |")
+    print("  |  GERCEK hesabinizla giris yaparsaniz:               |")
+    print("  |   • Hesabiniz hedef sunucu LOGLARINDA gorunur       |")
+    print("  |   • IP adresiniz hesabinizla ESLESTIRILIR           |")
+    print("  |   • Anormal istek paterni hesaba BAGLANIR           |")
+    print("  |   • Hesabiniz banlanabilir / kimliginiz ifsa olur   |")
+    print("  |                                                      |")
+    print("  |  -> Mutlaka OZEL BIR TEST HESABI olusturun!         |")
+    print("  |  -> Test hesabi: test_scan@gecici-mail.com gibi      |")
+    print("  |  -> Gercek isim / gercek mail KULLANMAYIN            |")
+    print("  +======================================================+")
     print("")
 
     if _profile_valid:
@@ -282,22 +282,22 @@ def setup_proxy(cfg: dict, args: Namespace) -> None:
     _auth_on   = bool(((cfg.get("authenticated") or {}).get("auth_profiles") or [{}])[0].get("username"))
     _uname     = (((cfg.get("authenticated") or {}).get("auth_profiles") or [{}])[0].get("username") or "")
 
-    print("  ┌─────────────────────────────────────────────────────┐")
-    print("  │              TARAMA OPSec OZETI                     │")
-    print("  ├─────────────────────────────────────────────────────┤")
-    _tor_str = "✓ AKTIF" if _tor_on else "✗ Kapali — Gercek IP gorunuyor"
-    print(f"  │  Tor           : {_tor_str:40}│")
+    print("  +-----------------------------------------------------+")
+    print("  |              TARAMA OPSec OZETI                     |")
+    print("  +-----------------------------------------------------+")
+    _tor_str = "[OK] AKTIF" if _tor_on else "[FAIL] Kapali — Gercek IP gorunuyor"
+    print(f"  |  Tor           : {_tor_str:40}|")
     if _pool_on:
         _pc = len(cfg["network"]["proxies"]["pool"])
-        print(f"  │  Proxy havuzu  : ✓ {_pc} proxy, round_robin rotasyon{' ' * max(0, 17 - len(str(_pc)))}│")
+        print(f"  |  Proxy havuzu  : [OK] {_pc} proxy, round_robin rotasyon{' ' * max(0, 17 - len(str(_pc)))}|")
     elif _single_on:
-        print(f"  │  Tek proxy     : ✓ AKTIF{' ' * 30}│")
+        print(f"  |  Tek proxy     : [OK] AKTIF{' ' * 30}|")
     else:
-        print(f"  │  Proxy         : ✗ Yok — Gercek IP{' ' * 19}│")
+        print(f"  |  Proxy         : [FAIL] Yok — Gercek IP{' ' * 19}|")
     if _auth_on:
-        print(f"  │  Hesap         : ⚠ {_uname[:36]:36}│")
-        print(f"  │  (!) Hedef bu hesabi loglarinda gorecek{' ' * 14}│")
+        print(f"  |  Hesap         : [!] {_uname[:36]:36}|")
+        print(f"  |  (!) Hedef bu hesabi loglarinda gorecek{' ' * 14}|")
     else:
-        print(f"  │  Hesap         : Kimlik dogrulama yok{' ' * 16}│")
-    print("  └─────────────────────────────────────────────────────┘")
+        print(f"  |  Hesap         : Kimlik dogrulama yok{' ' * 16}|")
+    print("  +-----------------------------------------------------+")
     print("")

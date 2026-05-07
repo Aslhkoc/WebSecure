@@ -99,7 +99,7 @@ class CmdiScanner(BaseScanner):
         for url in urls:
             self.scan_url(url)
 
-        # ─── Adım 5: RCE chain — komut çıktısını raporla ─────────────────
+        # --- Adım 5: RCE chain — komut çıktısını raporla -----------------
         self._run_rce_chain(urls)
 
     def _run_rce_chain(self, urls: List[str]) -> None:
@@ -434,7 +434,7 @@ def run(
 
 
 # ===========================================================================
-# Adım 5 — CMDI → RCE Automation Chain
+# Adım 5 — CMDI -> RCE Automation Chain
 # ===========================================================================
 
 class CMDIRCEChain:

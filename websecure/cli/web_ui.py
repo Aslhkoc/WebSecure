@@ -12,8 +12,8 @@ Tarayıcıda http://localhost:PORT adresinde açılır.
 * Tarama durumu (progress bar)
 * Log paneli
 * REST API: /api/status, /api/findings, /api/logs
-* POST /api/scan → yeni tarama başlat
-* GET /api/sarif → SARIF export
+* POST /api/scan -> yeni tarama başlat
+* GET /api/sarif -> SARIF export
 * Dashboard HTML/JS gömülü (dosya gerektirmez)
 
 SOLID
@@ -216,9 +216,9 @@ button.danger { background: #dc3545; }
 </head>
 <body>
 <header>
-  <h1>⚡ WebSecure</h1>
+  <h1>[!] WebSecure</h1>
   <span class="badge" id="version-badge">v2.0</span>
-  <span id="connection-status" style="margin-left:auto;font-size:.8rem;color:#28a745">● Bağlı</span>
+  <span id="connection-status" style="margin-left:auto;font-size:.8rem;color:#28a745">[*] Bağlı</span>
 </header>
 
 <div class="container">
@@ -271,7 +271,7 @@ evtSource.onmessage = (e) => {
   if (msg.type === 'status')   handleStatus(msg.data);
 };
 evtSource.onerror = () => {
-  document.getElementById('connection-status').textContent = '● Bağlantı kesildi';
+  document.getElementById('connection-status').textContent = '[*] Bağlantı kesildi';
   document.getElementById('connection-status').style.color = '#dc3545';
 };
 

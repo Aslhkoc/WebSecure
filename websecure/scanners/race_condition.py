@@ -4,7 +4,7 @@ websecure.scanners.race_condition
 Race Condition / Time-of-Check-Time-of-Use (TOCTOU) vulnerability detector.
 
 Techniques
-──────────
+----------
   1. Parallel identical requests — fire N concurrent copies of the same
      mutating request (POST /transfer, POST /redeem) and look for duplicate
      success responses indicating the server processed the same action twice.
@@ -22,7 +22,7 @@ All techniques use a "last-byte sync" strategy: prepare all connections,
 then release the final byte simultaneously to maximise overlap.
 
 References
-──────────
+----------
   • https://portswigger.net/web-security/race-conditions
   • https://portswigger.net/research/smashing-the-state-machine
 """
@@ -503,7 +503,7 @@ class GateTechniqueExploiter(BaseScanner):
     """
     "Last-byte synchronization" (gate) tekni
     - N baglanti hazir edilir, son byte gonderilmeden beklenir
-    - Tum son byte'lar ayni anda gonderilir → maksimum zaman celisimi
+    - Tum son byte'lar ayni anda gonderilir -> maksimum zaman celisimi
     - Duplicate success response = race window confirmed
     """
     name = "gate_technique"
@@ -631,7 +631,7 @@ class GateTechniqueExploiter(BaseScanner):
 # ===========================================================================
 class RaceAuthBypassProber(BaseScanner):
     """
-    Race condition → auth/rate-limit bypass:
+    Race condition -> auth/rate-limit bypass:
     - Login rate limit bypass (brute force window)
     - Concurrent session creation bypass
     - Parallel password reset token generation
@@ -757,7 +757,7 @@ class RaceAuthBypassProber(BaseScanner):
 # ===========================================================================
 class RaceDoubleSpendProber(BaseScanner):
     """
-    Race condition → double-spend / limit bypass:
+    Race condition -> double-spend / limit bypass:
     - Coupon/promo code parallel redemption
     - Transfer duplicate (same amount, same reference)
     - Vote/like count bypass
