@@ -253,7 +253,7 @@ class KatanaWrapper(ToolIntegration):
             cmd.append("-form-extraction")
 
         if known_files:
-            cmd.append("-known-files", "all")
+            cmd.extend(["-known-files", "all"])
 
         if self.scope_regex:
             cmd.extend(["-scope-regex", self.scope_regex])
