@@ -359,6 +359,9 @@ class SQLInjectionScanner(BaseScanner):
                     payload=payload,
                     severity="Critical",
                     evidence=evidence,
+                    detection_method="union_based",
+                    verified=True,
+                    confidence="confirmed",
                 )
 
             # Boolean-blind fallback — independent, always run
@@ -372,6 +375,9 @@ class SQLInjectionScanner(BaseScanner):
                     payload=payload,
                     severity="Critical",
                     evidence=evidence,
+                    detection_method="boolean_blind",
+                    verified=True,
+                    confidence="high",
                 )
 
         # JSON body injection — test params as JSON payload
@@ -420,6 +426,8 @@ class SQLInjectionScanner(BaseScanner):
                     "param": param_name,
                     "payload": curr,
                     "evidence": f"DB: {db} — new error signature in response",
+                    "detection_method": "error_based",
+                    "confidence": "high",
                 }
 
             # Time-based — first-pass flag only; cross-validate before reporting
@@ -434,6 +442,9 @@ class SQLInjectionScanner(BaseScanner):
                             f"Time-based (cross-validated): first={elapsed:.2f}s, "
                             f"threshold={time_threshold:.2f}s"
                         ),
+                        "detection_method": "time_based",
+                        "confidence": "high",
+                        "verified": True,
                     }
             return None
 
@@ -518,6 +529,8 @@ class SQLInjectionScanner(BaseScanner):
                     "param": p_name,
                     "payload": payload,
                     "evidence": f"DB: {db}",
+                    "detection_method": "error_based",
+                    "confidence": "high",
                 }
 
             if self._is_time_payload(payload) and elapsed > time_threshold:
@@ -527,6 +540,8 @@ class SQLInjectionScanner(BaseScanner):
                     "param": p_name,
                     "payload": payload,
                     "evidence": f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s",
+                    "detection_method": "time_based",
+                    "confidence": "medium",
                 }
             return None
 
@@ -594,6 +609,8 @@ class SQLInjectionScanner(BaseScanner):
                         payload=payload,
                         severity="Critical",
                         evidence=f"DB: {db} — JSON body injection",
+                        detection_method="json_error",
+                        confidence="high",
                     )
                     break  # one finding per key is enough
 
@@ -608,6 +625,8 @@ class SQLInjectionScanner(BaseScanner):
                             f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
                             f"(JSON body)"
                         ),
+                        detection_method="json_time",
+                        confidence="medium",
                     )
                     break
 
@@ -669,6 +688,8 @@ class SQLInjectionScanner(BaseScanner):
                         payload=payload,
                         severity="Critical",
                         evidence=f"DB: {db} — header injection via {header}",
+                        detection_method="header_error",
+                        confidence="high",
                     )
                     break
 
@@ -683,6 +704,8 @@ class SQLInjectionScanner(BaseScanner):
                             f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
                             f"(header: {header})"
                         ),
+                        detection_method="header_time",
+                        confidence="medium",
                     )
                     break
 
@@ -735,7 +758,7 @@ class SQLInjectionScanner(BaseScanner):
                             f"Check OAST server for DNS/HTTP callbacks. "
                             f"Payloads tried: {len(sent)}"
                         ),
-                        extra={"oob_host": oob_host, "payloads_sent": len(sent)},
+                        extra={"oob_host": oob_host, "payloads_sent": len(sent), "detection_method": "oob_dns", "confidence": "low"},
                     )
                     break  # one finding per URL is enough
 
@@ -759,6 +782,9 @@ class SQLInjectionScanner(BaseScanner):
                         severity="Critical",
                         evidence=evidence,
                         extra={"db_hint": db_hint},
+                        detection_method="stacked_query",
+                        verified=True,
+                        confidence="high",
                     )
                     # Schema extraction fırsatı: stacked query = arbitrary SELECT
                     self._run_schema_extraction(url, param, db_hint)
@@ -780,6 +806,9 @@ class SQLInjectionScanner(BaseScanner):
                     f"Columns: {schema['columns']}"
                 ),
                 extra={"schema": schema},
+                detection_method="schema_extraction",
+                verified=True,
+                confidence="confirmed",
             )
 
     def _run_adaptive_scan(self, urls: List[str]) -> None:
@@ -812,6 +841,8 @@ class SQLInjectionScanner(BaseScanner):
                             payload=variant,
                             severity="Critical",
                             evidence=f"WAF bypassed: {db} error via mutation — HTTP {status_code}",
+                            detection_method="adaptive_waf_bypass",
+                            confidence="high",
                         )
                         break
 
@@ -841,6 +872,9 @@ class SQLInjectionScanner(BaseScanner):
                     f"Output dir: {result.get('output_dir')}"
                 ),
                 extra={"sqlmap": result},
+                detection_method="sqlmap_confirmed",
+                verified=True,
+                confidence="confirmed",
             )
 
 
