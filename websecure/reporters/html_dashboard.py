@@ -301,10 +301,11 @@ def render_html_dashboard(results: dict) -> str:
         sev_lbl = info["sev_label"]
         effort  = info["effort"]
         ec      = _EFFORT_COLOR.get(effort, "var(--text-muted)")
+        vtype_js = _escape(vtype).replace("'", "\\'")
         _rem_rows_html += (
-            f"<tr>"
+            f"<tr style='cursor:pointer;' onclick=\"filterByType('{vtype_js}')\" title='Click to filter findings by this type'>"
             f"<td style='text-align:center; color:var(--text-muted); font-weight:600'>{rank}</td>"
-            f"<td style='font-weight:500'>{_escape(vtype)}</td>"
+            f"<td style='font-weight:500'>{_escape(vtype)} <span style='font-size:0.75rem; color:var(--accent);'>▼ filter</span></td>"
             f"<td><span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)}</span></td>"
             f"<td style='text-align:center; color:var(--accent); font-weight:600'>{info['count']}</td>"
             f"<td style='font-size:0.88rem; color:var(--text-muted)'>{_escape(info['advice'])}</td>"
@@ -932,6 +933,16 @@ def render_html_dashboard(results: dict) -> str:
         renderTable(filtered);
     }}
 
+    function filterByType(vtype) {{
+        const searchInput = document.getElementById('searchInput');
+        // Strip "(bucket)" suffix added by dashboard e.g. "SSTI (ssti)" -> "SSTI"
+        const cleanType = vtype.split(' (')[0].trim();
+        searchInput.value = cleanType;
+        applyFilters();
+        // Scroll findings table into view
+        document.getElementById('findingsTable').scrollIntoView({{behavior: 'smooth', block: 'start'}});
+    }}
+
     function showDetail(id) {{
         const item = data.find(i => i.id === id);
         if(!item) return;
@@ -940,84 +951,125 @@ def render_html_dashboard(results: dict) -> str:
         const modal = document.getElementById('detailModal');
         document.getElementById('modalTitle').innerText = item.type;
 
+        // --- 1. Temel bilgiler ---
+        const verified = d.verified || d.confirmed;
+        const confidence = d.confidence || d.score;
+        const tool = d.tool || d.scanner || d.source;
+        const verBadge = verified
+            ? `<span style="background:rgba(63,185,80,0.15); border:1px solid var(--sev-low); color:var(--sev-low); border-radius:4px; padding:2px 8px; font-size:0.8rem; font-weight:600;">✓ Verified</span>`
+            : `<span style="background:rgba(139,148,158,0.1); border:1px solid var(--text-muted); color:var(--text-muted); border-radius:4px; padding:2px 8px; font-size:0.8rem;">Unverified</span>`;
+
         let html = `
             <div class="kv-grid">
                 <div class="label">URL</div> <div><a href="${{escapeHtml(item.url)}}" target="_blank" style="color:var(--accent)">${{escapeHtml(item.url)}}</a></div>
-                <div class="label">Method</div> <div>${{item.method}}</div>
-                <div class="label">Severity</div> <div><span class="tag ${{item.severity}}">${{item.severity}}</span></div>
-                <div class="label">Location</div> <div>${{escapeHtml(d.location)}}</div>
-                <div class="label">Param</div> <div><code>${{escapeHtml(item.param)}}</code></div>
+                <div class="label">Method</div> <div><code>${{escapeHtml(item.method)}}</code></div>
+                <div class="label">Severity</div> <div><span class="tag ${{item.severity}}">${{item.severity}}</span> ${{verBadge}}</div>
+                ${{d.location ? `<div class="label">Location</div> <div>${{escapeHtml(d.location)}}</div>` : ''}}
+                ${{item.param && item.param !== '-' ? `<div class="label">Parameter</div> <div><code style="color:var(--sev-high)">${{escapeHtml(item.param)}}</code></div>` : ''}}
+                ${{confidence ? `<div class="label">Confidence</div> <div>${{escapeHtml(String(confidence))}}</div>` : ''}}
+                ${{tool ? `<div class="label">Scanner</div> <div><code>${{escapeHtml(tool)}}</code></div>` : ''}}
             </div>
         `;
 
-        if(d.reason) {{
-             html += `<h3>Reason</h3><p>${{escapeHtml(d.reason)}}</p>`;
-        }}
-
-        if(d.poc || d.payload || d.evidence) {{
-            const poc = d.poc || d.payload || d.evidence || "";
-            if (typeof poc === 'object') {{
-                html += `<h3>Evidence</h3><pre>${{escapeHtml(JSON.stringify(poc, null, 2))}}</pre>`;
-            }} else {{
-                html += `<h3>PoC / Payload</h3><pre>${{escapeHtml(poc)}}</pre>`;
-            }}
-        }}
-
-        // [User Request] Render ALL keys in detail for Generic items to avoid "empty" look
-        // If it's a generic info item, dump unknown keys as a table
-        let knownKeys = ["url", "method", "severity", "location", "param", "reason", "poc", "payload", "evidence"];
-        let extraKeys = Object.keys(d).filter(k => !knownKeys.includes(k) && !k.startsWith("_"));
-
-        if (extraKeys.length > 0) {{
-             html += `<h3>Additional Details</h3><div class="kv-grid">`;
-             extraKeys.forEach(k => {{
-                 let val = d[k];
-                 if (typeof val === 'object') val = JSON.stringify(val, null, 2);
-                 html += `<div class="label">${{escapeHtml(k)}}</div> <div><pre style="margin:0; padding:5px; font-size:0.85rem;">${{escapeHtml(val)}}</pre></div>`;
-             }});
-             html += `</div>`;
-        }}
-
-
-        // [WS3] Universal Forensic Panel (Evidence Locker)
-        const ev = d.evidence || {{}};
-        const hasEvidence = Object.keys(ev).length > 0;
-
-        if (hasEvidence) {{
-            html += `<div style="margin-top:20px; border:1px solid var(--accent); border-radius:6px; overflow:hidden;">`;
-            html += `<div style="background:var(--accent); color:#000; padding:10px; font-weight:bold;">[search] FACES OF EVIDENCE (FORENSICS)</div>`;
-            html += `<div style="padding:15px; background:var(--bg-card);">`;
-
-            // 1. Database Extraction (SQLMap)
-            if (ev.database_banner || ev.extracted_data_type || ev.dumped_data) {{
-                html += `<h4 style="color:var(--sev-high); margin-top:0;">[blood] Database Extraction Detected</h4>`;
-                html += `<div class="kv-grid" style="margin-bottom:10px;">`;
-                if(ev.database_banner) html += `<div class="label">DB Banner</div> <div><code>${{escapeHtml(ev.database_banner)}}</code></div>`;
-                if(ev.extracted_data_type) html += `<div class="label">Extracted Type</div> <div>${{escapeHtml(ev.extracted_data_type)}}</div>`;
-                html += `</div>`;
-
-                if (ev.dumped_data && Array.isArray(ev.dumped_data)) {{
-                    html += `<div><strong>Dumped Data Snippets:</strong></div>`;
-                    html += `<pre style="color:var(--sev-high); border-color:var(--sev-high);">${{escapeHtml(ev.dumped_data.join("\\n"))}}</pre>`;
-                }}
-            }}
-
-            // 2. XSS Alerts / Screenshots
-            if (ev.alert_text || ev.screenshot_path) {{
-                html += `<h4 style="color:var(--sev-med); margin-top:20px;">[snap] DOM Exploitation Proof</h4>`;
-                html += `<div class="kv-grid">`;
-                if(ev.alert_text) html += `<div class="label">Alert Box</div> <div><code>${{escapeHtml(ev.alert_text)}}</code></div>`;
-                if(ev.screenshot_path) html += `<div class="label">Screenshot</div> <div><a href="${{escapeHtml(ev.screenshot_path)}}" target="_blank">View File</a></div>`;
-                html += `</div>`;
-            }}
-
-            // 3. Raw Response (Universal)
-            if (ev.raw_response) {{
-                html += `<h4 style="margin-top:20px;">[doc] Raw Server Response</h4>`;
-                html += `<pre style="max-height:200px; overflow:auto; font-size:0.8rem;">${{escapeHtml(ev.raw_response)}}</pre>`;
-            }}
-
+        // --- 2. Teknik / Saldırı Detayı ---
+        const technique = d.technique || d.attack_type || d.attack || d.vector || d.category;
+        const scriptName = d.script || d.script_name || d.template;
+        const wafBypass  = d.waf_bypass || d.bypass_technique || d.encoding;
+        if (technique || scriptName || wafBypass) {{
+            html += `<div style="background:rgba(88,166,255,0.07); border:1px solid rgba(88,166,255,0.3); border-radius:6px; padding:12px; margin:12px 0;">`;
+            html += `<div style="font-weight:600; color:var(--accent); margin-bottom:8px;">⚡ Attack Technique</div>`;
+            html += `<div class="kv-grid" style="margin:0;">`;
+            if(technique)   html += `<div class="label">Technique</div><div><code style="color:var(--sev-high)">${{escapeHtml(technique)}}</code></div>`;
+            if(scriptName)  html += `<div class="label">Script / Template</div><div><code>${{escapeHtml(scriptName)}}</code></div>`;
+            if(wafBypass)   html += `<div class="label">WAF Bypass</div><div><code>${{escapeHtml(wafBypass)}}</code></div>`;
             html += `</div></div>`;
+        }}
+
+        // --- 3. Payload / PoC ---
+        const payloadVal = d.payload || d.poc;
+        if (payloadVal) {{
+            const payStr = typeof payloadVal === 'object' ? JSON.stringify(payloadVal, null, 2) : String(payloadVal);
+            html += `<div style="margin:12px 0;">`;
+            html += `<div style="font-weight:600; color:var(--sev-high); margin-bottom:6px;">💉 Payload / PoC</div>`;
+            html += `<pre style="background:#0d1117; border:1px solid var(--sev-high); border-radius:4px; padding:10px; font-size:0.88rem; overflow-x:auto; white-space:pre-wrap;">${{escapeHtml(payStr)}}</pre>`;
+            html += `</div>`;
+        }}
+
+        // --- 4. Reason / Message ---
+        const reasonVal = d.reason || d.message || d.description;
+        if (reasonVal) {{
+            html += `<div style="margin:12px 0;"><div style="font-weight:600; margin-bottom:4px;">📋 Reason</div><p style="color:var(--text-muted); margin:0;">${{escapeHtml(reasonVal)}}</p></div>`;
+        }}
+
+        // --- 5. HTTP İstek / Yanıt ---
+        const reqVal  = d.request  || d.raw_request  || (typeof d.evidence === 'object' && d.evidence && d.evidence.request);
+        const respVal = d.response || d.raw_response || (typeof d.evidence === 'object' && d.evidence && d.evidence.raw_response);
+        if (reqVal || respVal) {{
+            html += `<div style="margin:12px 0;">`;
+            html += `<div style="font-weight:600; margin-bottom:8px;">🌐 HTTP Traffic</div>`;
+            if (reqVal) {{
+                let rq = typeof reqVal === 'object' ? JSON.stringify(reqVal, null, 2) : String(reqVal);
+                if (rq.length > 3000) rq = rq.substring(0, 3000) + "\n... [truncated]";
+                html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ Request</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rq)}}</pre></details>`;
+            }}
+            if (respVal) {{
+                let rs = typeof respVal === 'object' ? JSON.stringify(respVal, null, 2) : String(respVal);
+                if (rs.length > 3000) rs = rs.substring(0, 3000) + "\n... [truncated]";
+                html += `<details><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ Response</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rs)}}</pre></details>`;
+            }}
+            html += `</div>`;
+        }}
+
+        // --- 6. Evidence Forensics (object tipinde) ---
+        const ev = (typeof d.evidence === 'object' && d.evidence && !Array.isArray(d.evidence)) ? d.evidence : {{}};
+        const hasEvidence = Object.keys(ev).length > 0;
+        if (hasEvidence) {{
+            html += `<div style="margin-top:16px; border:1px solid var(--accent); border-radius:6px; overflow:hidden;">`;
+            html += `<div style="background:var(--accent); color:#000; padding:8px 12px; font-weight:bold; font-size:0.9rem;">🔎 Evidence Locker</div>`;
+            html += `<div style="padding:12px; background:var(--bg-card);">`;
+            if (ev.database_banner || ev.dumped_data) {{
+                html += `<h4 style="color:var(--sev-high); margin-top:0;">🩸 DB Extraction</h4>`;
+                if(ev.database_banner) html += `<div><strong>Banner:</strong> <code>${{escapeHtml(ev.database_banner)}}</code></div>`;
+                if(ev.dumped_data && Array.isArray(ev.dumped_data))
+                    html += `<pre style="color:var(--sev-high);">${{escapeHtml(ev.dumped_data.join("\\n"))}}</pre>`;
+            }}
+            if (ev.alert_text || ev.mechanism) {{
+                html += `<h4 style="color:var(--sev-critical); margin-top:12px;">📸 XSS Proof</h4>`;
+                if(ev.mechanism)  html += `<div><strong>Mechanism:</strong> ${{escapeHtml(ev.mechanism)}}</div>`;
+                if(ev.alert_text) html += `<div><strong>Alert:</strong> <code style="background:#000; padding:2px 6px; color:#0f0;">${{escapeHtml(ev.alert_text)}}</code></div>`;
+            }}
+            if(ev.screenshot_path)
+                html += `<div style="margin-top:8px;"><img src="${{escapeHtml(ev.screenshot_path)}}" style="max-width:100%; border:1px solid #555;"></div>`;
+            // Remaining evidence keys
+            const usedEv = ["database_banner","extracted_data_type","dumped_data","alert_text","mechanism","raw_response","screenshot_path","request","response"];
+            const otherEv = Object.keys(ev).filter(k => !usedEv.includes(k));
+            if (otherEv.length > 0) {{
+                html += `<div style="margin-top:8px; font-size:0.85rem;"><div class="kv-grid">`;
+                otherEv.forEach(k => {{
+                    let v = ev[k];
+                    if (typeof v === 'object') v = JSON.stringify(v, null, 2);
+                    html += `<div class="label">${{escapeHtml(k)}}</div><div><pre style="margin:0; padding:4px; font-size:0.82rem;">${{escapeHtml(String(v))}}</pre></div>`;
+                }});
+                html += `</div></div>`;
+            }}
+            html += `</div></div>`;
+        }}
+
+        // --- 7. Geri kalan alanlar (dump) ---
+        const handledKeys = new Set(["url","method","severity","location","param","confidence","score",
+            "verified","confirmed","tool","scanner","source","technique","attack_type","attack","vector",
+            "category","script","script_name","template","waf_bypass","bypass_technique","encoding",
+            "payload","poc","reason","message","description","request","raw_request","response","raw_response","evidence","ts"]);
+        const extraKeys = Object.keys(d).filter(k => !handledKeys.has(k) && !k.startsWith("_"));
+        if (extraKeys.length > 0) {{
+            html += `<details style="margin-top:12px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem;">▶ All Raw Fields (${{extraKeys.length}})</summary>`;
+            html += `<div class="kv-grid" style="margin-top:8px; font-size:0.83rem;">`;
+            extraKeys.forEach(k => {{
+                let val = d[k];
+                if (typeof val === 'object') val = JSON.stringify(val, null, 2);
+                html += `<div class="label">${{escapeHtml(k)}}</div><div><pre style="margin:0; padding:4px;">${{escapeHtml(String(val ?? ''))}}</pre></div>`;
+            }});
+            html += `</div></details>`;
         }}
 
         document.getElementById('modalBody').innerHTML = html;
