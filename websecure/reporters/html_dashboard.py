@@ -44,7 +44,7 @@ def render_html_dashboard(results: dict) -> str:
         "headers", "security_headers", "rate_limit", "request_smuggling",
         "session_hunter", "mass_assignment", "ws_fuzz", "infrastructure",
         "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
-        "discovery", "passive", "subdomains",
+        "discovery", "passive", "subdomains", "vulnerability",
         "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
     ]
 
@@ -64,8 +64,15 @@ def render_html_dashboard(results: dict) -> str:
         for item in items:
             if not isinstance(item, dict): continue
 
-            # Filter out Generic items without useful info
-            f_type = item.get("type") or item.get("title") or "Generic"
+            # Build meaningful type label
+            if bucket == "nmap" and item.get("port"):
+                _svc = item.get("service") or item.get("name") or "?"
+                _prod = item.get("product") or ""
+                f_type = f"Open Port {item['port']}/{item.get('proto','tcp')} ({_svc}{' '+_prod if _prod else ''})"
+            elif bucket == "portscan" and not item.get("type"):
+                f_type = item.get("message") or "Port Scan Note"
+            else:
+                f_type = item.get("type") or item.get("title") or item.get("message") or "Generic"
             _raw_sev = (item.get("severity") or "Info").lower()
             _sev_map = {"critical": "Critical", "Critical": "Critical",
                         "high": "High", "High": "High",
@@ -343,31 +350,60 @@ def render_html_dashboard(results: dict) -> str:
     # --- Ports Data Prep ---
     ports_html = ""
     nmap_data = results.get("nmap") or results.get("port_scan") or results.get("ports") or []
-    if isinstance(nmap_data, list) and nmap_data:
+    # Also try bucket results directly
+    if not nmap_data:
+        _bkt_nmap = results.get("_buckets", {}).get("nmap") or []
+        if isinstance(_bkt_nmap, list):
+            nmap_data = _bkt_nmap
+
+    nmap_ran = bool(nmap_data) or bool(results.get("port_scan_summary")) or bool(results.get("open_ports"))
+
+    if isinstance(nmap_data, list):
         rows = []
         for p in nmap_data:
              if not isinstance(p, dict): continue
              # Normalize fields
-             host = p.get("host") or p.get("ip") or "-"
+             host = p.get("host") or p.get("ip") or p.get("hostname") or "-"
              port = p.get("port") or p.get("dst_port") or "-"
-             proto = p.get("proto") or "tcp"
+             proto = p.get("proto") or p.get("protocol") or "tcp"
              service = p.get("service") or p.get("name") or "-"
+             product = p.get("product") or ""
+             version = p.get("version") or ""
+             svc_label = f"{service}{' '+product if product else ''}{' '+version if version else ''}".strip()
              state = p.get("state") or "open"
 
-             # Accept "open" or "scanned" if we want to show them
              if "open" in str(state).lower():
-                 rows.append(f"<tr><td>{_escape(host)}</td><td>{port}</td><td>{_escape(proto)}</td><td>{_escape(service)}</td><td><span class='tag Low'>{_escape(state)}</span></td></tr>")
+                 rows.append(
+                     f"<tr>"
+                     f"<td style='font-family:monospace'>{_escape(host)}</td>"
+                     f"<td style='font-weight:600; color:var(--accent)'>{port}</td>"
+                     f"<td><span style='font-size:0.8rem; color:var(--text-muted)'>{_escape(proto)}</span></td>"
+                     f"<td>{_escape(svc_label)}</td>"
+                     f"<td><span class='tag Low'>{_escape(state)}</span></td>"
+                     f"</tr>"
+                 )
 
         if rows:
              ports_html = f"""
              <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[web] Open Ports (Nmap)</h3>
+                <h3 style="margin-top:0;">[web] Open Ports — Nmap ({len(rows)} found)</h3>
                 <div class="table-container">
                     <table>
                         <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Service</th><th>State</th></tr></thead>
                         <tbody>{''.join(rows)}</tbody>
                     </table>
                 </div>
+             </div>
+             """
+        else:
+             # Nmap ran but found no open ports — show the section with a notice
+             _no_ports_msg = "Nmap taraması tamamlandı — açık port bulunamadı." if nmap_ran else "Nmap taraması çalıştırılmadı veya veri bulunamadı."
+             ports_html = f"""
+             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                <h3 style="margin-top:0;">[web] Port Taraması — Nmap</h3>
+                <p style="color:var(--text-muted); font-size:0.9rem; margin:0;">
+                    <span style="color:var(--sev-low)">&#9632;</span> {_escape(_no_ports_msg)}
+                </p>
              </div>
              """
 
@@ -784,27 +820,27 @@ def render_html_dashboard(results: dict) -> str:
 
 <div class="container">
 
-    <!-- Executive Summary -->
+    <!-- Executive Summary — click any card to filter findings table -->
     <div class="stats-grid">
-        <div class="stat-card">
+        <div class="stat-card" id="card-Critical" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Critical')" title="Click to filter Critical findings">
             <span class="stat-value c-critical">{ stats["Critical"] }</span>
             <span class="stat-label">Critical</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="card-High" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('High')" title="Click to filter High findings">
             <span class="stat-value c-high">{ stats["High"] }</span>
             <span class="stat-label">High</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="card-Medium" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Medium')" title="Click to filter Medium findings">
             <span class="stat-value c-medium">{ stats["Medium"] }</span>
             <span class="stat-label">Medium</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="card-Low" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Low')" title="Click to filter Low findings">
             <span class="stat-value c-low">{ stats["Low"] }</span>
             <span class="stat-label">Low</span>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" id="card-All" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('')" title="Show all findings">
              <span class="stat-value">{ total_issues }</span>
-             <span class="stat-label">Total Findings</span>
+             <span class="stat-label">All Findings</span>
         </div>
     </div>
 
@@ -926,11 +962,39 @@ def render_html_dashboard(results: dict) -> str:
             const matchText = !term ||
                 (item.url && item.url.toLowerCase().includes(term)) ||
                 (item.type && item.type.toLowerCase().includes(term)) ||
-                (item.param && item.param.toLowerCase().includes(term));
+                (item.param && item.param.toLowerCase().includes(term)) ||
+                (item.severity && item.severity.toLowerCase().includes(term));
             const matchSev = !sev || item.severity === sev;
             return matchText && matchSev;
         }});
         renderTable(filtered);
+        // Highlight active severity card
+        const sevColors = {{
+            Critical: 'var(--sev-critical)',
+            High: 'var(--sev-high)',
+            Medium: 'var(--sev-medium)',
+            Low: 'var(--sev-low)',
+            '': 'var(--border)'
+        }};
+        ['Critical','High','Medium','Low','All'].forEach(s => {{
+            const card = document.getElementById('card-' + (s || 'All'));
+            if (!card) return;
+            const activeSev = s === 'All' ? '' : s;
+            if (activeSev === sev) {{
+                card.style.borderColor = sevColors[sev] || 'var(--accent)';
+                card.style.boxShadow = '0 0 0 2px ' + (sevColors[sev] || 'var(--accent)');
+            }} else {{
+                card.style.borderColor = 'var(--border)';
+                card.style.boxShadow = 'none';
+            }}
+        }});
+    }}
+
+    function filterBySeverity(sev) {{
+        document.getElementById('sevFilter').value = sev;
+        document.getElementById('searchInput').value = '';
+        applyFilters();
+        document.getElementById('findingsTable').scrollIntoView({{behavior: 'smooth', block: 'start'}});
     }}
 
     function filterByType(vtype) {{
