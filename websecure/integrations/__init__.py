@@ -111,14 +111,16 @@ _nmap = _safe_import("websecure.integrations.nmap", ["NmapWrapper"])
 NmapWrapper = _nmap.get("NmapWrapper")
 
 # SQLMap
-_sqlmap = _safe_import("websecure.integrations.sqlmap", ["SQLMapClient"])
+_sqlmap = _safe_import("websecure.integrations.sqlmap", ["SQLMapClient", "SQLMapWrapper"])
 SQLMapClient = _sqlmap.get("SQLMapClient")
+SQLMapWrapper = _sqlmap.get("SQLMapWrapper")
 
-# Amass (YENİ)
+# Amass + Subfinder (recon)
 _amass = _safe_import("websecure.integrations.amass", [
-    "AmassWrapper", "run_amass",
+    "AmassWrapper", "SubfinderIntegration", "run_amass",
 ])
 AmassWrapper = _amass.get("AmassWrapper")
+SubfinderIntegration = _amass.get("SubfinderIntegration")
 run_amass = _amass.get("run_amass")
 
 # httpx (YENİ)
@@ -176,12 +178,24 @@ def _auto_register_tools() -> ToolRegistry:
     registry = ToolRegistry.instance()
 
     _tool_classes = [
-        ("amass",       AmassWrapper),
-        ("httpx",       HttpxWrapper),
-        ("katana",      KatanaWrapper),
-        ("dalfox",      DalfoxWrapper),
-        ("metasploit",  MetasploitIntegration),
-        ("burp",        BurpIntegration),
+        # Subdomain / recon
+        ("amass",        AmassWrapper),
+        ("subfinder",    SubfinderIntegration),
+        # HTTP / crawl
+        ("httpx",        HttpxWrapper),
+        ("katana",       KatanaWrapper),
+        # Fuzzing / discovery
+        ("ffuf",         FFUFWrapper),
+        ("feroxbuster",  FeroxbusterWrapper),
+        # Vulnerability scanning
+        ("nuclei",       NucleiWrapper),
+        ("dalfox",       DalfoxWrapper),
+        ("sqlmap",       SQLMapWrapper),
+        # Port scanning
+        ("nmap",         NmapWrapper),
+        # Enterprise (optional)
+        ("metasploit",   MetasploitIntegration),
+        ("burp",         BurpIntegration),
     ]
 
     for name, cls in _tool_classes:
@@ -226,7 +240,9 @@ __all__ = [
     "FeroxbusterWrapper",
     "NmapWrapper",
     "SQLMapClient",
+    "SQLMapWrapper",
     "AmassWrapper",
+    "SubfinderIntegration",
     "HttpxWrapper",
     "KatanaWrapper",
     "DalfoxWrapper",

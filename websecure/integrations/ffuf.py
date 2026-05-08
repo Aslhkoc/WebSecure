@@ -11,6 +11,7 @@ import shutil
 import string
 import subprocess
 import tempfile
+import time
 import os
 from typing import List, Dict, Optional, Any
 
@@ -19,17 +20,30 @@ try:
 except ImportError:
     _requests = None
 
+from websecure.integrations.base import (
+    ToolFinding,
+    ToolIntegration,
+    ToolResult,
+    ToolSeverity,
+    ToolStatus,
+)
+
 logger = logging.getLogger(__name__)
 
 
-class FFUFWrapper:
+class FFUFWrapper(ToolIntegration):
     """
     Wrapper for FFUF (Fuzz Faster U Fool).
     Requires 'ffuf' binary to be in PATH.
     """
 
+    @property
+    def tool_name(self) -> str:
+        return "ffuf"
+
     def __init__(self, binary_path: str = "ffuf"):
-        self.binary = binary_path
+        super().__init__("")
+        self._binary_name = binary_path
         self._check_binary()
 
     def _check_binary(self):
@@ -44,7 +58,7 @@ class FFUFWrapper:
         ]
         for p in possible:
             if os.path.exists(p):
-                self.binary = p
+                self._binary_path = p
                 return
 
         logger.warning(f"FFUF binary not found at '{self.binary}'. Fuzzing will be disabled.")
@@ -54,6 +68,44 @@ class FFUFWrapper:
             import sys
             return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
         return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """ToolIntegration interface — directory/endpoint discovery on target."""
+        wordlist = kwargs.get("wordlist", "")
+        if not wordlist:
+            return ToolResult(tool=self.tool_name, target=target, status=ToolStatus.SKIPPED,
+                              stderr="No wordlist provided")
+        start = time.monotonic()
+        raw = self.run_scan(target, wordlist=wordlist,
+                            threads=kwargs.get("threads", 40),
+                            proxy=kwargs.get("proxy"),
+                            profile_cfg=kwargs.get("profile_cfg"))
+        findings = self._results_to_tool_findings(raw, target)
+        return ToolResult(
+            tool=self.tool_name, target=target, status=ToolStatus.SUCCESS,
+            findings=findings, duration_s=time.monotonic() - start,
+            extra={"discovered": raw},
+        )
+
+    def _results_to_tool_findings(self, results: List[Dict], target: str) -> List[ToolFinding]:
+        findings: List[ToolFinding] = []
+        for r in results:
+            status = r.get("status", 0)
+            url = r.get("url", target)
+            sev = ToolSeverity.MEDIUM if status in {401, 403, 500} else ToolSeverity.INFO
+            findings.append(ToolFinding(
+                title=f"Discovered: {r.get('input', url)}  [{status}]",
+                severity=sev,
+                url=url,
+                tool=self.tool_name,
+                description=f"HTTP {status}  Size: {r.get('length', 0)}  Words: {r.get('words', 0)}",
+                evidence=json.dumps(r)[:300],
+                confidence="high",
+                verified=True,
+                tags=["discovery", "ffuf", f"http-{status}"],
+                raw=r,
+            ))
+        return findings
 
     def _get_baseline_size(self, base_url: str) -> Optional[str]:
         """
@@ -152,7 +204,8 @@ class FFUFWrapper:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                check=False
+                timeout=600,
+                check=False,
             )
 
             if process.returncode != 0 and process.stderr:
@@ -447,11 +500,16 @@ class FFUFWrapper:
 # SECTION 2: Feroxbuster (merged from feroxbuster.py)
 # ============================================================================
 
-class FeroxbusterWrapper:
+class FeroxbusterWrapper(ToolIntegration):
     """Wrapper for Feroxbuster binary."""
 
+    @property
+    def tool_name(self) -> str:
+        return "feroxbuster"
+
     def __init__(self):
-        self.binary = "feroxbuster"
+        super().__init__("")
+        self._binary_name = "feroxbuster"
         self._find_binary()
 
     def _find_binary(self):
@@ -465,11 +523,47 @@ class FeroxbusterWrapper:
         ]
         for p in possible:
             if os.path.exists(p):
-                self.binary = p
+                self._binary_path = p
                 return
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """ToolIntegration interface — recursive directory brute-force."""
+        start = time.monotonic()
+        raw = self.scan(
+            target,
+            wordlist=kwargs.get("wordlist"),
+            threads=kwargs.get("threads", 50),
+            depth=kwargs.get("depth", 2),
+        )
+        findings = self._results_to_tool_findings(raw, target)
+        return ToolResult(
+            tool=self.tool_name, target=target, status=ToolStatus.SUCCESS,
+            findings=findings, duration_s=time.monotonic() - start,
+            extra={"discovered": raw},
+        )
+
+    def _results_to_tool_findings(self, results: List[Dict], target: str) -> List[ToolFinding]:
+        findings: List[ToolFinding] = []
+        for r in results:
+            status = r.get("status", 0)
+            url = r.get("url", target)
+            sev = ToolSeverity.MEDIUM if status in {401, 403, 500} else ToolSeverity.INFO
+            findings.append(ToolFinding(
+                title=f"Discovered: {url}  [{status}]",
+                severity=sev,
+                url=url,
+                tool=self.tool_name,
+                description=f"HTTP {status}  Size: {r.get('length', 0)}  Words: {r.get('words', 0)}",
+                evidence=json.dumps(r)[:300],
+                confidence="high",
+                verified=True,
+                tags=["discovery", "feroxbuster", f"http-{status}"],
+                raw=r,
+            ))
+        return findings
 
     def scan(self, target: str, wordlist: str = None, threads: int = 50,
              depth: int = 1, extra_args: List[str] = None) -> List[Dict[str, Any]]:

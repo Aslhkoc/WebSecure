@@ -378,7 +378,160 @@ def run_amass(
     return result.extra.get("subdomains", [])
 
 
+# ---------------------------------------------------------------------------
+# SubfinderIntegration — Pasif subdomain OSINT
+# ---------------------------------------------------------------------------
+
+class SubfinderIntegration(ToolIntegration):
+    """
+    subfinder pasif subdomain enumeration entegrasyonu.
+
+    ProjectDiscovery'nin subfinder aracını kullanarak çok sayıda
+    pasif DNS kaynağından (Shodan, Censys, VirusTotal vb.) subdomain toplar.
+    """
+
+    def __init__(
+        self,
+        binary_path: Optional[str] = None,
+        timeout_s: int = 120,
+        all_sources: bool = True,
+    ) -> None:
+        super().__init__(binary_path or "subfinder")
+        self.timeout_s = timeout_s
+        self.all_sources = all_sources
+
+    @property
+    def tool_name(self) -> str:
+        return "subfinder"
+
+    def is_available(self) -> bool:
+        return (
+            shutil.which(self.binary) is not None
+            or (self._binary_path is not None and Path(self._binary_path).exists())
+        )
+
+    def version(self) -> Optional[str]:
+        if not self.is_available():
+            return None
+        try:
+            proc = subprocess.run(
+                [self.binary, "-version"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=10, check=False,
+            )
+            out = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            return out.strip().splitlines()[0] if out.strip() else None
+        except Exception:
+            return None
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """
+        Subfinder ile pasif subdomain enumeration.
+
+        Anahtar argümanlar
+        ------------------
+        timeout_s     : int — maksimum süre (saniye)
+        all_sources   : bool — tüm pasif kaynakları kullan
+        """
+        domain = _extract_domain(target)
+        if not domain:
+            return ToolResult(tool=self.tool_name, target=target,
+                              status=ToolStatus.ERROR, stderr="Invalid domain")
+
+        if not self.is_available():
+            logger.warning("[subfinder] Binary bulunamadı, atlanıyor.")
+            return ToolResult(tool=self.tool_name, target=target, status=ToolStatus.NOT_FOUND)
+
+        timeout_s = kwargs.get("timeout_s", self.timeout_s)
+        start = time.monotonic()
+
+        fd, out_file = tempfile.mkstemp(suffix=".txt", prefix="ws_subfinder_")
+        os.close(fd)
+
+        try:
+            cmd = [self.binary, "-d", domain, "-o", out_file, "-silent"]
+            if kwargs.get("all_sources", self.all_sources):
+                cmd.append("-all")
+
+            logger.info(f"[subfinder] Pasif enum başlıyor: {domain}")
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=timeout_s,
+                check=False,
+            )
+
+            if proc.returncode not in (0, 1):
+                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
+                logger.warning(f"[subfinder] Çıkış kodu {proc.returncode}: {stderr_out}")
+
+            subdomains = self._parse_output(out_file)
+            findings = self._build_findings(domain, subdomains)
+            duration = time.monotonic() - start
+
+            logger.info(f"[subfinder] {domain}: {len(subdomains)} subdomain  {duration:.1f}s")
+
+            return ToolResult(
+                tool=self.tool_name,
+                target=target,
+                status=ToolStatus.SUCCESS,
+                findings=findings,
+                duration_s=duration,
+                extra={"domain": domain, "subdomains": list(subdomains)},
+            )
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[subfinder] Zaman aşımı ({timeout_s}s)")
+            return ToolResult(tool=self.tool_name, target=target,
+                              status=ToolStatus.TIMEOUT,
+                              duration_s=time.monotonic() - start)
+        except Exception as exc:
+            logger.error(f"[subfinder] Hata: {exc!r}", exc_info=True)
+            return ToolResult(tool=self.tool_name, target=target,
+                              status=ToolStatus.ERROR, stderr=str(exc))
+        finally:
+            try:
+                os.unlink(out_file)
+            except OSError:
+                pass
+
+    def _parse_output(self, out_file: str) -> Set[str]:
+        subdomains: Set[str] = set()
+        if not os.path.exists(out_file):
+            return subdomains
+        try:
+            with open(out_file, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    sub = line.strip().lower()
+                    if sub:
+                        subdomains.add(sub)
+        except Exception as exc:
+            logger.debug(f"[subfinder] Çıktı parse hatası: {exc!r}")
+        return subdomains
+
+    def _build_findings(self, domain: str, subdomains: Set[str]) -> List[ToolFinding]:
+        if not subdomains:
+            return []
+        return [ToolFinding(
+            title=f"Subfinder — {len(subdomains)} Subdomain Keşfedildi",
+            severity=ToolSeverity.INFO,
+            url=f"https://{domain}",
+            tool=self.tool_name,
+            description=(
+                f"Pasif OSINT ile {len(subdomains)} subdomain keşfedildi: "
+                + ", ".join(sorted(subdomains)[:10])
+                + ("..." if len(subdomains) > 10 else "")
+            ),
+            evidence="\n".join(sorted(subdomains)),
+            tags=["recon", "subdomain", "passive"],
+            confidence="high",
+            verified=True,
+        )]
+
+
 __all__ = [
     "AmassWrapper",
+    "SubfinderIntegration",
     "run_amass",
 ]

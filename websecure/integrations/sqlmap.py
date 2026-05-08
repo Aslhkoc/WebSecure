@@ -9,6 +9,14 @@ import shutil
 import subprocess
 from typing import Dict, Any, Optional, List
 
+from websecure.integrations.base import (
+    ToolFinding,
+    ToolIntegration,
+    ToolResult,
+    ToolSeverity,
+    ToolStatus,
+)
+
 logger = logging.getLogger(__name__)
 
 class SQLMapClient:
@@ -89,15 +97,59 @@ class SQLMapClient:
         except Exception as exc:
             return False
 
-class SQLMapWrapper:
+class SQLMapWrapper(ToolIntegration):
     """
     Wrapper for SQLMap binary (direct execution).
     """
+
+    @property
+    def tool_name(self) -> str:
+        return "sqlmap"
+
     def __init__(self, binary_path: str = "sqlmap"):
-        self.binary = binary_path
+        super().__init__("")
+        self._binary_name = binary_path
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """ToolIntegration interface — SQL injection scan on target."""
+        start = time.monotonic()
+        raw = self.scan(
+            target,
+            risk=kwargs.get("risk", 1),
+            level=kwargs.get("level", 1),
+            proxy=kwargs.get("proxy"),
+            profile_cfg=kwargs.get("profile_cfg"),
+        )
+        findings = self._results_to_tool_findings(raw, target)
+        return ToolResult(
+            tool=self.tool_name, target=target, status=ToolStatus.SUCCESS,
+            findings=findings, duration_s=time.monotonic() - start,
+            extra={"raw": raw},
+        )
+
+    def _results_to_tool_findings(self, results: List[Dict[str, Any]], target: str) -> List[ToolFinding]:
+        findings: List[ToolFinding] = []
+        for r in results:
+            param = r.get("parameter", "?")
+            method = r.get("method", "GET")
+            inj_types = ", ".join(i.get("type", "") for i in r.get("injections", []))
+            evidence = json.dumps(r.get("evidence", {}))[:400]
+            findings.append(ToolFinding(
+                title=f"SQL Injection — {param} ({method})",
+                severity=ToolSeverity.CRITICAL,
+                url=r.get("url", target),
+                tool=self.tool_name,
+                description=r.get("description", f"SQLi in {param} via {inj_types}"),
+                evidence=evidence,
+                confidence="high",
+                verified=True,
+                tags=["sqli", "injection", method.lower()],
+                raw=r,
+            ))
+        return findings
 
     def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None) -> List[Dict[str, Any]]:
         """
@@ -119,7 +171,7 @@ class SQLMapWrapper:
             found = False
             for p in possible:
                 if os.path.exists(p):
-                    self.binary = p
+                    self._binary_path = p
                     found = True
                     break
             

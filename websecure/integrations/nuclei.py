@@ -15,6 +15,14 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from websecure.integrations.base import (
+    ToolFinding,
+    ToolIntegration,
+    ToolResult,
+    ToolSeverity,
+    ToolStatus,
+)
+
 logger = logging.getLogger(__name__)
 
 # How old (in seconds) templates must be before auto-update triggers (default: 24h)
@@ -55,15 +63,20 @@ _TECH_TEMPLATE_MAP = {
 }
 
 
-class NucleiWrapper:
+class NucleiWrapper(ToolIntegration):
     """
     Wrapper for the Nuclei vulnerability scanner.
     https://github.com/projectdiscovery/nuclei
     """
 
     def __init__(self, binary_path: str = "nuclei"):
-        self.binary = binary_path
+        super().__init__("")
+        self._binary_name = binary_path
         self._check_binary()
+
+    @property
+    def tool_name(self) -> str:
+        return "nuclei"
 
     def _check_binary(self) -> None:
         if shutil.which(self.binary):
@@ -77,12 +90,54 @@ class NucleiWrapper:
             root / "tools" / "nuclei",
         ]:
             if candidate.exists():
-                self.binary = str(candidate)
+                self._binary_path = str(candidate)
                 return
         logger.warning("[Nuclei] Binary bulunamadi. Program baslarken otomatik indirilecek.")
 
     def is_available(self) -> bool:
         return shutil.which(self.binary) is not None or Path(self.binary).exists()
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """ToolIntegration interface — scan target and return ToolResult."""
+        start = time.monotonic()
+        raw = self.scan(
+            target,
+            tags=kwargs.get("tags"),
+            severity=kwargs.get("severity", "low,medium,high,critical"),
+            rate_limit=kwargs.get("rate_limit", 150),
+            timeout=kwargs.get("timeout", 300),
+            proxy=kwargs.get("proxy"),
+            tech_stack=kwargs.get("tech_stack"),
+            profile_cfg=kwargs.get("profile_cfg"),
+        )
+        findings = [self._raw_to_tool_finding(f) for f in raw]
+        return ToolResult(
+            tool=self.tool_name,
+            target=target,
+            status=ToolStatus.SUCCESS,
+            findings=findings,
+            duration_s=time.monotonic() - start,
+        )
+
+    def _raw_to_tool_finding(self, f: Dict[str, Any]) -> ToolFinding:
+        ev = f.get("evidence") or {}
+        cve = ev.get("cve_id", []) if isinstance(ev, dict) else []
+        if isinstance(cve, str):
+            cve = [cve] if cve else []
+        return ToolFinding(
+            title=f.get("type", "Nuclei Finding"),
+            severity=ToolSeverity.from_str(f.get("severity", "info")),
+            url=f.get("url", ""),
+            tool=self.tool_name,
+            description=f.get("detail", ""),
+            evidence=str(ev.get("curl", ""))[:300] if isinstance(ev, dict) else "",
+            cve_ids=list(cve),
+            cvss_score=ev.get("cvss_score") if isinstance(ev, dict) else None,
+            confidence=f.get("confidence", "high"),
+            verified=f.get("verified", True),
+            tags=list(ev.get("tags", [])) if isinstance(ev, dict) else [],
+            raw=f,
+        )
 
     # -------------------------------------------------------------------------
     # Template update management
