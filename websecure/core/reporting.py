@@ -1,4 +1,4 @@
-
+﻿
 from __future__ import annotations
 import os
 import pathlib
@@ -32,11 +32,11 @@ def should_fail_ci(cfg: dict, results: dict) -> bool:
         return False
     # severity_aliases: map any TR/EN variant to canonical lowercase English
     _SEV_ALIAS: dict[str, str] = {
-        "kritik": "critical", "critical": "critical", "crit": "critical", "severe": "critical",
-        "yüksek": "high", "yuksek": "high", "high": "high",
-        "orta": "medium", "medium": "medium", "med": "medium",
-        "düşük": "low", "dusuk": "low", "low": "low",
-        "bilgi": "info", "info": "info", "information": "info",
+        "Critical": "critical", "critical": "critical", "crit": "critical", "severe": "critical",
+        "High": "high", "yuksek": "high", "high": "high",
+        "Medium": "medium", "medium": "medium", "med": "medium",
+        "Low": "low", "dusuk": "low", "low": "low",
+        "Informational": "info", "info": "info", "information": "info",
     }
 
     counts: dict[str, int] = {}
@@ -557,7 +557,7 @@ def add_result(bucket: str, item: Any) -> None:
         it.setdefault("ts", _now_iso())
 
         # Normalize severity to canonical English for every stored finding.
-        # Scanners may emit "High", "Yüksek", "high", "CRITICAL", etc.
+        # Scanners may emit "High", "High", "high", "CRITICAL", etc.
         # Storing canonical English ensures sorting, CI gates and CVSS scoring
         # all use the same key space without any per-caller conversion.
         raw_sev = it.get("severity")
@@ -594,11 +594,11 @@ def add_result(bucket: str, item: Any) -> None:
         # --- Audio Alert Logic ---
         # Check severity (supports English and Turkish normalized severities)
         sev = str(safe_it.get("severity") or "").lower()
-        if any(s in sev for s in ["critical", "kritik"]):
+        if any(s in sev for s in ["critical", "Critical"]):
             AlertManager.play_critical()
-        elif any(s in sev for s in ["high", "yüksek", "yuksek"]):
+        elif any(s in sev for s in ["high", "High", "yuksek"]):
             AlertManager.play_high()
-        if any(s in sev for s in ["low", "düşük", "dusuk"]):
+        if any(s in sev for s in ["low", "Low", "dusuk"]):
             AlertManager.play_low()
 
         # --- Console Visual Alert ---
@@ -873,10 +873,10 @@ def _short_poc(s: str) -> str:
 def _norm_sev_tr(s: str | None) -> str:
     """Normalize severity to English canonical. Accepts English and Turkish inputs."""
     s = (s or "Info").strip().lower()
-    if s in ("kritik", "critical", "crit", "severe"): return "Critical"
-    if s in ("yüksek", "yuksek", "high"): return "High"
-    if s in ("orta", "medium", "med"): return "Medium"
-    if s in ("düşük", "dusuk", "low"): return "Low"
+    if s in ("Critical", "critical", "crit", "severe"): return "Critical"
+    if s in ("High", "yuksek", "high"): return "High"
+    if s in ("Medium", "medium", "med"): return "Medium"
+    if s in ("Low", "dusuk", "low"): return "Low"
     return "Info"
 
 
@@ -1507,10 +1507,10 @@ _CVSS_DEFAULTS = {
 
 def _norm_sev_en(s: str) -> str:
     s = (s or "").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "critical"
-    if s in ("yüksek", "high", "severe"): return "high"
-    if s in ("orta", "medium", "med"): return "medium"
-    if s in ("düşük", "low"): return "low"
+    if s in ("Critical", "critical", "crit"): return "critical"
+    if s in ("High", "high", "severe"): return "high"
+    if s in ("Medium", "medium", "med"): return "medium"
+    if s in ("Low", "low"): return "low"
     return "info"
 
 def _cvss_for_item(it: Dict[str, Any], cfg: Dict[str, Any] | None) -> dict:
@@ -1868,10 +1868,10 @@ def _build_registry(items: list[dict], cfg: dict | None) -> dict:
 
 def _map_severity_to_level(sev: str) -> str:
     s = (sev or "").lower()
-    if s in ("kritik", "critical"): return "error"
-    if s in ("yüksek", "high"):     return "error"
-    if s in ("orta", "medium"):     return "warning"
-    if s in ("düşük", "low"):       return "note"
+    if s in ("Critical", "critical"): return "error"
+    if s in ("High", "high"):     return "error"
+    if s in ("Medium", "medium"):     return "warning"
+    if s in ("Low", "low"):       return "note"
     return "note"
 
 
@@ -1982,7 +1982,7 @@ def _severity_rank(s: str) -> int:
         "high": 3,
         "critical": 4,
         # backward compat Turkish
-        "bilgi": 0, "düşük": 1, "orta": 2, "yüksek": 3, "kritik": 4,
+        "Informational": 0, "Low": 1, "Medium": 2, "High": 3, "Critical": 4,
     }
     return order.get(s, 0)
 
@@ -2171,8 +2171,8 @@ def to_sarif(results: Dict, tool_name: str = "WebSec") -> Dict:
 
     def _sev_to_level(s: str) -> str:
         s = (s or "").lower()
-        if s in ("kritik", "yüksek", "high", "critical"): return "error"
-        if s in ("orta", "medium"): return "warning"
+        if s in ("Critical", "High", "high", "critical"): return "error"
+        if s in ("Medium", "medium"): return "warning"
         return "note"
 
     sarif_results = []
@@ -2267,8 +2267,8 @@ def to_junit(results: Dict, suite_name: str = "websec") -> str:
     import xml.sax.saxutils as sx
     items = _iter_findings(results)
     total = len(items)
-    errors = sum(1 for i in items if str(i.get("severity", "")).lower() in ("kritik", "yüksek", "critical", "high"))
-    failures = sum(1 for i in items if str(i.get("severity", "")).lower() in ("orta", "medium"))
+    errors = sum(1 for i in items if str(i.get("severity", "")).lower() in ("Critical", "High", "critical", "high"))
+    failures = sum(1 for i in items if str(i.get("severity", "")).lower() in ("Medium", "medium"))
     skipped = 0
     parts = []
     parts.append(
@@ -2279,9 +2279,9 @@ def to_junit(results: Dict, suite_name: str = "websec") -> str:
         msg = sx.escape(str(i.get("description") or i.get("title") or ""))
         sev = str(i.get("severity", "")).lower()
         parts.append(f"  <testcase classname='{classname}' name='{name}'>")
-        if sev in ("kritik", "yüksek", "critical", "high"):
+        if sev in ("Critical", "High", "critical", "high"):
             parts.append(f"    <error message='{name}'><![CDATA[{msg}]]></error>")
-        elif sev in ("orta", "medium"):
+        elif sev in ("Medium", "medium"):
             parts.append(f"    <failure message='{name}'><![CDATA[{msg}]]></failure>")
         parts.append("  </testcase>")
     parts.append("</testsuite>")
@@ -3475,8 +3475,8 @@ _COMPLIANCE_CONTROLS: Dict[str, List[Dict[str, Any]]] = {
     ],
 }
 
-_SEV_RANKS_COMP = {"kritik": 5, "critical": 5, "yüksek": 4, "high": 4,
-                   "orta": 3, "medium": 3, "düşük": 2, "low": 2, "bilgi": 1, "info": 1}
+_SEV_RANKS_COMP = {"Critical": 5, "critical": 5, "High": 4, "high": 4,
+                   "Medium": 3, "medium": 3, "Low": 2, "low": 2, "Informational": 1, "info": 1}
 
 
 class ComplianceReportBuilder:

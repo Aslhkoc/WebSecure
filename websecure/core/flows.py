@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import logging
 import types
 from json import loads as _json_loads
@@ -89,7 +89,7 @@ def _mk_finding_from_step(flow_name: str, step_item: dict, role: str, base_url: 
         "location": "",
         "param": "",
         "type": "BUSINESS_LOGIC",
-        "severity": "Orta",
+        "severity": "Medium",
         "reason": f"Flow '{flow_name}' adım {step_item.get('step')} beklenti hatası",
         "method": step_item.get("method","GET"),
         "payload": "",

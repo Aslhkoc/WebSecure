@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 # Sub-module re-exports (extracted from this monolith for future incremental splitting)
 from websecure.core.phases._context import ScanMode, ScanContext  # noqa: F401
@@ -858,7 +858,7 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
     if not mod or not hasattr(mod, "scan") or not callable(getattr(mod, "scan")):
         add_result("offensive", {
             "type": "SSRF/XXE",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "Modül bulunamadı ya da `scan` yok."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -902,7 +902,7 @@ def _runner_scanners_request_smuggling(ctx) -> None:
     if not prober_cls:
         add_result("offensive", {
             "type": "Request Smuggling",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "Modül bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -979,7 +979,7 @@ def _runner_scanners_request_smuggling(ctx) -> None:
     # Rapor
     add_result("offensive", {
         "type": "HTTP Request Smuggling (yan etkisiz prob)",
-        "severity": "Bilgi",
+        "severity": "Informational",
         "url": base_url,
         "proof": {"probes": probes, "errors": errors}
     })
@@ -987,7 +987,7 @@ def _runner_scanners_request_smuggling(ctx) -> None:
 def _runner_mass_assignment(ctx) -> None:
     mod = _opt_import("scanners.mass_assignment")
     if not mod:
-        add_result("offensive", {"type": "Mass Assignment", "severity": "Bilgi", "reason": "Modül bulunamadı."})
+        add_result("offensive", {"type": "Mass Assignment", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
 
         return
@@ -1007,7 +1007,7 @@ def _runner_mass_assignment(ctx) -> None:
 def _runner_nosqli(ctx) -> None:
     mod = _opt_import("scanners.nosqli")
     if not mod:
-        add_result("offensive", {"type": "NoSQLi", "severity": "Bilgi", "reason": "Modül bulunamadı."})
+        add_result("offensive", {"type": "NoSQLi", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
 
         return
@@ -1032,7 +1032,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     if not mod:
         add_result("offensive", {
             "type": "File Upload",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "Modül bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1042,7 +1042,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     if not callable(run):
         add_result("offensive", {
             "type": "File Upload",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "`run`/`scan` bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1081,7 +1081,7 @@ def _runner_scanners_file_upload(ctx) -> None:
 def _runner_jwt(ctx) -> None:
     mod = _opt_import("scanners.jwt")
     if not mod or not hasattr(mod, "JWTScanner"):
-        add_result("offensive", {"type": "JWT", "severity": "Bilgi", "reason": "Modül/Sınıf bulunamadı."})
+        add_result("offensive", {"type": "JWT", "severity": "Informational", "reason": "Modül/Sınıf bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
 
@@ -1115,7 +1115,7 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
     if not mod:
         add_result("offensive", {
             "type": "WebSocket",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "Modül bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1125,7 +1125,7 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
     if not callable(run):
         add_result("offensive", {
             "type": "WebSocket",
-            "severity": "Bilgi",
+            "severity": "Informational",
             "reason": "`run`/`scan` bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1244,7 +1244,7 @@ def _runner_graphql(ctx) -> None:
             for f in list(out or []):
                 findings_acc.append({
                     "type": f"GraphQL {label}",
-                    "severity": f.get("severity", "Bilgi"),
+                    "severity": f.get("severity", "Informational"),
                     "url": f.get("endpoint", gql_url),
                     "reason": f.get("issue"),
                     "proof": redact_sensitive({

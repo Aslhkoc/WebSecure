@@ -1,4 +1,4 @@
-"""
+﻿"""
 websecure.scanners.session_scanner
 -----------------------------------
 Session & Cookie güvenlik tarayıcıları.
@@ -155,7 +155,7 @@ class SessionFixationExploiter(BaseScanner):
                     if post_val and pre_val == post_val:
                         self.report_finding(
                             type="Session Fixation",
-                            severity="Yüksek",
+                            severity="High",
                             url=login_url,
                             cookie_name=name,
                             pre_auth_value=pre_val[:16] + "...",
@@ -185,7 +185,7 @@ class SessionFixationExploiter(BaseScanner):
                 if jar.get(param) == fixed_token or jar.get(param.upper()) == fixed_token:
                     self.report_finding(
                         type="Session Fixation (URL-based)",
-                        severity="Yüksek",
+                        severity="High",
                         url=test_url,
                         parameter=param,
                         injected_token=fixed_token,
@@ -251,7 +251,7 @@ class CookieInjectionProber(BaseScanner):
                     if any("injected=1" in h for h in set_cookie_hdrs):
                         self.report_finding(
                             type="Cookie Injection via CRLF",
-                            severity="Yüksek",
+                            severity="High",
                             url=test_url,
                             parameter=param,
                             payload=payload,
@@ -378,7 +378,7 @@ class JWTExpiryBypassProber(BaseScanner):
                 if r.status_code == 200:
                     self.report_finding(
                         type="JWT Expiry Bypass",
-                        severity="Kritik",
+                        severity="Critical",
                         url=protected_url,
                         test=test_name,
                         tampered_token=token[:64] + "...",
@@ -453,7 +453,7 @@ class BrowserFingerprintBypassProber(BaseScanner):
                 if r.status_code == 200 and "login" not in r.url.lower():
                     self.report_finding(
                         type="Browser Fingerprint Session Bypass",
-                        severity="Orta",
+                        severity="Medium",
                         url=protected_url,
                         original_ua=original_ua[:60],
                         replay_ua=alt_ua,
@@ -483,7 +483,7 @@ class BrowserFingerprintBypassProber(BaseScanner):
             if r_spoof.status_code == 200 and "login" not in r_spoof.url.lower():
                 self.report_finding(
                     type="Session IP Binding Bypass",
-                    severity="Orta",
+                    severity="Medium",
                     url=protected_url,
                     spoofed_ip="1.2.3.4",
                     response_status=r_spoof.status_code,
@@ -531,7 +531,7 @@ class ConcurrentSessionBypassProber(BaseScanner):
         if result.get("tested") and result.get("first_session_still_valid"):
             self.report_finding(
                 type="Concurrent Session Limit Bypass",
-                severity=result.get("severity", "Orta"),
+                severity=result.get("severity", "Medium"),
                 url=login_url,
                 sessions_created=result.get("sessions_created"),
                 first_session_valid=result.get("first_session_still_valid"),
@@ -593,7 +593,7 @@ class SessionScanner(BaseScanner):
         try:
             entropy_analyzer = SessionEntropyAnalyzer(sample_count=6)
             entropy_result = entropy_analyzer.analyze(target)
-            if entropy_result.get("severity") in ("Kritik", "Yüksek", "Orta"):
+            if entropy_result.get("severity") in ("Critical", "High", "Medium", "Critical", "High", "Medium"):
                 self.report_finding(
                     type="Session Entropy",
                     severity=entropy_result["severity"],

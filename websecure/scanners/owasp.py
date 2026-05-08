@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
 from websecure.core.reporting import add_result
@@ -127,49 +127,49 @@ def check_broken_access_control(url: str, open_ports, results: Dict, session, de
 
         # .git/HEAD sızıntısı
         if path == "/.git/HEAD" and code == 200 and "ref: refs/heads/" in body:
-            items.append({"issue": "VCS sızıntısı (.git/HEAD)", "path": path, "status": code, "severity": "Yüksek"})
+            items.append({"issue": "VCS sızıntısı (.git/HEAD)", "path": path, "status": code, "severity": "High"})
             vulns += 1
             continue
 
         # Apache server-status (açık olmamalı)
         if path == "/server-status" and code == 200 and ("apache server status" in body.lower()):
-            items.append({"issue": "server-status erişilebilir", "path": path, "status": code, "severity": "Orta"})
+            items.append({"issue": "server-status erişilebilir", "path": path, "status": code, "severity": "Medium"})
             vulns += 1
             continue
 
         # Spring actuator yüzeyi
         if path == "/actuator" and code in (200, 302) and ("beans" in body.lower() or "health" in body.lower() or "env" in body.lower()):
-            items.append({"issue": "Spring Actuator yüzeyi", "path": path, "status": code, "severity": "Orta"})
+            items.append({"issue": "Spring Actuator yüzeyi", "path": path, "status": code, "severity": "Medium"})
             vulns += 1
             continue
 
         # .env dosyası
         if path == "/.env" and code == 200 and ("db_" in body.lower() or "aws_" in body.lower() or "secret" in body.lower()):
-            items.append({"issue": ".env dosyası sızıntısı", "path": path, "status": code, "severity": "Yüksek"})
+            items.append({"issue": ".env dosyası sızıntısı", "path": path, "status": code, "severity": "High"})
             vulns += 1
             continue
 
         # .DS_Store sızıntısı
         if path == "/.DS_Store" and code == 200 and len(body) > 0:
-            items.append({"issue": "Gizli dosya sızıntısı (.DS_Store)", "path": path, "status": code, "severity": "Düşük"})
+            items.append({"issue": "Gizli dosya sızıntısı (.DS_Store)", "path": path, "status": code, "severity": "Low"})
             vulns += 1
             continue
 
         # OIDC discovery güvenliği (bilgi amaçlı)
         if path == "/.well-known/openid-configuration" and code == 200:
-            items.append({"issue": "OIDC discovery yayınlanıyor (bilgi)", "path": path, "status": code, "severity": "Düşük"})
+            items.append({"issue": "OIDC discovery yayınlanıyor (bilgi)", "path": path, "status": code, "severity": "Low"})
 
         # Admin benzeri paneller 200 dönüyorsa şüpheli
         if path in ("/admin", "/dashboard", "/config") and code == 200:
             # login sayfasına yönlenmediyse / içerik doluysa
             if ("login" not in (getattr(r, "url", "") or "").lower()) and not _looks_directory_listing(body):
-                items.append({"issue": "Yetkisiz erişim olası", "path": path, "status": 200, "severity": "Orta"})
+                items.append({"issue": "Yetkisiz erişim olası", "path": path, "status": 200, "severity": "Medium"})
                 vulns += 1
                 continue
 
         # Dizin listelemesi
         if code == 200 and _looks_directory_listing(body):
-            items.append({"issue": "Dizin listelemesi açık", "path": path, "status": 200, "severity": "Düşük"})
+            items.append({"issue": "Dizin listelemesi açık", "path": path, "status": 200, "severity": "Low"})
             vulns += 1
 
     _summary(results, bucket, vulns)
@@ -188,7 +188,7 @@ def check_sensitive_data_exposure(url: str, results: Dict, session, debug: bool 
 
     pr = urlparse(url)
     if pr.scheme == "http":
-        items.append({"issue": "HTTP üzerinden içerik", "severity": "Yüksek"})
+        items.append({"issue": "HTTP üzerinden içerik", "severity": "High"})
         vulns += 1
 
     r = _safe_get(session, url, timeout=7, allow_redirects=True)
@@ -205,16 +205,16 @@ def check_sensitive_data_exposure(url: str, results: Dict, session, debug: bool 
     if set_cookie:
         low = str(set_cookie).lower()
         if "secure" not in low:
-            items.append({"issue": "Secure bayrağı olmayan cookie", "severity": "Orta"})
+            items.append({"issue": "Secure bayrağı olmayan cookie", "severity": "Medium"})
             vulns += 1
         if "httponly" not in low:
-            items.append({"issue": "HttpOnly bayrağı olmayan cookie", "severity": "Düşük"})
+            items.append({"issue": "HttpOnly bayrağı olmayan cookie", "severity": "Low"})
             vulns += 1
 
     # oturum çerezi varsa ve agresif cache kontrolü yoksa uyar
     if _has_session_cookie(str(set_cookie)) and not any(k in cache_ctrl for k in ("no-store", "must-revalidate")):
         if pragma != "no-cache":
-            items.append({"issue": "Duyarlı içerikte zayıf cache kontrolü", "severity": "Düşük"})
+            items.append({"issue": "Duyarlı içerikte zayıf cache kontrolü", "severity": "Low"})
             vulns += 1
 
     _summary(results, bucket, vulns)
@@ -244,11 +244,11 @@ def check_authentication(url: str, results: Dict, session, debug: bool = False):
 
     frame_ok = (xfo != "") or ("frame-ancestors" in csp)
     if not frame_ok:
-        items.append({"issue": "Clickjacking koruması zayıf (XFO/CSP yok)", "severity": "Düşük"})
+        items.append({"issue": "Clickjacking koruması zayıf (XFO/CSP yok)", "severity": "Low"})
         vulns += 1
 
     if xcto != "nosniff":
-        items.append({"issue": "X-Content-Type-Options nosniff eksik", "severity": "Düşük"})
+        items.append({"issue": "X-Content-Type-Options nosniff eksik", "severity": "Low"})
         vulns += 1
 
     _summary(results, bucket, vulns)
@@ -312,13 +312,13 @@ def check_cache_poisoning_and_host_header(url: str, results: Dict[str, Any], ses
         sev = None
         reason = None
         if r.status_code in (301, 302, 303, 307, 308) and ref_in_loc:
-            sev = "Yüksek"; reason = "Host injection yansıması Location içinde."
+            sev = "High"; reason = "Host injection yansıması Location içinde."
         elif (ref_in_body and r.status_code == 200):
-            sev = "Orta"; reason = "Host yansıması içerikte."
+            sev = "Medium"; reason = "Host yansıması içerikte."
         elif cacheable and not base_cacheable:
-            sev = "Düşük"; reason = "Cache davranışı değişti (vary/no-cc)."
+            sev = "Low"; reason = "Cache davranışı değişti (vary/no-cc)."
         elif cacheable and ref_in_loc:
-            sev = "Yüksek"; reason = "Cache’e uygun yanıt + Location yansıması (yüksek risk)."
+            sev = "High"; reason = "Cache’e uygun yanıt + Location yansıması (yüksek risk)."
 
         if sev:
             items.append({
@@ -367,15 +367,15 @@ def _looks_leak(path: str, status: int, headers: Dict[str,str], body_sample: str
     cl = headers.get("Content-Length") or ""
     # .git/config içerik imzası
     if p.endswith("/.git/config") and status == 200 and ("[core]" in body_sample or "repositoryformatversion" in body_sample.lower()):
-        return "Yüksek", "Git repo yapılandırma sızıntısı"
+        return "High", "Git repo yapılandırma sızıntısı"
     if p.endswith("/.git/head") and status == 200 and "ref: refs/heads/" in body_sample:
-        return "Yüksek", ".git/HEAD sızıntısı"
+        return "High", ".git/HEAD sızıntısı"
     if p.endswith(".env") and status == 200 and any(k in body_sample.lower() for k in ("db_", "aws_", "secret", "key=")):
-        return "Yüksek", ".env içeriği erişilebilir"
+        return "High", ".env içeriği erişilebilir"
     if any(p.endswith(ext) for ext in (".zip",".tar",".gz",".tgz")) and status == 200 and (("application/zip" in ct) or ("application/x-" in ct) or cl.isdigit() and int(cl) > 0):
-        return "Orta", "Arşiv/dump erişilebilir (içerik kontrol edilmeli)"
+        return "Medium", "Arşiv/dump erişilebilir (içerik kontrol edilmeli)"
     if any(p.endswith(ext) for ext in (".bak",".swp","~",".save",".old")) and status == 200 and len(body_sample) > 0:
-        return "Düşük", "Editör/backup dosyası erişilebilir"
+        return "Low", "Editör/backup dosyası erişilebilir"
     return None, ""
 
 def check_backup_files(url: str, results: Dict[str, Any], session, debug: bool = False):
@@ -792,11 +792,11 @@ def host_header_cache_poison(
         sev = None
         why = None
         if r.status_code in (301, 302, 303, 307, 308) and ref_loc:
-            sev, why = "Yüksek", "Location yansıması"
+            sev, why = "High", "Location yansıması"
         elif ref_body and r.status_code == 200:
-            sev, why = "Orta", "Body yansıması"
+            sev, why = "Medium", "Body yansıması"
         elif cacheable and not base_cacheable:
-            sev, why = "Düşük", "Cache davranışı değişti"
+            sev, why = "Low", "Cache davranışı değişti"
 
         if sev:
             out.append({
@@ -834,15 +834,15 @@ def backup_hunt(url: str, session, results: Dict[str, Any], debug: bool = False)
             sev: Optional[str]
             why: str
             if p.endswith("/.git/HEAD"):
-                sev, why = "Yüksek", ".git/HEAD"
+                sev, why = "High", ".git/HEAD"
             elif p.endswith("/.git/config"):
-                sev, why = "Yüksek", ".git/config"
+                sev, why = "High", ".git/config"
             elif p.endswith(".env"):
-                sev, why = "Yüksek", ".env"
+                sev, why = "High", ".env"
             elif any(p.endswith(ext) for ext in (".zip", ".tar", ".gz", ".tgz")) and (("application/zip" in ct) or ("application/x-" in ct) or (cl.isdigit() and int(cl) > 0)):
-                sev, why = "Orta", "Arşiv"
+                sev, why = "Medium", "Arşiv"
             else:
-                sev, why = "Düşük", "Muhtemel gizli artefakt"
+                sev, why = "Low", "Muhtemel gizli artefakt"
             findings.append({"path": p, "status": code, "severity": sev, "why": why, "headers": {"Content-Type": ct, "Content-Length": cl}})
         elif debug and code < 400:
             findings.append({"path": p, "status": code, "severity": "Yok"})
