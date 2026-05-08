@@ -266,7 +266,18 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
     if not profile and active_name in _BUILTIN_PROFILES:
         profile = _BUILTIN_PROFILES[active_name]
-            
+
+    # ProfileRegistry fallback: bug_bounty, cicd, api_only, authenticated, compliance vb.
+    if not profile:
+        try:
+            from websecure.core.profiles import get_registry as _get_registry
+            _reg_profile = _get_registry().get(active_name)
+            if _reg_profile is not None:
+                logging.info(f"[Config] Profile '{active_name}' ProfileRegistry üzerinden uygulanıyor.")
+                return _reg_profile.apply(cfg)
+        except Exception as _exc:
+            logging.debug(f"[Config] ProfileRegistry fallback başarısız: {_exc!r}")
+
     if not profile:
         logging.warning(f"[Config] Profile '{active_name}' not found in settings.profiles")
         return cfg
