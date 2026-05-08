@@ -225,6 +225,19 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
         if "metrics" in ctx and isinstance(ctx["metrics"], dict):
             results["metrics"] = dict(ctx["metrics"])
 
+    # _buckets'tan eksik bucket'ları results'a ekle (add_result() ile yazılanlar)
+    try:
+        buckets = get_results()
+        for bkey, bval in buckets.items():
+            if bval and bkey not in results:
+                results[bkey] = bval
+            elif bval and isinstance(results.get(bkey), list):
+                # Var olan listeyi _buckets ile birleştir (tekrar olmadan)
+                existing = {id(x) for x in results[bkey]}
+                results[bkey] = results[bkey] + [x for x in bval if id(x) not in existing]
+    except Exception as _be:
+        log_warn(f"[reporting] _buckets merge atlandı: {_be!r}")
+
     # [Fix] Ensure 'nmap' key is populated for HTML dashboard BEFORE reporting
     # Check if we have port data in known keys
     if "nmap" not in results:
