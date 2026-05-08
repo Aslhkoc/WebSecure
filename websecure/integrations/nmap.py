@@ -27,8 +27,17 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
+
+from websecure.integrations.base import (
+    ToolFinding,
+    ToolIntegration,
+    ToolResult,
+    ToolSeverity,
+    ToolStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +153,7 @@ def _run_nmap(binary: str, args: List[str], target: str,
     # xml_out temizleme caller'a bırakılır
 
 
-class NmapWrapper:
+class NmapWrapper(ToolIntegration):
     """
     İki fazlı, servis-farkındalıklı, UDP destekli maksimum Nmap tarayıcısı.
 
@@ -153,14 +162,21 @@ class NmapWrapper:
     UDP   — (root) kritik UDP servisleri
     """
 
+    _HIGH_RISK_PORTS = {21, 22, 23, 25, 110, 143, 3306, 5432, 5900, 6379, 27017, 1433, 3389}
+
     def __init__(self, binary_path: str = "nmap"):
-        self.binary = binary_path
+        super().__init__("")
+        self._binary_name = binary_path
         self._find_binary()
+
+    @property
+    def tool_name(self) -> str:
+        return "nmap"
 
     def _find_binary(self):
         found = shutil.which(self.binary)
         if found:
-            self.binary = found
+            self._binary_path = found
             return
         from pathlib import Path
         candidates = [
@@ -170,7 +186,7 @@ class NmapWrapper:
         ]
         for c in candidates:
             if os.path.exists(c):
-                self.binary = c
+                self._binary_path = c
                 logger.info(f"[Nmap] Binary: {c}")
                 return
         logger.warning("[Nmap] Nmap bulunamadı. Kali: sudo apt install nmap")
@@ -178,6 +194,51 @@ class NmapWrapper:
 
     def is_available(self) -> bool:
         return bool(shutil.which(self.binary)) or os.path.exists(self.binary)
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """ToolIntegration interface — scan target and return ToolResult."""
+        start = time.monotonic()
+        raw = self.scan(
+            target,
+            mode=kwargs.get("mode", "aggressive"),
+            timeout=kwargs.get("timeout", 900),
+            proxy=kwargs.get("proxy"),
+        )
+        findings = self._results_to_tool_findings(raw, target)
+        return ToolResult(
+            tool=self.tool_name,
+            target=target,
+            status=ToolStatus.SUCCESS,
+            findings=findings,
+            duration_s=time.monotonic() - start,
+            extra={"ports": raw},
+        )
+
+    def _results_to_tool_findings(self, results: List[Dict[str, Any]], target: str) -> List[ToolFinding]:
+        findings: List[ToolFinding] = []
+        for r in results:
+            port = r.get("port", 0)
+            service = r.get("service", "unknown")
+            product = r.get("product", "")
+            version = r.get("version", "")
+            scripts = r.get("scripts", {})
+            title = f"Open Port {port}/{r.get('protocol','tcp')} — {product} {version}".strip(" —")
+            desc = f"Service: {service}  Product: {product}  Version: {version}  Host: {r.get('host', target)}"
+            evidence = "\n".join(f"{k}: {str(v)[:200]}" for k, v in list(scripts.items())[:5])
+            sev = ToolSeverity.MEDIUM if port in self._HIGH_RISK_PORTS else ToolSeverity.INFO
+            findings.append(ToolFinding(
+                title=title,
+                severity=sev,
+                url=f"{r.get('host', target)}:{port}",
+                tool=self.tool_name,
+                description=desc,
+                evidence=evidence,
+                confidence="high",
+                verified=True,
+                tags=["port-scan", service, r.get("protocol", "tcp")],
+                raw=r,
+            ))
+        return findings
 
     # ------------------------------------------------------------------
     # Ana tarama metodu
