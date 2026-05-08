@@ -368,7 +368,6 @@ def render_html_dashboard(results: dict) -> str:
                     </table>
                 </div>
              </div>
-             </div>
              """
 
     # --- WAF Detection Status ---
@@ -1019,46 +1018,6 @@ def render_html_dashboard(results: dict) -> str:
             }}
 
             html += `</div></div>`;
-        }}
-
-            // 2. XSS Proof (Alerts)
-            if (ev.alert_text || ev.mechanism) {{
-                html += `<h4 style="color:var(--sev-critical); margin-top:10px;">[snap] Verified Payload Execution</h4>`;
-                html += `<div style="background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); padding:10px; border-radius:4px;">`;
-                html += `<div><strong>Mechanism:</strong> ${{escapeHtml(ev.mechanism || "Browser Event")}}</div>`;
-                if(ev.alert_text) html += `<div><strong>Alert Content:</strong> <span style="font-family:monospace; background:#000; padding:2px 5px; color:#fff;">${{escapeHtml(ev.alert_text)}}</span></div>`;
-                html += `</div>`;
-            }}
-
-            // 3. Raw Response (File Link or Snippet)
-            if (ev.raw_response) {{
-                 html += `<h4 style="margin-top:15px;">[scroll] Raw Server Response (Snapshot)</h4>`;
-                 // Truncate if too long for modal
-                 let raw = ev.raw_response;
-                 if (raw.length > 2000) raw = raw.substring(0, 2000) + "... [truncated]";
-                 html += `<pre>${{escapeHtml(raw)}}</pre>`;
-            }}
-
-            // 4. Screenshots
-            if (ev.screenshot_path) {{
-                 html += `<h4 style="margin-top:15px;">[img] Screen Capture</h4>`;
-                 html += `<img src="${{escapeHtml(ev.screenshot_path)}}" style="max-width:100%; border:1px solid #555;">`;
-            }}
-
-            // 5. Generic KV dump for other evidence keys
-            let usedKeys = ["database_banner", "extracted_data_type", "dumped_data", "alert_text", "mechanism", "raw_response", "screenshot_path"];
-            let otherKeys = Object.keys(ev).filter(k => !usedKeys.includes(k));
-            if(otherKeys.length > 0) {{
-                 html += `<h4 style="margin-top:15px;">[dir] Other Artifacts</h4><ul>`;
-                 otherKeys.forEach(k => {{
-                     let val = ev[k];
-                     if(typeof val === 'object') val = JSON.stringify(val);
-                     html += `<li><strong>${{escapeHtml(k)}}:</strong> ${{escapeHtml(val)}}</li>`;
-                 }});
-                 html += `</ul>`;
-            }}
-
-            html += `</div></div>`; // End of Forensic Card
         }}
 
         document.getElementById('modalBody').innerHTML = html;
