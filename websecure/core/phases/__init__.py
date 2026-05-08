@@ -370,8 +370,7 @@ def phase_portscan(ctx: dict):
     nmap_mode = nmap_cfg.get("mode") or _nmap_profile.get("mode")
     if not nmap_mode:
         scan_profile = str(_cfg_top.get("scan_profile", "NORMAL")).upper()
-        # Agresif ve Stealth: ikisi de deep kapsam
-        nmap_mode = {"STEALTH": "deep", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
+        nmap_mode = {"STEALTH": "stealth", "NORMAL": "standard", "AGGRESSIVE": "deep"}.get(scan_profile, "standard")
 
     # Port override
     ports_cfg = nmap_cfg.get("ports", [])
@@ -433,6 +432,29 @@ def phase_portscan(ctx: dict):
                     "port": p,
                     "evidence": script_out[:500],
                 })
+
+    # ctx["results"] ile de senkronize et (finalize_reports okuyabilsin)
+    port_records = []
+    for item in res:
+        p = item.get("port")
+        if not p:
+            continue
+        port_records.append({
+            "host": item.get("ip") or item.get("hostname") or host,
+            "port": p,
+            "proto": item.get("protocol", "tcp"),
+            "service": item.get("service", ""),
+            "product": item.get("product", ""),
+            "version": item.get("version", ""),
+            "state": "open",
+            "scripts": item.get("scripts", {}),
+            "cpe": item.get("cpe", []),
+            "os_guess": item.get("os_guess", ""),
+        })
+    if isinstance(ctx, dict) and port_records:
+        ctx_results = ctx.setdefault("results", {})
+        ctx_results["nmap"] = port_records
+        ctx_results["port_scan"] = port_records
 
     if not res:
         add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
