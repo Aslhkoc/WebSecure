@@ -330,11 +330,21 @@ class XSSScanner(BaseScanner):
                 # in a browser even though it appears in the source — skip it.
                 if not _is_xss_executable(actual, res.text):
                     return None
+                pos = res.text.find(actual)
+                window = res.text[max(0, pos - 100): pos + len(actual) + 100]
+                has_exec_ctx = bool(
+                    _SCRIPT_INDICATORS.search(window)
+                    or _EVENT_INDICATORS.search(window)
+                    or _HREF_INDICATORS.search(window)
+                    or _SRC_INDICATORS.search(window)
+                )
                 return {
                     "vuln_type": "Reflected XSS",
                     "url": url,
                     "param": param_name,
                     "payload": actual,
+                    "detection_method": "reflection",
+                    "confidence": "medium" if has_exec_ctx else "low",
                 }
             return None
 
@@ -350,12 +360,15 @@ class XSSScanner(BaseScanner):
                     "Payload yansıtıldı (baseline'da yok) — DOM doğrulanamadı, manuel kontrol önerilir"
                 ),
                 verified=dom_confirmed,
-                confidence="high" if dom_confirmed else "medium",
-                **hit,
+                confidence="high" if dom_confirmed else hit.get("confidence", "medium"),
+                detection_method=hit.get("detection_method", "reflection"),
+                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
             # XSS -> ATO PoC for every confirmed finding
             if dom_confirmed:
                 ato = ato_gen.generate_poc(url, param_name, hit.get("payload", ""))
+                ato["verified"] = True  # DOM execution confirmed -> ATO is proven
+                ato["detection_method"] = "dom_playwright"
                 self.report_finding(severity="Critical", **ato)
 
     def _dom_verify_xss(self, url: str, param_name: str, payload: str) -> bool:
@@ -439,18 +452,18 @@ class XSSScanner(BaseScanner):
 
             # Prototype pollution — URL-level, no specific param
             for f in pp_prober.probe(url, self.session):
-                self.report_finding(severity="High", **f)
+                self.report_finding(severity="High", confidence="medium", detection_method="proto_pollution", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
 
             for param in params[:5]:
                 inject_fn = self._inject_param_fn
 
                 # mXSS
                 for f in mxss_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="High", **f)
+                    self.report_finding(severity="High", confidence="medium", detection_method="mxss", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
 
                 # DOM Clobbering
                 for f in clobber_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="Medium", **f)
+                    self.report_finding(severity="Medium", confidence="low", detection_method="dom_clobbering", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
 
                 # CSP bypass payloads
                 for payload in csp_bypasses[:6]:
@@ -465,7 +478,7 @@ class XSSScanner(BaseScanner):
                                 "payload": payload,
                                 "evidence": f"CSP bypass reflected; policy: {csp_info.get('raw','')[:100]}",
                             }
-                            self.report_finding(severity="High", **finding)
+                            self.report_finding(severity="High", confidence="medium", detection_method="csp_bypass", **finding)
                             # Generate ATO PoC for confirmed CSP bypass
                             ato = ato_gen.generate_poc(url, param, payload)
                             self.report_finding(severity="Critical", **ato)
@@ -474,16 +487,16 @@ class XSSScanner(BaseScanner):
 
                 # Trusted Types bypass
                 for f in tt_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="Medium", **f)
+                    self.report_finding(severity="Medium", confidence="low", detection_method="trusted_types", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
 
                 # Template literal injection
                 for f in tl_prober.probe(url, param, self.session, inject_fn):
                     sev = "High" if f.get("confidence") == "high" else "Medium"
-                    self.report_finding(severity=sev, **f)
+                    self.report_finding(severity=sev, detection_method="template_literal", **{k: v for k, v in f.items() if k not in ("detection_method",)})
 
                 # Blind XSS (OOB)
                 for f in blind_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="High", **f)
+                    self.report_finding(severity="High", detection_method="blind_xss_oob", **{k: v for k, v in f.items() if k not in ("detection_method",)})
 
     def scan_forms(self, forms: List[Dict]):
         logger.info(f"[XSS] Scanning {len(forms)} forms...")
@@ -548,11 +561,23 @@ class XSSScanner(BaseScanner):
                 return None
 
             if payload in res.text and payload not in baseline_text:
+                if not _is_xss_executable(payload, res.text):
+                    return None
+                pos = res.text.find(payload)
+                window = res.text[max(0, pos - 100): pos + len(payload) + 100]
+                has_exec_ctx = bool(
+                    _SCRIPT_INDICATORS.search(window)
+                    or _EVENT_INDICATORS.search(window)
+                    or _HREF_INDICATORS.search(window)
+                    or _SRC_INDICATORS.search(window)
+                )
                 return {
                     "vuln_type": "Reflected XSS (Form)",
                     "url": action,
                     "param": p_name,
                     "payload": payload,
+                    "detection_method": "reflection_form",
+                    "confidence": "medium" if has_exec_ctx else "low",
                 }
             return None
 
@@ -561,7 +586,9 @@ class XSSScanner(BaseScanner):
             self.report_finding(
                 severity="High",
                 evidence="Payload reflected in form response (not in baseline)",
-                **hit,
+                detection_method=hit.get("detection_method", "reflection_form"),
+                confidence=hit.get("confidence", "low"),
+                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
 
 
