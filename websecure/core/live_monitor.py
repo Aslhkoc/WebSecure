@@ -1,4 +1,4 @@
-"""
+﻿"""
 websecure.core.live_monitor
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Gerçek zamanlı terminal monitörü (LiveMonitor) ve konsol uyarı sistemi.
@@ -165,11 +165,11 @@ class LiveMonitor:
         param   = str(item.get("parameter") or item.get("param") or "")
         payload = str(item.get("payload") or "")[:60]
 
-        if "critical" in sev or "kritik" in sev:
+        if "critical" in sev or "Critical" in sev:
             color, icon = self._R, "[Critical]"
-        elif "high" in sev or "yüksek" in sev:
+        elif "high" in sev or "High" in sev:
             color, icon = self._Y, "[High]"
-        elif "medium" in sev or "orta" in sev:
+        elif "medium" in sev or "Medium" in sev:
             color, icon = self._C, "[Medium]"
         else:
             color, icon = self._G, "[Info]"
@@ -230,7 +230,7 @@ def console_alert(bucket: str, item: Dict[str, Any]) -> None:
     """Print a real-time 'Kill Cam' style alert to the terminal."""
     sev = str(item.get("severity") or "Info").lower()
 
-    important = ["critical", "kritik", "high", "yüksek", "yuksek", "medium", "orta"]
+    important = ["critical", "Critical", "high", "High", "yuksek", "medium", "Medium"]
     if not any(s in sev for s in important):
         return
 
@@ -240,9 +240,9 @@ def console_alert(bucket: str, item: Dict[str, Any]) -> None:
     BOLD   = "\033[1m"
 
     color = YELLOW
-    if "critical" in sev or "kritik" in sev:
+    if "critical" in sev or "Critical" in sev:
         color = RED
-    elif "high" in sev or "yüksek" in sev:
+    elif "high" in sev or "High" in sev:
         color = RED
 
     icon = "[!]"

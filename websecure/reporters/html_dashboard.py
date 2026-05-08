@@ -1,4 +1,4 @@
-"""
+﻿"""
 websecure.reporters.html_dashboard
 ------------------------------------
 HTML dashboard renderer for WebSecure scan results.
@@ -67,10 +67,10 @@ def render_html_dashboard(results: dict) -> str:
             # Filter out Generic items without useful info
             f_type = item.get("type") or item.get("title") or "Generic"
             _raw_sev = (item.get("severity") or "Info").lower()
-            _sev_map = {"critical": "Critical", "kritik": "Critical",
-                        "high": "High", "yüksek": "High",
-                        "medium": "Medium", "orta": "Medium",
-                        "low": "Low", "düşük": "Low"}
+            _sev_map = {"critical": "Critical", "Critical": "Critical",
+                        "high": "High", "High": "High",
+                        "medium": "Medium", "Medium": "Medium",
+                        "low": "Low", "Low": "Low"}
             f_sev = _sev_map.get(_raw_sev, "Info")
 
             # Skip status/meta-only items

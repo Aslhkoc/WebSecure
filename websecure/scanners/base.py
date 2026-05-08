@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import threading
 import time
@@ -14,6 +14,22 @@ from ..core.http import hardened_session
 from ..core.reporting import add_result, redact_sensitive
 from ..core.payloads import get_payloads
 from ..core.analysis import InputContext
+
+# Turkish → English severity normalization (lowercase keys for case-insensitive lookup)
+_SEVERITY_NORMALIZE_MAP: Dict[str, str] = {
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "informational": "Informational",
+    "info": "Informational",
+    # Turkish variants
+    "kritik": "Critical",
+    "yüksek": "High",
+    "orta": "Medium",
+    "düşük": "Low",
+    "bilgi": "Informational",
+}
 
 
 class BaseScanner:
@@ -114,36 +130,97 @@ class BaseScanner:
     # FAZ 2.4 — Standardised finding emission
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_severity(sev: str) -> str:
+        """Normalize severity string, including Turkish variants."""
+        return _SEVERITY_NORMALIZE_MAP.get((sev or "").lower().strip(), sev or "Informational")
+
+    def _apply_cvss_severity(self, entry: Dict, hint_severity: str = "") -> Dict:
+        """
+        Override scanner-provided severity with CVSS v3.1 score.
+        Applies a confidence penalty for unverified findings.
+        Preserves the scanner's original assessment in hint_severity.
+        """
+        try:
+            from ..core.cvss import CVSSScorer
+
+            waf_detected = bool(self.results.get("waf_detected"))
+            auth_required = bool(self.results.get("authenticated"))
+
+            scored = CVSSScorer(
+                auth_required=auth_required, waf_detected=waf_detected
+            ).score(entry)
+
+            cvss_severity: str = scored.get("cvss_severity") or hint_severity or "Informational"
+            cvss_score: float = scored.get("cvss_score", 0.0)
+
+            # Confidence penalty: unverified / low-confidence findings drop one level
+            verified = (
+                entry.get("verified")
+                or entry.get("oast_verified")
+                or entry.get("confirmed")
+            )
+            confidence = entry.get("confidence", "medium")
+            if not verified and confidence in ("low", None):
+                _levels = ["Critical", "High", "Medium", "Low", "Informational"]
+                idx = _levels.index(cvss_severity) if cvss_severity in _levels else 2
+                cvss_severity = _levels[min(idx + 1, len(_levels) - 1)]
+
+            entry["severity"] = cvss_severity
+            entry["cvss_score"] = scored.get("cvss_score", cvss_score)
+            entry["cvss_vector"] = scored.get("cvss_vector", "")
+            entry["hint_severity"] = self._normalize_severity(hint_severity)
+            entry.setdefault("remediation", scored.get("remediation", ""))
+
+        except Exception as exc:
+            self.logger.debug(f"[{self.name}] CVSS scoring failed, using hint: {exc!r}")
+            entry["severity"] = self._normalize_severity(hint_severity or entry.get("severity", "Informational"))
+
+        return entry
+
     def report_finding(
         self,
         *,
-        vuln_type: str,
+        vuln_type: str = "",
         url: str,
         param: str = "",
         payload: str = "",
         severity: str,
         evidence: str = "",
         extra: Optional[Dict] = None,
+        # legacy alias used by some scanners
+        type: str = "",
+        **kwargs: Any,
     ) -> None:
         """
         Unified finding reporter used by all scanners.
         Replaces the per-scanner _report_vuln / _report_finding methods.
         Calls self.add() once — never call add_result() directly from scanners.
+        Severity is determined by CVSS v3.1 scoring; scanner-provided value is a hint.
+        Accepts `type=` as a legacy alias for `vuln_type=`.
+        Extra keyword arguments are merged into the finding entry.
         """
-        entry = {
-            "type": vuln_type,
-            "severity": severity,
+        resolved_type = vuln_type or type
+        entry: Dict[str, Any] = {
+            "type": resolved_type,
+            "severity": severity,  # overridden by _apply_cvss_severity below
             "url": url,
             "parameter": param,
             "payload": payload,
         }
         if evidence:
             entry["evidence"] = evidence
+        if kwargs:
+            entry.update(kwargs)
         if extra:
             entry.update(extra)
+
+        entry = self._apply_cvss_severity(entry, hint_severity=severity)
+
         self.add("offensive", entry)
         self.logger.warning(
-            f"[{self.name.upper()}] {vuln_type} FOUND: {url}"
+            f"[{self.name.upper()}] {resolved_type} FOUND: {url} "
+            f"[{entry['severity']} / CVSS {entry.get('cvss_score', '?')}]"
             + (f" (param={param})" if param else "")
         )
 

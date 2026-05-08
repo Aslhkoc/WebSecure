@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import json
@@ -18,18 +18,18 @@ def _short_poc(s: str) -> str:
 def _norm_sev_tr(s: str | None) -> str:
     """Normalize severity to English canonical."""
     s = (s or "Info").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "Critical"
-    if s in ("yüksek", "high", "severe"): return "High"
-    if s in ("orta", "medium", "med"): return "Medium"
-    if s in ("düşük", "low"): return "Low"
+    if s in ("Critical", "critical", "crit"): return "Critical"
+    if s in ("High", "high", "severe"): return "High"
+    if s in ("Medium", "medium", "med"): return "Medium"
+    if s in ("Low", "low"): return "Low"
     return "Info"
 
 def _norm_sev_en(s: str | None) -> str:
     s = (s or "Info").strip().lower()
-    if s in ("kritik", "critical", "crit"): return "Critical"
-    if s in ("yüksek", "high", "severe"): return "High"
-    if s in ("orta", "medium", "med"): return "Medium"
-    if s in ("düşük", "low"): return "Low"
+    if s in ("Critical", "critical", "crit"): return "Critical"
+    if s in ("High", "high", "severe"): return "High"
+    if s in ("Medium", "medium", "med"): return "Medium"
+    if s in ("Low", "low"): return "Low"
     return "Info"
 
 def _sev_rank(s: str | None) -> int:

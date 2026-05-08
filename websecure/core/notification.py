@@ -1,4 +1,4 @@
-"""
+﻿"""
 websecure.core.notification
 ----------------------------
 Harici bildirim entegrasyonlari: JIRA, GitHub Issues, Slack, Teams, PagerDuty.
@@ -28,19 +28,19 @@ import requests
 _logger = logging.getLogger(__name__)
 
 _SEV_EMOJI = {
-    "kritik": "[Critical]", "critical": "[Critical]",
-    "yüksek": "[High]", "high": "[High]",
-    "orta": "[Medium]", "medium": "[Medium]",
-    "düşük": "[Info]", "low": "[Info]",
-    "bilgi": "[o]", "info": "[o]",
+    "Critical": "[Critical]", "critical": "[Critical]",
+    "High": "[High]", "high": "[High]",
+    "Medium": "[Medium]", "medium": "[Medium]",
+    "Low": "[Info]", "low": "[Info]",
+    "Informational": "[o]", "info": "[o]",
 }
 
 _SEV_PD_PRIORITY = {
-    "kritik": "P1", "critical": "P1",
-    "yüksek": "P2", "high": "P2",
-    "orta": "P3", "medium": "P3",
-    "düşük": "P4", "low": "P4",
-    "bilgi": "P5", "info": "P5",
+    "Critical": "P1", "critical": "P1",
+    "High": "P2", "high": "P2",
+    "Medium": "P3", "medium": "P3",
+    "Low": "P4", "low": "P4",
+    "Informational": "P5", "info": "P5",
 }
 
 _TIMEOUT = 12
@@ -122,9 +122,9 @@ class NotificationConfig:
 # Severity filter helper
 # ---------------------------------------------------------------------------
 
-_SEV_RANK = {"kritik": 5, "critical": 5, "yüksek": 4, "high": 4,
-              "orta": 3, "medium": 3, "düşük": 2, "low": 2,
-              "bilgi": 1, "info": 1}
+_SEV_RANK = {"Critical": 5, "critical": 5, "High": 4, "high": 4,
+              "Medium": 3, "medium": 3, "Low": 2, "low": 2,
+              "Informational": 1, "info": 1}
 
 
 def _sev_passes(finding: Dict, min_severity: str) -> bool:
@@ -177,10 +177,10 @@ class JIRANotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        priority_map = {"kritik": "Highest", "critical": "Highest",
-                        "yüksek": "High", "high": "High",
-                        "orta": "Medium", "medium": "Medium",
-                        "düşük": "Low", "low": "Low"}
+        priority_map = {"Critical": "Highest", "critical": "Highest",
+                        "High": "High", "high": "High",
+                        "Medium": "Medium", "medium": "Medium",
+                        "Low": "Low", "low": "Low"}
         priority = priority_map.get(sev, "Medium")
 
         payload = {
@@ -288,10 +288,10 @@ class SlackNotifier(BaseNotifier):
 
         sev = _sev_lower(finding)
         emoji = _SEV_EMOJI.get(sev, "[o]")
-        color_map = {"kritik": "#FF0000", "critical": "#FF0000",
-                     "yüksek": "#FF6600", "high": "#FF6600",
-                     "orta": "#FFCC00", "medium": "#FFCC00",
-                     "düşük": "#00AA00", "low": "#00AA00"}
+        color_map = {"Critical": "#FF0000", "critical": "#FF0000",
+                     "High": "#FF6600", "high": "#FF6600",
+                     "Medium": "#FFCC00", "medium": "#FFCC00",
+                     "Low": "#00AA00", "low": "#00AA00"}
         color = color_map.get(sev, "#AAAAAA")
         title = _finding_title(finding)
         fields_list = []
@@ -354,7 +354,7 @@ class TeamsNotifier(BaseNotifier):
         payload = {
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
-            "themeColor": "FF6600" if sev in ("yüksek", "high", "kritik", "critical") else "FFCC00",
+            "themeColor": "FF6600" if sev in ("High", "high", "Critical", "critical") else "FFCC00",
             "summary": title[:128],
             "sections": [{
                 "activityTitle": title,
@@ -400,11 +400,11 @@ class PagerDutyNotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        pd_severity_map = {"kritik": "critical", "critical": "critical",
-                           "yüksek": "error", "high": "error",
-                           "orta": "warning", "medium": "warning",
-                           "düşük": "info", "low": "info",
-                           "bilgi": "info", "info": "info"}
+        pd_severity_map = {"Critical": "critical", "critical": "critical",
+                           "High": "error", "high": "error",
+                           "Medium": "warning", "medium": "warning",
+                           "Low": "info", "low": "info",
+                           "Informational": "info", "info": "info"}
 
         summary = _finding_title(finding)[:256]
         payload = {

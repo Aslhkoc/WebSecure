@@ -1,4 +1,4 @@
-"""
+﻿"""
 websecure.core.session_manager
 -------------------------------
 Session ve Cookie güvenlik analiz yardımcıları.
@@ -140,7 +140,7 @@ class CookieSecurityAnalyzer:
 
         if not r.http_only:
             r.missing_http_only = True
-            sev = "Yüksek" if is_sensitive else "Orta"
+            sev = "High" if is_sensitive else "Medium"
             r.issues.append(
                 f"HttpOnly eksik — JavaScript cookie erişimi mümkün "
                 f"({'kritik: oturum çalınabilir' if is_sensitive else 'risk: izleme cookie'})"
@@ -178,11 +178,11 @@ class CookieSecurityAnalyzer:
 
         # Severity
         if any(x in (r.missing_http_only, r.missing_secure) for x in [True]) and is_sensitive:
-            r.severity = "Yüksek"
+            r.severity = "High"
         elif r.issues:
-            r.severity = "Orta"
+            r.severity = "Medium"
         else:
-            r.severity = "Bilgi"
+            r.severity = "Informational"
 
     def analyze_response(self, response) -> List[CookieAuditResult]:
         """Analyze all Set-Cookie headers from a requests.Response."""
@@ -296,16 +296,16 @@ class SessionEntropyAnalyzer:
 
         if min_entropy < 32:
             verdict = "KRİTİK — tahmin edilebilir (brute-force riski yüksek)"
-            severity = "Kritik"
+            severity = "Critical"
         elif min_entropy < 64:
             verdict = "YÜKSEK — düşük entropi, gelişmiş brute-force mümkün"
-            severity = "Yüksek"
+            severity = "High"
         elif min_entropy < 96:
             verdict = "ORTA — sınırda kabul edilebilir entropi"
-            severity = "Orta"
+            severity = "Medium"
         else:
             verdict = "GÜVENLİ — kriptografik güçte entropi"
-            severity = "Bilgi"
+            severity = "Informational"
 
         # Check uniqueness (sequential tokens?)
         unique_ratio = len(set(tokens)) / len(tokens)
@@ -379,7 +379,7 @@ class SessionLifecycleProber:
                 "post_logout_valid": still_valid,
                 "replay_status": r_replay.status_code,
                 "replay_url": r_replay.url,
-                "severity": "Yüksek" if still_valid else "Bilgi",
+                "severity": "High" if still_valid else "Informational",
                 "description": (
                     "Logout sonrası eski oturum cookie'si hâlâ geçerli — session invalidation eksik"
                     if still_valid
@@ -432,7 +432,7 @@ class SessionLifecycleProber:
             "sessions_created": len(sessions),
             "first_session_still_valid": first_still_valid,
             "concurrent_session_limit": not first_still_valid,
-            "severity": "Orta" if first_still_valid else "Bilgi",
+            "severity": "Medium" if first_still_valid else "Informational",
             "description": (
                 "Concurrent session limiti yok — aynı hesaba N oturum açılabilir"
                 if first_still_valid
