@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -33,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 # Kritik UDP portları — root ile taranır
 _UDP_PORTS = "53,67,68,69,111,123,137,138,161,162,500,514,520,1900,4500,5353,11211"
+
+# Windows'ta raw socket desteklenmiyor — bu returncode assertion failure'ı gösterir
+_WINDOWS_CRASH_CODES = {3221226505, 3221225477, 3221225725, 0xC0000005, 0xC000013A}
+
+def _is_windows() -> bool:
+    return platform.system() == "Windows"
 
 # Servis adına göre ek NSE scriptler
 _SERVICE_SCRIPTS: Dict[str, str] = {
@@ -225,25 +232,28 @@ class NmapWrapper:
 
         # ----- FAZ 1: Port Keşfi -----
         print(f"\033[36m[Nmap Faz-1]\033[0m Port keşfi başlıyor ({target})...")
+        on_windows = _is_windows()
 
-        if root:
-            # SYN scan — en hızlı ve güvenilir
-            phase1_args = ["-sS", "-p-" if all_ports else "--top-ports", "65535" if all_ports else "",
-                           "-T4", "--open", "--min-rate", "1000", "--max-retries", "2"]
-            phase1_args = [a for a in phase1_args if a]  # boşları temizle
-            if not all_ports:
+        if root and not on_windows:
+            # SYN scan — Linux/Mac'te en hızlı ve güvenilir
+            if all_ports:
+                phase1_args = ["-sS", "-p-", "-T4", "--open", "--min-rate", "1000", "--max-retries", "2"]
+            else:
                 phase1_args = ["-sS", "--top-ports", "65535", "-T4", "--open",
                                "--min-rate", "1000", "--max-retries", "2"]
         else:
-            # TCP connect scan — root gerektirmez
-            phase1_args = ["-sT", "--top-ports", "10000", "-T4", "--open",
-                           "--max-retries", "2"]
+            # TCP connect scan — root gerektirmez, Windows'ta ZORUNLU
+            top = "10000" if not on_windows else "2000"
+            phase1_args = ["-sT", "--top-ports", top, "-T4", "--open", "--max-retries", "2"]
+            if on_windows:
+                # Windows raw socket yasağı — unprivileged modda çalış
+                phase1_args += ["--unprivileged"]
 
         self._inject_proxy(phase1_args, proxy)
         rc1, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 180))
 
-        # Açık portları ayıkla
-        open_ports = self._extract_open_ports(xml1) if xml1 else []
+        # Açık portları ayıkla (nmap crash etse bile kısmi XML'den kurtarmayı dene)
+        open_ports = NmapParser.extract_open_ports_safe(xml1) if xml1 else []
         try:
             if xml1:
                 os.remove(xml1)
@@ -251,7 +261,8 @@ class NmapWrapper:
             pass
 
         if rc1 not in (0, 1) and not open_ports:
-            print(f"\033[33m[Nmap Faz-1]\033[0m Nmap hata kodu {rc1} — çıktı yok.")
+            code_note = " (Windows raw socket kısıtlaması)" if rc1 in _WINDOWS_CRASH_CODES else ""
+            print(f"\033[33m[Nmap Faz-1]\033[0m Nmap hata kodu {rc1}{code_note} — çıktı yok.")
             return []
 
         if not open_ports:
@@ -266,45 +277,58 @@ class NmapWrapper:
 
         ports_str = ",".join(map(str, sorted(open_ports)))
 
-        # Hangi servislerin çalıştığını tahmin et (faz1 parse'dan)
-        faz1_results = []  # faz1 artık silinmiş, faz2 parse edecek
+        if on_windows:
+            # Windows: raw socket yok → -sT, -A/-O yok, safe scripts, unsafe=1 yok
+            phase2_args = [
+                "-sT", "--unprivileged",
+                "-sV", "--version-intensity", "7",
+                "-sC",
+                "--script", self._build_script_list(windows_safe=True),
+                "--script-args",
+                "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
+                "--script-timeout", "45s",
+                "-p", ports_str,
+                "-T4",
+            ]
+        else:
+            phase2_args = [
+                "-sV", "--version-intensity", "9",
+                "--version-all",
+                "-sC",
+                "-O" if root else "",
+                "--osscan-guess" if root else "",
+                "-A" if root else "",
+                "--script", self._build_script_list(),
+                "--script-args",
+                "http.useragent=Mozilla/5.0,brute.firstonly=true,"
+                "vulns.showall=true,unsafe=1",
+                "--script-timeout", "60s",
+                "-p", ports_str,
+                "-T4",
+            ]
 
-        phase2_args = [
-            "-sV", "--version-intensity", "9",
-            "--version-all",          # tüm probe'ları dene
-            "-sC",                    # default script kategorisi
-            "-O" if root else "",     # OS detection (root)
-            "--osscan-guess" if root else "",
-            "-A" if root else "",     # aggressive: -sV -sC -O --traceroute
-            "--script", self._build_script_list(),
-            "--script-args",
-            "http.useragent=Mozilla/5.0,brute.firstonly=true,"
-            "vulns.showall=true,unsafe=1",
-            "--script-timeout", "60s",
-            "-p", ports_str,
-            "-T4",
-        ]
         phase2_args = [a for a in phase2_args if a]  # boşları temizle
         self._inject_proxy(phase2_args, proxy)
 
         rc2, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
         if rc2 not in (0, 1):
-            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}")
+            code_note = " (Windows raw socket kısıtlaması)" if rc2 in _WINDOWS_CRASH_CODES else ""
+            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}{code_note}")
         results = NmapParser.parse_xml(xml2) if xml2 else []
         try:
             os.remove(xml2)
         except Exception:
             pass
 
-        # ----- UDP Taraması (root) -----
-        if root:
+        # ----- UDP Taraması (root, Linux/Mac only) -----
+        if root and not on_windows:
             print(f"\033[36m[Nmap UDP]\033[0m Kritik UDP portları taranıyor...")
             udp_args = [
                 "-sU",
                 "--version-intensity", "5",
                 "--script", "snmp-info,snmp-sysdescr,snmp-brute,dns-recursion,"
                             "dns-service-discovery,ntp-info,tftp-enum,dhcp-discover,"
-                            "sip-methods,broadcast-listener",
+                            "sip-methods",
                 "-p", _UDP_PORTS,
                 "-T4", "--max-retries", "1",
             ]
@@ -329,13 +353,16 @@ class NmapWrapper:
 
     def _scan_stealth(self, target: str, proxy: Optional[str] = None,
                       timeout: int = 900) -> List[Dict[str, Any]]:
-        """TCP connect, yavaş, gizli — root gerektirmez."""
+        """TCP connect, yavaş, gizli — root gerektirmez. Windows uyumlu."""
         print(f"\033[36m[Nmap Stealth Faz-1]\033[0m Port keşfi ({target})...")
+        on_windows = _is_windows()
 
-        phase1_args = ["-sT", "--top-ports", "5000", "-T2", "--open", "--max-retries", "1"]
+        phase1_args = ["-sT", "--top-ports", "1000", "-T2", "--open", "--max-retries", "1"]
+        if on_windows:
+            phase1_args.append("--unprivileged")
         self._inject_proxy(phase1_args, proxy)
         _, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=timeout // 2)
-        open_ports = self._extract_open_ports(xml1)
+        open_ports = NmapParser.extract_open_ports_safe(xml1)
         try:
             os.remove(xml1)
         except Exception:
@@ -349,10 +376,12 @@ class NmapWrapper:
         ports_str = ",".join(map(str, sorted(open_ports)))
         phase2_args = [
             "-sT", "-sV", "--version-intensity", "6",
-            "--script", self._build_script_list(safe_only=True),
+            "--script", self._build_script_list(safe_only=True, windows_safe=on_windows),
             "--script-timeout", "30s",
             "-p", ports_str, "-T2",
         ]
+        if on_windows:
+            phase2_args.append("--unprivileged")
         self._inject_proxy(phase2_args, proxy)
         _, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
         results = NmapParser.parse_xml(xml2)
@@ -391,13 +420,33 @@ class NmapWrapper:
             args.append("-n")
 
     @staticmethod
-    def _build_script_list(safe_only: bool = False) -> str:
-        """Maksimum NSE script listesi oluşturur."""
-        if safe_only:
+    def _build_script_list(safe_only: bool = False, windows_safe: bool = False) -> str:
+        """
+        NSE script listesi oluşturur.
+        windows_safe=True → raw socket gerektiren scriptleri (lltd-discovery dahil) hariç tutar.
+        safe_only=True    → sadece bilgi toplama scriptleri (brute/vuln yok).
+        """
+        if windows_safe or safe_only:
+            # Windows veya stealth: discovery kategorisini (lltd-discovery dahil) dışla,
+            # raw socket gerektiren scriptleri dışla, explicit liste kullan.
             return (
-                "default,auth,discovery,version,safe,"
-                "banner,ssl-cert,ssl-enum-ciphers,http-title,http-headers,ssh-hostkey"
+                "default,auth,version,safe,"
+                "banner,ssl-cert,ssl-enum-ciphers,ssl-date,"
+                "http-title,http-headers,http-methods,http-auth-finder,"
+                "http-server-header,http-robots.txt,http-git,"
+                "http-backup-finder,http-default-accounts,"
+                "ssh-auth-methods,ssh-hostkey,ssh2-enum-algos,"
+                "ftp-anon,ftp-syst,"
+                "smtp-commands,smtp-open-relay,"
+                "smb-security-mode,smb-enum-shares,"
+                "mysql-info,mysql-empty-password,"
+                "ms-sql-info,ms-sql-empty-password,"
+                "rdp-enum-encryption,"
+                "dns-recursion,"
+                "mongodb-info,redis-info"
             )
+        # Linux/Mac full scan: discovery kategorisi dahil ama lltd-discovery explicit değil
+        # (lltd-discovery sadece Windows hedefler için, Linux'ta safe)
         return (
             "default,auth,discovery,version,vuln,exploit,malware,safe,"
             "banner,ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,"
@@ -421,20 +470,8 @@ class NmapWrapper:
 
     @staticmethod
     def _extract_open_ports(xml_file: str) -> List[int]:
-        """XML dosyasından sadece açık port numaralarını çıkarır."""
-        ports = []
-        try:
-            tree = ET.parse(xml_file)
-            for port in tree.getroot().findall(".//port"):
-                state = port.find("state")
-                if state is not None and state.get("state") == "open":
-                    try:
-                        ports.append(int(port.get("portid", 0)))
-                    except (ValueError, TypeError):
-                        pass
-        except Exception as e:
-            logger.debug(f"[Nmap] Port çıkarma hatası: {e}")
-        return ports
+        """XML dosyasından sadece açık port numaralarını çıkarır (eski compat)."""
+        return NmapParser.extract_open_ports_safe(xml_file)
 
     def quick_web_scan(self, target: str) -> List[Dict[str, Any]]:
         """Web odaklı hızlı tarama."""
@@ -454,6 +491,53 @@ class NmapWrapper:
 
 class NmapParser:
     """Nmap XML (-oX) çıktısını parse eder — tüm NSE script çıktıları dahil."""
+
+    @staticmethod
+    def extract_open_ports_safe(xml_file: str) -> List[int]:
+        """
+        Açık portları kısmi/bozuk XML'den de kurtarır.
+        Önce düzgün parse, başarısız olursa regex fallback.
+        """
+        if not xml_file or not os.path.exists(xml_file):
+            return []
+
+        ports: List[int] = []
+
+        # Yöntem 1: Normal XML parse
+        try:
+            tree = ET.parse(xml_file)
+            for port in tree.getroot().findall(".//port"):
+                state = port.find("state")
+                if state is not None and state.get("state") == "open":
+                    try:
+                        ports.append(int(port.get("portid", 0)))
+                    except (ValueError, TypeError):
+                        pass
+            return ports
+        except ET.ParseError:
+            pass  # Bozuk XML → fallback
+        except Exception as e:
+            logger.debug(f"[Nmap] Port çıkarma hatası: {e}")
+            return []
+
+        # Yöntem 2: Regex fallback — bozuk/kısmi XML'den port bilgisini çek
+        try:
+            content = open(xml_file, encoding="utf-8", errors="replace").read()
+            # <port protocol="tcp" portid="80"> ... <state state="open"
+            for m in re.finditer(
+                r'<port\s[^>]*portid="(\d+)"[^>]*>.*?<state\s[^>]*state="open"',
+                content, re.DOTALL
+            ):
+                try:
+                    ports.append(int(m.group(1)))
+                except (ValueError, TypeError):
+                    pass
+            if ports:
+                logger.debug(f"[Nmap] Regex fallback ile {len(ports)} port kurtarıldı.")
+        except Exception as e:
+            logger.debug(f"[Nmap] Regex port kurtarma hatası: {e}")
+
+        return ports
 
     @staticmethod
     def parse_xml(file_path: str) -> List[Dict[str, Any]]:
@@ -587,11 +671,73 @@ class NmapParser:
                     })
 
         except ET.ParseError as e:
-            logger.error(f"[Nmap] XML parse hatası: {e}")
+            logger.warning(f"[Nmap] XML parse hatası (kısmi kurtarma deneniyor): {e}")
+            # Kısmi XML kurtarma: son geçerli </port> tag'ine kadar kes ve kapat
+            results = NmapParser._recover_partial_xml(file_path)
         except FileNotFoundError:
             logger.error(f"[Nmap] Dosya yok: {file_path}")
         except Exception as e:
             logger.error(f"[Nmap] Parse hatası: {e}")
 
         logger.info(f"[Nmap] {len(results)} servis parse edildi.")
+        return results
+
+    @staticmethod
+    def _recover_partial_xml(file_path: str) -> List[Dict[str, Any]]:
+        """
+        Nmap crash sonrası yarım kalan XML dosyasından port kayıtlarını kurtarır.
+        Son geçerli </port> tag'inden sonrasını keser, kapanış tag'lerini ekler.
+        """
+        results: List[Dict[str, Any]] = []
+        try:
+            content = open(file_path, encoding="utf-8", errors="replace").read()
+            # Son </port> tag pozisyonunu bul
+            last_port_close = content.rfind("</port>")
+            if last_port_close == -1:
+                logger.debug("[Nmap] Kurtarılacak <port> kaydı bulunamadı.")
+                return []
+
+            truncated = content[:last_port_close + len("</port>")] + \
+                        "\n</ports></host></nmaprun>"
+
+            root = ET.fromstring(truncated)
+            # Normal parse_xml logic'ini yeniden çalıştır
+            for host in root.findall("host"):
+                status = host.find("status")
+                if status is not None and status.get("state") != "up":
+                    continue
+                ip = "unknown"
+                for addr in host.findall("address"):
+                    if addr.get("addrtype") in ("ipv4", "ipv6"):
+                        ip = addr.get("addr", "unknown")
+                        break
+                hostname = ""
+                hn_el = host.find(".//hostname")
+                if hn_el is not None:
+                    hostname = hn_el.get("name", "")
+                ports_el = host.find("ports")
+                if ports_el is None:
+                    continue
+                for port in ports_el.findall("port"):
+                    state = port.find("state")
+                    if state is None or state.get("state") != "open":
+                        continue
+                    port_id = int(port.get("portid", 0))
+                    protocol = port.get("protocol", "tcp")
+                    svc = port.find("service")
+                    service_name = svc.get("name", "unknown") if svc is not None else "unknown"
+                    product = svc.get("product", "") if svc is not None else ""
+                    version = svc.get("version", "") if svc is not None else ""
+                    results.append({
+                        "ip": ip, "hostname": hostname, "host": hostname or ip,
+                        "port": port_id, "protocol": protocol, "proto": protocol,
+                        "reason": "recovered", "service": service_name,
+                        "product": product, "version": version,
+                        "extra_info": "", "tunnel": "", "service_conf": 0,
+                        "cpe": [], "os_guess": "", "os_accuracy": 0,
+                        "os_family": "", "os_gen": "", "scripts": {}, "state": "open",
+                    })
+            logger.info(f"[Nmap] Kısmi XML kurtarma: {len(results)} kayıt elde edildi.")
+        except Exception as exc:
+            logger.debug(f"[Nmap] Kısmi kurtarma başarısız: {exc!r}")
         return results
