@@ -46,6 +46,9 @@ def render_html_dashboard(results: dict) -> str:
         "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
         "discovery", "passive", "subdomains", "vulnerability",
         "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
+        # New tool integrations
+        "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
+        "interactsh", "oast", "metasploit", "burp",
     ]
 
     _id_counter = 1
@@ -222,6 +225,79 @@ def render_html_dashboard(results: dict) -> str:
         </div>
         """
 
+    # --- httpx Probe Results ---
+    httpx_html = ""
+    httpx_items = results.get("httpx") or results.get("http_probe") or []
+    if isinstance(httpx_items, list) and httpx_items:
+        _hx_rows = []
+        for _hx in httpx_items:
+            if not isinstance(_hx, dict):
+                continue
+            _hx_url = _hx.get("url") or _hx.get("input") or "-"
+            _hx_sc  = _hx.get("status_code") or _hx.get("status") or "-"
+            _hx_title = _hx.get("title") or _hx.get("webserver") or "-"
+            _hx_tech = ", ".join(_hx.get("tech") or _hx.get("technologies") or []) or "-"
+            _hx_clen = _hx.get("content_length") or _hx.get("content-length") or "-"
+            _sc_color = "var(--sev-low)" if str(_hx_sc).startswith("2") else (
+                "var(--sev-medium)" if str(_hx_sc).startswith("3") else (
+                "var(--sev-high)" if str(_hx_sc).startswith("4") else (
+                "var(--sev-critical)" if str(_hx_sc).startswith("5") else "var(--text-muted)")))
+            _hx_rows.append(
+                f"<tr>"
+                f"<td class='url'><a href='{_escape(_hx_url)}' target='_blank' style='color:var(--accent)'>{_escape(_hx_url)}</a></td>"
+                f"<td><span style='font-weight:600; color:{_sc_color}'>{_escape(str(_hx_sc))}</span></td>"
+                f"<td style='font-size:0.88rem'>{_escape(_hx_title)}</td>"
+                f"<td style='font-size:0.83rem; color:var(--sev-low)'>{_escape(_hx_tech)}</td>"
+                f"<td style='font-family:monospace; font-size:0.83rem'>{_escape(str(_hx_clen))}</td>"
+                f"</tr>"
+            )
+        if _hx_rows:
+            httpx_html = f"""
+            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                <h3 style="margin-top:0;">[signal] HTTP Probe Results — httpx ({len(_hx_rows)} hosts)</h3>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>URL</th><th>Status</th><th>Title / Server</th><th>Technologies</th><th>Content-Length</th></tr></thead>
+                        <tbody>{''.join(_hx_rows)}</tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
+    # --- katana Crawl Results ---
+    katana_html = ""
+    katana_items = results.get("katana") or results.get("crawl") or results.get("endpoints") or []
+    if isinstance(katana_items, list) and katana_items:
+        # Filter to show only endpoint strings or dicts
+        _kat_eps = []
+        for _ke in katana_items:
+            if isinstance(_ke, str) and "://" in _ke:
+                _kat_eps.append({"url": _ke, "method": "GET", "source": "crawl"})
+            elif isinstance(_ke, dict) and _ke.get("url"):
+                _kat_eps.append(_ke)
+        if _kat_eps:
+            _kat_rows = "".join(
+                f"<tr>"
+                f"<td class='url' style='font-size:0.85rem'>"
+                f"  <a href='{_escape(ep.get('url',''))}' target='_blank' style='color:var(--accent)'>{_escape(ep.get('url',''))}</a>"
+                f"</td>"
+                f"<td style='font-family:monospace; font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('method','GET'))}</td>"
+                f"<td style='font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('source','') or ep.get('tag',''))}</td>"
+                f"</tr>"
+                for ep in _kat_eps[:200]  # cap at 200 for readability
+            )
+            katana_html = f"""
+            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                <h3 style="margin-top:0;">[globe] Crawled Endpoints — katana ({len(_kat_eps)} found{', showing 200' if len(_kat_eps) > 200 else ''})</h3>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>URL</th><th>Method</th><th>Source</th></tr></thead>
+                        <tbody>{_kat_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
     # --- Discovered Files Data Prep ---
     files_html = ""
     file_items = results.get("files_discovered") or []
@@ -308,12 +384,22 @@ def render_html_dashboard(results: dict) -> str:
         sev_lbl = info["sev_label"]
         effort  = info["effort"]
         ec      = _EFFORT_COLOR.get(effort, "var(--text-muted)")
-        vtype_js = _escape(vtype).replace("'", "\\'")
+        # Safe JS string: use JSON encoding to avoid quote/special-char issues
+        vtype_js = json.dumps(vtype)  # produces "\"...\""  — safe inside onclick attr
+        sev_js   = json.dumps(sev_lbl)
         _rem_rows_html += (
-            f"<tr style='cursor:pointer;' onclick=\"filterByType('{vtype_js}')\" title='Click to filter findings by this type'>"
+            f"<tr>"
             f"<td style='text-align:center; color:var(--text-muted); font-weight:600'>{rank}</td>"
-            f"<td style='font-weight:500'>{_escape(vtype)} <span style='font-size:0.75rem; color:var(--accent);'>▼ filter</span></td>"
-            f"<td><span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)}</span></td>"
+            f"<td style='font-weight:500; cursor:pointer;' "
+            f"    onclick=\"filterByType({vtype_js})\" "
+            f"    title='Click to filter findings by type: {_escape(vtype)}'>"
+            f"  {_escape(vtype)} <span style='font-size:0.75rem; color:var(--accent);'>&#9660;</span>"
+            f"</td>"
+            f"<td style='cursor:pointer;' "
+            f"    onclick=\"filterBySeverity({sev_js})\" "
+            f"    title='Click to filter by severity: {_escape(sev_lbl)}'>"
+            f"  <span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)} &#9660;</span>"
+            f"</td>"
             f"<td style='text-align:center; color:var(--accent); font-weight:600'>{info['count']}</td>"
             f"<td style='font-size:0.88rem; color:var(--text-muted)'>{_escape(info['advice'])}</td>"
             f"<td style='font-weight:600; color:{ec}'>{_escape(effort)}</td>"
@@ -350,11 +436,34 @@ def render_html_dashboard(results: dict) -> str:
     # --- Ports Data Prep ---
     ports_html = ""
     nmap_data = results.get("nmap") or results.get("port_scan") or results.get("ports") or []
-    # Also try bucket results directly
+    # Try bucket results directly
     if not nmap_data:
         _bkt_nmap = results.get("_buckets", {}).get("nmap") or []
         if isinstance(_bkt_nmap, list):
             nmap_data = _bkt_nmap
+    # Fallback: extract port records from findings we already collected via all_buckets
+    if not nmap_data:
+        nmap_data = [
+            f["detail"] for f in findings
+            if isinstance(f.get("detail"), dict)
+            and f["detail"].get("port")
+            and ("(nmap)" in f.get("type", "") or "(portscan)" in f.get("type", ""))
+        ]
+    # Normalize: ensure every item is a dict with expected keys
+    _nmap_norm = []
+    for _nd in nmap_data:
+        if not isinstance(_nd, dict):
+            continue
+        # Items might have "ip" but not "host"
+        if not _nd.get("host"):
+            _nd = dict(_nd)
+            _nd["host"] = _nd.get("ip") or _nd.get("hostname") or "-"
+        # Items might have "protocol" but not "proto"
+        if not _nd.get("proto"):
+            _nd = dict(_nd)
+            _nd["proto"] = _nd.get("protocol") or "tcp"
+        _nmap_norm.append(_nd)
+    nmap_data = _nmap_norm
 
     nmap_ran = bool(nmap_data) or bool(results.get("port_scan_summary")) or bool(results.get("open_ports"))
 
@@ -857,6 +966,10 @@ def render_html_dashboard(results: dict) -> str:
     { js_files_html }
     { files_html }
 
+    <!-- httpx + katana -->
+    { httpx_html }
+    { katana_html }
+
     <!-- Remediation Priority Matrix -->
     { remediation_html }
 
@@ -866,7 +979,7 @@ def render_html_dashboard(results: dict) -> str:
     <!-- Findings Table -->
     <h2>[search] Findings ({total_issues} total)</h2>
     <div class="controls">
-        <input type="text" id="searchInput" class="search" placeholder="Filter by URL, type, param, severity...">
+        <input type="text" id="searchInput" class="search" placeholder="Filter by URL, type, param, severity..." oninput="applyFilters()">
         <select id="sevFilter" onchange="applyFilters()" style="background:var(--bg-header); border:1px solid var(--border); color:var(--text-main); padding:0.5rem 1rem; border-radius:6px;">
             <option value="">All Severities</option>
             <option value="Critical">Critical</option>
@@ -875,6 +988,7 @@ def render_html_dashboard(results: dict) -> str:
             <option value="Low">Low</option>
             <option value="Info">Info</option>
         </select>
+        <button class="btn" onclick="filterBySeverity('')" title="Clear all filters">&#x2715; Clear</button>
     </div>
 
     <div class="table-container">
@@ -924,87 +1038,125 @@ def render_html_dashboard(results: dict) -> str:
 </div>
 
 <script>
-    const data = { findings_json };
-    const sessions = { sessions_json };
+    // -----------------------------------------------------------------------
+    // Data — JSON-encoded by Python; safe unicode escapes for < >
+    // -----------------------------------------------------------------------
+    var data = [];
+    var sessions = [];
+    try {{
+        data = { findings_json };
+    }} catch(e) {{
+        console.error('[WebSecure] Failed to parse findings data:', e);
+    }}
+    try {{
+        sessions = { sessions_json };
+    }} catch(e) {{
+        console.error('[WebSecure] Failed to parse sessions data:', e);
+    }}
 
+    // -----------------------------------------------------------------------
+    // Table rendering
+    // -----------------------------------------------------------------------
     function renderTable(items) {{
-        const tbody = document.getElementById('tableBody');
+        var tbody = document.getElementById('tableBody');
+        if (!tbody) return;
         tbody.innerHTML = '';
-        if (items.length === 0) {{
+        if (!items || items.length === 0) {{
             tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">No findings match the current filter.</td></tr>';
             return;
         }}
-        items.forEach(item => {{
-            const tr = document.createElement('tr');
-            tr.style.cursor = 'pointer';
-            tr.onclick = () => showDetail(item.id);
-            const sevClass = item.severity || 'Info';
-            // Show param inline under URL for quick risk location view
-            const paramBadge = item.param && item.param !== '-'
-                ? `<br><span style="font-size:0.78rem; color:var(--text-muted);">param: <code style="color:var(--sev-high)">${{escapeHtml(item.param)}}</code></span>`
-                : '';
-            tr.innerHTML = `
-                <td><span class="tag ${{sevClass}}">${{escapeHtml(sevClass)}}</span></td>
-                <td style="font-weight:500">${{escapeHtml(item.type)}}</td>
-                <td class="url">${{escapeHtml(item.url)}}${{paramBadge}}</td>
-                <td class="method">${{escapeHtml(item.method)}}</td>
-                <td><code style="font-size:0.85rem">${{escapeHtml(item.param)}}</code></td>
-                <td><span class="tag Info">Open</span></td>
-            `;
-            tbody.appendChild(tr);
-        }});
-    }}
-
-    function applyFilters() {{
-        const term = document.getElementById('searchInput').value.toLowerCase();
-        const sev = document.getElementById('sevFilter').value;
-        const filtered = data.filter(item => {{
-            const matchText = !term ||
-                (item.url && item.url.toLowerCase().includes(term)) ||
-                (item.type && item.type.toLowerCase().includes(term)) ||
-                (item.param && item.param.toLowerCase().includes(term)) ||
-                (item.severity && item.severity.toLowerCase().includes(term));
-            const matchSev = !sev || item.severity === sev;
-            return matchText && matchSev;
-        }});
-        renderTable(filtered);
-        // Highlight active severity card
-        const sevColors = {{
-            Critical: 'var(--sev-critical)',
-            High: 'var(--sev-high)',
-            Medium: 'var(--sev-medium)',
-            Low: 'var(--sev-low)',
-            '': 'var(--border)'
-        }};
-        ['Critical','High','Medium','Low','All'].forEach(s => {{
-            const card = document.getElementById('card-' + (s || 'All'));
-            if (!card) return;
-            const activeSev = s === 'All' ? '' : s;
-            if (activeSev === sev) {{
-                card.style.borderColor = sevColors[sev] || 'var(--accent)';
-                card.style.boxShadow = '0 0 0 2px ' + (sevColors[sev] || 'var(--accent)');
-            }} else {{
-                card.style.borderColor = 'var(--border)';
-                card.style.boxShadow = 'none';
+        // Render in chunks to avoid blocking the UI on large datasets
+        var fragment = document.createDocumentFragment();
+        items.forEach(function(item) {{
+            try {{
+                var tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = function() {{ showDetail(item.id); }};
+                var sevClass = item.severity || 'Info';
+                var paramBadge = item.param && item.param !== '-'
+                    ? '<br><span style="font-size:0.78rem; color:var(--text-muted);">param: <code style="color:var(--sev-high)">' + escapeHtml(item.param) + '</code></span>'
+                    : '';
+                tr.innerHTML =
+                    '<td><span class="tag ' + escapeHtml(sevClass) + '">' + escapeHtml(sevClass) + '</span></td>' +
+                    '<td style="font-weight:500">' + escapeHtml(item.type) + '</td>' +
+                    '<td class="url">' + escapeHtml(item.url) + paramBadge + '</td>' +
+                    '<td class="method">' + escapeHtml(item.method) + '</td>' +
+                    '<td><code style="font-size:0.85rem">' + escapeHtml(item.param) + '</code></td>' +
+                    '<td><span class="tag Info">Open</span></td>';
+                fragment.appendChild(tr);
+            }} catch(e) {{
+                console.warn('[WebSecure] renderTable row error:', e, item);
             }}
         }});
+        tbody.appendChild(fragment);
+    }}
+
+    // -----------------------------------------------------------------------
+    // Filter + search
+    // -----------------------------------------------------------------------
+    function applyFilters() {{
+        try {{
+            var searchEl = document.getElementById('searchInput');
+            var sevEl    = document.getElementById('sevFilter');
+            var term = searchEl ? searchEl.value.toLowerCase() : '';
+            var sev  = sevEl   ? sevEl.value : '';
+            var filtered = data.filter(function(item) {{
+                var matchText = !term ||
+                    (item.url    && item.url.toLowerCase().includes(term))    ||
+                    (item.type   && item.type.toLowerCase().includes(term))   ||
+                    (item.param  && item.param.toLowerCase().includes(term))  ||
+                    (item.severity && item.severity.toLowerCase().includes(term));
+                var matchSev = !sev || item.severity === sev;
+                return matchText && matchSev;
+            }});
+            renderTable(filtered);
+
+            // Highlight active severity stat card
+            var sevColors = {{
+                'Critical': 'var(--sev-critical)',
+                'High':     'var(--sev-high)',
+                'Medium':   'var(--sev-medium)',
+                'Low':      'var(--sev-low)',
+                '':         'var(--border)'
+            }};
+            ['Critical','High','Medium','Low','All'].forEach(function(s) {{
+                var card = document.getElementById('card-' + (s === '' ? 'All' : s));
+                if (!card) return;
+                var activeSev = s === 'All' ? '' : s;
+                if (activeSev === sev) {{
+                    card.style.borderColor = sevColors[sev] || 'var(--accent)';
+                    card.style.boxShadow   = '0 0 0 2px ' + (sevColors[sev] || 'var(--accent)');
+                }} else {{
+                    card.style.borderColor = 'var(--border)';
+                    card.style.boxShadow   = 'none';
+                }}
+            }});
+        }} catch(e) {{
+            console.error('[WebSecure] applyFilters error:', e);
+        }}
     }}
 
     function filterBySeverity(sev) {{
-        document.getElementById('sevFilter').value = sev;
-        document.getElementById('searchInput').value = '';
+        var sevEl   = document.getElementById('sevFilter');
+        var searchEl = document.getElementById('searchInput');
+        if (sevEl)   sevEl.value   = sev;
+        if (searchEl) searchEl.value = '';
         applyFilters();
-        document.getElementById('findingsTable').scrollIntoView({{behavior: 'smooth', block: 'start'}});
+        var tbl = document.getElementById('findingsTable');
+        if (tbl) tbl.scrollIntoView({{behavior: 'smooth', block: 'start'}});
     }}
 
     function filterByType(vtype) {{
-        const searchInput = document.getElementById('searchInput');
-        // Strip "(bucket)" suffix added by dashboard e.g. "SSTI (ssti)" -> "SSTI"
-        const cleanType = vtype.split(' (')[0].trim();
-        searchInput.value = cleanType;
+        // vtype arrives as a plain string (JSON-decoded by JS engine from onclick attr)
+        var searchEl = document.getElementById('searchInput');
+        var sevEl    = document.getElementById('sevFilter');
+        // Strip "(bucket)" suffix if present: "SQL Injection (sqli)" → "SQL Injection"
+        var cleanType = (vtype || '').split(' (')[0].trim();
+        if (searchEl) searchEl.value = cleanType;
+        if (sevEl)    sevEl.value    = '';   // clear severity filter when filtering by type
         applyFilters();
-        // Scroll findings table into view
-        document.getElementById('findingsTable').scrollIntoView({{behavior: 'smooth', block: 'start'}});
+        var tbl = document.getElementById('findingsTable');
+        if (tbl) tbl.scrollIntoView({{behavior: 'smooth', block: 'start'}});
     }}
 
     function showDetail(id) {{
@@ -1201,11 +1353,23 @@ setTimeout(() => location.reload(), 1000);
             .replace(/'/g, "&#039;");
     }}
 
-    // Search logic
-    document.getElementById('searchInput').addEventListener('input', applyFilters);
+    // Search: both inline oninput attr + addEventListener for belt-and-suspenders
+    (function() {{
+        var si = document.getElementById('searchInput');
+        if (si && !si._wsListenerAdded) {{
+            si.addEventListener('input', applyFilters);
+            si._wsListenerAdded = true;
+        }}
+    }})();
 
-    // Init
-    renderTable(data);
+    // Init — render full table on load
+    try {{
+        renderTable(data);
+    }} catch(e) {{
+        console.error('[WebSecure] Initial renderTable failed:', e);
+        var tbody = document.getElementById('tableBody');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="color:var(--sev-high); padding:1rem;">Error rendering findings table. Check console.</td></tr>';
+    }}
 
 </script>
 </body>
