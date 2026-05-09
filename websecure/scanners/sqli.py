@@ -14,6 +14,32 @@ from websecure.core.mutator import Mutator
 
 logger = logging.getLogger(__name__)
 
+
+def _sqli_severity_from_method(detection_method: str, confidence: str = "medium") -> str:
+    """
+    Map SQLi detection method + confidence to proper CVSS-aligned severity.
+
+    Rationale:
+    - Critical: Data extraction CONFIRMED (union, schema dump, sqlmap verify, stacked)
+    - High:     Injection confirmed but data not directly extracted
+                (error-based, boolean-blind, OOB pending)
+    - Medium:   Timing-based — injection suspected, no data shown, easiest to false-positive
+    """
+    dm = (detection_method or "").lower()
+    if dm in ("union_based", "schema_extraction", "sqlmap_confirmed", "stacked_query"):
+        return "Critical"
+    if dm in (
+        "error_based", "json_error", "header_error",
+        "adaptive_waf_bypass", "boolean_blind", "oob_dns",
+    ):
+        return "High"
+    if dm in ("time_based", "json_time", "header_time"):
+        return "Medium"
+    # Unknown method — derive from confidence
+    conf_map = {"confirmed": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
+    return conf_map.get((confidence or "").lower(), "High")
+
+
 class SQLInjectionScanner(BaseScanner):
     """
     Robust SQL Injection Scanner.
@@ -65,6 +91,31 @@ class SQLInjectionScanner(BaseScanner):
         "Sybase": (
             r"(?i)Sybase message", r"Sybase.*Server message",
             r"SybSQLException",
+        ),
+        "MariaDB": (
+            r"You have an error in your SQL syntax.*MariaDB",
+            r"Warning.*mariadb_",
+            r"valid MariaDB result",
+        ),
+        "H2": (
+            r"Syntax error in SQL statement",
+            r"Column .* not found",
+        ),
+        "HSQL": (
+            r"Unexpected token.*in statement",
+        ),
+        "Firebird": (
+            r"Dynamic SQL Error",
+            r"SQL error code = -\d+",
+        ),
+        "Informix": (
+            r"A syntax error has occurred",
+            r"Informix",
+        ),
+        "MongoDB": (
+            r"MongoError",
+            r"Failed to parse",
+            r"\"errmsg\"",
         ),
     }
 
@@ -193,6 +244,76 @@ class SQLInjectionScanner(BaseScanner):
             self._nat_var_cache[url] = result
         return result
 
+    def _get_response_len(self, url: str, param: str, value: str) -> Optional[int]:
+        """Helper: inject `value` for `param` and return response length, or None on error."""
+        try:
+            r = self.session.get(self.inject_param(url, param, value), timeout=10)
+            return len(r.text)
+        except _requests.exceptions.RequestException as exc:
+            logger.debug(f"[SQLi] _get_response_len error ({url} param={param}): {exc!r}")
+            return None
+
+    def _boolean_blind_test(self, url: str, param: str, value: str) -> Optional[Dict]:
+        """
+        True/False payload pair approach with confidence metric.
+        Tests at least 3 pairs and requires consistent, statistically significant difference.
+        Returns a finding dict or None.
+        """
+        true_payloads = [
+            f"{value}' AND '1'='1",
+            f"{value}' AND 1=1--",
+            f"{value}\" AND \"1\"=\"1",
+        ]
+        false_payloads = [
+            f"{value}' AND '1'='2",
+            f"{value}' AND 1=2--",
+            f"{value}\" AND \"1\"=\"2",
+        ]
+
+        # Baseline
+        baseline_len = self._get_response_len(url, param, value)
+        if baseline_len is None:
+            return None
+
+        true_lens: List[float] = []
+        false_lens: List[float] = []
+
+        for tp, fp in zip(true_payloads, false_payloads):
+            tl = self._get_response_len(url, param, tp)
+            fl = self._get_response_len(url, param, fp)
+            if tl is not None:
+                true_lens.append(float(tl))
+            if fl is not None:
+                false_lens.append(float(fl))
+
+        if not true_lens or not false_lens:
+            return None
+
+        avg_true = sum(true_lens) / len(true_lens)
+        avg_false = sum(false_lens) / len(false_lens)
+
+        diff = abs(avg_true - avg_false)
+        diff_pct = diff / max(avg_true, 1)
+
+        # True payload should be close to baseline; false payload should differ
+        baseline_diff_true = abs(baseline_len - avg_true)
+        baseline_diff_false = abs(baseline_len - avg_false)
+
+        if diff > 50 and diff_pct > 0.05 and baseline_diff_true < baseline_diff_false:
+            confidence = "high" if diff_pct > 0.15 else "medium"
+            return {
+                "type": "Boolean-based Blind SQLi",
+                "confidence": confidence,
+                "severity": "High" if diff_pct > 0.15 else "Medium",
+                "evidence": {
+                    "true_avg_len": avg_true,
+                    "false_avg_len": avg_false,
+                    "diff": diff,
+                    "diff_pct": f"{diff_pct:.1%}",
+                },
+            }
+        return None
+
     def _is_boolean_blind(self, url: str, param: str,
                           baseline_len: int) -> Optional[Tuple[str, str]]:
         """
@@ -271,6 +392,27 @@ class SQLInjectionScanner(BaseScanner):
         )
         return true_pl, evidence
 
+    def _measure_baseline_timing(self, url: str, n: int = 3) -> Tuple[float, float]:
+        """
+        Measure n baseline (non-injected) request times to compute mean + stdev.
+        Used to set a statistically robust threshold for time-based SQLi detection.
+        Returns (mean_seconds, stdev_seconds).
+        """
+        times: List[float] = []
+        for _ in range(n):
+            t0 = time.time()
+            try:
+                self.session.get(url, timeout=15)
+                times.append(time.time() - t0)
+            except _requests.exceptions.RequestException:
+                pass
+        if len(times) < 2:
+            mean = times[0] if times else 1.0
+            return mean, mean * 0.2
+        mean = statistics.mean(times)
+        stdev = statistics.stdev(times)
+        return mean, stdev
+
     def _verify_time_based(
         self,
         url: str,
@@ -278,28 +420,35 @@ class SQLInjectionScanner(BaseScanner):
         payload: str,
         time_threshold: float,
         n: int = 3,
-        min_hits: int = 2,
+        min_hits: int = 3,
     ) -> bool:
         """
-        Re-send the time-based payload n times; require at least min_hits to
-        exceed time_threshold.  Eliminates single-spike false positives caused
-        by transient network latency or server hiccups.
+        Triple-confirmation time-based SQLi verification.
+
+        Re-send the time-based payload n times; require ALL n hits (min_hits=3/3)
+        to exceed the dynamic threshold: baseline_mean + 3*baseline_stdev, or at
+        minimum 4 seconds, whichever is higher.
+
+        Eliminates single-spike and double-spike false positives caused by
+        transient network latency or server hiccups.
         """
+        # Compute dynamic threshold from baseline timing
+        bl_mean, bl_stdev = self._measure_baseline_timing(url, n=3)
+        dynamic_threshold = max(bl_mean + 3.0 * bl_stdev, 4.0, time_threshold)
+
         hits = 0
         for _ in range(n):
             injected = self.inject_param(url, param_name, payload)
             t0 = time.time()
             try:
-                self.session.get(injected, timeout=time_threshold + 5)
+                self.session.get(injected, timeout=dynamic_threshold + 8)
                 elapsed = time.time() - t0
-                if elapsed > time_threshold:
+                if elapsed >= dynamic_threshold:
                     hits += 1
             except _requests.exceptions.Timeout:
                 hits += 1  # timeout itself is evidence of delay
             except _requests.exceptions.RequestException:
                 pass
-            if hits >= min_hits:
-                return True
         return hits >= min_hits
 
     def run(self, url, **kwargs):
@@ -380,6 +529,32 @@ class SQLInjectionScanner(BaseScanner):
                     confidence="high",
                 )
 
+            # Complementary boolean-blind test using value-anchored pairs (3-pair method)
+            # Runs only when the param has an original value to anchor against
+            original_value = dict(params).get(param_name, "1")
+            bool_test_result = self._boolean_blind_test(url, param_name, original_value)
+            if bool_test_result:
+                ev = bool_test_result.get("evidence", {})
+                t_avg = ev.get("true_avg_len", 0)
+                f_avg = ev.get("false_avg_len", 0)
+                ev_diff = ev.get("diff", 0)
+                evidence_str = (
+                    f"Boolean-blind (3-pair value-anchored): "
+                    f"true_avg={t_avg:.0f}B, false_avg={f_avg:.0f}B, "
+                    f"diff={ev_diff:.0f}B ({ev.get('diff_pct', '?')})"
+                )
+                self.report_finding(
+                    vuln_type="SQL Injection (Boolean-Blind, Value-Anchored)",
+                    url=url,
+                    param=param_name,
+                    payload=f"{original_value}' AND '1'='1 vs '1'='2",
+                    severity=bool_test_result.get("severity", "High"),
+                    evidence=evidence_str,
+                    detection_method="boolean_blind_value_anchored",
+                    verified=True,
+                    confidence=bool_test_result.get("confidence", "medium"),
+                )
+
         # JSON body injection — test params as JSON payload
         self._scan_json_body(url, params, baseline_errors, time_threshold)
 
@@ -450,7 +625,10 @@ class SQLInjectionScanner(BaseScanner):
 
         hits = self.run_parallel_probes(probe, self.payloads, max_workers=self.MAX_WORKERS)
         for hit in hits:
-            self.report_finding(severity="Critical", **hit)
+            sev = _sqli_severity_from_method(
+                hit.get("detection_method", ""), hit.get("confidence", "medium")
+            )
+            self.report_finding(severity=sev, **hit)
         return bool(hits)
 
     def scan_forms(self, forms: List[Dict]):
@@ -547,7 +725,10 @@ class SQLInjectionScanner(BaseScanner):
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
         for hit in hits:
-            self.report_finding(severity="Critical", **hit)
+            sev = _sqli_severity_from_method(
+                hit.get("detection_method", ""), hit.get("confidence", "medium")
+            )
+            self.report_finding(severity=sev, **hit)
         return bool(hits)
 
     # -------------------------------------------------------------------------
@@ -607,7 +788,7 @@ class SQLInjectionScanner(BaseScanner):
                         url=url,
                         param=key,
                         payload=payload,
-                        severity="Critical",
+                        severity="High",  # Error confirms injection, not data exfil
                         evidence=f"DB: {db} — JSON body injection",
                         detection_method="json_error",
                         confidence="high",
@@ -620,7 +801,7 @@ class SQLInjectionScanner(BaseScanner):
                         url=url,
                         param=key,
                         payload=payload,
-                        severity="Critical",
+                        severity="Medium",  # Timing-based: weakest evidence
                         evidence=(
                             f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
                             f"(JSON body)"
@@ -686,7 +867,7 @@ class SQLInjectionScanner(BaseScanner):
                         url=url,
                         param=f"[Header] {header}",
                         payload=payload,
-                        severity="Critical",
+                        severity="High",  # Error confirms injection, not data exfil
                         evidence=f"DB: {db} — header injection via {header}",
                         detection_method="header_error",
                         confidence="high",
@@ -699,7 +880,7 @@ class SQLInjectionScanner(BaseScanner):
                         url=url,
                         param=f"[Header] {header}",
                         payload=payload,
-                        severity="Critical",
+                        severity="Medium",  # Timing-based: weakest evidence
                         evidence=(
                             f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s "
                             f"(header: {header})"

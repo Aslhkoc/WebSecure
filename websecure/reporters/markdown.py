@@ -15,22 +15,40 @@ def _short_poc(s: str) -> str:
     s = (s or "").strip()
     return (s[:4000] + " …") if len(s) > 4000 else s
 
+_SEV_ICON: dict = {
+    "Critical": "🔴",
+    "High":     "🟠",
+    "Medium":   "🟡",
+    "Low":      "🟢",
+    "Info":     "ℹ️",
+    "Informational": "ℹ️",
+}
+
+
 def _norm_sev_tr(s: str | None) -> str:
     """Normalize severity to English canonical."""
     s = (s or "Info").strip().lower()
-    if s in ("Critical", "critical", "crit"): return "Critical"
-    if s in ("High", "high", "severe"): return "High"
-    if s in ("Medium", "medium", "med"): return "Medium"
-    if s in ("Low", "low"): return "Low"
+    if s in ("critical", "crit"): return "Critical"
+    if s in ("high", "severe"): return "High"
+    if s in ("medium", "med"): return "Medium"
+    if s in ("low",): return "Low"
     return "Info"
+
 
 def _norm_sev_en(s: str | None) -> str:
     s = (s or "Info").strip().lower()
-    if s in ("Critical", "critical", "crit"): return "Critical"
-    if s in ("High", "high", "severe"): return "High"
-    if s in ("Medium", "medium", "med"): return "Medium"
-    if s in ("Low", "low"): return "Low"
+    if s in ("critical", "crit"): return "Critical"
+    if s in ("high", "severe"): return "High"
+    if s in ("medium", "med"): return "Medium"
+    if s in ("low",): return "Low"
     return "Info"
+
+
+def _sev_with_icon(s: str | None) -> str:
+    """Return 'Critical 🔴' style label."""
+    norm = _norm_sev_tr(s)
+    icon = _SEV_ICON.get(norm, "")
+    return f"{norm} {icon}".strip()
 
 def _sev_rank(s: str | None) -> int:
     """Rank via EN normalization: critical=4 > high=3 > medium=2 > low=1 > info=0."""
@@ -291,7 +309,8 @@ def render(results: Dict) -> str:
     lines.append("| Severity | Count |")
     lines.append("|-|-:|")
     for k in ("Critical", "High", "Medium", "Low", "Info"):
-        lines.append(f"| {k} | {counts[k]} |")
+        icon = _SEV_ICON.get(k, "")
+        lines.append(f"| {icon} {k} | {counts[k]} |")
 
     # Remediation Priority Matrix
     risk_matrix = render_risk_matrix(items)
@@ -301,31 +320,86 @@ def render(results: Dict) -> str:
     # Findings List
     lines.append("")
     lines.append("## Findings")
-    lines.append("| Severity | Type | URL | Param |")
-    lines.append("|-|-|-|-|")
-    for i in items:
-        lines.append(f"| {_norm_sev_tr(i.get('severity'))} | {esc_md(i.get('type') or 'Finding')} | {esc_md(i.get('url') or '')} | {esc_md(i.get('param') or '')} |")
+    lines.append("| # | Severity | Type | Target URL | Parameter | Confidence |")
+    lines.append("|:-:|:-:|---|---|---|:-:|")
+    for idx, i in enumerate(items, 1):
+        sev = _sev_with_icon(i.get("severity"))
+        vtype = esc_md(i.get("type") or "Finding")
+        # Show original (clean) target URL — strip injected payload if present
+        url = esc_md(i.get("url") or "")
+        param = esc_md(i.get("param") or i.get("parameter") or "")
+        conf = esc_md(i.get("confidence") or "—")
+        lines.append(f"| {idx} | {sev} | {vtype} | {url} | {param} | {conf} |")
 
     # Details
     lines.append("")
     lines.append("## Details")
     for idx, it in enumerate(items, 1):
         lines.append("")
-        t = it.get('type') or 'GEN'
+        t = it.get("type") or "GEN"
+        sev = _sev_with_icon(it.get("severity"))
         lines.append(f"### {idx}. {t}")
-        lines.append(f"- **URL**: `{it.get('url') or ''}`")
-        lines.append(f"- **Severity**: {_norm_sev_tr(it.get('severity'))}")
-        lines.append(f"- **Param**: `{it.get('param') or ''}`")
+        lines.append("")
+
+        # Severity + confidence on one line
+        conf = it.get("confidence") or "—"
+        verified = it.get("verified") or it.get("oast_verified") or False
+        verified_mark = " ✅ Doğrulandı" if verified else " ⚠️ Doğrulanmadı"
+        lines.append(f"- **Severity**: {sev}  |  **Confidence**: `{conf}`{verified_mark}")
+
+        # Target URL — original clean URL
+        target_url = it.get("url") or ""
+        lines.append(f"- **Target URL**: `{target_url}`")
+
+        # Test URL — only show if payload was injected and URL changed
+        payload = it.get("payload") or ""
+        param = it.get("param") or it.get("parameter") or ""
+        if payload and param and target_url:
+            from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+            try:
+                _p = urlparse(target_url)
+                _params = dict(parse_qsl(_p.query))
+                _params[param] = payload
+                test_url = urlunparse(_p._replace(query=urlencode(_params)))
+                if test_url != target_url:
+                    lines.append(f"- **Test URL** *(payload enjekte edildi)*: `{test_url[:300]}`")
+            except Exception:
+                pass
+
+        lines.append(f"- **Parameter**: `{param}`")
+        if payload:
+            short_payload = payload[:200] + ("…" if len(payload) > 200 else "")
+            lines.append(f"- **Payload**: `{short_payload}`")
+
+        # Detection method + CVSS
+        dm = it.get("detection_method") or it.get("method") or ""
+        if dm:
+            lines.append(f"- **Detection Method**: `{dm}`")
+        cvss = it.get("cvss_score")
+        if cvss:
+            lines.append(f"- **CVSS Score**: `{cvss}`")
+
         if it.get("payloads"):
-            lines.append(f"- **Payloads**: `{len(it.get('payloads'))} adet`")
-            
-        # Forensic
+            lines.append(f"- **Payload Count**: `{len(it.get('payloads'))} adet`")
+
+        # Remediation hint
+        remediation = it.get("remediation") or ""
+        if remediation:
+            lines.append(f"- **Remediation**: {remediation}")
+
+        # Evidence
         ev = it.get("evidence")
-        if isinstance(ev, dict):
-             lines.append("\n<details><summary>Kanıtlar (Forensics)</summary>\n")
-             lines.append("```json")
-             lines.append(json.dumps(ev, indent=2, ensure_ascii=False)[:2000] + ("..." if len(str(ev))>2000 else ""))
-             lines.append("```\n</details>")
+        if isinstance(ev, dict) and ev:
+            lines.append("")
+            lines.append("<details><summary>📋 Kanıtlar (Forensics)</summary>")
+            lines.append("")
+            lines.append("```json")
+            ev_str = json.dumps(ev, indent=2, ensure_ascii=False)
+            lines.append(ev_str[:2000] + ("…" if len(ev_str) > 2000 else ""))
+            lines.append("```")
+            lines.append("</details>")
+        elif isinstance(ev, str) and ev:
+            lines.append(f"- **Evidence**: {ev[:500]}")
 
     # Ports
     lines.append("")

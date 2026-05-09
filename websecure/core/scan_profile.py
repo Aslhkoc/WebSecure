@@ -164,12 +164,12 @@ def _apply_aggressive_profile(cfg: dict) -> dict:
         "extra_args": ["-severity", "critical,high,medium,low,info", "-tags", ""],
     })
 
-    # --- Nmap: deep + hızlı ---
+    # --- Nmap: aggressive + hızlı + tüm portlar ---
     cfg.setdefault("_nmap", {}).update({
-        "mode": "deep",
-        "extra_args": ["-T4", "--min-parallelism", "10"],
+        "mode": "aggressive",
+        "extra_args": ["-T4", "--min-parallelism", "10", "-p-"],
     })
-    cfg.setdefault("nmap", {})["mode"] = "deep"
+    cfg.setdefault("nmap", {}).update({"mode": "aggressive", "enabled": True})
 
     # --- Content discovery ---
     cd = cfg.setdefault("content_discovery", {})
@@ -183,6 +183,9 @@ def _apply_aggressive_profile(cfg: dict) -> dict:
         "rotate_headers": True,
         "max_variants_per_payload": 10,
     })
+
+    # --- Proxy: isteğe bağlı (agresif modda zorunlu değil) ---
+    cfg.setdefault("privacy", {}).setdefault("mode", "none")
 
     return cfg
 
@@ -246,19 +249,19 @@ def _apply_stealth_profile(cfg: dict) -> dict:
         "extra_args": ["-severity", "critical,high,medium,low,info", "-tags", ""],
     })
 
-    # --- Nmap: deep + çok yavaş + stealth ---
+    # --- Nmap: stealth + çok yavaş + SYN scan ---
     cfg.setdefault("_nmap", {}).update({
-        "mode": "deep",
+        "mode": "stealth",
         "extra_args": [
-            "-T1", "--scan-delay", "5s", "--max-parallelism", "1",
+            "-T2", "--scan-delay", "5s", "--max-parallelism", "1",
             "--randomize-hosts", "-sS",
         ],
     })
-    cfg.setdefault("nmap", {})["mode"] = "deep"
+    cfg.setdefault("nmap", {}).update({"mode": "stealth", "enabled": True})
 
     # --- Content discovery ---
     cd = cfg.setdefault("content_discovery", {})
-    cd["rate_limit"] = 5
+    cd["rate_limit"] = 2   # maks 2 req/sn
     cd["threads"] = 1
     cd["recursive"] = True
 
@@ -271,6 +274,20 @@ def _apply_stealth_profile(cfg: dict) -> dict:
         "case_variants": True,
         "comment_variants": True,
     })
+
+    # --- Proxy: stealth modda zorunlu ---
+    privacy = cfg.setdefault("privacy", {})
+    if not privacy.get("mode") or privacy.get("mode") == "none":
+        privacy["mode"] = "tor"          # Varsayılan: Tor
+        privacy.setdefault("auto_start_tor", True)
+        privacy.setdefault("verify_anonymity", True)
+        privacy.setdefault("rotate_identity", True)
+        privacy.setdefault("rotate_every", 50)
+    _logger.info("[stealth] Privacy proxy zorunlu — mode: %s", privacy["mode"])
+
+    # --- Brute force: agresif brute force yok ---
+    cfg.setdefault("brute_force", {})["enabled"] = False
+    cfg.setdefault("auth_scanners", {})["brute_force"] = False
 
     return cfg
 

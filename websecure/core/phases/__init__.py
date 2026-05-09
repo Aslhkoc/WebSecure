@@ -385,6 +385,21 @@ def phase_portscan(ctx: dict):
     if vuln_mode:
         extra_args = extra_args + ["--script", "vuln,auth,default", "--script-timeout", "30s"]
 
+    # Akıllı port tarama stratejisi: hedefe göre mod seç
+    import socket as _socket
+    try:
+        resolved_ip = _socket.gethostbyname(host)
+        # Private IP aralıkları — stealth mode
+        _private = any([
+            resolved_ip.startswith("192.168."),
+            resolved_ip.startswith("10."),
+            resolved_ip.startswith("172."),
+        ])
+        if _private and nmap_mode == "aggressive":
+            nmap_mode = "deep"  # iç ağda aggressive çok gürültülü
+    except Exception:
+        resolved_ip = None
+
     _nmap_proxy = _cfg_top.get("_tor_proxy")
     _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
     res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args or None, proxy=_nmap_proxy)
@@ -1865,6 +1880,21 @@ def run_portscan(ctx):
         "AGGRESSIVE": "aggressive", # -sV -sC --top-ports 10000 + vuln + root'ta -A
         "NORMAL":     "deep",       # -sV -sC --top-ports 3000
     }.get(scan_profile, "aggressive")
+
+    # Akıllı port tarama stratejisi: hedefe göre mod seç
+    import socket as _socket
+    try:
+        resolved_ip = _socket.gethostbyname(host)
+        # Private IP aralıkları — stealth mode
+        _private = any([
+            resolved_ip.startswith("192.168."),
+            resolved_ip.startswith("10."),
+            resolved_ip.startswith("172."),
+        ])
+        if _private and nmap_mode == "aggressive":
+            nmap_mode = "deep"  # iç ağda aggressive çok gürültülü
+    except Exception:
+        resolved_ip = None
 
     _tor_proxy = cfg.get("_tor_proxy")
     _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode} (profil={scan_profile})")
