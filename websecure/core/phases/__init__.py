@@ -91,6 +91,44 @@ try:
 except ImportError:
     pass
 
+# --- Yeni tarayıcı modülleri ---
+_cmdi = _lfi = _cors = _st = _ss = _crlf = _wfp = None
+
+try:
+    from websecure.scanners import cmdi as _cmdi
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import lfi as _lfi
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import cors as _cors
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import subdomain_takeover as _st
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import session_scanner as _ss
+except ImportError:
+    pass
+
+try:
+    from websecure.scanners import crlf_injection as _crlf
+except ImportError:
+    pass
+
+try:
+    from websecure.core import waf_fingerprint as _wfp
+except ImportError:
+    pass
+
 try:
     from websecure.crawler import WebCrawler
 except ImportError:
@@ -535,6 +573,13 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.ssti",
         "websecure.scanners.idor",
         "websecure.scanners.js_analyzer",
+        # Yeni entegre edilen tarayıcılar
+        "websecure.scanners.cmdi",
+        "websecure.scanners.lfi",
+        "websecure.scanners.cors",
+        "websecure.scanners.subdomain_takeover",
+        "websecure.scanners.crlf_injection",
+        "websecure.scanners.session_scanner",
     ]
     for m in _url_first:
         label = m.rsplit(".", 1)[-1]
@@ -561,6 +606,27 @@ def phase_offensive(ctx: dict):
             results,
             base_url=url,
         ))
+
+    # --- open_redirect: run(target, cfg, session, urls, results) ---
+    _safe_run("open_redirect", lambda: _call_if_exists(
+        "websecure.scanners.open_redirect",
+        ("run", "scan"),
+        url, cfg, session, [], results))
+
+    # --- waf_fingerprint: WAFFingerprinter class interface ---
+    if _wfp:
+        def _waf_fp_call():
+            fp_cls = getattr(_wfp, "WAFFingerprinter", None)
+            if callable(fp_cls):
+                report = fp_cls().fingerprint(url, session=session)
+                if report:
+                    add_result("waf_fingerprint", {
+                        "url": url,
+                        "vendor": getattr(report, "vendor", "unknown"),
+                        "confidence": getattr(report, "confidence", 0.0),
+                        "detected": getattr(report, "detected", False),
+                    })
+        _safe_run("waf_fingerprint", _waf_fp_call)
 
     if not hit:
         add_result("offensive", {"severity": "note", "message": "no offensive modules found"})
@@ -1494,6 +1560,191 @@ def _runner_dom_xss(ctx) -> None:
         _logger.warning(f"[phases] DOMXSSScanner runner error: {e}")
 
 
+def _runner_cmdi(ctx) -> None:
+    """Command Injection (CMDi) taraması."""
+    mod = _opt_import("websecure.scanners.cmdi") or _opt_import("scanners.cmdi")
+    if not mod:
+        add_result("meta", {"stage": "cmdi", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            run_fn(url, session=sess, results=results, debug=False)
+    except Exception as e:
+        _logger.warning(f"[phases] CMDi runner error: {e}")
+
+
+def _runner_lfi(ctx) -> None:
+    """LFI / Directory Traversal taraması."""
+    mod = _opt_import("websecure.scanners.lfi") or _opt_import("scanners.lfi")
+    if not mod:
+        add_result("meta", {"stage": "lfi", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            run_fn(url, session=sess, debug=False)
+    except Exception as e:
+        _logger.warning(f"[phases] LFI runner error: {e}")
+
+
+def _runner_cors(ctx) -> None:
+    """CORS Misconfiguration taraması."""
+    mod = _opt_import("websecure.scanners.cors") or _opt_import("scanners.cors")
+    if not mod:
+        add_result("meta", {"stage": "cors", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            run_fn(url, session=sess, debug=False)
+    except Exception as e:
+        _logger.warning(f"[phases] CORS runner error: {e}")
+
+
+def _runner_subdomain_takeover(ctx) -> None:
+    """Subdomain Takeover taraması."""
+    mod = _opt_import("websecure.scanners.subdomain_takeover") or _opt_import("scanners.subdomain_takeover")
+    if not mod:
+        add_result("meta", {"stage": "subdomain_takeover", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            run_fn(url, session=sess, debug=False)
+    except Exception as e:
+        _logger.warning(f"[phases] Subdomain Takeover runner error: {e}")
+
+
+def _runner_session_scanner(ctx) -> None:
+    """Session & Cookie güvenlik taraması."""
+    mod = _opt_import("websecure.scanners.session_scanner") or _opt_import("scanners.session_scanner")
+    if not mod:
+        add_result("meta", {"stage": "session_scanner", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        scanner_cls = getattr(mod, "SessionScanner", None)
+        if scanner_cls:
+            scanner_cls(session=sess, results=results, debug=False).run(url)
+        else:
+            run_fn = getattr(mod, "run", None)
+            if callable(run_fn):
+                run_fn(url, session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] Session scanner error: {e}")
+
+
+def _runner_crlf_injection(ctx) -> None:
+    """CRLF Injection ve header injection taraması."""
+    mod = _opt_import("websecure.scanners.crlf_injection") or _opt_import("scanners.crlf_injection")
+    if not mod:
+        add_result("meta", {"stage": "crlf_injection", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    auth_ctx = getattr(ctx, "auth_ctx", None)
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            run_fn(url, session=sess, debug=False, auth_ctx=auth_ctx)
+    except Exception as e:
+        _logger.warning(f"[phases] CRLF Injection runner error: {e}")
+
+
+def _runner_waf_fingerprint(ctx) -> None:
+    """WAF davranış parmak izi analizi (waf_fingerprint modülü)."""
+    mod = _opt_import("websecure.core.waf_fingerprint") or _opt_import("core.waf_fingerprint")
+    if not mod:
+        add_result("meta", {"stage": "waf_fingerprint", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None) or hardened_session({})
+    try:
+        fingerprinter_cls = getattr(mod, "WAFFingerprinter", None)
+        if fingerprinter_cls:
+            fp = fingerprinter_cls()
+            report = fp.fingerprint(url, session=sess)
+            if report:
+                add_result("waf_fingerprint", {
+                    "url": url,
+                    "vendor": getattr(report, "vendor", "unknown"),
+                    "confidence": getattr(report, "confidence", 0.0),
+                    "bypass_hints": getattr(report, "bypass_hints", []),
+                    "rate_limit": getattr(report, "rate_limit", {}),
+                    "detected": getattr(report, "detected", False),
+                    "message": f"WAF parmak izi: {getattr(report, 'vendor', 'unknown')}",
+                })
+    except Exception as e:
+        _logger.warning(f"[phases] WAF fingerprint runner error: {e}")
+
+
+def _runner_exploit_orchestrator(ctx) -> None:
+    """Exploit Orchestrator — zafiyet bulgularını zincirleyerek gerçek saldırı dener."""
+    try:
+        from websecure.core.exploit_orchestrator import exploit_from_results  # noqa: PLC0415
+        results = _ensure_results_bucket(ctx)
+        cfg = getattr(ctx, "config", {}) or {}
+        exploit_cfg = (cfg.get("exploitation") or {})
+        if not exploit_cfg.get("enabled", False):
+            add_result("meta", {"stage": "exploit_orchestrator", "status": "skipped:disabled"})
+            return
+        url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+        # Bulguları tüm saldırı kovalarından topla
+        all_findings: list = []
+        for bucket in ("offensive", "sqli", "xss", "ssrf", "idor", "ssti", "cmdi", "lfi", "scored_findings"):
+            bucket_items = results.get(bucket, [])
+            if isinstance(bucket_items, list):
+                all_findings.extend([i for i in bucket_items if isinstance(i, dict)])
+        if not all_findings:
+            add_result("meta", {"stage": "exploit_orchestrator", "status": "skipped:no-findings"})
+            return
+        exploit_results = exploit_from_results(
+            scan_results={"findings": all_findings, "target": url},
+            cfg=cfg,
+        )
+        if exploit_results:
+            n = len(exploit_results) if isinstance(exploit_results, list) else 1
+            add_result("exploitation", {"results": exploit_results, "total": n, "target": url})
+            _logger.info(f"[phases] Exploit orchestrator: {n} exploit tamamlandı")
+    except ImportError:
+        add_result("meta", {"stage": "exploit_orchestrator", "status": "skipped:module-not-found"})
+    except Exception as e:
+        _logger.warning(f"[phases] Exploit orchestrator runner error: {e}")
+
+
+def _runner_human_adapter(ctx) -> None:
+    """HumanLike Adapter — tarama oturumunu insan benzeri davranışla sarar."""
+    try:
+        from websecure.core.human_adapter import make_human_session  # noqa: PLC0415
+        cfg = getattr(ctx, "config", {}) or {}
+        _scan_profile = str((cfg.get("settings") or {}).get("scan_profile", "stealth")).lower()
+        human_sess = make_human_session(profile=_scan_profile)
+        # ctx'e human_adapter nesnesini ekle; diğer fazlar isteğe bağlı kullanabilir
+        if hasattr(ctx, "__dict__") or hasattr(ctx, "__slots__"):
+            try:
+                setattr(ctx, "human_adapter", human_sess)
+            except (AttributeError, TypeError):
+                pass
+        add_result("meta", {"stage": "human_adapter", "status": "active", "profile": _scan_profile})
+        _logger.info(f"[phases] HumanLike adapter aktif: {_scan_profile}")
+    except ImportError:
+        add_result("meta", {"stage": "human_adapter", "status": "skipped:module-not-found"})
+    except Exception as e:
+        _logger.warning(f"[phases] HumanLike adapter error: {e}")
+
+
 def _runner_verify_and_score(ctx) -> None:
     """Run verification + CVSS scoring on all accumulated findings."""
     try:
@@ -1700,6 +1951,71 @@ def _offensive_phases(ctx) -> List[Phase]:
             runner=lambda c: _safe(c, lambda: _runner_open_redirect(c), "open_redirect"),
             tags=["active", "redirect", "a01"],
         ),
+        # ── Yeni tarayıcı fazları ──────────────────────────────────────────
+        Phase(
+            id="cmdi",
+            title="Command Injection (CMDi)",
+            enabled=_flag("cmdi", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_cmdi(c), "cmdi"),
+            tags=["active", "injection", "rce"],
+        ),
+        Phase(
+            id="lfi",
+            title="LFI / Directory Traversal",
+            enabled=_flag("lfi", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_lfi(c), "lfi"),
+            tags=["active", "lfi", "traversal", "rce"],
+        ),
+        Phase(
+            id="cors",
+            title="CORS Misconfiguration",
+            enabled=_flag("cors", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_cors(c), "cors"),
+            tags=["active", "cors", "config", "a05"],
+        ),
+        Phase(
+            id="subdomain_takeover",
+            title="Subdomain Takeover",
+            enabled=_flag("subdomain_takeover", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_subdomain_takeover(c), "subdomain_takeover"),
+            tags=["active", "dns", "takeover", "recon"],
+        ),
+        Phase(
+            id="session_scanner",
+            title="Session & Cookie Güvenliği",
+            enabled=_flag("session_scanner", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_session_scanner(c), "session_scanner"),
+            tags=["active", "auth", "session", "cookie"],
+        ),
+        Phase(
+            id="crlf_injection",
+            title="CRLF Injection / Header Injection",
+            enabled=_flag("crlf_injection", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_crlf_injection(c), "crlf_injection"),
+            tags=["active", "injection", "header", "a03"],
+        ),
+        Phase(
+            id="waf_fingerprint",
+            title="WAF Davranış Parmak İzi",
+            enabled=_flag("waf_fingerprint", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_waf_fingerprint(c), "waf_fingerprint"),
+            tags=["waf", "recon", "fingerprint"],
+        ),
+        Phase(
+            id="human_adapter",
+            title="HumanLike Session Adapter",
+            enabled=_flag("human_adapter", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_human_adapter(c), "human_adapter"),
+            tags=["stealth", "evasion", "session"],
+        ),
+        Phase(
+            id="exploit_orchestrator",
+            title="Exploit Orchestrator (Zincir Saldırı)",
+            enabled=_flag("exploit_orchestrator", default=False),
+            runner=lambda c: _safe(c, lambda: _runner_exploit_orchestrator(c), "exploit_orchestrator"),
+            tags=["exploitation", "rce", "post_exploit", "chain"],
+        ),
+        # ── Doğrulama & Raporlama ─────────────────────────────────────────
         Phase(id="verify_and_score", title="Doğrulama & Skorlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_verify_and_score(c), "verify_and_score"), tags=["verify","score"]),
         Phase(id="reporting", title="Raporlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_reporting_and_integration(c), "reporting"), tags=["report"])
     ]

@@ -1645,6 +1645,18 @@ def _run_scan_phases(
 
         session = _setup_session_from_config(cfg)
 
+        # --- HumanLike session adapter (stealth/evasion modu) ---
+        _human_adapter_inst = None
+        try:
+            from websecure.core.human_adapter import make_human_session as _make_human_sess  # noqa: PLC0415
+            _scan_profile_name = str((cfg.get("settings") or {}).get("scan_profile", "stealth")).lower()
+            if _scan_profile_name in ("stealth", "paranoid", "casual"):
+                _human_adapter_inst = _make_human_sess(profile=_scan_profile_name)
+                _logger.info(f"[HumanAdapter] Aktif: profil={_scan_profile_name}")
+                print(f"[+] HumanLike Adapter etkin (profil: {_scan_profile_name})")
+        except Exception as _ha_exc:
+            _logger.debug(f"[HumanAdapter] Yüklenemedi: {_ha_exc}")
+
         # --- Otomatik Playwright login (auth_profiles yapılandırılmışsa) ---
         _run_auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
         if _run_auth_profiles and _run_auth_profiles[0].get("username") and _run_auth_profiles[0].get("password"):
@@ -2162,6 +2174,39 @@ def _run_scan_phases(
         t = mark("phase_plan")
         _safe_call(run_plan_if_needed, ctx, call_timeout=None) # No timeout for full plan
         mark("phase_plan", t)
+
+        # --- human_adapter ctx ile senkronize et ---
+        if _human_adapter_inst is not None:
+            try:
+                setattr(ctx, "human_adapter", _human_adapter_inst)
+            except (AttributeError, TypeError):
+                pass
+
+        # --- Exploit Orchestrator (exploitation.enabled=true ise) ---
+        _exploit_cfg = (cfg.get("exploitation") or {}) if isinstance(cfg, dict) else {}
+        if _exploit_cfg.get("enabled", False):
+            print("[•] Exploit Orchestrator: bulgular zincire alınıyor…")
+            try:
+                from websecure.core.exploit_orchestrator import exploit_from_results as _exploit_fr  # noqa: PLC0415
+                _exp_findings: list = []
+                for _k, _lst in get_bucket_results().items():
+                    if isinstance(_lst, list):
+                        _exp_findings.extend([i for i in _lst if isinstance(i, dict)])
+                if _exp_findings:
+                    t_ex = mark("exploit_orchestrator")
+                    _exp_res = _exploit_fr(
+                        scan_results={"findings": _exp_findings, "target": url},
+                        cfg=cfg,
+                    )
+                    mark("exploit_orchestrator", t_ex)
+                    if _exp_res and callable(globals().get("add_result")):
+                        add_result("exploitation", {"results": _exp_res, "total": len(_exp_res) if isinstance(_exp_res, list) else 1})
+                    _n_ex = len(_exp_res) if isinstance(_exp_res, list) else 0
+                    print(f"[+] Exploit Orchestrator tamamlandı: {_n_ex} senaryo")
+            except ImportError:
+                _logger.debug("[ExploitOrchestrator] Modül bulunamadı, atlandı.")
+            except Exception as _ex_exc:
+                _logger.warning(f"[ExploitOrchestrator] Hata: {_ex_exc}")
 
         # 6) OFFENSIVE 3A
         print("[•] Offensive modüller…")
