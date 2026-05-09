@@ -1121,7 +1121,18 @@ class MSFPostExploitRunner:
 
     SRP: solely responsible for orchestrating post-exploitation modules.
     OCP: new modules added without changing existing method signatures.
+    DIP: accepts optional MetasploitRPCClient; uses session._client when not provided.
     """
+
+    def __init__(self, client: Optional["MetasploitRPCClient"] = None) -> None:
+        """
+        Parameters
+        ----------
+        client : MetasploitRPCClient or None
+            Optional RPC client.  When None, each method uses the session's
+            own ``_client`` directly (session already holds a valid auth token).
+        """
+        self._client = client
 
     def run_all(self, session: MeterpreterSession) -> Dict[str, Any]:
         """

@@ -616,7 +616,52 @@ def post_scan_persist(
     except Exception as exc:
         logger.warning(f"[scan_runner] DB kayıt atlandı: {exc}")
 
+    # 4. Exploitation pipeline (opt-in)
+    try:
+        from websecure.core.exploit_orchestrator import exploit_from_results
+        exploitation_results = exploit_from_results(
+            scan_results={"findings": clean_findings},
+            cfg={"exploitation": {"enabled": False}},  # default off, callers set True
+        )
+        if exploitation_results.get("exploit_results"):
+            result["exploitation"] = {
+                "total": exploitation_results["summary"]["total"],
+                "successful": exploitation_results["summary"]["successful"],
+            }
+            logger.info(
+                f"[scan_runner] Exploitation: "
+                f"{exploitation_results['summary']['successful']}/"
+                f"{exploitation_results['summary']['total']} başarılı"
+            )
+    except Exception as exc:
+        logger.debug(f"[scan_runner] Exploitation pipeline atlandı: {exc}")
+
     return result
+
+
+def make_human_session(profile: str = "stealth"):
+    """
+    İnsan gibi davranan bir requests session döner.
+
+    HumanLikeAdapter ile sarılmış session — tüm isteklere gerçekçi
+    timing, browser fingerprinting ve WAF/CAPTCHA tespiti eklenir.
+
+    Parametreler
+    ------------
+    profile : "casual" | "stealth" | "aggressive" | "paranoid"
+        Tarama profiline göre davranış hızı/gizliliği.
+
+    Döndürür
+    --------
+    HumanLikeAdapter  (requests.Session uyumlu get/post arayüzü)
+    """
+    try:
+        from websecure.core.human_adapter import make_human_session as _make
+        return _make(profile)
+    except ImportError as exc:
+        logger.debug(f"[scan_runner] HumanLikeAdapter yüklenemedi, ham session: {exc}")
+        import requests
+        return requests.Session()
 
 
 def filter_false_positives(
@@ -647,4 +692,6 @@ __all__ = [
     # Adım 20 — Kalıcılık entegrasyonu
     "post_scan_persist",
     "filter_false_positives",
+    # Yeni entegrasyonlar
+    "make_human_session",
 ]
