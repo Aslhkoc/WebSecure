@@ -96,14 +96,31 @@ def render_html_dashboard(results: dict) -> str:
             # Skip subdomains items that are plain strings (not finding dicts)
             if bucket == "subdomains" and not item.get("type") and not item.get("severity"):
                 continue
+            # Nmap/portscan port records have their own dedicated section — skip from main findings table
+            # (they'd appear with IP-only URL and Info severity, polluting the table)
+            if bucket in ("nmap", "port_scan", "portscan", "ports") and item.get("port"):
+                continue
+            # HTTP probe results have their own section — only include if they have a vuln type
+            if bucket in ("httpx", "http_probe") and not item.get("type"):
+                continue
+            # Katana crawl endpoints are informational — skip unless they carry a finding type
+            if bucket in ("katana", "crawl") and not item.get("type"):
+                continue
+
+            # Resolve URL — prefer clean URL, fall back to target, avoid bare IPs
+            _raw_url = item.get("url") or item.get("target") or item.get("host") or ""
+            # Normalize: if it looks like a bare IP or hostname (no scheme), add http://
+            if _raw_url and "://" not in _raw_url and not _raw_url.startswith("-"):
+                _raw_url = "http://" + _raw_url
+            f_url = _raw_url or "-"
 
             f = {
                 "id": _id_counter,
                 "severity": f_sev,
                 "type": f"{f_type} ({bucket})", # Show tool source
-                "url": item.get("url") or item.get("target") or "-",
+                "url": f_url,
                 "method": item.get("method") or "GET",
-                "param": item.get("param") or "-",
+                "param": item.get("param") or item.get("parameter") or "-",
                 "status": "Open",
                 "detail": item
             }
@@ -1175,13 +1192,32 @@ def render_html_dashboard(results: dict) -> str:
             ? `<span style="background:rgba(63,185,80,0.15); border:1px solid var(--sev-low); color:var(--sev-low); border-radius:4px; padding:2px 8px; font-size:0.8rem; font-weight:600;">✓ Verified</span>`
             : `<span style="background:rgba(139,148,158,0.1); border:1px solid var(--text-muted); color:var(--text-muted); border-radius:4px; padding:2px 8px; font-size:0.8rem;">Unverified</span>`;
 
+        // Build test URL (original URL + injected payload in param) for display only
+        var testUrlHtml = '';
+        var cleanUrl = item.url || '';
+        var payloadVal0 = d.payload || d.poc || '';
+        var paramVal0 = item.param && item.param !== '-' ? item.param : (d.parameter || '');
+        if (cleanUrl && paramVal0 && payloadVal0 && typeof payloadVal0 === 'string') {{
+            try {{
+                var _tu = new URL(cleanUrl);
+                _tu.searchParams.set(paramVal0, payloadVal0);
+                var _testStr = _tu.toString();
+                testUrlHtml = `<div class="label" style="color:var(--sev-medium); font-size:0.78rem;">Test URL</div>`
+                    + `<div style="font-size:0.82rem; word-break:break-all; color:var(--text-muted);">`
+                    + `<code style="background:rgba(139,148,158,0.1); padding:2px 4px; border-radius:3px;">`
+                    + escapeHtml(_testStr.substring(0,400)) + (_testStr.length > 400 ? '…' : '')
+                    + `</code> <span style="font-size:0.75rem; color:var(--text-muted)">(payload enjekte edildi — tarayıcıda çalışmayabilir)</span></div>`;
+            }} catch(e) {{}}
+        }}
+
         let html = `
             <div class="kv-grid">
-                <div class="label">URL</div> <div><a href="${{escapeHtml(item.url)}}" target="_blank" style="color:var(--accent)">${{escapeHtml(item.url)}}</a></div>
+                <div class="label">Target URL</div> <div><a href="${{escapeHtml(cleanUrl)}}" target="_blank" style="color:var(--accent)">${{escapeHtml(cleanUrl)}}</a></div>
+                ${{testUrlHtml}}
                 <div class="label">Method</div> <div><code>${{escapeHtml(item.method)}}</code></div>
                 <div class="label">Severity</div> <div><span class="tag ${{item.severity}}">${{item.severity}}</span> ${{verBadge}}</div>
                 ${{d.location ? `<div class="label">Location</div> <div>${{escapeHtml(d.location)}}</div>` : ''}}
-                ${{item.param && item.param !== '-' ? `<div class="label">Parameter</div> <div><code style="color:var(--sev-high)">${{escapeHtml(item.param)}}</code></div>` : ''}}
+                ${{paramVal0 ? `<div class="label">Parameter</div> <div><code style="color:var(--sev-high)">${{escapeHtml(paramVal0)}}</code></div>` : ''}}
                 ${{confidence ? `<div class="label">Confidence</div> <div>${{escapeHtml(String(confidence))}}</div>` : ''}}
                 ${{tool ? `<div class="label">Scanner</div> <div><code>${{escapeHtml(tool)}}</code></div>` : ''}}
             </div>

