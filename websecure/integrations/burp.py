@@ -1383,11 +1383,13 @@ class BurpScanConfiguration:
         },
     }
 
-    def __init__(self, api_client: BurpSuiteAPIClient) -> None:
+    def __init__(self, api_client: Optional["BurpSuiteAPIClient"] = None) -> None:
         """
         Parameters
         ----------
-        api_client : BurpSuiteAPIClient — for pushing configs to Burp Pro.
+        api_client : BurpSuiteAPIClient or None
+            Optional Burp Pro API client used to push configs remotely.
+            When None, configs are managed locally only (list/get still work).
         """
         self._client = api_client
         self._local_configs: Dict[str, Dict[str, Any]] = {}
