@@ -69,6 +69,11 @@ def new_tor_identity() -> bool:
         if b"250" in resp:
             time.sleep(2)  # Yeni devre kurulumu için bekle
             _logger.info("[egress] Yeni Tor kimliği alındı.")
+            try:
+                from websecure.core.circuit_breaker import cb_reset as _cb_reset
+                _cb_reset()
+            except Exception:
+                pass
             return True
     except Exception as e:
         _logger.debug(f"[egress] NEWNYM başarısız: {e}")
