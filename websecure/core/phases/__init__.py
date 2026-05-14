@@ -580,6 +580,12 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.subdomain_takeover",
         "websecure.scanners.crlf_injection",
         "websecure.scanners.session_scanner",
+        # Faz 3 — bağlı olmayan scanner'lar
+        "websecure.scanners.prototype_pollution",
+        "websecure.scanners.xxe",
+        "websecure.scanners.ssrf",
+        "websecure.scanners.headers",
+        "websecure.scanners.race_condition",
     ]
     for m in _url_first:
         label = m.rsplit(".", 1)[-1]
@@ -1778,6 +1784,115 @@ def _runner_verify_and_score(ctx) -> None:
         _logger.warning(f"[phases] verify_and_score error: {e}")
 
 
+# ----------------------------- Faz 3 — Yeni Runner'lar ---------------------------
+
+def _runner_prototype_pollution(ctx) -> None:
+    """Prototype Pollution taraması (JSON body / query string / constructor)."""
+    mod = _opt_import("websecure.scanners.prototype_pollution")
+    if not mod:
+        add_result("meta", {"stage": "prototype_pollution", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    auth_ctx = getattr(ctx, "auth_ctx", None)
+    try:
+        findings = mod.run(url, session=sess, debug=debug, auth_ctx=auth_ctx) or []
+        for f in findings:
+            add_result("prototype_pollution", f)
+            if f.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", f)
+        add_result("meta", {"stage": "prototype_pollution", "findings": len(findings)})
+    except Exception as e:
+        _logger.warning(f"[phases] Prototype Pollution runner error: {e}")
+
+
+def _runner_xxe(ctx) -> None:
+    """Standalone XXE taraması (ssrf_xxe birleşiğinden bağımsız)."""
+    mod = _opt_import("websecure.scanners.xxe")
+    if not mod:
+        add_result("meta", {"stage": "xxe", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    try:
+        findings = mod.run(url, session=sess, debug=debug) or []
+        for f in findings:
+            add_result("xxe", f)
+            if f.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", f)
+        add_result("meta", {"stage": "xxe", "findings": len(findings)})
+    except Exception as e:
+        _logger.warning(f"[phases] XXE runner error: {e}")
+
+
+def _runner_ssrf(ctx) -> None:
+    """Standalone SSRF taraması (ssrf_xxe birleşiğinden bağımsız)."""
+    mod = _opt_import("websecure.scanners.ssrf")
+    if not mod:
+        add_result("meta", {"stage": "ssrf", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    try:
+        findings = mod.run(url, session=sess, debug=debug) or []
+        for f in findings:
+            add_result("ssrf", f)
+            if f.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", f)
+        add_result("meta", {"stage": "ssrf", "findings": len(findings)})
+    except Exception as e:
+        _logger.warning(f"[phases] SSRF runner error: {e}")
+
+
+def _runner_headers_scanner(ctx) -> None:
+    """Security headers tam analizi (CSP, HSTS, email security, DNS CAA, vb.)."""
+    mod = _opt_import("websecure.scanners.headers")
+    if not mod:
+        add_result("meta", {"stage": "headers_scanner", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    try:
+        findings = mod.run(url, session=sess, debug=debug) or []
+        if isinstance(findings, list):
+            for f in findings:
+                add_result("security_headers", f)
+        elif isinstance(findings, dict):
+            add_result("security_headers", findings)
+        add_result("meta", {"stage": "headers_scanner", "status": "completed"})
+    except Exception as e:
+        _logger.warning(f"[phases] Headers Scanner runner error: {e}")
+
+
+def _runner_race_condition(ctx) -> None:
+    """Race Condition taraması — RaceConditionScanner orchestrator kullanır."""
+    mod = _opt_import("websecure.scanners.race_condition")
+    if not mod:
+        add_result("meta", {"stage": "race_condition", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    results = _ensure_results_bucket(ctx)
+    try:
+        scanner_cls = getattr(mod, "RaceConditionScanner", None)
+        if scanner_cls:
+            findings = scanner_cls(session=sess, results=results, debug=debug).run(url) or []
+        else:
+            findings = mod.run(url, session=sess, debug=debug) or []
+        for f in findings:
+            add_result("race_condition", f)
+            if f.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", f)
+        add_result("meta", {"stage": "race_condition", "findings": len(findings)})
+    except Exception as e:
+        _logger.warning(f"[phases] Race Condition runner error: {e}")
+
+
 # ----------------------------- Plan Builder End ---------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -1993,6 +2108,42 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("crlf_injection", default=True),
             runner=lambda c: _safe(c, lambda: _runner_crlf_injection(c), "crlf_injection"),
             tags=["active", "injection", "header", "a03"],
+        ),
+        # ── Faz 3 — Yeni bağlanan scanner'lar ────────────────────────────────
+        Phase(
+            id="prototype_pollution",
+            title="Prototype Pollution",
+            enabled=_flag("prototype_pollution", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_prototype_pollution(c), "prototype_pollution"),
+            tags=["active", "injection", "js", "api"],
+        ),
+        Phase(
+            id="xxe",
+            title="XXE (XML External Entity)",
+            enabled=_flag("xxe", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_xxe(c), "xxe"),
+            tags=["active", "injection", "xml", "oast"],
+        ),
+        Phase(
+            id="ssrf",
+            title="SSRF (Server-Side Request Forgery)",
+            enabled=_flag("ssrf", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_ssrf(c), "ssrf"),
+            tags=["active", "ssrf", "oast"],
+        ),
+        Phase(
+            id="headers_scanner",
+            title="Security Headers Analizi (Tam)",
+            enabled=_flag("headers_scanner", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_headers_scanner(c), "headers_scanner"),
+            tags=["passive", "headers", "config", "a05"],
+        ),
+        Phase(
+            id="race_condition",
+            title="Race Condition (Tam Orchestrator)",
+            enabled=_flag("race_condition", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_race_condition(c), "race_condition"),
+            tags=["active", "race", "concurrency", "logic"],
         ),
         Phase(
             id="waf_fingerprint",
