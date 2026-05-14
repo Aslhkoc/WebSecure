@@ -26,10 +26,24 @@ logger = logging.getLogger(__name__)
 def export_sarif(results: Dict[str, Any], out_path: str) -> None:
     """
     SARIF 2.1.0 formatında rapor dosyası yazar.
-    `results` dict'inde 'findings' listesi beklenir.
+    `results` dict'inde 'findings' veya 'final' listesi beklenir.
 
-    FAZ 4.1: reporting.py:3062'den taşındı.
+    integrations/sarif.SARIFReport'a delege eder (fingerprint, CWE linking, dedup dahil).
+    İmport başarısız olursa minimal SARIF fallback kullanılır.
     """
+    findings: List[Dict] = []
+    if isinstance(results, dict):
+        findings = results.get("findings") or results.get("final") or []
+
+    try:
+        from websecure.integrations.sarif import findings_to_sarif as _findings_to_sarif
+        _findings_to_sarif(findings, output_path=out_path, tool_source="websecure")
+        logger.info(f"[report_generator] SARIF raporu yazıldı: {out_path}")
+        return
+    except ImportError:
+        pass
+
+    # Fallback: minimal SARIF 2.1.0
     run: Dict[str, Any] = {
         "tool": {
             "driver": {
@@ -39,15 +53,19 @@ def export_sarif(results: Dict[str, Any], out_path: str) -> None:
         },
         "results": [],
     }
-    for it in results.get("findings", []):
+    for it in findings:
         rule_id = it.get("cwe") or it.get("type") or "generic"
         msg = it.get("message") or it.get("title") or it.get("type") or "finding"
         run["results"].append({"ruleId": str(rule_id), "message": {"text": str(msg)}})
 
-    sarif = {"version": "2.1.0", "runs": [run]}
+    sarif = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [run],
+    }
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(sarif, fh, indent=2, ensure_ascii=False)
-    logger.info(f"[report_generator] SARIF raporu yazıldı: {out_path}")
+    logger.info(f"[report_generator] SARIF raporu yazıldı (fallback): {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +85,20 @@ def export_junit(
     """
     JUnit XML formatında rapor dosyası yazar.
 
-    FAZ 4.1: reporting.py'deki _to_junit'ten türetildi.
+    reporting.to_junit()'e delege eder.
+    İmport başarısız olursa kendi minimal impl'ini kullanır.
     """
-    # _coerce_final benzeri: 'final' ya da sonuç listesi
+    try:
+        from websecure.core.reporting import to_junit as _to_junit
+        xml_str = _to_junit(results, suite_name=suite_name)
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(xml_str)
+        logger.info(f"[report_generator] JUnit XML raporu yazıldı: {out_path}")
+        return
+    except ImportError:
+        pass
+
+    # Fallback: own minimal impl
     items: List[Dict] = []
     if isinstance(results, dict):
         items = results.get("final") or results.get("findings") or []
@@ -93,7 +122,7 @@ def export_junit(
 
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
-    logger.info(f"[report_generator] JUnit XML raporu yazıldı: {out_path}")
+    logger.info(f"[report_generator] JUnit XML raporu yazıldı (fallback): {out_path}")
 
 
 # ---------------------------------------------------------------------------

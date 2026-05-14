@@ -4083,13 +4083,53 @@ def run_js_analysis(ctx) -> None:
 
 def run_reporting_and_integration(ctx) -> None:
     from websecure.core.reporting import perform_reporting
-    
+
     results = getattr(ctx, "results", {}) or {}
     cfg = getattr(ctx, "config", {}) or {}
     session = getattr(ctx, "session", None)
-    
+
     _logger.info("Generating Final Reports...")
     perform_reporting(session, cfg, results)
+
+    # Always-on SARIF + JUnit — CI/CD pipeline'ı için yapılandırmadan bağımsız üret
+    _rep_cfg = (cfg.get("reporting") or {}) if isinstance(cfg, dict) else {}
+    _formats = list(_rep_cfg.get("formats") or [])
+    _out_dir = str(_rep_cfg.get("output_dir") or cfg.get("output_dir") or "output")
+    try:
+        import os as _os
+        _os.makedirs(_out_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    if "sarif" not in _formats:
+        try:
+            from websecure.core.report_generator import export_sarif as _export_sarif
+            from websecure.core.reporting import get_global_results as _get_gr
+            _all_findings: List[Dict] = []
+            for _bucket in _get_gr().values():
+                if isinstance(_bucket, list):
+                    _all_findings.extend(_bucket)
+            import os as _os2
+            _sarif_path = _os2.path.join(_out_dir, "websecure.sarif")
+            _export_sarif({"findings": _all_findings}, _sarif_path)
+            _logger.info(f"[run_reporting] SARIF always-on yazıldı: {_sarif_path}")
+        except Exception as _sarif_exc:
+            _logger.debug(f"[run_reporting] SARIF always-on hatası: {_sarif_exc!r}")
+
+    if "junit" not in _formats:
+        try:
+            from websecure.core.report_generator import export_junit as _export_junit
+            from websecure.core.reporting import get_global_results as _get_gr2
+            _all_findings2: List[Dict] = []
+            for _bucket2 in _get_gr2().values():
+                if isinstance(_bucket2, list):
+                    _all_findings2.extend(_bucket2)
+            import os as _os3
+            _junit_path = _os3.path.join(_out_dir, "websecure.junit.xml")
+            _export_junit({"findings": _all_findings2}, _junit_path)
+            _logger.info(f"[run_reporting] JUnit always-on yazıldı: {_junit_path}")
+        except Exception as _junit_exc:
+            _logger.debug(f"[run_reporting] JUnit always-on hatası: {_junit_exc!r}")
 
 
 def _setup_oast_domain(ctx) -> Optional[str]:
