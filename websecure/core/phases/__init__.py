@@ -989,6 +989,9 @@ def _runner_katana(ctx) -> None:
         url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
         if not url:
             return
+        # Ensure URL has protocol prefix before passing to katana
+        if url and not url.startswith(("http://", "https://")):
+            url = "https://" + url
         # Config'den derinlik ve JS tarama seçeneklerini al
         cfg = getattr(ctx, "config", {}) or {}
         depth = int((cfg.get("discovery") or {}).get("max_depth") or 3)

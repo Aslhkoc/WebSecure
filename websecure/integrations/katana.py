@@ -230,6 +230,11 @@ class KatanaWrapper(ToolIntegration):
         form_extraction: bool,
         known_files: bool,
     ) -> List[str]:
+        # Ensure URL has a protocol prefix — katana rejects bare hostnames
+        if target and not target.startswith(("http://", "https://")):
+            target = "https://" + target
+            logger.info(f"[katana] URL'ye protokol eklendi → {target}")
+
         cmd = [
             self.binary,
             "-u", target,
@@ -243,25 +248,66 @@ class KatanaWrapper(ToolIntegration):
             "-timeout", str(self.timeout_s),
         ]
 
-        if js_crawl:
+        # Optional flags — only append if supported by the installed version
+        _supported = self._get_supported_flags()
+
+        if js_crawl and "-js-crawl" in _supported:
             cmd.append("-js-crawl")
 
-        if headless:
-            cmd.extend(["-headless"])
+        if headless and "-headless" in _supported:
+            cmd.append("-headless")
 
-        if form_extraction:
+        if form_extraction and "-form-extraction" in _supported:
             cmd.append("-form-extraction")
 
+        # -known-files flag syntax varies across katana versions
         if known_files:
-            cmd.extend(["-known-files", "all"])
+            if "-known-files" in _supported:
+                cmd.extend(["-known-files", "all"])
+            elif "-kf" in _supported:
+                cmd.extend(["-kf", "all"])
 
-        if self.scope_regex:
+        if self.scope_regex and "-scope-regex" in _supported:
             cmd.extend(["-scope-regex", self.scope_regex])
 
-        # Çıktı alanları
-        cmd.extend(["-field", "url,method,body,source,tag"])
+        # -field flag was removed in newer katana versions — skip it entirely.
+        # -json already outputs all fields we need.
 
         return cmd
+
+    def _get_supported_flags(self) -> Set[str]:
+        """
+        Parse katana --help to discover available flags.
+        Cached per instance to avoid repeated subprocess calls.
+        """
+        if hasattr(self, "_supported_flags_cache"):
+            return self._supported_flags_cache  # type: ignore[attr-defined]
+
+        supported: Set[str] = set()
+        try:
+            proc = subprocess.run(
+                [self.binary, "-help"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=8,
+                check=False,
+            )
+            help_text = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            # Extract flag names: lines starting with whitespace then dash
+            import re as _re
+            for m in _re.finditer(r"\s(-{1,2}[\w-]+)", help_text):
+                supported.add(m.group(1))
+        except Exception as exc:
+            logger.debug(f"[katana] Flag discovery failed: {exc!r}")
+            # Conservative defaults for when help fails
+            supported = {
+                "-js-crawl", "-headless", "-form-extraction",
+                "-known-files", "-silent", "-json", "-depth",
+                "-c", "-p", "-rate-limit", "-timeout", "-u", "-o",
+            }
+
+        self._supported_flags_cache = supported  # type: ignore[attr-defined]
+        return supported
 
     # ------------------------------------------------------------------ #
     # Çıktı ayrıştırma

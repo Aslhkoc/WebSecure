@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
+from urllib.parse import urljoin
 from typing import Any, Dict, List, Optional, Set
 
 # [WS3] Integration of AdvancedFormFuzzer logic
