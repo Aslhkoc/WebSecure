@@ -2141,6 +2141,29 @@ class AdaptiveMutationEngine:
                 key = f"{category}:{variant}"
                 if key not in self._tried[payload]:
                     mutations.append(variant)
+
+        # Deep WAF bypass variants from Mutator (fullwidth, null-byte, hex, polyglot)
+        try:
+            from websecure.core.mutator import Mutator as _Mutator
+            cat_lower = (category or "").lower()
+            _mutator_variants: list = []
+            if "sql" in cat_lower or cat_lower in ("generic", ""):
+                _mutator_variants.extend(_Mutator.mutate_sql(payload, max_variants=10))
+            if "xss" in cat_lower or cat_lower in ("generic", ""):
+                _mutator_variants.extend(_Mutator.mutate_xss(payload, max_variants=10))
+            if "rce" in cat_lower or "cmd" in cat_lower:
+                _mutator_variants.extend(_Mutator.mutate_rce(payload, max_variants=10))
+            if "nosql" in cat_lower:
+                _mutator_variants.extend(_Mutator.mutate_nosql(payload, max_variants=10))
+            for variant in _mutator_variants:
+                if not variant:
+                    continue
+                key = f"{category}:{variant}"
+                if key not in self._tried[payload]:
+                    mutations.append(variant)
+        except Exception:
+            pass
+
         return mutations
 
     def record_tried(self, payload: str, variant: str, category: str = "generic") -> None:

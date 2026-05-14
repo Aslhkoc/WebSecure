@@ -615,8 +615,8 @@ class ConcatenationMutation(MutationStrategy):
         # JS: 'ab' -> 'a'+'b'
         js_concat = f"'{payload[:mid]}'"+"+'"+ payload[mid:]+"'"
         # PHP: 'ab' -> 'a'.'b'
-        php_concat = f"'{payload[:mid]}'"+"."+"'{payload[mid:]}'"
-        return [sql_concat, js_concat][:2]
+        php_concat = f"'{payload[:mid]}'.'{payload[mid:]}'"
+        return [sql_concat, js_concat, php_concat][:3]
 
 
 class PayloadMutationEngine:

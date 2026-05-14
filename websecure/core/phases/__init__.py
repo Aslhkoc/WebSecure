@@ -1836,6 +1836,30 @@ def _runner_verify_and_score(ctx) -> None:
     except Exception as e:
         _logger.warning(f"[phases] correlation_engine error: {e}")
 
+    # Faz 6: PayloadScorer feedback — başarılı bulgular Bayesian scorer'a kaydet
+    try:
+        from websecure.core.payload_engine import get_engine as _get_payload_engine
+        from websecure.core.reporting import get_global_results as _get_global_results_ps
+        _pe_scorer = _get_payload_engine()
+        _g_ps = _get_global_results_ps()
+        _bucket_cat_map = {
+            "offensive": "generic", "sqli": "sqli", "xss": "xss",
+            "rce": "rce", "lfi": "lfi", "ssrf": "ssrf", "ssti": "ssti",
+            "nosqli": "nosql", "cmdi": "rce",
+        }
+        for _bucket_ps, _cat_ps in _bucket_cat_map.items():
+            for _f_ps in _g_ps.get(_bucket_ps, []):
+                if not isinstance(_f_ps, dict):
+                    continue
+                if _f_ps.get("severity") in ("Critical", "High"):
+                    _payload_ps = _f_ps.get("payload") or _f_ps.get("evidence") or ""
+                    if _payload_ps and isinstance(_payload_ps, str) and len(_payload_ps) < 512:
+                        _pe_scorer.record_result(_payload_ps, _cat_ps, success=True)
+        _pe_scorer.save_scores()
+        _logger.debug("[phases] PayloadScorer güncellendi.")
+    except Exception as _ps_exc:
+        _logger.debug(f"[phases] PayloadScorer feedback error: {_ps_exc}")
+
 
 # ----------------------------- Faz 3 — Yeni Runner'lar ---------------------------
 
@@ -2244,6 +2268,33 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
             _quick_tech_probe(ctx)
         except Exception as exc:
             _logger.debug(f"[phases] Quick tech probe failed: {exc!r}")
+
+    # Faz 6: PayloadEngine — CMS-aware payload pre-computation after tech probe
+    try:
+        from websecure.core.payload_engine import get_engine as _get_payload_engine
+        _pe = _get_payload_engine()
+        _techs = list(getattr(ctx, "technologies", []) or [])
+        if _techs:
+            _cms_name = _pe.fingerprinter.detect(_techs)
+            if _cms_name and not getattr(ctx, "detected_cms", None):
+                ctx.detected_cms = _cms_name
+                _logger.info(f"[phases] PayloadEngine CMS tespit: {_cms_name}")
+            _cms_paths = _pe.get_cms_paths(_techs)
+            if _cms_paths and not getattr(ctx, "cms_extra_paths", None):
+                ctx.cms_extra_paths = _cms_paths
+            _ctx_payloads: dict = {}
+            for _cat in ("sqli", "xss", "rce", "lfi"):
+                _ctx_payloads[_cat] = _pe.get(category=_cat, tech_tags=_techs, limit=100)
+            ctx.cms_payloads = _ctx_payloads
+            add_result("meta", {
+                "stage": "cms_payload_init",
+                "cms": _cms_name,
+                "techs": _techs,
+                "cms_paths_count": len(_cms_paths),
+            })
+    except Exception as _pe_exc:
+        _logger.debug(f"[phases] PayloadEngine init error: {_pe_exc}")
+
     base: List[Phase] = []
     existing = getattr(ctx, "base_plan", None)
     if isinstance(existing, list):
