@@ -548,3 +548,11 @@ def should_use_browser_crawler(http_result: Dict) -> bool:
     if any(t in spa_techs for t in tech):
         return True
     return False
+
+
+__all__ = [
+    'BrowserCrawlConfig',
+    'BrowserCrawlResult',
+    'BrowserCrawler',
+    'should_use_browser_crawler',
+]

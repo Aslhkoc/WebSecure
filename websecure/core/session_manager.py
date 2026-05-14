@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.core.session_manager
 -------------------------------
 Session ve Cookie güvenlik analiz yardımcıları.
@@ -439,3 +439,11 @@ class SessionLifecycleProber:
                 else "Eski oturum yeni oturum açılınca geçersiz kılınmış (doğru davranış)"
             ),
         }
+
+
+__all__ = [
+    'CookieAuditResult',
+    'CookieSecurityAnalyzer',
+    'SessionEntropyAnalyzer',
+    'SessionLifecycleProber',
+]

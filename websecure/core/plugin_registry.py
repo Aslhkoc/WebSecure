@@ -181,3 +181,10 @@ def reset_registry() -> None:
     global _REGISTRY
     with _REGISTRY_LOCK:
         _REGISTRY = None
+
+
+__all__ = [
+    'PluginRegistry',
+    'get_registry',
+    'reset_registry',
+]

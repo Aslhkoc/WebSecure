@@ -3103,6 +3103,12 @@ def run_plan_if_needed(ctx: dict):
     except (ImportError, AttributeError) as exc:
         _logger.debug(f"[phases] LiveMonitor summary unavailable: {exc!r}")
 
+    # Raporlama fazı plan'dan filtrelendi; burada eksiz çalıştır (SARIF/JUnit/bildirim)
+    try:
+        run_reporting_and_integration(ctx)
+    except Exception as _rep_exc:
+        _logger.debug(f"[phases] run_reporting_and_integration hatası: {_rep_exc!r}")
+
 
 # ===========================================================================
 # MERGED FROM: websecure/core/flow_runner.py
