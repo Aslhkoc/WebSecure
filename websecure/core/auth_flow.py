@@ -793,6 +793,13 @@ def playwright_login(cfg: Dict[str, Any], session_path: str = "session.json") ->
         )
         return None
 
+    # Ensure URL has a protocol prefix — Playwright rejects bare hostnames
+    if login_url and not login_url.startswith(("http://", "https://")):
+        login_url = "https://" + login_url
+        logging.getLogger(__name__).info(
+            f"[Auth] playwright_login: URL'ye protokol eklendi → {login_url}"
+        )
+
     logger = logging.getLogger(__name__)
     logger.info(f"[Auth] Playwright ile otomatik giriş: {login_url}")
 
