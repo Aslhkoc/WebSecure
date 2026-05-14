@@ -300,7 +300,9 @@ class KatanaWrapper(ToolIntegration):
     def _parse_endpoint(self, data: Dict[str, Any]) -> Optional[KatanaEndpoint]:
         try:
             req = data.get("request") or {}
-            url = req.get("url") or data.get("url") or data.get("endpoint") or ""
+            # katana v1 JSON: {"request":{"endpoint":"https://..."}} — "endpoint" inside request
+            # older/fallback: top-level "url" or "endpoint"
+            url = req.get("endpoint") or req.get("url") or data.get("url") or data.get("endpoint") or ""
             if not url:
                 return None
 
