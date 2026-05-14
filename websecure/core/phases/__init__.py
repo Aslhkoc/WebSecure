@@ -557,6 +557,9 @@ def phase_offensive(ctx: dict):
             _logger.warning(f"[phases] {label} error: {_e}")
             _report_phase_error("offensive", label, _e)
 
+    # --- Faz 7: httpx probe before scanners (enriches ctx.technologies) ---
+    _safe_run("httpx_probe", lambda: _runner_httpx_probe(ctx))
+
     # --- Scanners with standard (url, session=, results=, ...) signature ---
     _url_first = [
         "websecure.scanners.request_smuggling",
@@ -643,6 +646,9 @@ def phase_offensive(ctx: dict):
             _runner_sqlmap(ctx)
     except Exception as _e:
         _logger.warning(f"[phases] sqlmap runner error: {_e}")
+
+    # --- Faz 7: dalfox verify after all XSS scanners ---
+    _safe_run("dalfox_verify", lambda: _runner_dalfox_verify(ctx))
 
 
 """
@@ -1970,6 +1976,101 @@ def _runner_race_condition(ctx) -> None:
         _logger.warning(f"[phases] Race Condition runner error: {e}")
 
 
+# ---- Faz 7: httpx probe + dalfox verify runners -------------------------
+
+def _runner_httpx_probe(ctx) -> None:
+    """httpx ile hızlı HTTP prob — teknoloji tespiti, HTTP/2, TLS, status kodu."""
+    try:
+        from websecure.integrations.httpx_runner import HttpxWrapper
+        wrapper = HttpxWrapper()
+        if not wrapper.is_available():
+            add_result("meta", {"stage": "httpx_probe", "status": "skipped:not-installed"})
+            return
+        url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+        if not url:
+            return
+        result = wrapper.probe_bulk([url], tech_detect=True, tls_probe=True)
+        # Teknoloji zenginleştirme: httpx tespitlerini ctx.technologies'e ekle
+        all_techs = set(getattr(ctx, "technologies", []) or [])
+        for pr_dict in result.extra.get("probe_results", []):
+            for t in (pr_dict.get("tech") or []):
+                if t:
+                    all_techs.add(t)
+        if all_techs:
+            ctx.technologies = sorted(all_techs)
+        for f in result.findings:
+            add_result("meta", f.to_dict())
+        add_result("meta", {
+            "stage": "httpx_probe",
+            "status": "ok",
+            "probed": len(result.extra.get("probe_results", [])),
+            "findings": result.finding_count,
+        })
+        _logger.info(f"[phases] httpx_probe: {result.finding_count} bulgu, techs={len(all_techs)}")
+    except Exception as e:
+        _logger.warning(f"[phases] httpx_probe runner error: {e}")
+
+
+def _runner_dalfox_verify(ctx) -> None:
+    """Dalfox ile XSS bulgularını doğrula — yalnızca dalfox kuruluysa çalışır."""
+    try:
+        from websecure.integrations.dalfox import DalfoxWrapper
+        wrapper = DalfoxWrapper()
+        if not wrapper.is_available():
+            add_result("meta", {"stage": "dalfox_verify", "status": "skipped:not-installed"})
+            return
+        from websecure.core.reporting import get_global_results as _get_gr_df
+        g_res = _get_gr_df()
+        # XSS bulgularını topla
+        xss_findings: list = []
+        for bucket in ("xss", "dom_xss", "offensive"):
+            for f in g_res.get(bucket, []):
+                if not isinstance(f, dict) or not f.get("url"):
+                    continue
+                t = (f.get("type") or "").lower()
+                if "xss" in t or bucket == "xss":
+                    xss_findings.append(f)
+        # Tekrarları url+type bazında deduplicate et
+        seen_keys: set = set()
+        unique_xss: list = []
+        for f in xss_findings:
+            k = f"{f.get('url', '')}|{f.get('type', '')}"
+            if k not in seen_keys:
+                seen_keys.add(k)
+                unique_xss.append(f)
+        if not unique_xss:
+            add_result("meta", {"stage": "dalfox_verify", "status": "skipped:no-xss-findings"})
+            return
+        # Cookie + blind callback al
+        cookie = ""
+        auth_ctx = getattr(ctx, "auth_ctx", None)
+        if isinstance(auth_ctx, dict):
+            cookie = auth_ctx.get("cookie") or auth_ctx.get("session_cookie") or ""
+        blind_callback = ""
+        cfg = getattr(ctx, "config", {}) or {}
+        oast_cfg = (cfg.get("oast") or {}) if isinstance(cfg, dict) else {}
+        if isinstance(oast_cfg, dict):
+            blind_callback = oast_cfg.get("interactsh_url") or oast_cfg.get("blind_callback") or ""
+        wrapper.blind_callback = blind_callback
+        result = wrapper.verify_xss_findings(unique_xss, cookie=cookie)
+        for f in result.findings:
+            d = f.to_dict()
+            add_result("xss", d)
+            add_result("offensive", d)
+        add_result("meta", {
+            "stage": "dalfox_verify",
+            "status": "ok",
+            "input_findings": len(unique_xss),
+            "confirmed": result.finding_count,
+        })
+        _logger.info(
+            f"[phases] dalfox_verify: {len(unique_xss)} XSS → "
+            f"{result.finding_count} doğrulandı"
+        )
+    except Exception as e:
+        _logger.warning(f"[phases] dalfox_verify runner error: {e}")
+
+
 # ----------------------------- Plan Builder End ---------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -2015,12 +2116,26 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(id="subdomain", title="Subdomain Enumeration", enabled=_flag("subdomain", default=True), runner=lambda c: _safe(c, lambda: _runner_subdomain(c), "subdomain"), tags=["recon","dns","passive"]),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
+        Phase(
+            id="httpx_probe",
+            title="httpx HTTP/2 Prob & Teknoloji Tespiti",
+            enabled=_flag("httpx_probe", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_httpx_probe(c), "httpx_probe"),
+            tags=["recon", "tech-detect", "http2"],
+        ),
         Phase(id="js_analysis", title="JS Dosya & Endpoint Analizi", enabled=True, runner=lambda c: _safe(c, lambda: _runner_js_analysis(c), "js_analysis"), tags=["js","recon","secrets"]),
         Phase(id="ffuf", title="FFUF Content & File Fuzzing", enabled=True, runner=lambda c: _safe(c, lambda: _runner_ffuf(c), "ffuf"), tags=["fuzz","content","files"]),
         Phase(id="feroxbuster", title="Feroxbuster Recursive Discovery", enabled=True, runner=lambda c: _safe(c, lambda: _runner_feroxbuster(c), "feroxbuster"), tags=["fuzz","content"]),
         Phase(id="nuclei", title="Nuclei Vulnerability Scanner", enabled=_flag("nuclei", default=True), runner=lambda c: _safe(c, lambda: _runner_nuclei(c), "nuclei"), tags=["vuln","cve","nuclei"]),
         Phase(id="port_scan", title="Port Taraması", enabled=True, runner=lambda c: _safe(c, lambda: run_portscan(c), "portscan"), tags=["infra","port"]),
         Phase(id="xss", title="XSS Scan (Nuclei/Dalfox)", enabled=_flag("xss", default=True), runner=lambda c: _safe(c, lambda: _runner_xss(c), "xss"), tags=["xss","active"]),
+        Phase(
+            id="dalfox_verify",
+            title="Dalfox XSS Doğrulama",
+            enabled=_flag("dalfox_verify", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_dalfox_verify(c), "dalfox_verify"),
+            tags=["xss", "verify", "dalfox"],
+        ),
         Phase(id="csrf", title="CSRF Scanner", enabled=_flag("csrf", default=True), runner=lambda c: _safe(c, lambda: _runner_csrf(c), "csrf"), tags=["csrf","active"]),
         Phase(
             id="scanners.ssrf_xxe",
