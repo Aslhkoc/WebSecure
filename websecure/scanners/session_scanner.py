@@ -580,7 +580,7 @@ class SessionScanner(BaseScanner):
 
         for name, ScannerClass in sub_scanners:
             try:
-                scanner = ScannerClass(self.session, self.config)
+                scanner = ScannerClass(session=self.session, results=self.results, debug=self.debug)
                 findings = scanner.run(target, **kwargs)
                 for f in findings:
                     f.setdefault("scanner", name)
@@ -615,5 +615,16 @@ class SessionScanner(BaseScanner):
         except Exception as e:
             logger.debug(f"[SessionScanner] Entropy analysis failed: {e}")
 
+        for finding in all_findings:
+            add_result("session_scanner", finding)
+            if finding.get("severity") in ("Critical", "High", "Medium"):
+                add_result("offensive", finding)
+
         logger.info(f"[SessionScanner] Toplam {len(all_findings)} bulgu — {target}")
         return all_findings
+
+
+def run(url: str, session=None, results: dict = None, debug: bool = False, **kwargs) -> list:
+    """Standard (url, session=, results=, ...) entry point for phase runner and _call_if_exists."""
+    scanner = SessionScanner(session=session, results=results if results is not None else {}, debug=debug)
+    return scanner.run(url, **kwargs)
