@@ -935,7 +935,7 @@ def _runner_open_redirect(ctx) -> None:
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
     """scanners.ssrf_xxe.scan(...) çağrısı için imza-uyumlu sargı."""
-    mod = _opt_import("scanners.ssrf_xxe")
+    mod = _opt_import("websecure.scanners.ssrf_xxe")
     if not mod or not hasattr(mod, "scan") or not callable(getattr(mod, "scan")):
         add_result("offensive", {
             "type": "SSRF/XXE",
@@ -979,7 +979,7 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
 
 def _runner_scanners_request_smuggling(ctx) -> None:
     """scanners.request_smuggling.SmugglingProber üzerinden düşük etkili prob seti."""
-    prober_cls = _opt_import("scanners.request_smuggling", "SmugglingProber")
+    prober_cls = _opt_import("websecure.scanners.request_smuggling", "SmugglingProber")
     if not prober_cls:
         add_result("offensive", {
             "type": "Request Smuggling",
@@ -1066,7 +1066,7 @@ def _runner_scanners_request_smuggling(ctx) -> None:
     })
 
 def _runner_mass_assignment(ctx) -> None:
-    mod = _opt_import("scanners.mass_assignment")
+    mod = _opt_import("websecure.scanners.mass_assignment")
     if not mod:
         add_result("offensive", {"type": "Mass Assignment", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1086,7 +1086,7 @@ def _runner_mass_assignment(ctx) -> None:
         run(**kw)
 
 def _runner_nosqli(ctx) -> None:
-    mod = _opt_import("scanners.nosqli")
+    mod = _opt_import("websecure.scanners.nosqli")
     if not mod:
         add_result("offensive", {"type": "NoSQLi", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1109,7 +1109,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     scanners.file_upload.{run|scan} için sargı.
     - İmza keşfi ile uyum (TypeError yakalamadan)
     """
-    mod = _opt_import("scanners.file_upload")
+    mod = _opt_import("websecure.scanners.file_upload")
     if not mod:
         add_result("offensive", {
             "type": "File Upload",
@@ -1160,7 +1160,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     add_result("meta", {"stage": "file_upload", "tested": len(endpoints)})
 
 def _runner_jwt(ctx) -> None:
-    mod = _opt_import("scanners.jwt")
+    mod = _opt_import("websecure.scanners.jwt")
     if not mod or not hasattr(mod, "JWTScanner"):
         add_result("offensive", {"type": "JWT", "severity": "Informational", "reason": "Modül/Sınıf bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
@@ -1192,7 +1192,7 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
     - İmza keşfi
     - Sonuçları normalize ederek raporla
     """
-    mod = _opt_import("scanners.ws_fuzz")
+    mod = _opt_import("websecure.scanners.ws_fuzz")
     if not mod:
         add_result("offensive", {
             "type": "WebSocket",
@@ -1259,12 +1259,12 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
     add_result("meta", {"stage": "ws_fuzz", "tested": len(endpoints)})
 
 def _runner_graphql(ctx) -> None:
-    att_mod = _opt_import("scanners.graphql_attacks")
-    rpc_mod = _opt_import("scanners.graphql_rpc")
+    att_mod = _opt_import("websecure.scanners.graphql_attacks")
+    rpc_mod = _opt_import("websecure.scanners.graphql_rpc")
     
     # [WS3] Fallback to robust scanner if 'attacks' module missing
     if not att_mod:
-        mod_base = _opt_import("scanners.graphql")
+        mod_base = _opt_import("websecure.scanners.graphql")
         if mod_base and hasattr(mod_base, "GraphQLScanner"):
              add_result("offensive", {"type": "GraphQL Attacks", "severity": "Note", "reason": "Attack module missing, running standard GraphQL Scanner"})
              _runner_scanners_graphql(ctx)
@@ -1349,7 +1349,7 @@ def _runner_graphql(ctx) -> None:
         add_result("errors", {"type": "graphql_probes", "errors": errors})
 
 def _runner_passive_recon(ctx) -> None:
-    mod = _opt_import("scanners.passive_recon")
+    mod = _opt_import("websecure.scanners.passive_recon")
     if not mod:
         add_result("discovery", {"type": "Passive Recon", "severity": "Info", "reason": "Module not found"})
         return
@@ -1384,7 +1384,7 @@ def _runner_passive_recon(ctx) -> None:
                 add_result("offensive", f) # JS secrets are offensive/vulnerability findings
 
 def _runner_owasp_nuclei(ctx) -> None:
-    mod = _opt_import("scanners.owasp")
+    mod = _opt_import("websecure.scanners.owasp")
     if not mod:
          add_result("offensive", {"type": "OWASP", "severity": "Info", "reason": "Module not found"})
          return
@@ -1423,7 +1423,7 @@ def _runner_owasp_nuclei(ctx) -> None:
 
 
 def _runner_scanners_graphql(ctx) -> None:
-    mod = _opt_import("scanners.graphql")
+    mod = _opt_import("websecure.scanners.graphql")
     if not mod or not hasattr(mod, "GraphQLScanner"):
         return
     base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
@@ -1436,7 +1436,7 @@ def _runner_scanners_graphql(ctx) -> None:
 
 def _runner_scanners_tls(ctx) -> None:
     # Use scanners.tls if available
-    mod = _opt_import("scanners.tls")
+    mod = _opt_import("websecure.scanners.tls")
     if not mod or not hasattr(mod, "scan_tls"):
         return
     base_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None) or "")
@@ -1448,7 +1448,7 @@ def _runner_scanners_tls(ctx) -> None:
 
 # ----------------------------- CSRF Runner (NEW) -----------------------------
 def _runner_csrf(ctx) -> None:
-    mod = _opt_import("scanners.csrf")
+    mod = _opt_import("websecure.scanners.csrf")
     if not mod:
         add_result("offensive", {"type": "CSRF", "severity": "Info", "reason": "Module not found"})
         return
@@ -1471,7 +1471,7 @@ def _runner_csrf(ctx) -> None:
 # ----------------------------- Phase 4 Runner Functions ---------------------------
 
 def _runner_ssti(ctx) -> None:
-    mod = _opt_import("websecure.scanners.ssti") or _opt_import("scanners.ssti")
+    mod = _opt_import("websecure.scanners.ssti")
     if not mod:
         add_result("meta", {"stage": "ssti", "status": "skipped:module-not-found"})
         return
@@ -1499,7 +1499,7 @@ def _runner_ssti(ctx) -> None:
 
 
 def _runner_idor(ctx) -> None:
-    mod = _opt_import("websecure.scanners.idor") or _opt_import("scanners.idor")
+    mod = _opt_import("websecure.scanners.idor")
     if not mod:
         add_result("meta", {"stage": "idor", "status": "skipped:module-not-found"})
         return
@@ -1519,7 +1519,7 @@ def _runner_idor(ctx) -> None:
 
 
 def _runner_auth_matrix(ctx) -> None:
-    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
+    mod = _opt_import("websecure.scanners.auth_scanners")
     if not mod:
         add_result("meta", {"stage": "auth_matrix", "status": "skipped:module-not-found"})
         return
@@ -1542,7 +1542,7 @@ def _runner_auth_matrix(ctx) -> None:
 
 
 def _runner_dom_xss(ctx) -> None:
-    mod = _opt_import("websecure.scanners.dom_xss") or _opt_import("scanners.dom_xss")
+    mod = _opt_import("websecure.scanners.dom_xss")
     if not mod:
         add_result("meta", {"stage": "dom_xss", "status": "skipped:module-not-found"})
         return
@@ -1562,7 +1562,7 @@ def _runner_dom_xss(ctx) -> None:
 
 def _runner_cmdi(ctx) -> None:
     """Command Injection (CMDi) taraması."""
-    mod = _opt_import("websecure.scanners.cmdi") or _opt_import("scanners.cmdi")
+    mod = _opt_import("websecure.scanners.cmdi")
     if not mod:
         add_result("meta", {"stage": "cmdi", "status": "skipped:module-not-found"})
         return
@@ -1579,7 +1579,7 @@ def _runner_cmdi(ctx) -> None:
 
 def _runner_lfi(ctx) -> None:
     """LFI / Directory Traversal taraması."""
-    mod = _opt_import("websecure.scanners.lfi") or _opt_import("scanners.lfi")
+    mod = _opt_import("websecure.scanners.lfi")
     if not mod:
         add_result("meta", {"stage": "lfi", "status": "skipped:module-not-found"})
         return
@@ -1595,7 +1595,7 @@ def _runner_lfi(ctx) -> None:
 
 def _runner_cors(ctx) -> None:
     """CORS Misconfiguration taraması."""
-    mod = _opt_import("websecure.scanners.cors") or _opt_import("scanners.cors")
+    mod = _opt_import("websecure.scanners.cors")
     if not mod:
         add_result("meta", {"stage": "cors", "status": "skipped:module-not-found"})
         return
@@ -1611,7 +1611,7 @@ def _runner_cors(ctx) -> None:
 
 def _runner_subdomain_takeover(ctx) -> None:
     """Subdomain Takeover taraması."""
-    mod = _opt_import("websecure.scanners.subdomain_takeover") or _opt_import("scanners.subdomain_takeover")
+    mod = _opt_import("websecure.scanners.subdomain_takeover")
     if not mod:
         add_result("meta", {"stage": "subdomain_takeover", "status": "skipped:module-not-found"})
         return
@@ -1627,7 +1627,7 @@ def _runner_subdomain_takeover(ctx) -> None:
 
 def _runner_session_scanner(ctx) -> None:
     """Session & Cookie güvenlik taraması."""
-    mod = _opt_import("websecure.scanners.session_scanner") or _opt_import("scanners.session_scanner")
+    mod = _opt_import("websecure.scanners.session_scanner")
     if not mod:
         add_result("meta", {"stage": "session_scanner", "status": "skipped:module-not-found"})
         return
@@ -1648,7 +1648,7 @@ def _runner_session_scanner(ctx) -> None:
 
 def _runner_crlf_injection(ctx) -> None:
     """CRLF Injection ve header injection taraması."""
-    mod = _opt_import("websecure.scanners.crlf_injection") or _opt_import("scanners.crlf_injection")
+    mod = _opt_import("websecure.scanners.crlf_injection")
     if not mod:
         add_result("meta", {"stage": "crlf_injection", "status": "skipped:module-not-found"})
         return
@@ -3762,7 +3762,7 @@ def run_authorization_matrix(ctx) -> None:
     Yetkilendirme matrisi (IDOR/PrivEsc) testi.
     scanners.auth modülünü kullanır.
     """
-    mod = _opt_import("websecure.scanners.auth_scanners") or _opt_import("scanners.auth_scanners")
+    mod = _opt_import("websecure.scanners.auth_scanners")
     if not mod:
         add_result("auth_matrix", {"status": "skipped", "reason": "Module not found"})
         return
