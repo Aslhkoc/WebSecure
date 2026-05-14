@@ -1751,14 +1751,22 @@ def _runner_human_adapter(ctx) -> None:
         _logger.warning(f"[phases] HumanLike adapter error: {e}")
 
 
+_VERIFY_BUCKETS = {
+    "offensive", "sqlmap", "xss", "ssrf", "idor", "ssti", "auth_matrix",
+    "nosqli", "csrf", "jwt", "lfi", "cmdi", "cors", "crlf_injection",
+    "session_scanner", "prototype_pollution", "xxe", "race_condition",
+    "headers", "tls", "subdomain_takeover", "dom_xss",
+}
+
+
 def _runner_verify_and_score(ctx) -> None:
-    """Run verification + CVSS scoring on all accumulated findings."""
+    """Run verification + CVSS scoring + correlation on all accumulated findings."""
     try:
         from websecure.core.reporting import get_global_results, verify_and_score, score_findings
         g_res = get_global_results()
         all_findings = []
         for bucket, items in g_res.items():
-            if bucket in ("offensive", "sqlmap", "xss", "ssrf", "idor", "ssti", "auth_matrix"):
+            if bucket in _VERIFY_BUCKETS:
                 all_findings.extend([i for i in items if isinstance(i, dict)])
         oast_events = g_res.get("oast_callbacks", [])
         verified = verify_and_score(all_findings, oast_events)
@@ -1782,6 +1790,51 @@ def _runner_verify_and_score(ctx) -> None:
                 )
     except Exception as e:
         _logger.warning(f"[phases] verify_and_score error: {e}")
+
+    # --- Correlation Engine: exploit zinciri + tekrar eden bulgular ---
+    try:
+        from websecure.core.reporting import get_global_results as _get_global_results
+        from websecure.core.correlation_engine import get_correlation_engine, ChainCorrelation
+        g_res = _get_global_results()
+
+        # Tüm anlamlı bulgular
+        corr_findings: list = []
+        for bucket, items in g_res.items():
+            if isinstance(items, list) and bucket not in ("meta", "errors", "scored_findings", "oast_callbacks"):
+                corr_findings.extend([i for i in items if isinstance(i, dict) and i.get("type")])
+
+        if len(corr_findings) >= 2:
+            scan_id = str(getattr(ctx, "scan_id", "current"))
+
+            # Within-scan: sadece ChainCorrelation — FingerprintCorrelation/Escalation aynı liste için anlamsız
+            chain_engine = get_correlation_engine()
+            chain_engine._strategies = [ChainCorrelation()]
+            matches = chain_engine.correlate(
+                corr_findings, corr_findings,
+                scan1_id=scan_id, scan2_id=scan_id,
+                min_confidence=0.5,
+            )
+
+            if matches:
+                report = chain_engine.report(matches)
+                add_result("correlation", report)
+                _logger.info(
+                    f"[phases] Korelasyon: {len(matches)} zincir tespit edildi — "
+                    + ", ".join(report.get("chains", []))
+                )
+                # Kritik zincirleri offensive bucket'a da ekle
+                for m in matches:
+                    add_result("offensive", {
+                        "type": "Exploit Chain",
+                        "severity": "High",
+                        "chain": m.chain_name,
+                        "confidence": m.confidence,
+                        "description": m.description,
+                        "finding1_id": m.finding1_id,
+                        "finding2_id": m.finding2_id,
+                    })
+    except Exception as e:
+        _logger.warning(f"[phases] correlation_engine error: {e}")
 
 
 # ----------------------------- Faz 3 — Yeni Runner'lar ---------------------------

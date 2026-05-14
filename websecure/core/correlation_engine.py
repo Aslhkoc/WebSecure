@@ -39,14 +39,21 @@ _SEV_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 _CHAIN_PAIRS: List[Tuple[Set[str], Set[str], str]] = [
     # (set1_keywords, set2_keywords, chain_name)
-    ({"sql injection", "sqli"},     {"idor", "broken access"},  "SQLi -> IDOR -> Data Leak"),
-    ({"xss", "cross-site script"},  {"csrf"},                    "XSS -> CSRF"),
-    ({"lfi", "local file"},         {"rce", "remote code"},      "LFI -> RCE"),
-    ({"ssrf"},                      {"cloud", "metadata"},       "SSRF -> Cloud Metadata"),
-    ({"file upload", "unrestrict"}, {"rce", "remote code"},      "Upload -> RCE"),
-    ({"auth bypass", "broken auth"},{"sql injection"},           "Auth Bypass -> SQLi"),
-    ({"ssti", "template inject"},   {"rce", "remote code"},      "SSTI -> RCE"),
-    ({"open redirect"},             {"xss", "cross-site script"},"Open Redirect -> XSS"),
+    ({"sql injection", "sqli"},          {"idor", "broken access"},       "SQLi -> IDOR -> Data Leak"),
+    ({"xss", "cross-site script"},       {"csrf"},                        "XSS -> CSRF"),
+    ({"lfi", "local file", "traversal"}, {"rce", "remote code", "exec"},  "LFI -> RCE"),
+    ({"ssrf", "server-side request"},    {"cloud", "metadata", "aws", "gcp", "azure"}, "SSRF -> Cloud Metadata"),
+    ({"file upload", "unrestrict"},      {"rce", "remote code", "exec"},  "Upload -> RCE"),
+    ({"auth bypass", "broken auth"},     {"sql injection", "sqli"},       "Auth Bypass -> SQLi"),
+    ({"ssti", "template inject"},        {"rce", "remote code", "exec"},  "SSTI -> RCE"),
+    ({"open redirect"},                  {"xss", "cross-site script"},    "Open Redirect -> XSS"),
+    ({"nosql", "nosqli", "mongodb"},     {"idor", "broken access"},       "NoSQLi -> Data Leak"),
+    ({"prototype pollution"},            {"xss", "cross-site script"},    "Prototype Pollution -> XSS"),
+    ({"cors", "cross-origin"},           {"csrf", "session"},             "CORS -> CSRF"),
+    ({"xxe", "xml external"},            {"ssrf", "server-side"},         "XXE -> SSRF"),
+    ({"jwt", "token"},                   {"auth bypass", "broken auth", "privilege"}, "JWT Bypass -> Privilege Escalation"),
+    ({"crlf", "header injection"},       {"xss", "cross-site script"},   "CRLF -> XSS"),
+    ({"race condition"},                 {"auth bypass", "double spend"},  "Race Condition -> Logic Bypass"),
 ]
 
 
@@ -81,6 +88,7 @@ class CorrelationMatch:
             "finding2_id": self.finding2_id,
             "description": self.description,
             "chain_name": self.chain_name,
+            "extra": self.extra,
         }
 
 
@@ -206,20 +214,29 @@ class ChainCorrelation(CorrelationStrategy):
         if len(all_findings) < 2:
             return []
 
-        # Tüm başlıkları küçük harfe indir
+        # Başlık + tip alanlarını birleştirerek arama metni oluştur
+        def _search_text(f: Dict[str, Any]) -> str:
+            parts = [
+                f.get("title", ""),
+                f.get("type", ""),
+                f.get("name", ""),
+                f.get("description", ""),
+            ]
+            return " ".join(p for p in parts if p).lower()
+
         titled: List[Tuple[str, Dict]] = [
-            (f.get("title", "").lower(), f) for f in all_findings
+            (_search_text(f), f) for f in all_findings
         ]
 
         matches = []
         for set1_kws, set2_kws, chain_name in _CHAIN_PAIRS:
             group1 = [
-                f for title, f in titled
-                if any(kw in title for kw in set1_kws)
+                f for text, f in titled
+                if any(kw in text for kw in set1_kws)
             ]
             group2 = [
-                f for title, f in titled
-                if any(kw in title for kw in set2_kws)
+                f for text, f in titled
+                if any(kw in text for kw in set2_kws)
             ]
             if group1 and group2:
                 # İlk çifti al
@@ -421,10 +438,12 @@ _engine_instance: Optional[CorrelationEngine] = None
 
 
 def get_correlation_engine(db=None) -> CorrelationEngine:
-    """Global CorrelationEngine singleton'ını döndür."""
+    """Global CorrelationEngine singleton'ını döndür. DB sağlanmışsa güncelle."""
     global _engine_instance
     if _engine_instance is None:
         _engine_instance = CorrelationEngine(db=db)
+    elif db is not None and _engine_instance._db is None:
+        _engine_instance._db = db
     return _engine_instance
 
 
