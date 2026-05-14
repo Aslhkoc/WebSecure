@@ -2553,16 +2553,34 @@ def run_plan_if_needed(ctx: dict):
     Executes the unified scan plan if not already executed.
     Orchestrates discovery, portscan, tls, offensive phases based on config.
     """
-    # Simple guard: if we have significant results, maybe we already ran? 
-    # But for now, we just enforce running the plan constructed by build_plan.
-    
+    # Reset circuit breaker at scan start so previous scan's OPEN state doesn't bleed in
+    try:
+        from websecure.core.circuit_breaker import reset_circuit_breaker as _reset_cb
+        _reset_cb()
+    except Exception:
+        pass
+
+    # Inject AsyncScanRunner into ctx so individual scanners can use parallel HTTP probes
+    try:
+        from websecure.core.async_runner import AsyncScanRunner as _AsyncScanRunner
+        cfg = ctx.get("config", {}) if isinstance(ctx, dict) else getattr(ctx, "config", {}) or {}
+        max_concurrent = int((cfg.get("async", {}) or {}).get("max_concurrent", 30))
+        timeout_s = float((cfg.get("async", {}) or {}).get("timeout_s", 10.0))
+        _ar = _AsyncScanRunner(max_concurrent=max_concurrent, timeout_s=timeout_s)
+        if isinstance(ctx, dict):
+            ctx["async_runner"] = _ar
+        else:
+            setattr(ctx, "async_runner", _ar)
+    except Exception:
+        pass
+
     plan = build_plan(ctx)
     if not plan:
         add_result("meta", {"stage": "plan", "status": "empty_plan"})
         return
 
     _logger.info(f"[Phases] Executing plan with {len(plan)} steps.")
-    
+
     results = _ensure_results_bucket(ctx)
     # Mark start
     results.setdefault("meta", {})["scan_start"] = _t.time()

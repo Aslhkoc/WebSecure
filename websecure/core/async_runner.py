@@ -350,16 +350,15 @@ class AsyncScanRunner:
         ```
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Zaten bir event loop varsa yeni thread'de çalıştır
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(asyncio.run, self.run_all(tasks))
-                    return future.result()
-            else:
-                return loop.run_until_complete(self.run_all(tasks))
+            # Python 3.10+: get_running_loop() raises RuntimeError if no loop is running
+            asyncio.get_running_loop()
+            # Already inside a running loop — run in a separate thread to avoid deadlock
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, self.run_all(tasks))
+                return future.result()
         except RuntimeError:
+            # No running loop — safe to call asyncio.run() directly
             return asyncio.run(self.run_all(tasks))
 
     # ------------------------------------------------------------------

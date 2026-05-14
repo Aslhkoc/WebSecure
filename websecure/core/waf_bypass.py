@@ -1424,6 +1424,11 @@ class TorController:
                 resp = f.readline()
                 if "250" in resp:
                     _logger.info("[Tor] External IP rotation requested (SIGNAL NEWNYM).")
+                    try:
+                        from websecure.core.circuit_breaker import cb_reset as _cb_reset
+                        _cb_reset()
+                    except Exception:
+                        pass
                     return True
                 else:
                     _logger.warning(f"[Tor] Signal failed: {resp.strip()}")
