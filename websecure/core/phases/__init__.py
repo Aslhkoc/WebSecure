@@ -923,6 +923,105 @@ def _runner_katana(ctx) -> None:
         _logger.warning(f"[phases] katana runner error: {e}")
 
 
+def _runner_browser_crawler(ctx) -> None:
+    """
+    Playwright tabanlı BrowserCrawler — JS-heavy SPA'lar için.
+    should_use_browser_crawler() heuristic'i True dönerse devreye girer.
+    Playwright yoksa veya site JS-heavy değilse sessizce atlar.
+    """
+    try:
+        from websecure.core.browser_crawler import (
+            BrowserCrawler, BrowserCrawlConfig, should_use_browser_crawler,
+        )
+        existing_results = getattr(ctx, "results", {}) or {}
+        http_result = {
+            "endpoints": list(existing_results.get("endpoints", [])),
+            "tech_stack": list(getattr(ctx, "technologies", []) or []),
+        }
+        if not should_use_browser_crawler(http_result):
+            add_result("meta", {"stage": "browser_crawler", "status": "skipped:not-needed"})
+            return
+
+        url = (getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+               or getattr(ctx, "target", ""))
+        if not url:
+            return
+
+        cfg = getattr(ctx, "config", {}) or {}
+        bc_cfg = cfg.get("browser_crawler") or cfg.get("browser") or {}
+        config = BrowserCrawlConfig(
+            headless=bool(bc_cfg.get("headless", True)),
+            max_pages=int(bc_cfg.get("max_pages") or 50),
+            timeout_ms=int(bc_cfg.get("timeout_ms") or 15000),
+        )
+
+        crawler = BrowserCrawler(config)
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = _asyncio.new_event_loop()
+                _asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(crawler.crawl(url))
+        except RuntimeError:
+            loop = _asyncio.new_event_loop()
+            result = loop.run_until_complete(crawler.crawl(url))
+
+        # Endpoint'leri ctx.results'a ekle
+        new_urls = set(result.endpoints + result.api_endpoints + result.spa_routes)
+        ctx_results = getattr(ctx, "results", None)
+        if ctx_results is None:
+            ctx_results = {}
+            try:
+                ctx.results = ctx_results
+            except AttributeError:
+                pass
+        existing_eps = set(ctx_results.get("endpoints", []))
+        existing_eps.update(new_urls)
+        ctx_results["endpoints"] = list(existing_eps)
+
+        # Tech stack güncelle
+        if result.tech_stack:
+            existing_tech = list(getattr(ctx, "technologies", []) or [])
+            for t in result.tech_stack:
+                if t not in existing_tech:
+                    existing_tech.append(t)
+            try:
+                ctx.technologies = existing_tech
+            except AttributeError:
+                pass
+
+        # Exposed secret'ler bulgu olarak kaydet
+        for secret in result.secrets_found:
+            add_result("offensive", {
+                "type": "SecretExposed",
+                "severity": secret.get("severity", "High"),
+                "title": f"Exposed Secret: {secret.get('type', 'Unknown')}",
+                "url": secret.get("url", url),
+                "evidence": secret.get("value_preview", ""),
+                "tool": "browser_crawler",
+                "verified": False,
+            })
+
+        add_result("meta", {
+            "stage": "browser_crawler",
+            "status": "completed",
+            "endpoints_found": len(result.endpoints),
+            "api_endpoints": len(result.api_endpoints),
+            "spa_routes": len(result.spa_routes),
+            "secrets_found": len(result.secrets_found),
+            "tech_stack": result.tech_stack,
+        })
+        _logger.info(
+            f"[phases] BrowserCrawler: {len(new_urls)} URL, "
+            f"{len(result.secrets_found)} secret, {result.tech_stack}"
+        )
+    except Exception as e:
+        _logger.debug(f"[phases] BrowserCrawler error (Playwright not available?): {e}")
+        add_result("meta", {"stage": "browser_crawler", "status": "skipped:error",
+                             "error": str(e)[:200]})
+
+
 def _runner_discovery(ctx) -> None:
     if is_blocked(ctx):
         add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
@@ -930,6 +1029,8 @@ def _runner_discovery(ctx) -> None:
     # Katana kuruluysa keşif öncesi çalıştır — endpoint havuzunu zenginleştirir
     _runner_katana(ctx)
     run_discovery_extended(ctx)
+    # BrowserCrawler: HTTP crawler az endpoint bulduysa veya JS-heavy SPA ise devreye girer
+    _runner_browser_crawler(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
     run_fuzz_and_param_discovery(ctx)
@@ -2127,6 +2228,59 @@ def _runner_dalfox_verify(ctx) -> None:
         _logger.warning(f"[phases] dalfox_verify runner error: {e}")
 
 
+def _runner_session_analysis(ctx) -> None:
+    """
+    CookieSecurityAnalyzer + SessionLifecycleProber ile oturum güvenliğini denetler.
+    Zayıf/HTTPOnly eksik/SameSite eksik cookie'leri bulgu olarak kaydeder.
+    """
+    try:
+        from websecure.core.session_manager import CookieSecurityAnalyzer
+        url = (getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+               or getattr(ctx, "target", ""))
+        if not url:
+            add_result("meta", {"stage": "session_analysis", "status": "skipped:no-url"})
+            return
+        session = getattr(ctx, "session", None)
+        if session is None:
+            add_result("meta", {"stage": "session_analysis", "status": "skipped:no-session"})
+            return
+
+        analyzer = CookieSecurityAnalyzer(session=session)
+        audit_results = analyzer.audit(url)
+
+        finding_count = 0
+        for audit in (audit_results if isinstance(audit_results, list) else [audit_results]):
+            if not isinstance(audit, dict):
+                try:
+                    # CookieAuditResult dataclass
+                    audit = vars(audit)
+                except Exception:
+                    continue
+            issues = audit.get("issues") or []
+            if issues:
+                add_result("offensive", {
+                    "type": "WeakCookieSecurity",
+                    "severity": audit.get("severity", "Medium"),
+                    "title": f"Cookie Güvenlik Sorunu: {audit.get('name', 'unknown')}",
+                    "url": url,
+                    "evidence": "; ".join(str(i) for i in issues),
+                    "tool": "session_manager",
+                    "verified": True,
+                })
+                finding_count += 1
+
+        add_result("meta", {
+            "stage": "session_analysis",
+            "status": "completed",
+            "findings": finding_count,
+        })
+        _logger.info(f"[phases] session_analysis: {finding_count} cookie sorun")
+    except Exception as e:
+        _logger.debug(f"[phases] session_analysis error: {e}")
+        add_result("meta", {"stage": "session_analysis", "status": "skipped:error",
+                             "error": str(e)[:200]})
+
+
 # ----------------------------- Plan Builder End ---------------------------
 
 def _offensive_phases(ctx) -> List[Phase]:
@@ -2176,6 +2330,20 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("katana", default=True),
             runner=lambda c: _safe(c, lambda: _runner_katana(c), "katana"),
             tags=["recon", "crawler", "js", "endpoints"],
+        ),
+        Phase(
+            id="browser_crawler",
+            title="Browser Crawler (Playwright/SPA)",
+            enabled=_flag("browser_crawler", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_browser_crawler(c), "browser_crawler"),
+            tags=["recon", "crawler", "js", "spa", "playwright"],
+        ),
+        Phase(
+            id="session_analysis",
+            title="Session / Cookie Güvenlik Analizi",
+            enabled=_flag("session_analysis", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_session_analysis(c), "session_analysis"),
+            tags=["session", "cookie", "passive", "auth"],
         ),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
@@ -2440,12 +2608,42 @@ def build_plan(ctx) -> List[Dict[str, Any]]:
     Eğer ctx.base_plan yoksa yalnızca `offensive` fazları döndürür.
     Dönen yapı sade dict'lere dönüştürülür; runner callables korunur.
     """
+    # Faz 17: Plugin registry — built-in scanner'ları kaydet + entry point plugin'lerini yükle
+    try:
+        from websecure.core.plugin_registry import get_registry as _get_registry
+        _reg = _get_registry()
+        _reg.register_builtins()
+        _reg.discover_entry_points()
+        _logger.debug(f"[phases] Plugin registry: {len(_reg.list_all())} plugin yüklendi")
+    except Exception as _preg_exc:
+        _logger.debug(f"[phases] Plugin registry başlatılamadı: {_preg_exc!r}")
+
     # Quick tech probe before phase selection so tech_trigger flags work correctly
     if not getattr(ctx, "technologies", None):
         try:
             _quick_tech_probe(ctx)
         except Exception as exc:
             _logger.debug(f"[phases] Quick tech probe failed: {exc!r}")
+
+    # Faz 18: LoginDiscovery — giriş sayfalarını bul ve ctx'e kaydet
+    try:
+        from websecure.core.analysis import discover_login_urls_with_config
+        url = (getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+               or getattr(ctx, "target", ""))
+        if url and not getattr(ctx, "login_urls", None):
+            cfg = getattr(ctx, "config", {}) or {}
+            session = getattr(ctx, "session", None)
+            login_urls = discover_login_urls_with_config(url, cfg=cfg, session=session)
+            if login_urls:
+                try:
+                    ctx.login_urls = login_urls
+                except AttributeError:
+                    pass
+                add_result("meta", {"stage": "login_discovery",
+                                    "login_urls": login_urls[:10]})
+                _logger.info(f"[phases] LoginDiscovery: {len(login_urls)} giriş URL'si bulundu")
+    except Exception as _ld_exc:
+        _logger.debug(f"[phases] LoginDiscovery hatası: {_ld_exc!r}")
 
     # Faz 6: PayloadEngine — CMS-aware payload pre-computation after tech probe
     try:
@@ -4130,6 +4328,29 @@ def run_reporting_and_integration(ctx) -> None:
             _logger.info(f"[run_reporting] JUnit always-on yazıldı: {_junit_path}")
         except Exception as _junit_exc:
             _logger.debug(f"[run_reporting] JUnit always-on hatası: {_junit_exc!r}")
+
+    # Faz 12: NotificationDispatcher — scan tamamlandığında webhook/email/Slack bildir
+    try:
+        from websecure.core.notification import NotificationDispatcher, NotificationConfig
+        # Notifications config varsa dispatcher kur
+        _notif_cfg_raw = (cfg.get("notifications") or cfg.get("notification") or {})
+        if _notif_cfg_raw and isinstance(_notif_cfg_raw, dict):
+            _notif_cfg = NotificationConfig.from_dict(_notif_cfg_raw)
+            dispatcher = NotificationDispatcher(config=_notif_cfg)
+            # Sadece notifier konfigürasyonu varsa gönder
+            if dispatcher._notifiers:
+                from websecure.core.reporting import get_global_results as _get_gr3
+                _all_f3: List[Dict] = []
+                for _b3 in _get_gr3().values():
+                    if isinstance(_b3, list):
+                        _all_f3.extend(
+                            [i for i in _b3 if isinstance(i, dict)
+                             and i.get("severity") in ("Critical", "High", "Medium", "Low", "Info")]
+                        )
+                totals = dispatcher.notify_batch(_all_f3, deduplicate=True)
+                _logger.info(f"[run_reporting] Bildirim: {totals}")
+    except Exception as _notif_exc:
+        _logger.debug(f"[run_reporting] Bildirim hatası: {_notif_exc!r}")
 
 
 def _setup_oast_domain(ctx) -> Optional[str]:

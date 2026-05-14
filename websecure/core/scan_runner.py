@@ -270,8 +270,10 @@ class ScanSession:
         total_tasks: int = 0,
         checkpoint_enabled: bool = True,
         checkpoint_dir: Optional[Path] = None,
+        tenant_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> "ScanSession":
-        """Yeni bir tarama oturumu başlatır."""
+        """Yeni bir tarama oturumu başlatır ve DB'ye 'running' kaydı oluşturur."""
         scan_id = _generate_scan_id()
         session = cls(
             scan_id=scan_id,
@@ -281,7 +283,29 @@ class ScanSession:
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_dir=checkpoint_dir,
         )
+        session.tenant_id = tenant_id
+        session.project_id = project_id
         logger.info(f"[scan_runner] Yeni oturum başlatıldı: {scan_id}  ->  {target}")
+
+        # DB'ye scan başlangıç kaydı (status=running) — crash recovery için
+        try:
+            import datetime as _dt
+            from websecure.db import get_db as _get_db_new, ScanRepository as _SR, Scan as _Scan
+            _db_new = _get_db_new()
+            _scan_obj = _Scan(
+                id=scan_id,
+                target=target,
+                profile=profile,
+                status="running",
+                started_at=_dt.datetime.utcnow().isoformat(),
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
+            _SR(_db_new).create(_scan_obj)
+            logger.debug(f"[scan_runner] DB scan başlangıç kaydı: {scan_id}")
+        except Exception as _dbs_exc:
+            logger.debug(f"[scan_runner] DB scan başlangıç kaydı atlandı: {_dbs_exc!r}")
+
         return session
 
     @classmethod

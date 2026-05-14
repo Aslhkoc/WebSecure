@@ -1911,6 +1911,11 @@ def _run_scan_phases(
         if callable(run_plan_if_needed):
             print("[*] Gelismis tarama plani calistiriliyor (Unified Framework)...")
             run_plan_if_needed(ctx)
+            # Guard: ctx'e flag koy — ilerleyen blokların planı tekrar çalıştırmasını engelle
+            try:
+                ctx._plan_ran = True
+            except (AttributeError, TypeError):
+                pass
         else:
             print("[!] CRITICAL: run_plan_if_needed fonksiyonu bulunamadi, manuel yedek calistiriliyor...")
             # Fallback: phases.py:phase_portscan() doğrudan çağrılır
@@ -2167,13 +2172,20 @@ def _run_scan_phases(
         ctx.target = url  # Use 'url' variable which represents the verified target
         ctx.url = url
 
-        # [Fix] Direct Phase Execution
+        # [Fix] Direct Phase Execution — only runs if first call at line ~1911 did NOT execute
         # from websecure.core.phases import run_plan_if_needed
 
-        print("[•] Faz planı çalıştırılıyor…")
-        t = mark("phase_plan")
-        _safe_call(run_plan_if_needed, ctx, call_timeout=None) # No timeout for full plan
-        mark("phase_plan", t)
+        if not getattr(ctx, "_plan_ran", False):
+            print("[•] Faz planı çalıştırılıyor…")
+            t = mark("phase_plan")
+            _safe_call(run_plan_if_needed, ctx, call_timeout=None)  # No timeout for full plan
+            mark("phase_plan", t)
+            try:
+                ctx._plan_ran = True
+            except (AttributeError, TypeError):
+                pass
+        else:
+            _logger.debug("[main] Faz planı zaten çalıştırıldı, ikinci çağrı atlandı.")
 
         # --- human_adapter ctx ile senkronize et ---
         if _human_adapter_inst is not None:
