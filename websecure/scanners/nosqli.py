@@ -412,7 +412,14 @@ def run_nosqli_scan(ctx):
         scanner.run(targets[0], endpoints=targets)
 
 
-run = run_nosqli_scan
+def run(url: str, session=None, results: dict = None, debug: bool = False,
+        timeout: float = 10.0, endpoints=None, **kwargs) -> None:
+    """Standard (url, session=, results=, ...) entry point for phase runner."""
+    if results is None:
+        results = {}
+    _endpoints = list(endpoints) if endpoints else [url]
+    scanner = NoSQLiScanner(session=session, results=results, debug=debug)
+    scanner.run(_endpoints[0] if _endpoints else url, endpoints=_endpoints)
 
 
 # ===========================================================================
