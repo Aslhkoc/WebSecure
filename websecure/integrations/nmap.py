@@ -475,12 +475,16 @@ class NmapWrapper(ToolIntegration):
     def _inject_proxy(args: List[str], proxy: Optional[str]):
         if not proxy:
             return
-        # Nmap supports socks5:// and socks4:// but NOT socks5h://.
-        # Keep socks5:// as-is (Tor works fine); only strip the 'h' suffix.
-        p = proxy.replace("socks5h://", "socks5://")
-        args.extend(["--proxies", p])
+        # Nmap --proxies ONLY accepts HTTP proxies (http://).
+        # socks4://, socks5://, socks5h:// all trigger:
+        #   "libnsock proxy_node_new(): Invalid protocol … QUITTING!"
+        # When a SOCKS proxy (Tor on 9150, etc.) is configured, skip --proxies
+        # entirely so nmap can reach the target directly.
+        if proxy.startswith(("socks5://", "socks5h://", "socks4://", "socks4a://")):
+            logger.info(f"[Nmap] SOCKS proxy atlandı — nmap yalnızca HTTP proxy destekler: {proxy}")
+            return
+        args.extend(["--proxies", proxy])
         if "-n" not in args:
-            # -n disables DNS on nmap side; the SOCKS5 proxy (Tor) handles resolution
             args.append("-n")
 
     @staticmethod

@@ -863,9 +863,10 @@ def clear_critical_error(ctx: Any) -> None:
 # Per-phase timeout overrides. Phases not listed here use the default (300s).
 # Nmap/port_scan needs much longer because it runs a two-stage scan internally.
 _PHASE_TIMEOUTS: Dict[str, int] = {
-    "port_scan":   900,   # nmap two-stage: up to 15 min
-    "portscan":    900,
-    "sqlmap":      600,   # sqlmap time-based blind can be slow
+    "port_scan":      900,   # nmap two-stage: up to 15 min
+    "portscan":       900,
+    "sqlmap":         600,   # sqlmap time-based blind can be slow
+    "passive_recon":  600,   # OSINT APIs + DNS + cert lookups can be slow
     "nuclei":      480,   # template-based, many checks
     "feroxbuster": 420,
     "ffuf":        420,

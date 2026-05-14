@@ -110,11 +110,57 @@ class HttpxWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "httpx"
 
+    def _is_go_httpx(self) -> bool:
+        """Return True only when the resolved binary is ProjectDiscovery's Go httpx."""
+        if hasattr(self, "_go_httpx_cache"):
+            return self._go_httpx_cache  # type: ignore[attr-defined]
+
+        result = False
+        try:
+            import re as _re
+            proc = subprocess.run(
+                [self.binary, "-version"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=8, check=False,
+            )
+            out = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            out_lower = out.lower()
+            # Python httpx CLI outputs "usage: python -m httpx" or similar
+            if "python" in out_lower or ("usage:" in out_lower and "url" in out_lower):
+                result = False
+            elif _re.search(r"v?\d+\.\d+", out):
+                # Go httpx emits a version like "vX.Y.Z" or "Current Version: vX.Y.Z"
+                result = True
+            else:
+                # Fallback: check -l flag in help text (Go httpx file-list flag)
+                h = subprocess.run(
+                    [self.binary, "-help"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=8, check=False,
+                )
+                help_text = (h.stdout or h.stderr or b"").decode("utf-8", "ignore")
+                result = ("-l " in help_text or "-list" in help_text)
+        except Exception as exc:
+            logger.debug(f"[httpx] Go binary detection failed: {exc!r}")
+            result = False
+
+        self._go_httpx_cache = result  # type: ignore[attr-defined]
+        if not result:
+            logger.warning(
+                "[httpx] 'httpx' binary, Go/ProjectDiscovery httpx değil — "
+                "Python httpx CLI olabilir. Lütfen Go httpx yükleyin: "
+                "go install github.com/projectdiscovery/httpx/cmd/httpx@latest"
+            )
+        return result
+
     def is_available(self) -> bool:
-        return (
+        binary_found = (
             shutil.which(self.binary) is not None
             or (self._binary_path is not None and Path(self._binary_path).exists())
         )
+        if not binary_found:
+            return False
+        return self._is_go_httpx()
 
     def version(self) -> Optional[str]:
         if not self.is_available():
