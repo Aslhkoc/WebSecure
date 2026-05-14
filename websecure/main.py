@@ -1191,6 +1191,9 @@ def _run_phase_plan(ctx, *, skip_legacy_offensive=True):
             results["_skip_legacy_offensive"] = True
         return {"ran": 0, "enabled": 0}
 
+    # Phase state machine: track completed phases to prevent re-runs
+    completed_phases: set = results.setdefault("_completed_phases", set())
+
     for item in plan:
         if not isinstance(item, dict):
             continue
@@ -1203,13 +1206,25 @@ def _run_phase_plan(ctx, *, skip_legacy_offensive=True):
             "tags": item.get("tags", []),
         })
 
+        if not item.get("enabled"):
+            continue
+
         runner = item.get("runner")
-        if item.get("enabled") and callable(runner):
-            enabled += 1
-            t0 = time.time()
-            runner(ctx)  # hata olursa yükselir; bastırma yok
-            ran += 1
-            results["phase_timings"][rid] = round(time.time() - t0, 2)
+        if not callable(runner):
+            continue
+
+        # Skip already-completed phases (resume / re-run protection)
+        if rid and rid in completed_phases:
+            _logger.debug(f"[phase_plan] Phase '{rid}' already completed — skipping")
+            continue
+
+        enabled += 1
+        t0 = time.time()
+        runner(ctx)  # hata olursa yükselir; bastırma yok
+        ran += 1
+        results["phase_timings"][rid] = round(time.time() - t0, 2)
+        if rid:
+            completed_phases.add(rid)
 
     add_result("phase_plan", {"visible": visible_meta, "enabled_total": enabled, "ran": ran})
 

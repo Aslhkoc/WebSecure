@@ -1588,7 +1588,8 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
             status_forcelist=(429, 500, 502, 503, 504),
             allowed_methods=["GET", "POST", "HEAD", "OPTIONS"]
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        # Use larger pool sizes to prevent "Connection pool full" warnings under Tor/concurrent scans
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=30)
         s.mount("https://", adapter)
         s.mount("http://", adapter)
 

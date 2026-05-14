@@ -103,57 +103,74 @@ def scan_tls(url: str, **kwargs) -> Dict[str, Any]:
     2. Protocol Support Check (TLS 1.0, 1.1)
     3. Weak Cipher Check (RC4, NULL, etc.)
     """
-    results = kwargs.get("results", {})
-    
-    # 1. Base Cert Analysis
-    base_info = _get_cert_details(url, config=kwargs.get("config"), session=kwargs.get("session"))
-    
+    results = kwargs.get("results") or {}
+
+    # 1. Base Cert Analysis — guarded: non-HTTPS hosts will fail gracefully
+    try:
+        base_info = _get_cert_details(url, config=kwargs.get("config"), session=kwargs.get("session"))
+    except Exception as exc:
+        _logger.warning(f"[TLS] Certificate analysis failed for {url}: {exc!r}")
+        base_info = {}
+
+    if not isinstance(base_info, dict):
+        base_info = {}
+
     host = base_info.get("host")
     port = base_info.get("port", 443)
-    
-    if not host:
-        return base_info
 
-    findings = []
-    
+    if not host:
+        from urllib.parse import urlparse as _up
+        parsed = _up(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not host:
+        return {"certificate": base_info, "new_findings": []}
+
+    # Ensure problems list exists
+    if "problems" not in base_info:
+        base_info["problems"] = []
+
+    findings: List[Dict[str, Any]] = []
+
     # 2. Protocol Check
-    weak_protos = check_protocol_support(host, port)
-    if weak_protos:
-        base_info["problems"].extend([f"Weak Protocol: {p}" for p in weak_protos])
-        for wp in weak_protos:
-             findings.append({
-                "type": "Weak TLS Protocol",
-                "severity": "Medium", # TLS 1.0/1.1 is usually Medium/High depending on compliance
-                "url": url,
-                "description": f"Server supports deprecated protocol: {wp}",
-                "recommendation": "Disable TLS 1.0 and 1.1. Configure server to use TLS 1.2 or 1.3 only."
-            })
+    try:
+        weak_protos = check_protocol_support(host, port)
+    except Exception as exc:
+        _logger.debug(f"[TLS] Protocol check error for {host}:{port}: {exc!r}")
+        weak_protos = []
+
+    for wp in weak_protos:
+        base_info["problems"].append(f"Weak Protocol: {wp}")
+        findings.append({
+            "type": "Weak TLS Protocol",
+            "severity": "Medium",
+            "url": url,
+            "description": f"Server supports deprecated protocol: {wp}",
+            "recommendation": "Disable TLS 1.0 and 1.1. Configure server to use TLS 1.2 or 1.3 only.",
+        })
 
     # 3. Cipher Check
-    weak_ciphers = check_weak_ciphers(host, port)
-    if weak_ciphers:
-         base_info["problems"].extend([f"Weak Cipher: {c}" for c in weak_ciphers])
-         for wc in weak_ciphers:
-             findings.append({
-                "type": "Weak Cipher Suite",
-                "severity": "Medium",
-                "url": url,
-                "description": f"Server supports weak cipher suite: {wc}",
-                "recommendation": "Disable weak ciphers (RC4, DES, NULL). Use modern AEAD suites."
-            })
+    try:
+        weak_ciphers = check_weak_ciphers(host, port)
+    except Exception as exc:
+        _logger.debug(f"[TLS] Cipher check error for {host}:{port}: {exc!r}")
+        weak_ciphers = []
 
-    # Inject findings into main results if provided
-    if "final" not in results:
-        results["final"] = []
-    
-    # Avoid duplicates
-    existing_ids = set() # simplistic check
-    results["final"].extend(findings)
+    for wc in weak_ciphers:
+        base_info["problems"].append(f"Weak Cipher: {wc}")
+        findings.append({
+            "type": "Weak Cipher Suite",
+            "severity": "Medium",
+            "url": url,
+            "description": f"Server supports weak cipher suite: {wc}",
+            "recommendation": "Disable weak ciphers (RC4, DES, NULL). Use modern AEAD suites.",
+        })
 
-    # Return merged info
+    results.setdefault("final", []).extend(findings)
+
     return {
         "certificate": base_info,
-        "new_findings": findings
+        "new_findings": findings,
     }
 
 # Compatibility alias

@@ -14,9 +14,14 @@ _SECLISTS_ROOTS = [
     "/opt/seclists",
     # Kali / Parrot
     "/usr/share/wordlists/seclists",
-    # Windows / project-local
+    # Windows common install paths
     r"C:\tools\SecLists",
     r"C:\SecLists",
+    r"C:\ProgramData\SecLists",
+    # User home-relative fallbacks (expanded at runtime)
+    os.path.join(os.path.expanduser("~"), "tools", "SecLists"),
+    os.path.join(os.path.expanduser("~"), "SecLists"),
+    os.path.join(os.path.expanduser("~"), "Desktop", "SecLists"),
 ]
 
 _PATT_ROOTS = [

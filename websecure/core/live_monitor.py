@@ -36,6 +36,17 @@ class LiveMonitor:
     _B   = "\033[1m"    # bold
     _RS  = "\033[0m"    # reset
 
+    # Buckets that are NOT security findings — skip VULN counter for these
+    _SYSTEM_BUCKETS: frozenset = frozenset({
+        "errors", "meta", "nmap", "portscan", "tls", "sessions",
+        "security_headers", "tech_stack", "egress_degraded",
+        "passive_recon", "passive", "dns", "subdomain",
+    })
+    # Severity values that mean "not a real vuln" — skip counter for these
+    _NON_VULN_SEVS: frozenset = frozenset({
+        "info", "informational", "note", "notice", "debug",
+    })
+
     # Teknik -> simge eşlemesi
     _TECH_ICON: Dict[str, str] = {
         "sql":       "[inject]",
@@ -155,26 +166,42 @@ class LiveMonitor:
 
     def log_finding(self, bucket: str, item: dict) -> None:
         """Bulunan zafiyeti öne çıkararak yazar (add_result'dan çağrılır)."""
-        with self._lock:
-            self._counters["findings"] += 1
-            n = self._counters["findings"]
+        sev   = str(item.get("severity") or "Info").lower().strip()
+        vtype = str(item.get("type") or bucket)
 
-        sev     = str(item.get("severity") or "Info").lower()
-        vtype   = str(item.get("type") or bucket)
+        # Determine whether this is a real security finding worthy of VULN counter
+        is_system = bucket in self._SYSTEM_BUCKETS
+        is_info_sev = sev in self._NON_VULN_SEVS
+        is_vuln = not is_system and not is_info_sev
+
+        if is_vuln:
+            with self._lock:
+                self._counters["findings"] += 1
+                n = self._counters["findings"]
+        else:
+            # System / informational events: show a compact line without VULN counter
+            if self.verbose and not is_system:
+                msg = str(item.get("message") or item.get("reason") or item.get("details") or "")[:100]
+                self._print(
+                    f"{self._DIM}[{self._ts()}]{self._RS}  "
+                    f"{self._G}[{bucket.upper()}]{self._RS}  "
+                    f"{vtype[:60]}  {msg}"
+                )
+            return
+
         url     = str(item.get("url") or item.get("target") or "")[:70]
         param   = str(item.get("parameter") or item.get("param") or "")
         payload = str(item.get("payload") or "")[:60]
 
-        if "critical" in sev or "Critical" in sev:
+        if "critical" in sev:
             color, icon = self._R, "[Critical]"
-        elif "high" in sev or "High" in sev:
+        elif "high" in sev:
             color, icon = self._Y, "[High]"
-        elif "medium" in sev or "Medium" in sev:
+        elif "medium" in sev:
             color, icon = self._C, "[Medium]"
         else:
-            color, icon = self._G, "[Info]"
+            color, icon = self._G, "[Low]"
 
-        # Ekstra bilgi: message veya details (url yoksa göster)
         msg = str(item.get("message") or item.get("details") or "")[:120]
 
         self._print(

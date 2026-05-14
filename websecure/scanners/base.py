@@ -55,6 +55,9 @@ class BaseScanner:
         self.debug = debug
         self.logger = logging.getLogger(f"websecure.scanners.{self.name}")
         self._results_lock = threading.Lock()
+        # Deduplication: prevent identical findings from being reported twice
+        self._seen_findings: set = set()
+        self._seen_lock = threading.Lock()
         # LRU cache: OrderedDict maps cache_key -> (response, timestamp)
         # Max 100 entries; entries older than _CACHE_TTL seconds are re-fetched.
         self._baseline_cache: OrderedDict[str, Tuple[Optional[_requests.Response], float]] = OrderedDict()
@@ -201,6 +204,18 @@ class BaseScanner:
         Extra keyword arguments are merged into the finding entry.
         """
         resolved_type = vuln_type or type
+
+        # Deduplicate: suppress exact-duplicate findings within this scanner instance
+        dedup_key = (resolved_type, url, param, (payload or "")[:80])
+        with self._seen_lock:
+            if dedup_key in self._seen_findings:
+                self.logger.debug(
+                    f"[{self.name}] Duplicate finding suppressed: {resolved_type} @ {url}"
+                    + (f" param={param}" if param else "")
+                )
+                return
+            self._seen_findings.add(dedup_key)
+
         entry: Dict[str, Any] = {
             "type": resolved_type,
             "severity": severity,  # overridden by _apply_cvss_severity below
