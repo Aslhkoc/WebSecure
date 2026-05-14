@@ -13,8 +13,118 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
+from websecure.core.response_analyzer import ResponseBehaviorAnalyzer
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Reflection Quality Scorer (Plan B — B4)
+# ---------------------------------------------------------------------------
+
+class ReflectionQualityScorer:
+    """
+    Scores the quality / exploitability of an XSS reflection.
+
+    Returns a dict:
+      score     — 0.0–1.0 composite exploitability signal
+      escaped   — list of chars that were HTML-encoded (evidence of sanitisation)
+      raw       — list of chars that survived unescaped (evidence of vulnerability)
+      context   — detected HTML context string
+      severity  — High / Medium / Low derived from score
+      detail    — human-readable evidence string
+    """
+
+    # Characters critical for XSS payloads to execute
+    _CRITICAL_CHARS: Dict[str, str] = {
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+        "/": "&#x2f;",
+        "`": "&#x60;",
+    }
+
+    # Context scoring — how dangerous is each reflection context
+    _CONTEXT_SCORES: Dict[str, float] = {
+        "script":      1.0,   # direct JS execution
+        "attr_double": 0.85,  # break out of attribute
+        "attr_single": 0.85,
+        "attr":        0.85,
+        "html":        0.75,  # inject new tags
+        "style":       0.60,  # CSS expression / tag break
+        "comment":     0.50,  # break out of comment
+    }
+
+    @classmethod
+    def score(
+        cls,
+        payload: str,
+        response_text: str,
+        context: str,
+        baseline_text: str = "",
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "score": 0.0,
+            "escaped": [],
+            "raw": [],
+            "context": context,
+            "severity": "Low",
+            "detail": "",
+        }
+
+        if not payload or payload not in response_text:
+            return result
+
+        # Don't count if payload already in baseline (static content)
+        if baseline_text and payload in baseline_text:
+            return result
+
+        # Find reflection position
+        pos = response_text.find(payload)
+        window = response_text[max(0, pos - 50): pos + len(payload) + 50]
+
+        # Score each critical character
+        char_score = 0.0
+        for char, entity in cls._CRITICAL_CHARS.items():
+            if char not in payload:
+                continue
+            # Check if the char appears encoded in the window
+            encoded = any(
+                enc.lower() in window.lower()
+                for enc in [entity, f"%{ord(char):02x}", f"%{ord(char):02X}"]
+            )
+            if encoded:
+                result["escaped"].append(char)
+            else:
+                result["raw"].append(char)
+                char_score += 1.0 / max(len([c for c in cls._CRITICAL_CHARS if c in payload]), 1)
+
+        # Context score
+        ctx_score = cls._CONTEXT_SCORES.get(context, 0.50)
+
+        # Executable indicator bonus
+        exec_bonus = 0.0
+        if re.search(r"<\s*script|on\w+\s*=|javascript:", window, re.I):
+            exec_bonus = 0.15
+
+        composite = min(char_score * 0.50 + ctx_score * 0.35 + exec_bonus, 1.0)
+        result["score"] = round(composite, 3)
+
+        if composite >= 0.75:
+            result["severity"] = "High"
+        elif composite >= 0.50:
+            result["severity"] = "Medium"
+        else:
+            result["severity"] = "Low"
+
+        escaped_str = f"escaped={result['escaped']}" if result["escaped"] else ""
+        raw_str     = f"raw={result['raw']}"         if result["raw"]     else ""
+        result["detail"] = (
+            f"Reflection quality: score={composite:.2f} ctx={context} "
+            + " ".join(filter(None, [raw_str, escaped_str]))
+        )
+        return result
 
 # ---------------------------------------------------------------------------
 # HTML-context executability check
@@ -514,7 +624,6 @@ class XSSScanner(BaseScanner):
             if not reflection["reflected"]:
                 return None
             if reflection["encoded"]:
-                # Encoded = sanitized, not exploitable; skip
                 logger.debug(f"[XSS] Payload encoded in response — skipping: {actual[:50]!r}")
                 return None
             if reflection["confidence"] == "none":
@@ -528,6 +637,15 @@ class XSSScanner(BaseScanner):
             if not _is_xss_executable(actual, res.text):
                 return None
 
+            # Plan B (B4): Reflection quality scoring — enriches evidence chain
+            rq = ReflectionQualityScorer.score(actual, res.text, context, baseline_text)
+            # Drop very low quality reflections (all chars escaped = sanitised)
+            if rq["escaped"] and not rq["raw"]:
+                logger.debug(
+                    f"[XSS] All dangerous chars escaped in reflection — suppressing: {actual[:50]!r}"
+                )
+                return None
+
             return {
                 "vuln_type": "Reflected XSS",
                 "url": url,
@@ -536,6 +654,9 @@ class XSSScanner(BaseScanner):
                 "detection_method": "reflection",
                 "confidence": reflection["confidence"],
                 "_executable": reflection["executable"],
+                "_rq_score": rq["score"],
+                "_rq_detail": rq["detail"],
+                "_rq_severity": rq["severity"],
             }
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
@@ -544,34 +665,42 @@ class XSSScanner(BaseScanner):
             dom_confirmed = self._dom_verify_xss(url, param_name, hit.get("payload", ""))
             hit_confidence = hit.get("confidence", "medium")
             executable = hit.pop("_executable", False)
+            rq_score  = hit.pop("_rq_score",   0.0)
+            rq_detail = hit.pop("_rq_detail",  "")
+            rq_sev    = hit.pop("_rq_severity", "Low")
 
-            # Severity based on confidence + executability
+            # Severity: DOM confirmation > quality score > confidence > executable flag
             if dom_confirmed:
                 severity = "High"
-            elif hit_confidence == "high" and executable:
+            elif rq_score >= 0.75 or (hit_confidence == "high" and executable):
                 severity = "High"
-            elif hit_confidence == "medium":
+            elif rq_score >= 0.50 or hit_confidence == "medium":
                 severity = "Medium"
             else:
                 severity = "Low"
 
+            if dom_confirmed:
+                evidence_str = "Payload reflected + Playwright DOM execution CONFIRMED"
+            else:
+                evidence_str = (
+                    f"Payload reflected (confidence={hit_confidence}, executable={executable})"
+                    + (f" | {rq_detail}" if rq_detail else "")
+                    + " — DOM unconfirmed, manual check recommended"
+                )
+
             self.report_finding(
                 severity=severity,
-                evidence=(
-                    "Payload yansıtıldı + Playwright ile DOM yürütmesi DOĞRULANDI"
-                    if dom_confirmed else
-                    f"Payload yansıtıldı (confidence={hit_confidence}, executable={executable}) "
-                    "— DOM doğrulanamadı, manuel kontrol önerilir"
-                ),
+                evidence=evidence_str,
                 verified=dom_confirmed,
                 confidence="high" if dom_confirmed else hit_confidence,
                 detection_method=hit.get("detection_method", "reflection"),
+                reflection_quality=round(rq_score, 3),
                 **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
             # XSS -> ATO PoC for every confirmed finding
             if dom_confirmed:
                 ato = ato_gen.generate_poc(url, param_name, hit.get("payload", ""))
-                ato["verified"] = True  # DOM execution confirmed -> ATO is proven
+                ato["verified"] = True
                 ato["detection_method"] = "dom_playwright"
                 self.report_finding(severity="Critical", **ato)
 

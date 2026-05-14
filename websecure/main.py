@@ -33,11 +33,27 @@ from websecure.core.phases import build_plan, run_plan_if_needed
 from websecure.crawler import discovery_enrich
 from websecure.core.alerts import AlertManager
 from websecure.core.reporting import (
-    verify_and_score, 
-    configure_logging, 
-    perform_reporting, 
+    verify_and_score,
+    configure_logging,
+    perform_reporting,
     add_session
 )
+
+# Plan B — Nessus-style response behaviour analysis components
+try:
+    from websecure.core.tech_fingerprint import TechFingerprinter as _TechFingerprinter
+    from websecure.core.endpoint_prioritizer import EndpointPrioritizer as _EndpointPrioritizer
+    from websecure.core.fp_reducer import FalsePositiveReducer as _FalsePositiveReducer
+    from websecure.core.rate_controller import AdaptiveRateController as _AdaptiveRateController
+    from websecure.core.evidence_chain import EvidenceChainBuilder as _EvidenceChainBuilder
+    _PLAN_B_AVAILABLE = True
+except ImportError as _pb_exc:
+    _PLAN_B_AVAILABLE = False
+    _TechFingerprinter = None
+    _EndpointPrioritizer = None
+    _FalsePositiveReducer = None
+    _AdaptiveRateController = None
+    _EvidenceChainBuilder = None
 
 
 
@@ -1860,6 +1876,26 @@ def _run_scan_phases(
         if callable(globals().get("_session_priming")):
             _session_priming(session, url, cfg)
 
+        # Plan B: Reset false-positive reducer for this scan session
+        if _PLAN_B_AVAILABLE and _FalsePositiveReducer is not None:
+            try:
+                _FalsePositiveReducer.reset_session()
+                _logger.info("[PlanB] FalsePositiveReducer session reset.")
+            except Exception as _fpr_exc:
+                _logger.debug(f"[PlanB] FPR reset error: {_fpr_exc!r}")
+
+        # Plan B: Wire AdaptiveRateController into results so scanners can use it
+        if _PLAN_B_AVAILABLE and _AdaptiveRateController is not None:
+            try:
+                _scan_rps = float((cfg.get("settings") or {}).get("rate_limit_rps", 10.0))
+                _rate_ctrl = _AdaptiveRateController(
+                    initial_rps=_scan_rps, min_rps=0.5, max_rps=50.0
+                )
+                results["_rate_controller"] = _rate_ctrl
+                _logger.info(f"[PlanB] AdaptiveRateController init @ {_scan_rps:.1f} rps")
+            except Exception as _rc_exc:
+                _logger.debug(f"[PlanB] RateController init error: {_rc_exc!r}")
+
         # [WS3] ROBUST AUTHENTICATION & SESSION CAPTURE
         def _on_auth_event(evt: str, data: dict):
             if not data.get("ok", True) and "final" not in evt: return
@@ -1977,7 +2013,74 @@ def _run_scan_phases(
         if callable(globals().get("add_result")):
             add_result("coverage_summary", cov)
 
+        # Plan B (B5): Technology fingerprinting — runs once on base URL before offensive scanning
+        if _PLAN_B_AVAILABLE and _TechFingerprinter is not None:
+            try:
+                _fp = _TechFingerprinter(session)
+                _tech_profile = _fp.fingerprint(url, timeout=10)
+                results["tech_profile"] = {
+                    "url": _tech_profile.url,
+                    "technologies": _tech_profile.technologies,
+                    "cms": _tech_profile.cms,
+                    "language": _tech_profile.language,
+                    "framework": _tech_profile.framework,
+                    "database": _tech_profile.database,
+                    "server": _tech_profile.server,
+                    "waf": _tech_profile.waf,
+                    "sqli_dialects": _tech_profile.sqli_dialects,
+                    "ssti_engines": _tech_profile.ssti_engines,
+                }
+                if callable(globals().get("add_result")):
+                    add_result("tech_profile", results["tech_profile"])
+                _logger.info(
+                    f"[PlanB/B5] Tech: {_tech_profile.top_technologies(3)} | "
+                    f"SQLi: {_tech_profile.sqli_dialects} | "
+                    f"SSTI: {_tech_profile.ssti_engines}"
+                )
+                print(
+                    f"[B5] Tech fingerprint: {', '.join(_tech_profile.top_technologies(3))}"
+                    + (f" | WAF: {_tech_profile.waf}" if _tech_profile.waf else "")
+                )
+            except Exception as _fp_exc:
+                _logger.debug(f"[PlanB] TechFingerprinter error: {_fp_exc!r}")
+
         endpoints = list(results.get("endpoints", [])) or [url]
+
+        # Plan B (B8): Smart endpoint prioritization — re-rank after crawl
+        if _PLAN_B_AVAILABLE and _EndpointPrioritizer is not None and len(endpoints) > 1:
+            try:
+                _prioritizer = _EndpointPrioritizer()
+                _ranked = _prioritizer.rank(endpoints)
+                # Re-order endpoints: critical/high first
+                _grouped = _prioritizer.group_by_priority(_ranked)
+                _ordered_eps = (
+                    [e.url for e in _grouped["critical"]]
+                    + [e.url for e in _grouped["high"]]
+                    + [e.url for e in _grouped["medium"]]
+                    + [e.url for e in _grouped["low"]]
+                )
+                # Preserve any endpoints not ranked (e.g. no params)
+                _seen_set = set(_ordered_eps)
+                _ordered_eps += [u for u in endpoints if u not in _seen_set]
+                endpoints = _ordered_eps
+                results["endpoint_priority_summary"] = {
+                    "critical": len(_grouped["critical"]),
+                    "high": len(_grouped["high"]),
+                    "medium": len(_grouped["medium"]),
+                    "low": len(_grouped["low"]),
+                    "total": len(_ranked),
+                }
+                _logger.info(
+                    f"[PlanB/B8] Prioritized {len(_ranked)} endpoints: "
+                    f"critical={len(_grouped['critical'])} high={len(_grouped['high'])}"
+                )
+                print(
+                    f"[B8] Endpoint priority: critical={len(_grouped['critical'])} "
+                    f"high={len(_grouped['high'])} medium={len(_grouped['medium'])}"
+                )
+            except Exception as _ep_exc:
+                _logger.debug(f"[PlanB] EndpointPrioritizer error: {_ep_exc!r}")
+
         crawled_pf_items = [{"url": u, "method": "GET", "params": {"query": {}, "body": {}, "json": {}}} for u in
                             endpoints]
         discovered = discover_params_from_crawl(crawled_pf_items) if callable(
@@ -2316,6 +2419,23 @@ def _run_scan_phases(
 
         final = verify_and_score(all_findings, oast_events)
 
+        # Plan B (B9): Evidence chain builder — correlate findings into attack chains
+        if _PLAN_B_AVAILABLE and _EvidenceChainBuilder is not None and all_findings:
+            try:
+                _chain_builder = _EvidenceChainBuilder()
+                _chain_builder.annotate_results(results)
+                chains = results.get("attack_chains", [])
+                if chains:
+                    _logger.info(f"[PlanB/B9] Built {len(chains)} attack chains")
+                    print(f"[B9] Attack chains: {len(chains)} correlation(s) found")
+                    critical_chains = [c for c in chains if c.get("chain_severity") == "Critical"]
+                    if critical_chains:
+                        print(f"  [!!] Critical chains: {len(critical_chains)}")
+                        for c in critical_chains[:3]:
+                            print(f"      - {c['title']} (score={c['chain_score']})")
+            except Exception as _cb_exc:
+                _logger.debug(f"[PlanB] EvidenceChainBuilder error: {_cb_exc!r}")
+
         report_payload = dict(results)
         report_payload.update(get_bucket_results())
         report_payload.update(buckets)
@@ -2341,6 +2461,10 @@ def _run_scan_phases(
             # Discovery: bucket'lardan
             "discovery": _bkts.get("discovery") or results.get("discovery") or [],
             "files_discovered": _bkts.get("files_discovered") or results.get("files_discovered") or [],
+            # Plan B data
+            "attack_chains": results.get("attack_chains") or [],
+            "tech_profile": results.get("tech_profile") or {},
+            "endpoint_priority_summary": results.get("endpoint_priority_summary") or {},
         })
 
         out = perform_reporting(session, cfg, report_payload)

@@ -11,6 +11,8 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
+from websecure.core.response_analyzer import ResponseBehaviorAnalyzer, SQLErrorDetector
+from websecure.core.timing_analyzer import TimingAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +128,9 @@ class SQLInjectionScanner(BaseScanner):
         # runs 4 HTTP requests ONCE per URL instead of once per parameter
         self._nat_var_cache: Dict[str, Tuple[float, float]] = {}
         self._nat_var_lock = threading.Lock()
+        # Plan B: Nessus-style response behaviour analysis + statistical timing
+        self._rba = ResponseBehaviorAnalyzer(self.session)
+        self._timing = TimingAnalyzer(self.session, baseline_n=4)
 
     def _load_payloads(self) -> List[str]:
         """Loads SQLi payloads. Falls back to built-in list if wordlist unavailable."""
@@ -497,6 +502,13 @@ class SQLInjectionScanner(BaseScanner):
                 url, param_name, baseline_errors, time_threshold
             )
 
+            # Plan B: RBA differential analysis — catches error responses that
+            # don't match known DB signatures (custom error pages, hidden errors)
+            self._rba_differential_scan(url, param_name)
+
+            # Plan B: enhanced timing with statistical cross-validation
+            self._enhanced_timing_scan(url, param_name)
+
             # Union-based detection — independent of error results
             union_result = self._try_union_based(url, param_name)
             if union_result:
@@ -560,6 +572,131 @@ class SQLInjectionScanner(BaseScanner):
 
         # HTTP header injection — inject into common headers
         self._scan_header_injection(url, baseline_errors, time_threshold)
+
+    # -------------------------------------------------------------------------
+    # Plan B: RBA differential analysis
+    # -------------------------------------------------------------------------
+
+    # Focused probe set for differential analysis — covers all major DBs without
+    # relying on known error signatures (catches custom error pages too)
+    _RBA_PROBE_PAYLOADS: List[str] = [
+        "'",
+        '"',
+        "' OR '1'='1",
+        "' AND 1=CONVERT(int,@@version)--",
+        "' AND extractvalue(1,concat(0x7e,version()))--",
+        "1 AND 1=2",
+        "' UNION SELECT NULL--",
+        "' UNION SELECT NULL,NULL--",
+        "'; SELECT 1--",
+        "1' AND SLEEP(0)--",
+    ]
+
+    def _rba_differential_scan(self, url: str, param_name: str) -> None:
+        """
+        Nessus-style: compare baseline vs injected response structure.
+        Detects injection even when DB errors are custom-paged or hidden.
+        Runs per-param with a shared RBA instance.
+        """
+        baseline = self._rba.capture_baseline(url, param_name, n_samples=2, timeout=10)
+        if baseline is None:
+            return
+
+        for payload in self._RBA_PROBE_PAYLOADS:
+            injected_url = self.inject_param(url, param_name, payload)
+            diff = self._rba.analyse(baseline, injected_url, payload, timeout=12)
+            if diff is None or not diff.is_reportable:
+                continue
+
+            # Avoid re-reporting what error-based scan already caught
+            if diff.new_db_errors:
+                db_labels = {fp.split(":")[0] for fp in diff.new_db_errors}
+                self.report_finding(
+                    vuln_type="SQL Injection (Differential/DB Error)",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity="High",
+                    evidence=(
+                        f"RBA: new DB error signature detected | "
+                        f"DB: {', '.join(sorted(db_labels))} | "
+                        f"{diff.evidence_summary}"
+                    ),
+                    detection_method="error_based",
+                    confidence=self._rba.confidence_label(diff.confidence),
+                    verified=diff.confidence >= 0.80,
+                )
+            elif diff.new_framework_errors:
+                fw_labels = {fp.split(":")[1] for fp in diff.new_framework_errors if ":" in fp}
+                self.report_finding(
+                    vuln_type="SQL Injection (Differential/Framework Error)",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity="Medium",
+                    evidence=(
+                        f"RBA: framework error triggered | "
+                        f"Framework: {', '.join(sorted(fw_labels))} | "
+                        f"{diff.evidence_summary}"
+                    ),
+                    detection_method="error_based",
+                    confidence=self._rba.confidence_label(diff.confidence),
+                )
+            elif diff.status_changed and diff.new_status == 500:
+                self.report_finding(
+                    vuln_type="SQL Injection (Differential/500 Error)",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity="Medium",
+                    evidence=(
+                        f"RBA: HTTP 500 triggered by injection | "
+                        f"{diff.evidence_summary}"
+                    ),
+                    detection_method="error_based",
+                    confidence=self._rba.confidence_label(diff.confidence),
+                )
+            # Stop after first reportable finding per param (one finding = one report)
+            break
+
+    _TIMING_PAYLOADS: List[Tuple[str, float, str]] = [
+        ("' AND SLEEP(3)-- -",         3.0, "mysql"),
+        ("'; WAITFOR DELAY '0:0:3'-- -", 3.0, "mssql"),
+        ("' OR pg_sleep(3)-- -",       3.0, "postgresql"),
+        ("' OR 1=DBMS_PIPE.RECEIVE_MESSAGE(CHR(99),3)-- -", 3.0, "oracle"),
+        ("' AND 3=LIKE('ABCDEFG',UPPER(HEX(RANDOMBLOB(1000000000/2))))-- -", 3.0, "sqlite"),
+    ]
+
+    def _enhanced_timing_scan(self, url: str, param_name: str) -> None:
+        """
+        Statistical timing detection using TimingAnalyzer.
+        Replaces ad-hoc `_verify_time_based()` for URL parameters.
+        Requires 3/3 cross-validated hits above dynamic threshold.
+        """
+        timing_baseline = self._timing.capture_baseline(url, param_name, timeout=12)
+        if timing_baseline is None:
+            return
+
+        for payload, expected_delay, db_hint in self._TIMING_PAYLOADS:
+            result = self._timing.probe(
+                url, param_name, payload, self.inject_param,
+                baseline=timing_baseline,
+                timeout=20,
+                expected_delay=expected_delay,
+            )
+            if result and result.confirmed:
+                self.report_finding(
+                    vuln_type=f"SQL Injection (Time-Based, {db_hint.upper()})",
+                    url=url,
+                    param=param_name,
+                    payload=payload,
+                    severity=_sqli_severity_from_method("time_based", "high"),
+                    evidence=result.evidence,
+                    detection_method="time_based",
+                    confidence="high",
+                    verified=True,
+                )
+                break  # first confirmed timing hit per param is sufficient
 
     def _test_param_parallel(
         self,
