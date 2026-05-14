@@ -439,6 +439,35 @@ def phase_discovery(ctx: dict):
     except Exception as e:
         _logger.warning(f"External discovery tool failed: {e}")
 
+
+def _phase_httpx_port_fallback(ctx, host: str) -> None:
+    """Probe common HTTP/HTTPS ports via requests when nmap is unavailable."""
+    import socket as _socket
+    session = ctx.get("session") if isinstance(ctx, dict) else getattr(ctx, "session", None)
+    if session is None:
+        session = hardened_session({})
+
+    _HTTP_PORTS = [80, 443, 8080, 8443, 8888, 9090, 3000, 5000, 4443, 4080]
+    for port in _HTTP_PORTS:
+        scheme = "https" if port in (443, 8443, 4443) else "http"
+        url = f"{scheme}://{host}:{port}/"
+        try:
+            r = session.get(url, timeout=4, allow_redirects=False)
+            svc = "https" if port in (443, 8443, 4443) else "http"
+            add_result("nmap", {
+                "severity": "info",
+                "message": f"Açık port (httpx-fallback): {port}/tcp ({svc}) — HTTP {r.status_code}",
+                "host": host,
+                "port": port,
+                "proto": "tcp",
+                "service": svc,
+                "state": "open",
+                "scripts": {},
+            })
+        except Exception:
+            pass
+
+
 def phase_portscan(ctx: dict):
     """
     Nmap port taraması.
@@ -463,7 +492,8 @@ def phase_portscan(ctx: dict):
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı."})
+        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı — httpx fallback ile HTTP portları taranıyor."})
+        _phase_httpx_port_fallback(ctx, host)
         return
 
     # Mode selection: _nmap config > scan_profile
@@ -830,6 +860,22 @@ def clear_critical_error(ctx: Any) -> None:
 
 # ----------------------------- Faz çalıştırma izolasyonu (no try/except) -----------------------------
 
+# Per-phase timeout overrides. Phases not listed here use the default (300s).
+# Nmap/port_scan needs much longer because it runs a two-stage scan internally.
+_PHASE_TIMEOUTS: Dict[str, int] = {
+    "port_scan":   900,   # nmap two-stage: up to 15 min
+    "portscan":    900,
+    "sqlmap":      600,   # sqlmap time-based blind can be slow
+    "nuclei":      480,   # template-based, many checks
+    "feroxbuster": 420,
+    "ffuf":        420,
+    "amass":       600,
+    "subdomain":   480,
+    "owasp_and_nuclei": 480,
+}
+_DEFAULT_PHASE_TIMEOUT = 300  # 5 minutes for all other phases
+
+
 def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     """
     Her fazı ayrı bir thread'de çalıştırır. İstisnalar main thread'i bozmaz.
@@ -845,15 +891,14 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     old_hook = getattr(threading, "excepthook", None)
     threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
 
-    # Per-phase timeout prevents any single phase from blocking forever
-    _PHASE_TIMEOUT = 240  # 4 minutes max per phase
+    phase_timeout = _PHASE_TIMEOUTS.get(phase_id, _DEFAULT_PHASE_TIMEOUT)
 
     t = threading.Thread(target=fn, name=f"phase::{phase_id}", daemon=True)
     t.start()
 
     # Poll in 1s increments so Ctrl+C (_SCAN_CANCEL) is checked frequently
     elapsed = 0.0
-    while t.is_alive() and elapsed < _PHASE_TIMEOUT:
+    while t.is_alive() and elapsed < phase_timeout:
         t.join(timeout=1.0)
         elapsed += 1.0
         if _SCAN_CANCEL.is_set():
@@ -866,12 +911,12 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
             _logger.info("[phases] Phase '%s' cancelled by user (Ctrl+C)", phase_id)
         else:
             _logger.warning(
-                "[phases] Phase '%s' exceeded %ds — skipped to prevent hang", phase_id, _PHASE_TIMEOUT
+                "[phases] Phase '%s' exceeded %ds — skipped to prevent hang", phase_id, phase_timeout
             )
             add_result("errors", {
                 "type": "phase_timeout",
                 "phase": phase_id,
-                "timeout_secs": _PHASE_TIMEOUT,
+                "timeout_secs": phase_timeout,
             })
 
     if err:
@@ -1178,6 +1223,14 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
 
+    base_url = (getattr(ctx, "url", None)
+                or getattr(ctx, "base_url", None)
+                or getattr(ctx, "target", None)
+                or "")
+    if not base_url:
+        add_result("meta", {"stage": "ssrf_xxe", "status": "skipped:no-url"})
+        return
+
     # OAST taraması başlamadan interactsh'e kayıt ol -> subdomain al
     oast_domain = _setup_oast_domain(ctx)
 
@@ -1188,11 +1241,6 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
     # interactsh subdomain'i scanner'a geçir
     if oast_domain:
         oast_cfg["dns_domain"] = oast_domain
-
-    base_url = (getattr(ctx, "url", None)
-                or getattr(ctx, "base_url", None)
-                or getattr(ctx, "target", None)
-                or "")
     endpoints = getattr(ctx, "endpoints", None) or ([base_url] if base_url else [])
 
     results_bucket = _ensure_results_bucket(ctx)
@@ -1226,6 +1274,9 @@ def _runner_scanners_request_smuggling(ctx) -> None:
                 or getattr(ctx, "base_url", None)
                 or getattr(ctx, "target", None)
                 or "")
+    if not base_url:
+        add_result("meta", {"stage": "request_smuggling", "status": "skipped:no-url"})
+        return
     cfg = getattr(ctx, "config", {}) or {}
     tls_verify = bool((cfg.get("http") or {}).get("tls_verify", (cfg.get("tls") or {}).get("verify", True)))
 
@@ -1303,9 +1354,11 @@ def _runner_mass_assignment(ctx) -> None:
     if not mod:
         add_result("offensive", {"type": "Mass Assignment", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
-    base_url = getattr(ctx, "url", "")
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "target", None) or "")
+    if not base_url:
+        add_result("meta", {"stage": "mass_assignment", "status": "skipped:no-url"})
+        return
     sess = getattr(ctx, "session", None)
     timeout = float(_get(getattr(ctx, "config", {}) or {}, "timeouts.mass_assignment", 10.0))
     endpoints = _get(getattr(ctx, "config", {}) or {}, "mass_assignment.endpoints", None)
@@ -1323,9 +1376,11 @@ def _runner_nosqli(ctx) -> None:
     if not mod:
         add_result("offensive", {"type": "NoSQLi", "severity": "Informational", "reason": "Modül bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
-    base_url = getattr(ctx, "url", "")
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "target", None) or "")
+    if not base_url:
+        add_result("meta", {"stage": "nosqli", "status": "skipped:no-url"})
+        return
     sess = getattr(ctx, "session", None)
     timeout = float(_get(getattr(ctx, "config", {}) or {}, "timeouts.nosqli", 8.0))
     endpoints = _get(getattr(ctx, "config", {}) or {}, "nosqli.endpoints", None)
@@ -1360,12 +1415,14 @@ def _runner_scanners_file_upload(ctx) -> None:
             "reason": "`run`/`scan` bulunamadı."
         })
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
         return
     base_url = (getattr(ctx, "url", None)
                 or getattr(ctx, "base_url", None)
                 or getattr(ctx, "target", None)
                 or "")
+    if not base_url:
+        add_result("meta", {"stage": "file_upload", "status": "skipped:no-url"})
+        return
     sess = getattr(ctx, "session", None)
     debug = bool(getattr(ctx, "debug", False))
     cfg = getattr(ctx, "config", {}) or {}
@@ -1399,7 +1456,14 @@ def _runner_jwt(ctx) -> None:
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
 
-    base_url = getattr(ctx, "url", "")
+    base_url = (getattr(ctx, "url", None) or getattr(ctx, "target", None) or "")
+    if not base_url:
+        add_result("meta", {"stage": "jwt", "status": "skipped:no-url"})
+        return
+
+    # JWT scanning is only worthwhile when tokens are observable
+    _jwt_indicators = ["jwt", "token", "bearer", "authorization", "auth"]
+    ctx_results = getattr(ctx, "results", {}) or {}
     sess = getattr(ctx, "session", None)
     debug = bool(getattr(ctx, "debug", False))
 

@@ -475,9 +475,12 @@ class NmapWrapper(ToolIntegration):
     def _inject_proxy(args: List[str], proxy: Optional[str]):
         if not proxy:
             return
-        p = proxy.replace("socks5h://", "socks4://").replace("socks5://", "socks4://")
+        # Nmap supports socks5:// and socks4:// but NOT socks5h://.
+        # Keep socks5:// as-is (Tor works fine); only strip the 'h' suffix.
+        p = proxy.replace("socks5h://", "socks5://")
         args.extend(["--proxies", p])
         if "-n" not in args:
+            # -n disables DNS on nmap side; the SOCKS5 proxy (Tor) handles resolution
             args.append("-n")
 
     @staticmethod

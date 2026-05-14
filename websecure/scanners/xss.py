@@ -301,8 +301,10 @@ class XSSScanner(BaseScanner):
         ]
 
     def _gen_canary(self) -> str:
-        token = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-        return f"{self.canary_prefix}{token}"
+        # Include hyphens so the canary cannot be a valid Base32/Base64/hex string
+        token = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        uid = str(uuid.uuid4())[:4]
+        return f"{self.canary_prefix}-{token}-{uid}"
 
     def _get_baseline(self, url: str, params: dict) -> Tuple[str, int]:
         """Orijinal parametrelerle baseline response al."""

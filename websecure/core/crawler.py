@@ -94,6 +94,40 @@ _INPUT_RE = re.compile(
     r'<(?:input|textarea|select)[^>]*name=["\']([^"\']+)["\'][^>]*>', re.I
 )
 
+# URL segment classifiers for template deduplication
+_SEG_ID_RE = re.compile(r'^\d+$')
+_SEG_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
+)
+_SEG_HEX_RE = re.compile(r'^[0-9a-f]{16,}$', re.I)
+_SEG_SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9\-]{3,}[a-z0-9]$', re.I)
+
+
+def _url_template(url: str) -> str:
+    """Normalize dynamic URL path segments to a canonical template string."""
+    from urllib.parse import parse_qs
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.split("/") if p]
+    norm: List[str] = []
+    for part in parts:
+        if _SEG_UUID_RE.match(part):
+            norm.append("{uuid}")
+        elif _SEG_ID_RE.match(part):
+            norm.append("{id}")
+        elif _SEG_HEX_RE.match(part):
+            norm.append("{hex}")
+        elif _SEG_SLUG_RE.match(part) and any(c.isdigit() for c in part) and "-" in part:
+            norm.append("{slug}")
+        else:
+            norm.append(part)
+    if parsed.query:
+        try:
+            keys = sorted(parse_qs(parsed.query, keep_blank_values=True).keys())
+            return f"{parsed.netloc}/{'/'.join(norm)}?{'&'.join(keys)}"
+        except Exception:
+            pass
+    return f"{parsed.netloc}/{'/'.join(norm)}"
+
 
 def _chunks(lst: List[Any], n: int) -> Generator[List[Any], None, None]:
     for i in range(0, len(lst), n):
@@ -111,21 +145,42 @@ class HTTPCrawler(CrawlerBase):
     No JavaScript rendering — use BrowserCrawler for SPAs.
     """
 
-    def __init__(self, max_pages: int = 200, timeout: int = 10):
+    def __init__(
+        self,
+        max_pages: int = 200,
+        timeout: int = 10,
+        max_samples_per_template: int = 3,
+        max_unique_templates: int = 50,
+    ):
         self.max_pages = max_pages
         self.timeout = timeout
+        self.max_samples_per_template = max_samples_per_template
+        self.max_unique_templates = max_unique_templates
 
     def crawl(self, target: str, session: Any) -> CrawlResult:
         result = CrawlResult()
         base_netloc = urlparse(target).netloc
         queue: deque[str] = deque([target])
         visited: Set[str] = set()
+        queued: Set[str] = {target}
+        template_counts: Dict[str, int] = {}
 
         while queue and len(visited) < self.max_pages:
             url = queue.popleft()
+            queued.discard(url)
             if url in visited:
                 continue
+
+            # Skip if this URL's template is already saturated
+            tmpl = _url_template(url)
+            count = template_counts.get(tmpl, 0)
+            if count >= self.max_samples_per_template:
+                continue
+            if len(template_counts) >= self.max_unique_templates and tmpl not in template_counts:
+                continue
+
             visited.add(url)
+            template_counts[tmpl] = count + 1
 
             try:
                 resp = session.get(url, timeout=self.timeout, allow_redirects=True)
@@ -133,12 +188,19 @@ class HTTPCrawler(CrawlerBase):
                 _logger.debug(f"[HTTPCrawler] {url}: {exc}")
                 continue
 
+            # Only include reachable, non-error pages in the result
+            if resp.status_code >= 400:
+                continue
+
             ct = resp.headers.get("Content-Type", "")
             if not any(t in ct for t in ("html", "text", "javascript")):
                 continue
 
+            if url not in result.endpoints:
+                result.endpoints.append(url)
+
             html = resp.text
-            self._extract_links(html, url, base_netloc, queue, visited, result)
+            self._extract_links(html, url, base_netloc, queue, queued, visited, template_counts, result)
             self._extract_api_calls(html, url, base_netloc, result)
             self._extract_js_files(html, url, result)
             self._extract_forms(html, url, result)
@@ -147,13 +209,15 @@ class HTTPCrawler(CrawlerBase):
         _logger.info(
             f"[HTTPCrawler] {len(result.endpoints)} pages, "
             f"{len(result.api_endpoints)} API hints, "
-            f"{len(result.forms)} forms"
+            f"{len(result.forms)} forms, "
+            f"{len(template_counts)} unique URL templates"
         )
         return result
 
     def _extract_links(
         self, html: str, base_url: str, netloc: str,
-        queue: deque, visited: Set[str], result: CrawlResult,
+        queue: deque, queued: Set[str], visited: Set[str],
+        template_counts: Dict[str, int], result: CrawlResult,
     ) -> None:
         for m in _LINK_RE.finditer(html):
             href = m.group(1)
@@ -166,10 +230,16 @@ class HTTPCrawler(CrawlerBase):
                    if "." in raw_path.rsplit("/", 1)[-1] else "")
             if ext in _SKIP_EXT:
                 continue
-            if full not in visited and full not in queue:
-                queue.append(full)
-            if full not in result.endpoints:
-                result.endpoints.append(full)
+            if full in visited or full in queued:
+                continue
+            # Pre-check template saturation before enqueuing
+            tmpl = _url_template(full)
+            if template_counts.get(tmpl, 0) >= self.max_samples_per_template:
+                continue
+            if len(template_counts) >= self.max_unique_templates and tmpl not in template_counts:
+                continue
+            queue.append(full)
+            queued.add(full)
 
     def _extract_api_calls(
         self, html: str, base_url: str, netloc: str, result: CrawlResult
