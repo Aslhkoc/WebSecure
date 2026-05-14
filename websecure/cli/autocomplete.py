@@ -355,13 +355,14 @@ _websecure "$@"
 '''
 
     def install_path(self) -> Optional[Path]:
-        # Kullanıcının zsh fpath'indeki standart konum
+        # Kullanıcının zsh fpath'indeki standart konum — önce parent dizin varlığı kontrol et
         home = Path.home()
         for p in [
             home / ".zsh/completions/_websecure",
             home / ".local/share/zsh/site-functions/_websecure",
         ]:
-            return p
+            if p.parent.exists():
+                return p
         return home / ".zsh/completions/_websecure"
 
 

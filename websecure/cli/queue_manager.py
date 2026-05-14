@@ -352,11 +352,55 @@ class ScanQueue:
 _queue_instance: Optional[ScanQueue] = None
 
 
+def _make_websecure_runner() -> Optional[Callable]:
+    """
+    CLI için gerçek WebSecure tarama runner'ı oluşturur.
+    ScanRunner üzerinden tarama çalıştırır ve standart sonuç dict'i döndürür.
+    """
+    try:
+        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+
+        def _runner(target: str, options: dict) -> dict:
+            import time as _time
+            t0 = _time.monotonic()
+            try:
+                sr = _ScanRunner(target=target, config=options or {})
+                ctx = sr.run()
+                findings: list = []
+                for bucket_items in (getattr(ctx, "results", None) or {}).values():
+                    if isinstance(bucket_items, list):
+                        findings.extend(bucket_items)
+                return {
+                    "success": True,
+                    "finding_count": len(findings),
+                    "duration_s": round(_time.monotonic() - t0, 2),
+                }
+            except Exception as _exc:
+                logger.error(f"[Queue] Tarama runner hatası: {_exc!r}")
+                return {
+                    "success": False,
+                    "error": str(_exc),
+                    "finding_count": 0,
+                    "duration_s": round(_time.monotonic() - t0, 2),
+                }
+
+        return _runner
+    except ImportError:
+        logger.warning("[Queue] ScanRunner import edilemedi — runner yok")
+        return None
+
+
 def get_queue(runner: Optional[Callable] = None) -> ScanQueue:
-    """Global ScanQueue singleton'ını döndür."""
+    """
+    Global ScanQueue singleton'ını döndür.
+    Singleton runner'sız oluşturulmuşsa ve yeni runner verilmişse günceller.
+    """
     global _queue_instance
     if _queue_instance is None:
         _queue_instance = ScanQueue(runner=runner)
+    elif runner is not None and _queue_instance._runner is None:
+        # Sonradan sağlanan runner'ı singleton'a bağla
+        _queue_instance._runner = runner
     return _queue_instance
 
 
@@ -403,7 +447,7 @@ def run_queue_cli(args: list) -> int:
     run_p.add_argument("--workers", "-w", type=int, default=1)
 
     ns = parser.parse_args(args)
-    q = get_queue()
+    q = get_queue(runner=_make_websecure_runner())
 
     if ns.subcmd == "add":
         e = q.add(target=ns.target, priority=ns.priority, label=ns.label)

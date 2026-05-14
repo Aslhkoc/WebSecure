@@ -411,13 +411,57 @@ class CronScheduler:
 _scheduler_instance: Optional[CronScheduler] = None
 
 
+def _make_websecure_runner() -> Optional[Callable]:
+    """
+    CLI için gerçek WebSecure tarama runner'ı oluşturur.
+    ScanRunner üzerinden tarama çalıştırır ve standart sonuç dict'i döndürür.
+    """
+    try:
+        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+
+        def _runner(target: str, options: dict) -> dict:
+            import time as _time
+            t0 = _time.monotonic()
+            try:
+                sr = _ScanRunner(target=target, config=options or {})
+                ctx = sr.run()
+                findings: list = []
+                for bucket_items in (getattr(ctx, "results", None) or {}).values():
+                    if isinstance(bucket_items, list):
+                        findings.extend(bucket_items)
+                return {
+                    "success": True,
+                    "finding_count": len(findings),
+                    "duration_s": round(_time.monotonic() - t0, 2),
+                }
+            except Exception as _exc:
+                logger.error(f"[Scheduler] Tarama runner hatası: {_exc!r}")
+                return {
+                    "success": False,
+                    "error": str(_exc),
+                    "finding_count": 0,
+                    "duration_s": round(_time.monotonic() - t0, 2),
+                }
+
+        return _runner
+    except ImportError:
+        logger.warning("[Scheduler] ScanRunner import edilemedi — runner yok")
+        return None
+
+
 def get_scheduler(
     runner: Optional[Callable] = None,
 ) -> CronScheduler:
-    """Global CronScheduler singleton'ını döndür."""
+    """
+    Global CronScheduler singleton'ını döndür.
+    Singleton runner'sız oluşturulmuşsa ve yeni runner verilmişse günceller.
+    """
     global _scheduler_instance
     if _scheduler_instance is None:
         _scheduler_instance = CronScheduler(runner=runner)
+    elif runner is not None and _scheduler_instance._runner is None:
+        # Sonradan sağlanan runner'ı singleton'a bağla
+        _scheduler_instance._runner = runner
     return _scheduler_instance
 
 
@@ -460,7 +504,7 @@ def run_scheduler_cli(args: list) -> int:
     sub.add_parser("run",  help="Daemon modunda çalıştır (Ctrl+C ile durdur)")
 
     ns = parser.parse_args(args)
-    sched = get_scheduler()
+    sched = get_scheduler(runner=_make_websecure_runner())
 
     if ns.subcmd == "add":
         try:

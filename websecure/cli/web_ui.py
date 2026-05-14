@@ -556,6 +556,46 @@ class WebDashboard:
 
 
 # ---------------------------------------------------------------------------
+# Scan callback fabrikası
+# ---------------------------------------------------------------------------
+
+def _make_scan_callback(state: "DashboardState") -> Optional[Callable[[str, dict], None]]:
+    """
+    WebDashboard için gerçek WebSecure scan callback'i oluşturur.
+    ScanRunner'ı arka plan thread'inde çalıştırır ve bulguları DashboardState'e aktarır.
+    """
+    try:
+        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+
+        def _callback(target: str, options: dict) -> None:
+            state.update_status(running=True, target=target)
+            state.add_log(f"Tarama başlatıldı: {target}", "success")
+            try:
+                sr = _ScanRunner(target=target, config=options or {})
+                ctx = sr.run()
+                findings_flat: list = []
+                for bucket_items in (getattr(ctx, "results", None) or {}).values():
+                    if isinstance(bucket_items, list):
+                        findings_flat.extend(bucket_items)
+                for f in findings_flat:
+                    if isinstance(f, dict):
+                        state.add_finding(f)
+                state.add_log(
+                    f"Tarama tamamlandı: {target} — {len(findings_flat)} bulgu", "success"
+                )
+            except Exception as exc:
+                state.add_log(f"Tarama hatası: {exc}", "error")
+                logger.error(f"[WebUI] Tarama hatası: {exc!r}")
+            finally:
+                state.update_status(running=False)
+
+        return _callback
+    except ImportError:
+        logger.warning("[WebUI] ScanRunner import edilemedi — POST /api/scan devre dışı")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CLI kısayol
 # ---------------------------------------------------------------------------
 
@@ -570,7 +610,8 @@ def run_serve_cli(args: list) -> int:
     ns = parser.parse_args(args)
 
     state = DashboardState()
-    dashboard = WebDashboard(state=state, host=ns.host, port=ns.port)
+    scan_cb = _make_scan_callback(state)
+    dashboard = WebDashboard(state=state, host=ns.host, port=ns.port, scan_callback=scan_cb)
 
     try:
         dashboard.start(open_browser=not ns.no_browser)

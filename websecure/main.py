@@ -1752,8 +1752,13 @@ def _run_scan_phases(
 
             class _Ctx:
                 __slots__ = (
-                    "url", "scheme", "config", "driver", "session", "results", "detailed", "save_report", "debug",
-                    "logger", "base_plan")
+                    "url", "scheme", "config", "driver", "session", "results", "detailed",
+                    "save_report", "debug", "logger", "base_plan",
+                    # Faz 19 fix: faz runner'ların ihtiyaç duyduğu ek alanlar
+                    "human_adapter", "_plan_ran", "target", "waf_profile",
+                    "bypass_session", "technologies", "authenticated",
+                    "base_url",
+                )
 
                 @property
                 def endpoints(self):
@@ -1769,9 +1774,14 @@ def _run_scan_phases(
 
             ctx = _Ctx()
             ctx.url, ctx.scheme, ctx.config, ctx.driver = url, scheme, cfg, driver
-            
+            ctx.target = url  # Faz 19 fix: faz runner'larının beklediği .target alanı
             ctx.session, ctx.results, ctx.detailed = session, results, detailed
             ctx.save_report, ctx.debug, ctx.logger = True, debug, logger
+            # Faz 19 fix: human_adapter'ı plan çalışmadan ÖNCE inject et
+            try:
+                ctx.human_adapter = _human_adapter_inst  # None olabilir, sorun değil
+            except (AttributeError, TypeError):
+                pass
             
             # [WS3] Inject manual phases for correct reporting
             manual_plan = [
@@ -1911,7 +1921,9 @@ def _run_scan_phases(
         if callable(run_plan_if_needed):
             print("[*] Gelismis tarama plani calistiriliyor (Unified Framework)...")
             run_plan_if_needed(ctx)
-            # Guard: ctx'e flag koy — ilerleyen blokların planı tekrar çalıştırmasını engelle
+            # Faz 19 fix: _plan_ran'ı ctx'e değil results dict'e yaz
+            # ctx'e de yaz (slot varsa), ancak results dict her zaman paylaşılan referanstır.
+            results["_plan_ran"] = True
             try:
                 ctx._plan_ran = True
             except (AttributeError, TypeError):
@@ -2172,27 +2184,27 @@ def _run_scan_phases(
         ctx.target = url  # Use 'url' variable which represents the verified target
         ctx.url = url
 
-        # [Fix] Direct Phase Execution — only runs if first call at line ~1911 did NOT execute
-        # from websecure.core.phases import run_plan_if_needed
+        # Faz 19 fix: human_adapter'ı ikinci ctx'e de plan öncesi inject et
+        if _human_adapter_inst is not None:
+            try:
+                ctx.human_adapter = _human_adapter_inst
+            except (AttributeError, TypeError):
+                pass
 
-        if not getattr(ctx, "_plan_ran", False):
+        # [Fix] Direct Phase Execution — only runs if first call at line ~1911 did NOT execute
+        # Faz 19 fix: _plan_ran kontrolü results dict üzerinden yapılır (ctx nesne değiştiğinden)
+        if not results.get("_plan_ran", False) and not getattr(ctx, "_plan_ran", False):
             print("[•] Faz planı çalıştırılıyor…")
             t = mark("phase_plan")
             _safe_call(run_plan_if_needed, ctx, call_timeout=None)  # No timeout for full plan
             mark("phase_plan", t)
+            results["_plan_ran"] = True
             try:
                 ctx._plan_ran = True
             except (AttributeError, TypeError):
                 pass
         else:
             _logger.debug("[main] Faz planı zaten çalıştırıldı, ikinci çağrı atlandı.")
-
-        # --- human_adapter ctx ile senkronize et ---
-        if _human_adapter_inst is not None:
-            try:
-                setattr(ctx, "human_adapter", _human_adapter_inst)
-            except (AttributeError, TypeError):
-                pass
 
         # --- Exploit Orchestrator (exploitation.enabled=true ise) ---
         _exploit_cfg = (cfg.get("exploitation") or {}) if isinstance(cfg, dict) else {}

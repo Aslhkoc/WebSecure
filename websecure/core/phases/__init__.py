@@ -316,24 +316,47 @@ def _call_if_exists(modname: str, cand_funcs=("run","scan","main","execute"), *a
 
 
 def phase_waf_detect(ctx: dict):
-    """Detect WAF before offensive scanning to choose bypass strategies."""
+    """
+    Detect WAF before offensive scanning to choose bypass strategies.
+
+    İki katmanlı tespit:
+    1. WAFDetector (waf_bypass) — aktif prob + imza tabanlı tespit
+    2. detect_waf_from_response() (analysis) — HTTP yanıtı analizi (fallback)
+    """
+    _ctx_get = ctx.get if hasattr(ctx, "get") else lambda k, d=None: getattr(ctx, k, d)
+    target = _ctx_get("target") or _ctx_get("url") or ""
+    if not target:
+        return
+
+    _waf_bypass_succeeded = False
+
+    # --- Katman 1: WAFDetector (waf_bypass modülü) -----------------------
     try:
         from websecure.core.waf_bypass import WAFDetector
-        target = ctx.get("target") or ctx.get("url") or ""
-        if not target:
-            return
-        session = ctx.get("session") or hardened_session()
+        session = _ctx_get("session") or hardened_session()
         detector = WAFDetector()
         profile = detector.detect(target, session=session)
-        # Store profile in ctx for other phases to use
-        if isinstance(ctx, dict):
-            ctx["waf_profile"] = profile
-            # Build a bypass-enhanced session for subsequent offensive phases
+        # Profile'ı ctx'e kaydet
+        try:
+            if isinstance(ctx, dict):
+                ctx["waf_profile"] = profile
+            else:
+                ctx.waf_profile = profile
+        except Exception:
+            pass
+        # Bypass session oluştur
+        try:
+            from websecure.core.waf_bypass import build_bypass_session
+            _bypass_sess = build_bypass_session(profile)
             try:
-                from websecure.core.waf_bypass import build_bypass_session
-                ctx["bypass_session"] = build_bypass_session(profile)
-            except (ImportError, AttributeError) as exc:
-                _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
+                if isinstance(ctx, dict):
+                    ctx["bypass_session"] = _bypass_sess
+                else:
+                    ctx.bypass_session = _bypass_sess
+            except Exception:
+                pass
+        except (ImportError, AttributeError) as exc:
+            _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
         add_result("waf_detection", {
             "url": target,
             "target": target,
@@ -341,12 +364,53 @@ def phase_waf_detect(ctx: dict):
             "confidence": profile.confidence,
             "detected": profile.detected,
             "bypass_strategies": profile.bypass_strategies,
-            "message": f"WAF: {profile.vendor} (güven: {profile.confidence:.0%})" if profile.detected else "WAF tespit edilmedi",
+            "message": (
+                f"WAF: {profile.vendor} (güven: {profile.confidence:.0%})"
+                if profile.detected else "WAF tespit edilmedi"
+            ),
         })
         if profile.detected:
             _logger.info(f"[phases] WAF detected: {profile.vendor} ({profile.confidence:.0%})")
-    except Exception as e:
-        _logger.debug(f"[phases] WAF detection skipped: {e}")
+        _waf_bypass_succeeded = True
+    except Exception as _e1:
+        _logger.debug(f"[phases] WAF detection (waf_bypass) skipped: {_e1}")
+
+    # --- Katman 2: detect_waf_from_response() fallback (analysis.py) -----
+    # waf_bypass başarısız veya WAF tespit edemediyse HTTP yanıtını analiz et
+    if not _waf_bypass_succeeded:
+        try:
+            from websecure.core.analysis import detect_waf_from_response as _dwfr
+            _sess = _ctx_get("session") or hardened_session()
+            _resp = _sess.get(target, timeout=8, allow_redirects=True, verify=False)
+            _waf = _dwfr(_resp)
+            _conf = 0.75 if _waf.blocked else 0.0
+            add_result("waf_detection", {
+                "url": target,
+                "target": target,
+                "vendor": _waf.vendor or ("Unknown" if _waf.blocked else "None"),
+                "confidence": _conf,
+                "detected": _waf.blocked,
+                "bypass_strategies": [],
+                "reasons": _waf.reasons,
+                "message": (
+                    f"WAF (response analysis): {_waf.vendor} — {', '.join(_waf.reasons)}"
+                    if _waf.blocked else "WAF tespit edilmedi (response analysis)"
+                ),
+            })
+            if _waf.blocked:
+                _logger.info(
+                    f"[phases] WAF detected via response analysis: "
+                    f"{_waf.vendor} reasons={_waf.reasons}"
+                )
+                try:
+                    if isinstance(ctx, dict):
+                        ctx["waf_profile"] = _waf
+                    else:
+                        ctx.waf_profile = _waf
+                except Exception:
+                    pass
+        except Exception as _e2:
+            _logger.debug(f"[phases] detect_waf_from_response fallback skipped: {_e2}")
 
 
 def phase_discovery(ctx: dict):
