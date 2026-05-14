@@ -869,10 +869,66 @@ def flush(ctx=None):
         _logger.debug(f"[phases] flush skipped: {exc!r}")
 
 
+def _runner_katana(ctx) -> None:
+    """katana web crawler — keşif fazı öncesi JS-aware endpoint tarama."""
+    try:
+        from websecure.integrations.katana import KatanaWrapper
+        wrapper = KatanaWrapper()
+        if not wrapper.is_available():
+            add_result("meta", {"stage": "katana", "status": "skipped:not-installed"})
+            return
+        url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+        if not url:
+            return
+        # Config'den derinlik ve JS tarama seçeneklerini al
+        cfg = getattr(ctx, "config", {}) or {}
+        depth = int((cfg.get("discovery") or {}).get("max_depth") or 3)
+        js_crawl = bool((cfg.get("katana") or {}).get("js_crawl", True))
+        result = wrapper.run(url, depth=depth, js_crawl=js_crawl)
+        unique_urls = result.extra.get("unique_urls", [])
+        endpoints_data = result.extra.get("endpoints", [])
+        # ctx.results["endpoints"] 'a katana URL'lerini ekle
+        if unique_urls:
+            ctx_results = getattr(ctx, "results", None)
+            if ctx_results is None:
+                ctx_results = {}
+                try:
+                    ctx.results = ctx_results
+                except AttributeError:
+                    pass
+            existing = set(ctx_results.get("endpoints", []))
+            existing.update(unique_urls)
+            ctx_results["endpoints"] = list(existing)
+        # endpoints bucket'a yaz
+        for ep_dict in endpoints_data:
+            ep_url = ep_dict.get("url", "")
+            if ep_url:
+                add_result("endpoints", {
+                    "url": ep_url,
+                    "method": ep_dict.get("method", "GET"),
+                    "source": f"katana:{ep_dict.get('source', '')}",
+                    "params": ep_dict.get("params", []),
+                })
+        # ToolFinding'leri meta'ya yaz
+        for f in result.findings:
+            add_result("meta", f.to_dict())
+        add_result("meta", {
+            "stage": "katana",
+            "status": "ok",
+            "endpoints": len(unique_urls),
+            "duration_s": round(result.duration_s, 1),
+        })
+        _logger.info(f"[phases] katana: {len(unique_urls)} URL keşfedildi")
+    except Exception as e:
+        _logger.warning(f"[phases] katana runner error: {e}")
+
+
 def _runner_discovery(ctx) -> None:
     if is_blocked(ctx):
         add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
         return
+    # Katana kuruluysa keşif öncesi çalıştır — endpoint havuzunu zenginleştirir
+    _runner_katana(ctx)
     run_discovery_extended(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
@@ -2114,6 +2170,13 @@ def _offensive_phases(ctx) -> List[Phase]:
     phases: List[Phase] = [
         Phase(id="waf_detect", title="WAF Tespiti", enabled=True, runner=lambda c: _safe(c, lambda: phase_waf_detect(c), "waf_detect"), tags=["waf","recon"]),
         Phase(id="subdomain", title="Subdomain Enumeration", enabled=_flag("subdomain", default=True), runner=lambda c: _safe(c, lambda: _runner_subdomain(c), "subdomain"), tags=["recon","dns","passive"]),
+        Phase(
+            id="katana",
+            title="Katana JS-Aware Web Crawler",
+            enabled=_flag("katana", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_katana(c), "katana"),
+            tags=["recon", "crawler", "js", "endpoints"],
+        ),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
         Phase(
