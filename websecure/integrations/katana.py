@@ -239,12 +239,12 @@ class KatanaWrapper(ToolIntegration):
             self.binary,
             "-u", target,
             "-o", out_file,
-            "-json",
+            "-jsonl",           # katana v1.6+ JSONL çıktı (eski -json flag'i kaldırıldı)
             "-silent",
             "-depth", str(depth),
             "-c", str(self.parallelism),
             "-p", str(self.threads),
-            "-rate-limit", str(self.rate_limit),
+            "-rl", str(self.rate_limit),  # rate-limit kısa formu
             "-timeout", str(self.timeout_s),
         ]
 

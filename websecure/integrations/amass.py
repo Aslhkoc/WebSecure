@@ -84,12 +84,18 @@ class AmassWrapper(ToolIntegration):
         if not self.is_available():
             return None
         try:
+            # Amass v5'te "version" subcommand yok; -h içindeki başlıktan versiyon çıkar
             proc = subprocess.run(
-                [self.binary, "version"],
+                [self.binary, "-h"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 timeout=10, check=False,
             )
             out = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            for line in out.splitlines():
+                if "v" in line and any(c.isdigit() for c in line):
+                    stripped = line.strip()
+                    if stripped:
+                        return stripped
             return out.strip().splitlines()[0] if out.strip() else None
         except Exception:
             return None
@@ -128,14 +134,15 @@ class AmassWrapper(ToolIntegration):
 
         start = time.monotonic()
 
-        # Sonuç dosyası
-        fd, out_file = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
+        # Amass v5 -oA flag'i ile prefix-based dosya üretir: prefix.json, prefix.txt
+        import uuid as _uuid
+        out_prefix = os.path.join(tempfile.gettempdir(), f"ws_amass_{_uuid.uuid4().hex[:12]}")
+        out_json = out_prefix + ".json"
 
         try:
             subdomains = self._run_enum(
                 domain=domain,
-                out_file=out_file,
+                out_prefix=out_prefix,
                 passive=passive,
                 timeout_s=timeout_s,
                 config_path=config_path,
@@ -181,10 +188,13 @@ class AmassWrapper(ToolIntegration):
                 stderr=str(exc),
             )
         finally:
-            try:
-                os.unlink(out_file)
-            except OSError:
-                pass
+            # Amass -oA prefix.json, prefix.txt ve diğer dosyaları temizle
+            for _ext in (".json", ".txt"):
+                _p = out_prefix + _ext
+                try:
+                    os.unlink(_p)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------ #
     # Amass komutları
@@ -193,25 +203,31 @@ class AmassWrapper(ToolIntegration):
     def _run_enum(
         self,
         domain: str,
-        out_file: str,
+        out_prefix: str,
         passive: bool,
         timeout_s: int,
         config_path: Optional[str],
     ) -> Set[str]:
         """Amass enum çalıştır, subdomain setini döndür."""
-        cmd = [self.binary, "enum", "-d", domain, "-json", out_file]
+        # Amass v5: -oA ile prefix.json + prefix.txt üretir; -json flag'i yok
+        cmd = [self.binary, "enum", "-d", domain, "-oA", out_prefix, "-silent"]
 
-        if passive:
-            cmd.append("-passive")
-        else:
+        if not passive:
             cmd.extend(["-active", "-brute"])
             if self.wordlist and Path(self.wordlist).exists():
-                cmd.extend(["-wl", self.wordlist])
+                cmd.extend(["-w", self.wordlist])   # -wl → -w (v5 flag adı)
 
         if self.resolvers:
-            cmd.extend(["-rf", ",".join(self.resolvers)])
+            # -rf dosya yolu bekliyor; IP listesini geçici dosyaya yaz
+            fd_r, rf_file = tempfile.mkstemp(suffix=".txt", prefix="ws_amass_rf_")
+            try:
+                with os.fdopen(fd_r, "w") as _f:
+                    _f.write("\n".join(self.resolvers))
+                cmd.extend(["-rf", rf_file])
+            except Exception:
+                os.close(fd_r)
 
-        cmd.extend(["-max-dns-queries", str(self.max_dns_queries)])
+        # -max-dns-queries v5'te yok — kaldırıldı
 
         if config_path and Path(config_path).exists():
             cmd.extend(["-config", config_path])
@@ -229,7 +245,7 @@ class AmassWrapper(ToolIntegration):
             stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
             logger.warning(f"[Amass] enum çıkış kodu {proc.returncode}: {stderr_out}")
 
-        return self._parse_json_output(out_file)
+        return self._parse_json_output(out_prefix + ".json")
 
     def _run_intel(self, domain: str, timeout_s: int = 60) -> List[Dict[str, Any]]:
         """Amass intel ile ASN/CIDR bilgisi al."""

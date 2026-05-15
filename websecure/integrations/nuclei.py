@@ -280,8 +280,7 @@ class NucleiWrapper(ToolIntegration):
             cmd = [
                 self.binary,
                 "-u", target,
-                "-o", output_file,
-                "-je",
+                "-jle", output_file,  # JSONL export: -je file_path (json-export) yerine -jle (jsonl-export)
                 "-silent",
                 "-nc",
                 "-rate-limit", str(_rate),
