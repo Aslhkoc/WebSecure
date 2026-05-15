@@ -95,6 +95,19 @@ class HttpxWrapper(ToolIntegration):
         follow_redirects: bool = True,
         http2: bool = True,
     ) -> None:
+        # PATH'ta Python httpx olabilir — tools/ klasöründeki Go httpx'i önceliklendir
+        if not binary_path:
+            _root = Path(__file__).resolve().parent.parent.parent
+            for _candidate in [
+                _root / "tools" / "httpx" / "httpx.exe",
+                _root / "tools" / "httpx" / "httpx",
+                _root / "tools" / "httpx.exe",
+                _root / "tools" / "httpx",
+            ]:
+                if _candidate.exists():
+                    binary_path = str(_candidate)
+                    logger.debug(f"[httpx] tools/ dizininden Go httpx bulundu: {binary_path}")
+                    break
         super().__init__(binary_path or "httpx")
         self.threads = threads
         self.rate_limit = rate_limit

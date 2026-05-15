@@ -244,14 +244,14 @@ class ToolIntegration(ABC):
     # ------------------------------------------------------------------ #
 
     def _resolve_binary(self, name: str) -> None:
-        """Binary'yi PATH'ta ve tools/ dizininde ara."""
-        # 1. PATH
-        found = shutil.which(name)
-        if found:
-            self._binary_path = found
+        """Binary'yi önce tools/ dizininde, sonra PATH'ta ara."""
+        # 0. Tam yol verilmişse (ör. tools/httpx/httpx.exe) — direkt kullan
+        p = Path(name)
+        if p.is_absolute() and p.exists():
+            self._binary_path = str(p)
             return
 
-        # 2. Proje tools/ dizini
+        # 1. Proje tools/ dizini — öncelikli (PATH'ta Python CLI'ları olabilir)
         root = Path(__file__).resolve().parent.parent.parent
         candidates = [
             root / "tools" / name / f"{name}.exe",
@@ -264,7 +264,13 @@ class ToolIntegration(ABC):
                 self._binary_path = str(c)
                 return
 
-        logger.debug(f"[{name}] Binary bulunamadı (PATH ve tools/ tarandı)")
+        # 2. PATH (son çare)
+        found = shutil.which(name)
+        if found:
+            self._binary_path = found
+            return
+
+        logger.debug(f"[{name}] Binary bulunamadı (tools/ ve PATH tarandı)")
 
     @property
     def binary(self) -> str:
