@@ -328,6 +328,7 @@ class XSSScanner(BaseScanner):
     def __init__(self, session=None, results: Dict = None, debug=False):
         super().__init__(session, results, debug)
         self.canary_prefix = "wsxss"
+        self._seen_url_params: set = set()   # (normalized_url, param_name) — test edilenleri izle
 
         # Context-aware payload sets — tried first before the wordlist
         self._context_payloads: Dict[str, List[str]] = {
@@ -547,6 +548,12 @@ class XSSScanner(BaseScanner):
             # Detect HTML context — choose context-appropriate payloads
             ctx = _detect_reflection_context(probe_res.text, canary)
 
+            # Dedup: skip (url, param) combinations already tested this run
+            combo_key = (url.split("?")[0], param_name)
+            if combo_key in self._seen_url_params:
+                continue
+            self._seen_url_params.add(combo_key)
+
             # Parameter reflects input — fuzz with context-aware payloads
             self._fuzz_xss_parallel(url, param_name, baseline_text, context=ctx)
 
@@ -623,6 +630,12 @@ class XSSScanner(BaseScanner):
 
             if not reflection["reflected"]:
                 return None
+
+            # Payload XSS-capable chars içermiyorsa (base32/random string echo) FP'dir
+            import re as _re
+            if not _re.search(r'[<>\'\"=\(\)\{\}\$`;]', actual):
+                return None  # Sadece alfanümerik string yansıması — gerçek XSS değil
+
             if reflection["encoded"]:
                 logger.debug(f"[XSS] Payload encoded in response — skipping: {actual[:50]!r}")
                 return None

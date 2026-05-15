@@ -205,6 +205,7 @@ class SSTIScanner(BaseScanner):
                  timeout: int = 10):
         super().__init__(session, results, debug)
         self.timeout = timeout
+        self._seen_ssti_combos: set = set()
 
     # Headers to inject SSTI payloads into (common server-side reflection points)
     _INJECTION_HEADERS = [
@@ -277,6 +278,11 @@ class SSTIScanner(BaseScanner):
             return
 
         for param_name, _ in params:
+            _combo = (url.split("?")[0], param_name)
+            if _combo in self._seen_ssti_combos:
+                continue
+            self._seen_ssti_combos.add(_combo)
+
             tier1_hit = self._tier1_probe(url, parsed, params, param_name)
             if not tier1_hit:
                 continue

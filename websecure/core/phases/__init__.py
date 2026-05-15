@@ -1260,11 +1260,11 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
         "debug": bool(getattr(ctx, "debug", False)),
         "auth_ctx": auth_ctx,
     }
-    scan(**_filter_kwargs(scan, kw_all))
+    scan(ctx, **_filter_kwargs(scan, kw_all))
 
 def _runner_scanners_request_smuggling(ctx) -> None:
     """scanners.request_smuggling.SmugglingProber üzerinden düşük etkili prob seti."""
-    prober_cls = _opt_import("websecure.scanners.request_smuggling", "SmugglingProber")
+    prober_cls = _opt_import("websecure.scanners.request_smuggling", "RequestSmugglingScanner")
     if not prober_cls:
         add_result("offensive", {
             "type": "Request Smuggling",
@@ -1371,7 +1371,7 @@ def _runner_mass_assignment(ctx) -> None:
     # run imzasını keşfet
     run = getattr(mod, "run", None)
     if callable(run):
-        kw = _filter_kwargs(run, dict(base_url=base_url, session=sess, debug=bool(getattr(ctx, "debug", False)),
+        kw = _filter_kwargs(run, dict(url=base_url, base_url=base_url, session=sess, debug=bool(getattr(ctx, "debug", False)),
                                       timeout=timeout, endpoints=endpoints, params=params))
         run(**kw)
 
@@ -1392,7 +1392,7 @@ def _runner_nosqli(ctx) -> None:
 
     run = getattr(mod, "run", None)
     if callable(run):
-        kw = _filter_kwargs(run, dict(base_url=base_url, session=sess, debug=bool(getattr(ctx, "debug", False)),
+        kw = _filter_kwargs(run, dict(url=base_url, base_url=base_url, session=sess, debug=bool(getattr(ctx, "debug", False)),
                                       timeout=timeout, endpoints=endpoints, params=params))
         run(**kw)
 

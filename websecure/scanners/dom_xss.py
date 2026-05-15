@@ -109,6 +109,7 @@ class DOMXSSScanner(BaseScanner):
         super().__init__(session, results, debug)
         self.headless = headless
         self.timeout_ms = timeout_ms
+        self._seen_dom_findings: set = set()  # (url_path, param_name) dedup
 
     def run(self, target: str, **kwargs):
         """Sync entry point."""
@@ -160,17 +161,33 @@ class DOMXSSScanner(BaseScanner):
         for param_name, _ in params:
             canary = _gen_canary()
             dom_payloads = _get_dom_payloads(canary)
-            payload = random.choice(dom_payloads)
 
-            # Build injected URL
-            new_params = dict(params)
-            new_params[param_name] = payload
-            new_query = urlencode(new_params)
-            test_url = urlunparse(parsed._replace(query=new_query))
+            # 5 çeşit payload dene, her biri farklı teknik
+            _diverse = [
+                next((p for p in dom_payloads if "<img" in p), dom_payloads[0]),
+                next((p for p in dom_payloads if "<svg" in p or "onload" in p.lower()), dom_payloads[min(1, len(dom_payloads)-1)]),
+                next((p for p in dom_payloads if "script" in p.lower()), dom_payloads[min(2, len(dom_payloads)-1)]),
+                next((p for p in dom_payloads if "onerror" in p.lower()), dom_payloads[min(3, len(dom_payloads)-1)]),
+                next((p for p in dom_payloads if "alert" in p.lower()), dom_payloads[min(4, len(dom_payloads)-1)]),
+            ]
+            _diverse = list(dict.fromkeys(_diverse))  # deduplicate preserving order
 
-            found = await self._navigate_and_check(page, test_url, canary, param_name)
+            found = None
+            payload = _diverse[0]
+            for payload in _diverse:
+                new_params = dict(params)
+                new_params[param_name] = payload
+                new_query = urlencode(new_params)
+                test_url = urlunparse(parsed._replace(query=new_query))
+                found = await self._navigate_and_check(page, test_url, canary, param_name)
+                if found:
+                    break
+
             if found:
-                self._report(url, param_name, payload, found)
+                _dom_key = (urlparse(url).path, param_name)
+                if _dom_key not in self._seen_dom_findings:
+                    self._seen_dom_findings.add(_dom_key)
+                    self._report(url, param_name, payload, found)
 
         # Also test fragment and postMessage on parametrised pages
         await self._test_fragment(page, url)
@@ -178,11 +195,15 @@ class DOMXSSScanner(BaseScanner):
 
     async def _test_fragment(self, page, url: str):
         """Test hash-based DOM XSS (location.hash sources)."""
+        _key = (url, "#fragment")
+        if _key in self._seen_dom_findings:
+            return
         canary = _gen_canary()
         payload = f"<img src=x onerror=console.error('DOMXSS_{canary}')>"
         test_url = url.rstrip("/") + f"#{payload}"
         found = await self._navigate_and_check(page, test_url, canary, "#fragment")
         if found:
+            self._seen_dom_findings.add(_key)
             self._report(url, "#fragment", payload, found)
 
     async def _test_window_name(self, page, url: str):
@@ -225,6 +246,9 @@ class DOMXSSScanner(BaseScanner):
 
     async def _test_postmessage(self, page, url: str):
         """Test postMessage-based DOM XSS (event.data sink)."""
+        _key = (url, "postMessage")
+        if _key in self._seen_dom_findings:
+            return
         canary = _gen_canary()
         payloads = [
             f"<img src=x onerror=console.error('DOMXSS_{canary}')>",
@@ -257,6 +281,7 @@ class DOMXSSScanner(BaseScanner):
                     }}
                 """)
                 if result:
+                    self._seen_dom_findings.add(_key)
                     self._report(url, "postMessage", payload, str(result))
                     return
         except Exception as exc:

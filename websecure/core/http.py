@@ -902,8 +902,8 @@ class _RequestsDriver:
         self.verify = verify
         self.timeout_pair = timeout_pair
 
-        pool_conns = int(http_cfg.get("pool_connections", 10))
-        pool_max = int(http_cfg.get("pool_maxsize", 10))
+        pool_conns = int(http_cfg.get("pool_connections", 100))
+        pool_max = int(http_cfg.get("pool_maxsize", 100))
         
         # Determine if we should use WAF Bypass Adapter
         # Default to True for now as requested "strength", or check config
@@ -1589,7 +1589,7 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
             allowed_methods=["GET", "POST", "HEAD", "OPTIONS"]
         )
         # Use larger pool sizes to prevent "Connection pool full" warnings under Tor/concurrent scans
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=30)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
         s.mount("https://", adapter)
         s.mount("http://", adapter)
 
@@ -2053,7 +2053,7 @@ from urllib3.util.retry import Retry
 def build_session(cfg: dict) -> Session:
     s = Session()
     http_cfg = (cfg or {}).get("http", {}) or {}
-    connect_timeout = float(http_cfg.get("connect_timeout", 5))
+    connect_timeout = float(http_cfg.get("connect_timeout", 15))
     read_timeout = float(http_cfg.get("read_timeout", 15))
     backoff = float(http_cfg.get("backoff_factor", 0.3))
     max_retries = int(http_cfg.get("max_retries", 1))
