@@ -414,15 +414,22 @@ class NmapWrapper(ToolIntegration):
 
     def _scan_stealth(self, target: str, proxy: Optional[str] = None,
                       timeout: int = 900) -> List[Dict[str, Any]]:
-        """TCP connect, yavaş, gizli — root gerektirmez. Windows uyumlu."""
+        """
+        TCP connect scan — root gerektirmez, Windows uyumlu.
+        "Stealth" = raw socket yok, SYN yok. Timing T4 — T2 değil.
+        T2 ile 1000 port = 2500+ saniye; T4 ile = 30 saniye.
+        """
         print(f"\033[36m[Nmap Stealth Faz-1]\033[0m Port keşfi ({target})...")
         on_windows = _is_windows()
 
-        phase1_args = ["-sT", "--top-ports", "1000", "-T2", "--open", "--max-retries", "1"]
-        if on_windows:
-            phase1_args.append("--unprivileged")
+        # T4 kullan — T2 1000 portu 2500+ saniyede tamamlar, kesinlikle timeout
+        phase1_args = [
+            "-sT", "--top-ports", "1000", "-T4", "--open",
+            "--max-retries", "2", "--min-rate", "200",
+        ]
+        # --unprivileged Windows'ta -sT ile gereksiz (connect scan zaten ayrıcalıksız çalışır)
         self._inject_proxy(phase1_args, proxy)
-        _, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=timeout // 2)
+        _, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 120))
         open_ports = NmapParser.extract_open_ports_safe(xml1)
         try:
             os.remove(xml1)
@@ -436,13 +443,11 @@ class NmapWrapper(ToolIntegration):
         print(f"[Nmap Stealth Faz-2] {len(open_ports)} porta derin analiz...")
         ports_str = ",".join(map(str, sorted(open_ports)))
         phase2_args = [
-            "-sT", "-sV", "--version-intensity", "6",
+            "-sT", "-sV", "--version-intensity", "7",
             "--script", self._build_script_list(safe_only=True, windows_safe=on_windows),
-            "--script-timeout", "30s",
-            "-p", ports_str, "-T2",
+            "--script-timeout", "45s",
+            "-p", ports_str, "-T4",
         ]
-        if on_windows:
-            phase2_args.append("--unprivileged")
         self._inject_proxy(phase2_args, proxy)
         _, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
         results = NmapParser.parse_xml(xml2)
@@ -450,6 +455,9 @@ class NmapWrapper(ToolIntegration):
             os.remove(xml2)
         except Exception:
             pass
+
+        if results:
+            print(f"\033[32m[Nmap Stealth]\033[0m Tamamlandı — {len(results)} açık port/servis.")
         return results
 
     # ------------------------------------------------------------------
