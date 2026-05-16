@@ -50,6 +50,31 @@ _WINDOWS_CRASH_CODES = {3221226505, 3221225477, 3221225725, 0xC0000005, 0xC00001
 def _is_windows() -> bool:
     return platform.system() == "Windows"
 
+
+def _has_npcap() -> bool:
+    """Windows'ta Npcap kurulu ve servis çalışıyor mu kontrol eder.
+    Npcap + Administrator = SYN scan, UDP scan, OS detection çalışır.
+    """
+    if not _is_windows():
+        return False
+    # Npcap DLL varlığı — en güvenilir gösterge
+    npcap_dll = r"C:\Windows\System32\Npcap\wpcap.dll"
+    if not os.path.exists(npcap_dll):
+        return False
+    # Npcap veya WinPcap servisi çalışıyor mu
+    for svc in ("npcap", "npf"):
+        try:
+            r = subprocess.run(
+                ["sc", "query", svc],
+                capture_output=True, text=True, timeout=5
+            )
+            if "RUNNING" in r.stdout:
+                return True
+        except Exception:
+            pass
+    # DLL var ama servis sorgulanamadı — yine de True say
+    return True
+
 # Servis adına göre ek NSE scriptler
 _SERVICE_SCRIPTS: Dict[str, str] = {
     "http":    "http-title,http-headers,http-methods,http-auth-finder,http-robots.txt,"
@@ -295,8 +320,14 @@ class NmapWrapper(ToolIntegration):
         print(f"\033[36m[Nmap Faz-1]\033[0m Port keşfi başlıyor ({target})...")
         on_windows = _is_windows()
 
-        if root and not on_windows:
-            # SYN scan — Linux/Mac root'ta en hızlı yöntem (raw socket)
+        # Raw socket erişimi: Linux/Mac root, VEYA Windows Admin+Npcap
+        _npcap_ok = on_windows and root and _has_npcap()
+        _raw_socket = (root and not on_windows) or _npcap_ok
+
+        if _raw_socket:
+            # SYN scan — Linux/Mac root veya Windows Admin+Npcap
+            if _npcap_ok:
+                print("\033[36m[Nmap]\033[0m Windows Admin + Npcap tespit edildi — SYN scan aktif!")
             if all_ports:
                 phase1_args = ["-sS", "-p-", "-T4", "--open",
                                "--min-rate", "1000", "--max-retries", "2",
@@ -306,18 +337,15 @@ class NmapWrapper(ToolIntegration):
                                "--min-rate", "1000", "--max-retries", "2",
                                "--host-timeout", "300s"]
         else:
-            # TCP connect scan — Windows'ta raw socket yok, -sT zorunlu
-            # Linux/Mac'te root değilken de buraya düşer
-            # Windows: top-ports 5000 (eski 2000 çok azdı)
+            # TCP connect scan — raw socket yok (normal kullanıcı veya Npcap yok)
             top = "10000" if not on_windows else "5000"
             phase1_args = [
                 "-sT", "--top-ports", top, "-T4", "--open",
                 "--min-rate", "500", "--max-retries", "2",
                 "--host-timeout", "180s",
             ]
-            # --unprivileged: Windows'ta -sT ile gereksiz ama nmap'in
-            # raw socket uyarısını bastırır
-            if on_windows:
+            if on_windows and not _npcap_ok:
+                # raw socket erişimi yok — nmap'e söyle
                 phase1_args += ["--unprivileged"]
 
         self._inject_proxy(phase1_args, proxy)
@@ -348,9 +376,26 @@ class NmapWrapper(ToolIntegration):
 
         ports_str = ",".join(map(str, sorted(open_ports)))
 
-        if on_windows:
-            # Windows: raw socket yok → -sT, OS detection yok, safe scripts
-            # -sV intensity 7: servis/banner tespiti için yeterli, 9 çok yavaş
+        if _raw_socket:
+            # Linux/Mac root veya Windows Admin+Npcap: tam güç
+            phase2_args = [
+                "-sS",
+                "-sV", "--version-intensity", "9", "--version-all",
+                "-sC",
+                "-O" if not on_windows else "",          # OS detect sadece Linux/Mac
+                "--osscan-guess" if not on_windows else "",
+                "-A" if not on_windows else "",
+                "--script", self._build_script_list(windows_safe=on_windows),
+                "--script-args",
+                "http.useragent=Mozilla/5.0,brute.firstonly=true,"
+                "vulns.showall=true" + ("" if on_windows else ",unsafe=1"),
+                "--script-timeout", "60s",
+                "--host-timeout", "180s",
+                "-p", ports_str,
+                "-T4",
+            ]
+        else:
+            # TCP connect — raw socket yok (normal kullanıcı)
             phase2_args = [
                 "-sT", "--unprivileged",
                 "-sV", "--version-intensity", "7",
@@ -360,24 +405,6 @@ class NmapWrapper(ToolIntegration):
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
                 "--script-timeout", "30s",
                 "--host-timeout", "120s",
-                "-p", ports_str,
-                "-T4",
-            ]
-        else:
-            # Linux/Mac: SYN scan + full script + OS detection (root'ta)
-            phase2_args = [
-                "-sV", "--version-intensity", "9",
-                "--version-all",
-                "-sC",
-                "-O" if root else "",
-                "--osscan-guess" if root else "",
-                "-A" if root else "",
-                "--script", self._build_script_list(),
-                "--script-args",
-                "http.useragent=Mozilla/5.0,brute.firstonly=true,"
-                "vulns.showall=true,unsafe=1",
-                "--script-timeout", "60s",
-                "--host-timeout", "180s",
                 "-p", ports_str,
                 "-T4",
             ]
@@ -395,8 +422,8 @@ class NmapWrapper(ToolIntegration):
         except Exception:
             pass
 
-        # ----- UDP Taraması (root, Linux/Mac only) -----
-        if root and not on_windows:
+        # ----- UDP Taraması (root + raw socket gerektirir) -----
+        if _raw_socket:
             print(f"\033[36m[Nmap UDP]\033[0m Kritik UDP portları taranıyor...")
             udp_args = [
                 "-sU",
