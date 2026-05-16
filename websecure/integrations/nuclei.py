@@ -308,27 +308,38 @@ class NucleiWrapper(ToolIntegration):
                 cmd.extend(extra_args)
 
             logger.info(f"[Nuclei] Scanning {target} ...")
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                timeout=timeout,
-                check=False,
             )
+            try:
+                from websecure.core.phases import register_child_proc, unregister_child_proc
+                register_child_proc(proc)
+            except Exception:
+                pass
+            try:
+                _, stderr_b = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning(f"[Nuclei] Scan timed out after {timeout}s")
+                return []
+            finally:
+                try:
+                    from websecure.core.phases import unregister_child_proc
+                    unregister_child_proc(proc)
+                except Exception:
+                    pass
 
             # 0 = no findings, 1 = findings found, diğerleri hata
             if proc.returncode not in (0, 1):
-                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:500]
+                stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:500]
                 logger.warning(f"[Nuclei] Exit kodu {proc.returncode} — hata olabilir: {stderr_out}")
                 if proc.returncode >= 2 and not stderr_out:
-                    # Binary crash veya permission hatası — çıktı bekleme
                     return []
 
             return self._parse_output(output_file)
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[Nuclei] Scan timed out after {timeout}s")
-            return []
         except Exception as e:
             logger.error(f"[Nuclei] Error: {e}")
             return []

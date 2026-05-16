@@ -150,32 +150,48 @@ def _run_nmap(binary: str, args: List[str], target: str,
     logger.info(f"[Nmap] {cmd_str}")
 
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
         )
-        stdout = res.stdout.decode("utf-8", errors="replace")
-        stderr = res.stderr.decode("utf-8", errors="replace")
 
-        if res.returncode != 0:
-            logger.warning(f"[Nmap] returncode={res.returncode}\nstderr: {stderr.strip()}")
-            print(f"\033[33m[Nmap] Uyarı (kod {res.returncode}):\033[0m {stderr.strip()[:300]}")
+        # Ctrl+C gelince öldürülebilmesi için kaydet
+        try:
+            from websecure.core.phases import register_child_proc, unregister_child_proc
+            register_child_proc(proc)
+        except Exception:
+            pass
 
-        return res.returncode, xml_out, stdout, stderr
+        try:
+            stdout_b, stderr_b = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            msg = f"[Nmap] Zaman aşımı ({timeout}s) — {cmd_str}"
+            logger.warning(msg)
+            print(f"\033[31m{msg}\033[0m")
+            return -1, xml_out, "", "timeout"
+        finally:
+            try:
+                from websecure.core.phases import unregister_child_proc
+                unregister_child_proc(proc)
+            except Exception:
+                pass
 
-    except subprocess.TimeoutExpired:
-        msg = f"[Nmap] Zaman aşımı ({timeout}s) — {cmd_str}"
-        logger.warning(msg)
-        print(f"\033[31m{msg}\033[0m")
-        return -1, xml_out, "", "timeout"
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+
+        if proc.returncode != 0:
+            logger.warning(f"[Nmap] returncode={proc.returncode}\nstderr: {stderr.strip()}")
+            print(f"\033[33m[Nmap] Uyarı (kod {proc.returncode}):\033[0m {stderr.strip()[:300]}")
+
+        return proc.returncode, xml_out, stdout, stderr
+
     except Exception as e:
         logger.error(f"[Nmap] Hata: {e}")
         print(f"\033[31m[Nmap] Hata: {e}\033[0m")
         return -2, xml_out, "", str(e)
-    # xml_out temizleme caller'a bırakılır
 
 
 class NmapWrapper(ToolIntegration):

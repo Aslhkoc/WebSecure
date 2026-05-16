@@ -33,17 +33,77 @@ except ImportError:
 # Global cancel event — set by SIGINT handler or external callers to stop the scan
 _SCAN_CANCEL = threading.Event()
 
+# Kayıtlı alt süreçler — Ctrl+C gelince terminate edilir
+_CHILD_PROCS: list = []
+_CHILD_PROCS_LOCK = threading.Lock()
+
+
+def register_child_proc(proc) -> None:
+    """Subprocess'i global registry'e kaydet (Ctrl+C'de öldürülsün)."""
+    with _CHILD_PROCS_LOCK:
+        _CHILD_PROCS.append(proc)
+
+
+def unregister_child_proc(proc) -> None:
+    with _CHILD_PROCS_LOCK:
+        try:
+            _CHILD_PROCS.remove(proc)
+        except ValueError:
+            pass
+
+
+def _kill_all_children() -> None:
+    """Tüm kayıtlı alt süreçleri sonlandır."""
+    with _CHILD_PROCS_LOCK:
+        procs = list(_CHILD_PROCS)
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    # Terminate yetmezse kill
+    import time as _time
+    _time.sleep(0.5)
+    for p in procs:
+        try:
+            if p.poll() is None:
+                p.kill()
+        except Exception:
+            pass
+
+
 def _install_sigint_handler():
-    """Install SIGINT handler that sets _SCAN_CANCEL instead of crashing."""
+    """Install SIGINT handler: 1. Ctrl+C → graceful stop + 5s force exit.
+    2. Ctrl+C × 2 → anında çıkış."""
     if threading.current_thread() is not threading.main_thread():
         return
     try:
         def _handler(signum, frame):
-            print("\n[!] Ctrl+C algılandı — tarama durduruluyor, rapor hazırlanıyor...")
+            if _SCAN_CANCEL.is_set():
+                # İkinci Ctrl+C → anında çık
+                print("\n[!] Zorla çıkılıyor (os._exit)...")
+                _kill_all_children()
+                os._exit(1)
+
+            print("\n[!] Ctrl+C — tarama durduruluyor... (tekrar basarsan anında çıkar)")
             _SCAN_CANCEL.set()
+            _kill_all_children()
+
+            # 8 saniye içinde program kendisi çıkmazsa zorla çık
+            def _force_exit():
+                import time as _t
+                _t.sleep(8)
+                if not _SCAN_CANCEL.is_set():
+                    return
+                print("\n[!] Zaman aşımı — program zorla kapatılıyor.")
+                os._exit(0)
+
+            _fe = threading.Thread(target=_force_exit, daemon=True)
+            _fe.start()
+
         signal.signal(signal.SIGINT, _handler)
     except (OSError, ValueError):
-        pass  # not in main thread or signal not supported
+        pass
 from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result, redact_sensitive
 # Safe imports for optional scanners

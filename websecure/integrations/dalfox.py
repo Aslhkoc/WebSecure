@@ -178,16 +178,28 @@ class DalfoxWrapper(ToolIntegration):
             )
 
             logger.info(f"[dalfox] URL taranıyor -> {url}")
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                timeout=max(60, self.timeout_s * 30),
-                check=False,
-            )
+            _timeout_df = max(60, self.timeout_s * 30)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                from websecure.core.phases import register_child_proc, unregister_child_proc
+                register_child_proc(proc)
+            except Exception:
+                pass
+            try:
+                _, stderr_b = proc.communicate(timeout=_timeout_df)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.communicate()
+                logger.warning(f"[dalfox] Timeout ({_timeout_df}s)")
+                stderr_b = b""
+            finally:
+                try:
+                    from websecure.core.phases import unregister_child_proc
+                    unregister_child_proc(proc)
+                except Exception:
+                    pass
 
             if proc.returncode not in (0, 1):
-                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
+                stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
                 logger.warning(f"[dalfox] Çıkış kodu {proc.returncode}: {stderr_out}")
 
             dalfox_findings = self._parse_output(out_file)
