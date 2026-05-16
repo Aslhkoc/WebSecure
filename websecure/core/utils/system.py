@@ -35,6 +35,7 @@ def setup_logging(level: str = "INFO", log_file: str = None):
 # ========================== WebDriver ==========================
 def setup_webdriver(headless: bool = True, proxy: str = None):
     try:
+        import tempfile
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service
         from selenium.webdriver.chrome.options import Options
@@ -45,16 +46,24 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
         if proxy:
             opts.add_argument(f"--proxy-server={proxy}")
 
+        # Admin/root altında çalışırken Chrome'un default profil diziniyle
+        # çakışmaması için izole bir geçici profil kullan
+        _tmp_profile = tempfile.mkdtemp(prefix="ws_chrome_")
+        opts.add_argument(f"--user-data-dir={_tmp_profile}")
+
         # Temel kararlılık flag'leri
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--disable-gpu")                      # Windows headless için zorunlu
+        opts.add_argument("--disable-software-rasterizer")
         opts.add_argument("--disable-extensions")
         opts.add_argument("--disable-default-apps")
         opts.add_argument("--no-first-run")
         opts.add_argument("--window-size=1920,1080")
         opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_argument("--log-level=3")                      # Chrome konsolunu sustur
+        opts.add_argument("--remote-debugging-port=0")          # random port — çakışma yok
+        opts.add_argument("--disable-background-networking")
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
         opts.add_experimental_option("useAutomationExtension", False)
 
@@ -114,7 +123,24 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
             logging.warning("[WebDriver] Uyumlu ChromeDriver bulunamadı.")
             return None
 
-        return webdriver.Chrome(service=service, options=opts)
+        try:
+            return webdriver.Chrome(service=service, options=opts)
+        except Exception as _first_err:
+            # İlk deneme başarısız → --headless=new yerine eski headless modu dene
+            logging.warning(f"[WebDriver] İlk başlatma başarısız ({_first_err!r}), eski headless ile yeniden deneniyor...")
+            try:
+                opts2 = Options()
+                opts2.add_argument("--headless")          # eski Chrome headless modu
+                opts2.add_argument("--no-sandbox")
+                opts2.add_argument("--disable-dev-shm-usage")
+                opts2.add_argument("--disable-gpu")
+                opts2.add_argument("--disable-software-rasterizer")
+                opts2.add_argument("--window-size=1920,1080")
+                opts2.add_argument("--log-level=3")
+                opts2.add_argument(f"--user-data-dir={_tmp_profile}")
+                return webdriver.Chrome(service=service, options=opts2)
+            except Exception as _second_err:
+                raise _second_err
 
     except Exception as e:
         logging.warning(f"WebDriver init failed: {e}")
