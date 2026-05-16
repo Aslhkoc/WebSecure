@@ -893,7 +893,7 @@ def _sev_rank(s: str | None) -> int:
 def _coerce_final(results: Dict) -> List[Dict]:
 
     fin = results.get("final")
-    if isinstance(fin, list):
+    if isinstance(fin, list) and len(fin) > 0:
         return fin
     merged: List[Dict] = []
     for key, val in list(results.items()):

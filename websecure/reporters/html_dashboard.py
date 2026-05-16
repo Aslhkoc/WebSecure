@@ -37,19 +37,24 @@ def render_html_dashboard(results: dict) -> str:
     # Flatten findings for the table
     findings = []
 
-    # Aggregate findings from ALL known buckets
-    all_buckets = [
-        "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
-        "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
-        "headers", "security_headers", "rate_limit", "request_smuggling",
-        "session_hunter", "mass_assignment", "ws_fuzz", "infrastructure",
-        "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
-        "discovery", "passive", "subdomains", "vulnerability",
-        "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
-        # New tool integrations
-        "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
-        "interactsh", "oast", "metasploit", "burp",
-    ]
+    # Use 'final' bucket if non-empty (matches MD report source), otherwise aggregate all buckets.
+    # This keeps MD and HTML counts consistent.
+    _final_items = results.get("final")
+    _use_final_only = isinstance(_final_items, list) and len(_final_items) > 0
+
+    all_buckets = (
+        ["final"] if _use_final_only else [
+            "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
+            "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
+            "headers", "security_headers", "rate_limit", "request_smuggling",
+            "session_hunter", "mass_assignment", "ws_fuzz", "infrastructure",
+            "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
+            "discovery", "passive", "subdomains", "vulnerability",
+            "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
+            "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
+            "interactsh", "oast", "metasploit", "burp",
+        ]
+    )
 
     _id_counter = 1
 
@@ -126,6 +131,24 @@ def render_html_dashboard(results: dict) -> str:
             }
             findings.append(f)
             _id_counter += 1
+
+    # Deduplicate findings by (base_type, url, param) — same logic as reporting._dedupe_findings
+    # This keeps the highest-severity version when multiple buckets report the same finding.
+    _sev_ranks = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
+    _dedup_map: dict = {}
+    for _f in findings:
+        _base = _f["type"].split(" (")[0].strip()
+        _key = (_base, _f["url"], _f["param"])
+        _ex = _dedup_map.get(_key)
+        if _ex is None:
+            _dedup_map[_key] = _f
+        elif _sev_ranks.get(_f["severity"], 0) > _sev_ranks.get(_ex["severity"], 0):
+            _f2 = dict(_f)
+            _f2["id"] = _ex["id"]
+            _dedup_map[_key] = _f2
+    findings = list(_dedup_map.values())
+    for _idx, _f in enumerate(findings, 1):
+        _f["id"] = _idx
 
     # Calculate Summary Stats
     stats = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
@@ -1093,10 +1116,13 @@ def render_html_dashboard(results: dict) -> str:
                 var paramBadge = item.param && item.param !== '-'
                     ? '<br><span style="font-size:0.78rem; color:var(--text-muted);">param: <code style="color:var(--sev-high)">' + escapeHtml(item.param) + '</code></span>'
                     : '';
+                var urlHtml = item.url && item.url !== '-'
+                    ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="color:var(--accent);text-decoration:none;" title="' + escapeHtml(item.url) + '">' + escapeHtml(item.url) + '</a>'
+                    : escapeHtml(item.url || '-');
                 tr.innerHTML =
                     '<td><span class="tag ' + escapeHtml(sevClass) + '">' + escapeHtml(sevClass) + '</span></td>' +
                     '<td style="font-weight:500">' + escapeHtml(item.type) + '</td>' +
-                    '<td class="url">' + escapeHtml(item.url) + paramBadge + '</td>' +
+                    '<td class="url">' + urlHtml + paramBadge + '</td>' +
                     '<td class="method">' + escapeHtml(item.method) + '</td>' +
                     '<td><code style="font-size:0.85rem">' + escapeHtml(item.param) + '</code></td>' +
                     '<td><span class="tag Info">Open</span></td>';
@@ -1118,11 +1144,17 @@ def render_html_dashboard(results: dict) -> str:
             var term = searchEl ? searchEl.value.toLowerCase() : '';
             var sev  = sevEl   ? sevEl.value : '';
             var filtered = data.filter(function(item) {{
+                var d = item.detail || {{}};
                 var matchText = !term ||
-                    (item.url    && item.url.toLowerCase().includes(term))    ||
-                    (item.type   && item.type.toLowerCase().includes(term))   ||
-                    (item.param  && item.param.toLowerCase().includes(term))  ||
-                    (item.severity && item.severity.toLowerCase().includes(term));
+                    (item.url      && item.url.toLowerCase().includes(term))      ||
+                    (item.type     && item.type.toLowerCase().includes(term))     ||
+                    (item.param    && item.param.toLowerCase().includes(term))    ||
+                    (item.severity && item.severity.toLowerCase().includes(term)) ||
+                    (item.method   && item.method.toLowerCase().includes(term))   ||
+                    (d.payload     && String(d.payload).toLowerCase().includes(term))   ||
+                    (d.reason      && String(d.reason).toLowerCase().includes(term))    ||
+                    (d.message     && String(d.message).toLowerCase().includes(term))   ||
+                    (d.type        && String(d.type).toLowerCase().includes(term));
                 var matchSev = !sev || item.severity === sev;
                 return matchText && matchSev;
             }});
