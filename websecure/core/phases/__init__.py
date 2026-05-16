@@ -3016,15 +3016,81 @@ def run_portscan(ctx):
         # Rapor bucket'ına ekle
         add_result("nmap", record)
 
-        # Script çıktısında zafiyet varsa vulnerability bucket'ına da ekle
+        # NSE script çıktılarından yapılandırılmış finding'ler üret
+        _scheme = "https" if svc in ("https", "ssl", "tls") or p in (443, 8443, 4443) else "http"
+        _base_url = f"{_scheme}://{_h}:{p}"
+
+        if "ssl-cert" in scripts:
+            add_result("tls_findings", {
+                "severity": "Info", "type": "SSL Certificate",
+                "url": _base_url, "host": _h, "port": p,
+                "message": f"SSL Certificate on {_h}:{p}",
+                "detail": {"raw": scripts["ssl-cert"][:1500]},
+            })
+
+        if "ssl-enum-ciphers" in scripts:
+            _ct = scripts["ssl-enum-ciphers"]
+            _cs = "Info"; _ctype = "TLS Cipher Suites"
+            if any(f" - {g}" in _ct for g in ("C", "D", "F")):
+                _cs = "High"; _ctype = "Weak TLS Cipher Suite"
+            elif " - B" in _ct:
+                _cs = "Medium"; _ctype = "Moderate TLS Cipher Suite"
+            add_result("tls_findings", {
+                "severity": _cs, "type": _ctype,
+                "url": _base_url, "host": _h, "port": p,
+                "message": f"TLS Cipher Suites on {_h}:{p}",
+                "detail": {"raw": _ct[:1500]},
+            })
+
+        if "ssl-heartbleed" in scripts and "VULNERABLE" in scripts["ssl-heartbleed"].upper():
+            add_result("tls_findings", {
+                "severity": "Critical", "type": "SSL Heartbleed (CVE-2014-0160)",
+                "url": _base_url, "host": _h, "port": p,
+                "message": f"Heartbleed vulnerability on {_h}:{p}",
+                "detail": {"raw": scripts["ssl-heartbleed"][:500]},
+            })
+
+        if "ssl-poodle" in scripts and "VULNERABLE" in scripts["ssl-poodle"].upper():
+            add_result("tls_findings", {
+                "severity": "High", "type": "SSL POODLE (CVE-2014-3566)",
+                "url": _base_url, "host": _h, "port": p,
+                "message": f"POODLE vulnerability on {_h}:{p}",
+                "detail": {"raw": scripts["ssl-poodle"][:500]},
+            })
+
+        if "ssl-dh-params" in scripts:
+            _dh = scripts["ssl-dh-params"]
+            if any(kw in _dh.lower() for kw in ("logjam", "weak", "anonymous")):
+                add_result("tls_findings", {
+                    "severity": "Medium", "type": "Weak DH Parameters",
+                    "url": _base_url, "host": _h, "port": p,
+                    "message": f"Weak DH parameters on {_h}:{p}",
+                    "detail": {"raw": _dh[:500]},
+                })
+
+        if "http-title" in scripts:
+            add_result("tls_findings", {
+                "severity": "Info", "type": "HTTP Title",
+                "url": _base_url, "host": _h, "port": p,
+                "message": scripts["http-title"][:150],
+                "detail": {"raw": scripts["http-title"]},
+            })
+
+        if "http-server-header" in scripts:
+            add_result("tls_findings", {
+                "severity": "Info", "type": "HTTP Server Header",
+                "url": _base_url, "host": _h, "port": p,
+                "message": f"Server: {scripts['http-server-header'][:100]}",
+                "detail": {"raw": scripts["http-server-header"]},
+            })
+
+        # Genel zafiyet keyword'u taşıyan scriptleri vulnerability bucket'ına ekle
         for script_id, script_out in scripts.items():
             if script_out and any(kw in script_out.lower() for kw in ("vuln", "vulnerable", "cve-", "exploit")):
                 add_result("vulnerability", {
-                    "severity": "high",
-                    "tool": "nmap-nse",
-                    "script": script_id,
-                    "host": host,
-                    "port": p,
+                    "severity": "High", "type": f"NSE: {script_id}",
+                    "tool": "nmap-nse", "script": script_id,
+                    "url": _base_url, "host": _h, "port": p,
                     "evidence": script_out[:500],
                 })
 

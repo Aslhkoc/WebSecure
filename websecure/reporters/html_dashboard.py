@@ -522,6 +522,44 @@ def render_html_dashboard(results: dict) -> str:
              state = p.get("state") or "open"
 
              if "open" in str(state).lower():
+                 # Build collapsible details from NSE scripts
+                 _scripts = p.get("scripts") or {}
+                 _detail_parts = []
+
+                 if "ssl-cert" in _scripts:
+                     _cert_lines = [l.strip() for l in _scripts["ssl-cert"].split("\n")
+                                    if any(k in l for k in ("commonName", "Not valid", "Subject:", "Issuer:", "Public Key"))]
+                     if _cert_lines:
+                         _detail_parts.append("<b>SSL Cert:</b><br>" + "<br>".join(_escape(l) for l in _cert_lines[:6]))
+
+                 if "ssl-enum-ciphers" in _scripts:
+                     _ct = _scripts["ssl-enum-ciphers"]
+                     _ls = next((l.strip() for l in _ct.split("\n") if "least strength" in l.lower()), "")
+                     _tv = next((l.strip() for l in _ct.split("\n") if "TLSv" in l or "SSLv" in l), "")
+                     _cipher_summary = " | ".join(x for x in [_tv, _ls] if x)
+                     if _cipher_summary:
+                         _detail_parts.append(f"<b>TLS:</b> {_escape(_cipher_summary)}")
+
+                 if "http-title" in _scripts:
+                     _detail_parts.append(f"<b>Title:</b> {_escape(_scripts['http-title'][:80])}")
+
+                 if "http-server-header" in _scripts:
+                     _detail_parts.append(f"<b>Server:</b> {_escape(_scripts['http-server-header'][:80])}")
+
+                 for _sid in ("ssl-heartbleed", "ssl-poodle", "ssl-ccs-injection"):
+                     if _sid in _scripts and "VULNERABLE" in _scripts[_sid].upper():
+                         _detail_parts.append(f"<b style='color:var(--sev-critical)'>VULN: {_escape(_sid)}</b>")
+
+                 _details_html = ""
+                 if _detail_parts:
+                     _inner = "<br><br>".join(_detail_parts)
+                     _details_html = (
+                         f"<details style='cursor:pointer'>"
+                         f"<summary style='color:var(--accent);font-size:0.8rem;list-style:none'>&#9656; details</summary>"
+                         f"<div style='font-size:0.78rem;margin-top:6px;line-height:1.6;color:var(--text-muted)'>{_inner}</div>"
+                         f"</details>"
+                     )
+
                  rows.append(
                      f"<tr>"
                      f"<td style='font-family:monospace'>{_escape(host)}</td>"
@@ -529,6 +567,7 @@ def render_html_dashboard(results: dict) -> str:
                      f"<td><span style='font-size:0.8rem; color:var(--text-muted)'>{_escape(proto)}</span></td>"
                      f"<td>{_escape(svc_label)}</td>"
                      f"<td><span class='tag Low'>{_escape(state)}</span></td>"
+                     f"<td style='max-width:320px'>{_details_html}</td>"
                      f"</tr>"
                  )
 
@@ -538,7 +577,7 @@ def render_html_dashboard(results: dict) -> str:
                 <h3 style="margin-top:0;">[web] Open Ports — Nmap ({len(rows)} found)</h3>
                 <div class="table-container">
                     <table>
-                        <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Service</th><th>State</th></tr></thead>
+                        <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Service</th><th>State</th><th>Details</th></tr></thead>
                         <tbody>{''.join(rows)}</tbody>
                     </table>
                 </div>
