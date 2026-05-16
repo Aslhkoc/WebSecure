@@ -264,16 +264,16 @@ class NmapWrapper(ToolIntegration):
         root = _is_root()
         mode = (mode or "aggressive").lower()
 
-        if mode in ("aggressive", "deep"):
+        if mode in ("aggressive", "deep", "standard", "normal"):
             return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout)
         elif mode == "stealth":
             return self._scan_stealth(target, proxy=proxy, timeout=timeout)
         elif mode == "full":
             return self._scan_two_phase(target, root=root, proxy=proxy,
-                                         timeout=timeout, all_ports=True)
+                                        timeout=timeout, all_ports=True)
         elif mode == "fast":
             return self._scan_single(target,
-                                     ["-F", "-T4", "--open"],
+                                     ["-sT", "-F", "-T4", "--open", "--host-timeout", "60s"],
                                      proxy=proxy, timeout=180)
         else:
             return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout)
@@ -296,22 +296,32 @@ class NmapWrapper(ToolIntegration):
         on_windows = _is_windows()
 
         if root and not on_windows:
-            # SYN scan — Linux/Mac'te en hızlı ve güvenilir
+            # SYN scan — Linux/Mac root'ta en hızlı yöntem (raw socket)
             if all_ports:
-                phase1_args = ["-sS", "-p-", "-T4", "--open", "--min-rate", "1000", "--max-retries", "2"]
+                phase1_args = ["-sS", "-p-", "-T4", "--open",
+                               "--min-rate", "1000", "--max-retries", "2",
+                               "--host-timeout", "300s"]
             else:
                 phase1_args = ["-sS", "--top-ports", "65535", "-T4", "--open",
-                               "--min-rate", "1000", "--max-retries", "2"]
+                               "--min-rate", "1000", "--max-retries", "2",
+                               "--host-timeout", "300s"]
         else:
-            # TCP connect scan — root gerektirmez, Windows'ta ZORUNLU
-            top = "10000" if not on_windows else "2000"
-            phase1_args = ["-sT", "--top-ports", top, "-T4", "--open", "--max-retries", "2"]
+            # TCP connect scan — Windows'ta raw socket yok, -sT zorunlu
+            # Linux/Mac'te root değilken de buraya düşer
+            # Windows: top-ports 5000 (eski 2000 çok azdı)
+            top = "10000" if not on_windows else "5000"
+            phase1_args = [
+                "-sT", "--top-ports", top, "-T4", "--open",
+                "--min-rate", "500", "--max-retries", "2",
+                "--host-timeout", "180s",
+            ]
+            # --unprivileged: Windows'ta -sT ile gereksiz ama nmap'in
+            # raw socket uyarısını bastırır
             if on_windows:
-                # Windows raw socket yasağı — unprivileged modda çalış
                 phase1_args += ["--unprivileged"]
 
         self._inject_proxy(phase1_args, proxy)
-        rc1, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 180))
+        rc1, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 240))
 
         # Açık portları ayıkla (nmap crash etse bile kısmi XML'den kurtarmayı dene)
         open_ports = NmapParser.extract_open_ports_safe(xml1) if xml1 else []
@@ -339,7 +349,8 @@ class NmapWrapper(ToolIntegration):
         ports_str = ",".join(map(str, sorted(open_ports)))
 
         if on_windows:
-            # Windows: raw socket yok → -sT, -A/-O yok, safe scripts, unsafe=1 yok
+            # Windows: raw socket yok → -sT, OS detection yok, safe scripts
+            # -sV intensity 7: servis/banner tespiti için yeterli, 9 çok yavaş
             phase2_args = [
                 "-sT", "--unprivileged",
                 "-sV", "--version-intensity", "7",
@@ -347,11 +358,13 @@ class NmapWrapper(ToolIntegration):
                 "--script", self._build_script_list(windows_safe=True),
                 "--script-args",
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
-                "--script-timeout", "45s",
+                "--script-timeout", "30s",
+                "--host-timeout", "120s",
                 "-p", ports_str,
                 "-T4",
             ]
         else:
+            # Linux/Mac: SYN scan + full script + OS detection (root'ta)
             phase2_args = [
                 "-sV", "--version-intensity", "9",
                 "--version-all",
@@ -364,6 +377,7 @@ class NmapWrapper(ToolIntegration):
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,"
                 "vulns.showall=true,unsafe=1",
                 "--script-timeout", "60s",
+                "--host-timeout", "180s",
                 "-p", ports_str,
                 "-T4",
             ]
@@ -424,10 +438,10 @@ class NmapWrapper(ToolIntegration):
 
         # T4 kullan — T2 1000 portu 2500+ saniyede tamamlar, kesinlikle timeout
         phase1_args = [
-            "-sT", "--top-ports", "1000", "-T4", "--open",
-            "--max-retries", "2", "--min-rate", "200",
+            "-sT", "--top-ports", "2000", "-T4", "--open",
+            "--max-retries", "2", "--min-rate", "300",
+            "--host-timeout", "120s",
         ]
-        # --unprivileged Windows'ta -sT ile gereksiz (connect scan zaten ayrıcalıksız çalışır)
         self._inject_proxy(phase1_args, proxy)
         _, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 120))
         open_ports = NmapParser.extract_open_ports_safe(xml1)
@@ -445,7 +459,8 @@ class NmapWrapper(ToolIntegration):
         phase2_args = [
             "-sT", "-sV", "--version-intensity", "7",
             "--script", self._build_script_list(safe_only=True, windows_safe=on_windows),
-            "--script-timeout", "45s",
+            "--script-timeout", "30s",
+            "--host-timeout", "120s",
             "-p", ports_str, "-T4",
         ]
         self._inject_proxy(phase2_args, proxy)
