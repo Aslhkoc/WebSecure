@@ -145,7 +145,7 @@ class BaseScanner:
         Preserves the scanner's original assessment in hint_severity.
         """
         try:
-            from ..core.cvss import CVSSScorer
+            from ..core.cvss import CVSSScorer, lookup_cwe
 
             waf_detected = bool(self.results.get("waf_detected"))
             auth_required = bool(self.results.get("authenticated"))
@@ -174,6 +174,10 @@ class BaseScanner:
             entry["cvss_vector"] = scored.get("cvss_vector", "")
             entry["hint_severity"] = self._normalize_severity(hint_severity)
             entry.setdefault("remediation", scored.get("remediation", ""))
+
+            # CWE injection: mevcut değer yoksa veya boşsa otomatik doldur
+            if not entry.get("cwe_ids"):
+                entry["cwe_ids"] = lookup_cwe(entry.get("type", ""))
 
         except Exception as exc:
             self.logger.debug(f"[{self.name}] CVSS scoring failed, using hint: {exc!r}")

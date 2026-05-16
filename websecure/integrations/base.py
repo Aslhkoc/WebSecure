@@ -102,6 +102,15 @@ class ToolFinding:
 
     def to_dict(self) -> Dict[str, Any]:
         """WebSecure native raporlama formatına dönüştür."""
+        # CWE boşsa finding tipinden otomatik doldur
+        cwe = list(self.cwe_ids)
+        if not cwe:
+            try:
+                from websecure.core.cvss import lookup_cwe
+                cwe = lookup_cwe(self.title)
+            except Exception:
+                pass
+
         return {
             "type":        self.title,
             "severity":    self.severity.value,
@@ -110,7 +119,7 @@ class ToolFinding:
             "evidence":    {
                 "text":     self.evidence,
                 "cve":      self.cve_ids,
-                "cwe":      self.cwe_ids,
+                "cwe":      cwe,
                 "cvss":     self.cvss_score,
                 "refs":     self.references,
                 "raw":      self.raw,

@@ -1158,9 +1158,21 @@ def render_html_dashboard(results: dict) -> str:
                 var urlHtml = item.url && item.url !== '-'
                     ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="color:var(--accent);text-decoration:none;" title="' + escapeHtml(item.url) + '">' + escapeHtml(item.url) + '</a>'
                     : escapeHtml(item.url || '-');
+                // CWE badge — detail nesnesinden çek
+                var _det = item.detail || {{}};
+                var _cweArr = (_det.cwe_ids && _det.cwe_ids.length) ? _det.cwe_ids
+                            : (_det.evidence && _det.evidence.cwe && _det.evidence.cwe.length) ? _det.evidence.cwe
+                            : [];
+                var cweBadge = _cweArr.length
+                    ? ' <span style="font-size:0.72rem; color:var(--accent); background:rgba(88,166,255,0.1); border:1px solid rgba(88,166,255,0.25); border-radius:3px; padding:1px 5px; vertical-align:middle;">' + escapeHtml(String(_cweArr[0])) + '</span>'
+                    : '';
+                var cvssVal = _det.cvss_score || (_det.evidence && _det.evidence.cvss);
+                var cvssBadge = cvssVal
+                    ? ' <span style="font-size:0.72rem; font-weight:700; color:' + (parseFloat(cvssVal)>=9?'var(--sev-critical)':parseFloat(cvssVal)>=7?'var(--sev-high)':parseFloat(cvssVal)>=4?'var(--sev-medium)':'var(--sev-low)') + '; vertical-align:middle;">' + parseFloat(cvssVal).toFixed(1) + '</span>'
+                    : '';
                 tr.innerHTML =
                     '<td><span class="tag ' + escapeHtml(sevClass) + '">' + escapeHtml(sevClass) + '</span></td>' +
-                    '<td style="font-weight:500">' + escapeHtml(item.type) + '</td>' +
+                    '<td style="font-weight:500">' + escapeHtml(item.type) + cweBadge + cvssBadge + '</td>' +
                     '<td class="url">' + urlHtml + paramBadge + '</td>' +
                     '<td class="method">' + escapeHtml(item.method) + '</td>' +
                     '<td><code style="font-size:0.85rem">' + escapeHtml(item.param) + '</code></td>' +
@@ -1293,6 +1305,53 @@ def render_html_dashboard(results: dict) -> str:
                 ${{tool ? `<div class="label">Scanner</div> <div><code>${{escapeHtml(tool)}}</code></div>` : ''}}
             </div>
         `;
+
+        // --- 1b. CWE / CVSS / CVE Sınıflandırma Bloğu ---
+        const cweList = (d.cwe_ids && d.cwe_ids.length) ? d.cwe_ids
+                      : (d.evidence && d.evidence.cwe && d.evidence.cwe.length) ? d.evidence.cwe
+                      : [];
+        const cveList = (d.cve_ids && d.cve_ids.length) ? d.cve_ids
+                      : (d.evidence && d.evidence.cve && d.evidence.cve.length) ? d.evidence.cve
+                      : [];
+        const cvssScore  = d.cvss_score  || (d.evidence && d.evidence.cvss);
+        const cvssVector = d.cvss_vector || '';
+        if (cweList.length || cveList.length || cvssScore) {{
+            html += `<div style="background:rgba(48,54,61,0.6); border:1px solid var(--border); border-radius:6px; padding:10px 14px; margin:10px 0; display:flex; flex-wrap:wrap; gap:12px; align-items:center;">`;
+            if (cweList.length) {{
+                cweList.forEach(cwe => {{
+                    const cweId = String(cwe).replace(/^CWE-/i,'');
+                    html += `<a href="https://cwe.mitre.org/data/definitions/${{cweId}}.html" target="_blank"
+                               style="display:inline-flex; align-items:center; gap:4px; background:rgba(88,166,255,0.12);
+                                      border:1px solid rgba(88,166,255,0.35); border-radius:4px; padding:3px 8px;
+                                      color:var(--accent); font-size:0.82rem; font-weight:600; text-decoration:none;"
+                               title="View ${{escapeHtml(String(cwe))}} on MITRE">
+                               🔗 ${{escapeHtml(String(cwe))}}
+                             </a>`;
+                }});
+            }}
+            if (cveList.length) {{
+                cveList.forEach(cve => {{
+                    html += `<a href="https://nvd.nist.gov/vuln/detail/${{escapeHtml(String(cve))}}" target="_blank"
+                               style="display:inline-flex; align-items:center; gap:4px; background:rgba(248,81,73,0.12);
+                                      border:1px solid rgba(248,81,73,0.35); border-radius:4px; padding:3px 8px;
+                                      color:var(--sev-high); font-size:0.82rem; font-weight:600; text-decoration:none;"
+                               title="View ${{escapeHtml(String(cve))}} on NVD">
+                               🔗 ${{escapeHtml(String(cve))}}
+                             </a>`;
+                }});
+            }}
+            if (cvssScore) {{
+                const score = parseFloat(cvssScore);
+                const scoreColor = score >= 9 ? 'var(--sev-critical)' : score >= 7 ? 'var(--sev-high)' : score >= 4 ? 'var(--sev-medium)' : 'var(--sev-low)';
+                html += `<span style="font-size:0.82rem; font-weight:700; color:${{scoreColor}}; background:rgba(0,0,0,0.3); border-radius:4px; padding:3px 8px; border:1px solid ${{scoreColor}}40;">
+                           CVSS ${{score.toFixed(1)}}
+                         </span>`;
+                if (cvssVector) {{
+                    html += `<span style="font-size:0.75rem; color:var(--text-muted); font-family:monospace;">${{escapeHtml(cvssVector)}}</span>`;
+                }}
+            }}
+            html += `</div>`;
+        }}
 
         // --- 2. Teknik / Saldırı Detayı ---
         const technique = d.technique || d.attack_type || d.attack || d.vector || d.category;

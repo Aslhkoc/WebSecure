@@ -7,7 +7,7 @@ Maps finding types to base vectors, adjusts for context (auth, WAF).
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -101,6 +101,122 @@ _BASE_VECTORS: Dict[str, Tuple[str, float]] = {
     "sql injection (stacked query)":       ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8),
     "sql injection (oob dns — pending callback)": ("CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H", 8.1),
 }
+
+# CWE mapping: finding type → CWE ID listesi
+# Her bulgu tipi için en spesifik CWE seçildi (NVD/MITRE referans alınarak)
+_CWE_MAP: Dict[str, List[str]] = {
+    # XSS
+    "xss":                              ["CWE-79"],
+    "reflected xss":                    ["CWE-79"],
+    "reflected xss (form)":             ["CWE-79"],
+    "dom xss":                          ["CWE-79", "CWE-1019"],
+    "stored xss":                       ["CWE-79"],
+    "blind xss (oob)":                  ["CWE-79"],
+    "mxss (mutation xss)":              ["CWE-79"],
+    "csp bypass xss":                   ["CWE-79", "CWE-693"],
+    "xss account takeover":             ["CWE-79"],
+    "xss -> account takeover (poc)":    ["CWE-79"],
+    "dom clobbering":                   ["CWE-79", "CWE-1321"],
+    "prototype pollution -> xss":       ["CWE-1321", "CWE-79"],
+    "trusted types bypass":             ["CWE-79"],
+    "template literal injection (xss/ssti)": ["CWE-94", "CWE-79"],
+
+    # SQL Injection
+    "sql injection":                    ["CWE-89"],
+    "sqli":                             ["CWE-89"],
+    "blind sqli":                       ["CWE-89"],
+    "sql injection — db schema extracted":      ["CWE-89"],
+    "sql injection (sqlmap confirmed)":         ["CWE-89"],
+    "sql injection (union-based)":              ["CWE-89"],
+    "sql injection (stacked query)":            ["CWE-89"],
+    "sql injection (oob dns — pending callback)": ["CWE-89"],
+    "nosql injection":                  ["CWE-943"],
+
+    # SSTI
+    "ssti":                             ["CWE-94"],
+    "server-side template injection":   ["CWE-94"],
+
+    # Command Injection
+    "command injection":                ["CWE-78"],
+    "os command injection":             ["CWE-78"],
+
+    # SSRF
+    "ssrf":                             ["CWE-918"],
+
+    # XXE
+    "xxe":                              ["CWE-611"],
+
+    # Access Control
+    "idor":                             ["CWE-639", "CWE-284"],
+    "insecure direct object reference": ["CWE-639", "CWE-284"],
+    "broken access control":            ["CWE-284"],
+    "missing authentication":           ["CWE-306"],
+    "horizontal privilege escalation":  ["CWE-639"],
+    "vertical privilege escalation":    ["CWE-269"],
+
+    # CSRF
+    "csrf":                             ["CWE-352"],
+
+    # JWT
+    "jwt":                              ["CWE-347"],
+    "jwt algorithm none":               ["CWE-347"],
+
+    # Request Smuggling
+    "request smuggling":                ["CWE-444"],
+    "http request smuggling":           ["CWE-444"],
+
+    # File Upload
+    "file upload":                      ["CWE-434"],
+    "unrestricted file upload":         ["CWE-434"],
+
+    # TLS / Crypto
+    "tls":                              ["CWE-326"],
+    "weak tls":                         ["CWE-326"],
+    "ssl heartbleed (cve-2014-0160)":  ["CWE-125"],
+    "ssl poodle (cve-2014-3566)":      ["CWE-326"],
+    "expired certificate":              ["CWE-298"],
+    "self-signed certificate":          ["CWE-295"],
+    "ssl certificate":                  ["CWE-295"],
+
+    # Headers / Misconfig
+    "missing csp":                      ["CWE-693"],
+    "missing hsts":                     ["CWE-523"],
+    "missing security header":          ["CWE-693"],
+    "open redirect":                    ["CWE-601"],
+    "clickjacking":                     ["CWE-1021"],
+
+    # Information Disclosure
+    "js secret exposure":               ["CWE-200", "CWE-312"],
+    "hardcoded secret":                 ["CWE-798"],
+    "sensitive file exposure":          ["CWE-200"],
+    "information disclosure":           ["CWE-200"],
+    "path disclosure":                  ["CWE-200"],
+    "stack trace disclosure":           ["CWE-209"],
+
+    # Path Traversal
+    "path traversal":                   ["CWE-22"],
+    "directory traversal":              ["CWE-22"],
+
+    # Rate Limiting / DoS
+    "rate limit bypass":                ["CWE-770"],
+
+    # HTTP Headers (server info)
+    "http server header":               ["CWE-200"],
+    "http title":                       ["CWE-200"],
+}
+
+
+def lookup_cwe(finding_type: str) -> List[str]:
+    """Finding tipinden CWE ID listesi döndür. Bulunamazsa boş liste."""
+    t = _normalize_type(finding_type)
+    if t in _CWE_MAP:
+        return list(_CWE_MAP[t])
+    # Kısmi eşleşme: "reflected xss" → "xss" gibi
+    for key, cwes in _CWE_MAP.items():
+        if key in t or t in key:
+            return list(cwes)
+    return []
+
 
 # Remediation guidance for each category
 _REMEDIATION: Dict[str, str] = {
