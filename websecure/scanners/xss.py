@@ -840,11 +840,27 @@ class XSSScanner(BaseScanner):
                                 "evidence": f"CSP bypass reflected; policy: {csp_info.get('raw','')[:100]}",
                             }
                             self.report_finding(severity="High", confidence="medium", detection_method="csp_bypass", **finding)
-                            # Generate ATO PoC for confirmed CSP bypass
+                            # Generate ATO PoC for confirmed CSP bypass.
+                            # BUG FIX: generate_poc() dict contains "severity" and other
+                            # keys that conflict with report_finding() explicit keyword args.
+                            # Extract only what we need instead of blind **unpacking.
                             ato = ato_gen.generate_poc(url, param, payload)
-                            self.report_finding(severity="Critical", **ato)
-                    except Exception:
-                        pass
+                            self.report_finding(
+                                vuln_type=ato.get("vuln_type", "XSS -> Account Takeover (PoC)"),
+                                url=url,
+                                param=param,
+                                payload=payload,
+                                severity="Critical",
+                                confidence=ato.get("confidence", "high"),
+                                extra={
+                                    "pocs": ato.get("pocs", {}),
+                                    "attacker_host": ato.get("attacker_host", ""),
+                                    "session_id": ato.get("session_id", ""),
+                                    "ato_source": "csp_bypass",
+                                },
+                            )
+                    except Exception as _csp_exc:
+                        logger.debug(f"[XSS] CSP bypass PoC reporting failed for {url}: {_csp_exc!r}")
 
                 # Trusted Types bypass
                 for f in tt_prober.probe(url, param, self.session, inject_fn):
@@ -1231,7 +1247,8 @@ class MutationXSSProber:
                         "payload": payload,
                         "evidence": "mXSS execution signature detected in response",
                     })
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[mXSS] probe failed for {url} param={param}: {_exc!r}")
                 continue
         return findings
 
@@ -1264,7 +1281,8 @@ class DOMClobberingProber:
                         "payload": payload,
                         "evidence": "DOM clobbering payload reflected unescaped",
                     })
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[DOMClobber] probe failed for {url} param={param}: {_exc!r}")
                 continue
         return findings
 
@@ -1345,7 +1363,8 @@ class TrustedTypesBypassProber:
                         "payload": payload,
                         "evidence": "Trusted Types bypass payload reflected unescaped",
                     })
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[TrustedTypes] probe failed for {url} param={param}: {_exc!r}")
                 continue
         return findings
 
@@ -1382,7 +1401,8 @@ class PrototypePollutionXSSProber:
                         "payload": payload,
                         "evidence": "PP gadget XSS signature detected in response",
                     })
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[PPXSSProber] probe failed for {url}: {_exc!r}")
                 continue
         return findings
 
@@ -1427,7 +1447,8 @@ class TemplateLiteralInjectionProber:
                         "evidence": "Template injection payload reflected unescaped",
                         "confidence": "medium",
                     })
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[TemplateLiteralInjection] probe failed for {url} param={param}: {_exc!r}")
                 continue
         return findings
 
@@ -1480,7 +1501,8 @@ class BlindXSSProber:
                         "requires_oob_confirmation": True,
                     })
                     break  # one delivery per param is sufficient
-            except Exception:
+            except Exception as _exc:
+                logger.debug(f"[BlindXSS] probe failed for {url} param={param}: {_exc!r}")
                 continue
         return findings
 

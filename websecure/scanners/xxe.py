@@ -168,7 +168,9 @@ class XXEErrorBasedExtractor(BaseScanner):
             if resp is None:
                 return None
             body = getattr(resp, "text", "")[:3000]
-            if re.search(r"root:.*:0:0:|Administrator|CDATA", body):
+            # BUG FIX: removed "CDATA" from regex — the word appears in the XML payload
+            # itself and would be echoed back in error pages, causing a false positive.
+            if re.search(r"root:.*:0:0:|Administrator", body):
                 return {
                     "vuln_type": "XXE — CDATA Bypass File Read",
                     "url": url, "severity": "Critical",

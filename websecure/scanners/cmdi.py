@@ -214,7 +214,8 @@ class CmdiScanner(BaseScanner):
 
             if "time" in technique and elapsed > time_threshold:
                 # Cross-validate time-based: need 2/3 requests to confirm
-                if self._verify_time_based_cmdi(url, params, param_name, payload, time_threshold):
+                # BUG FIX: was 'params' (NameError) — correct variable is 'qs'
+                if self._verify_time_based_cmdi(url, qs, param_name, payload, time_threshold):
                     return {
                         "vuln_type": "OS Command Injection (Time-Based)",
                         "url": url,
@@ -393,27 +394,32 @@ class CmdiScanner(BaseScanner):
             except Exception:
                 pass
 
-        # Poll for callback up to 10 seconds
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            try:
-                from websecure.core.oast import get_global_poller
-                poller = get_global_poller()
-                if poller:
-                    for cb in list(getattr(poller, "_callbacks_received", [])):
-                        if token in str(cb):
-                            self.report_finding(
-                                vuln_type="OS Command Injection (OOB/DNS)",
-                                url=url,
-                                param=param_name,
-                                payload=f"DNS callback token={token}",
-                                severity="Critical",
-                                evidence=f"OOB DNS callback received: {str(cb)[:200]}",
-                            )
-                            return
-            except Exception:
-                pass
-            time.sleep(1)
+        # BUG FIX: The previous 10-second blocking poll was executed synchronously
+        # for every parameter (e.g., 5 params = 50s of blocking sleep) and stalled
+        # the entire scan. OOB callbacks are delivered asynchronously by the global
+        # OAST poller — we don't need to block here. Do a single immediate check
+        # (catches any pre-queued callbacks) and log the token for deferred tracking.
+        try:
+            from websecure.core.oast import get_global_poller
+            poller = get_global_poller()
+            if poller:
+                for cb in list(getattr(poller, "_callbacks_received", [])):
+                    if token in str(cb):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (OOB/DNS)",
+                            url=url,
+                            param=param_name,
+                            payload=f"DNS callback token={token}",
+                            severity="Critical",
+                            evidence=f"OOB DNS callback received: {str(cb)[:200]}",
+                        )
+                        return
+        except Exception as _exc:
+            logger.debug(f"[CMDi/OOB] Poller check failed: {_exc!r}")
+        logger.info(
+            f"[CMDi/OOB] Payloads sent for token={token} — "
+            f"OAST poller will report any DNS callbacks asynchronously."
+        )
 
 
 # ---------------------------------------------------------------------------

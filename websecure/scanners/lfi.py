@@ -318,7 +318,10 @@ class LFIPHPFilterChain(BaseScanner):
 
     def run(self, target: str, **kwargs) -> List[Dict]:
         results: List[Dict] = []
-        uid = _canary()
+        # BUG FIX: `uid = _canary()` was generated but never embedded in the payload
+        # or checked in the response — it was dead code that gave a false sense of
+        # uniqueness. The filter chain payload is a static constant; we detect
+        # execution by looking for OS/PHP artifacts in the response.
         for test_url in _inject_lfi(target, _FILTER_CHAIN_RCE_BASE64)[:2]:
             try:
                 resp = self.session.get(test_url, timeout=10)

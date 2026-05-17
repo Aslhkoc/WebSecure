@@ -323,6 +323,46 @@ class SSTIScanner(BaseScanner):
                 return True
         return False
 
+    def _confirm_form_canary(
+        self,
+        action: str,
+        method: str,
+        base_data: Dict,
+        field_name: str,
+    ) -> bool:
+        """
+        Confirm SSTI in a form field via unique-canary math evaluation.
+
+        Analogous to _confirm_with_canary() for URL params, but submits the form.
+        Eliminates false positives from forms that naturally contain numeric content
+        (prices, quantities, etc.) matching the {{7*7}} → 49 detection pattern.
+
+        Algorithm:
+          1. Pick random A,B; product = A*B
+          2. Submit form with {{A*B}} in the field
+          3. Confirm `product` appears in response
+          4. Submit form with plain string `str(product)` to rule out pure reflection
+          5. Return True only when step 3 passes AND step 4 fails
+        """
+        import random as _random_local
+        a = _random_local.randint(17, 97)
+        b = _random_local.randint(17, 97)
+        product = a * b
+
+        for tmpl in (f"{{{{{a}*{b}}}}}", f"${{{a}*{b}}}", f"#{{{a}*{b}}}"):
+            form_data = dict(base_data)
+            form_data[field_name] = tmpl
+            body = self._submit_form(action, method, form_data)
+            if body and str(product) in body:
+                # Reflection check: plain number should NOT trigger the same content
+                reflection_data = dict(base_data)
+                reflection_data[field_name] = str(product)
+                reflection_body = self._submit_form(action, method, reflection_data)
+                if reflection_body and str(product) in reflection_body:
+                    continue  # pure reflection — not a real SSTI
+                return True
+        return False
+
     def _tier1_probe(self, url: str, parsed, params: List, param_name: str
                      ) -> Optional[Tuple[str, str]]:
         """
@@ -467,7 +507,16 @@ class SSTIScanner(BaseScanner):
                 form_data[p_name] = payload
                 body = self._submit_form(action, method, form_data)
                 if body and re.search(expected_re, body):
-                    _logger.info(f"[SSTI] Form hit: {action} field={p_name}")
+                    # Canary confirmation — eliminates false positives from forms
+                    # that naturally contain numbers matching 7*7=49 or similar.
+                    # Mirrors _confirm_with_canary() used for URL param scanning.
+                    if not self._confirm_form_canary(action, method, base_data, p_name):
+                        _logger.debug(
+                            f"[SSTI] Form Tier1 matched but canary FAILED (likely reflection): "
+                            f"{action} field={p_name}"
+                        )
+                        continue
+                    _logger.info(f"[SSTI] Form hit (canary confirmed): {action} field={p_name}")
                     self._emit_finding(action, p_name, payload, body[:200], None, None)
                     break  # one confirmed vuln per field
 
