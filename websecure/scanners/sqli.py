@@ -59,6 +59,8 @@ class SQLInjectionScanner(BaseScanner):
     MAX_WORKERS = 5          # parallel threads for payload testing
     TIME_DELTA = 3.0         # seconds above baseline to flag time-based
     MAX_FORM_PAYLOADS = 12   # payload cap per form input
+    _NAT_VAR_CACHE_TTL = 300  # seconds before natural-variation cache expires
+    _TIMING_CACHE_TTL  = 300  # seconds before baseline-timing cache expires
 
     # Signatures for Error-Based SQLi
     ERRORS = {
@@ -124,10 +126,18 @@ class SQLInjectionScanner(BaseScanner):
     def __init__(self, session=None, results=None, debug=False):
         super().__init__(session, results, debug)
         self.payloads = self._load_payloads()
-        # Per-instance cache: url -> (mean, stdev) so _measure_natural_variation
-        # runs 4 HTTP requests ONCE per URL instead of once per parameter
-        self._nat_var_cache: Dict[str, Tuple[float, float]] = {}
+        # Per-instance cache: url -> (mean, stdev, timestamp) so _measure_natural_variation
+        # runs 4 HTTP requests ONCE per URL instead of once per parameter.
+        # Entries expire after _NAT_VAR_CACHE_TTL seconds to prevent stale measurements
+        # during long scans with changing server behaviour.
+        self._nat_var_cache: Dict[str, Tuple[float, float, float]] = {}
         self._nat_var_lock = threading.Lock()
+        # Separate timing baseline cache (mean_s, stdev_s, timestamp) per URL.
+        # Prevents the single-sample distortion problem where fetch_baseline() returns
+        # a cached response (~0 ms), making time_threshold artificially low and causing
+        # excessive false-positive first-pass triggers in time-based detection.
+        self._timing_baseline_cache: Dict[str, Tuple[float, float, float]] = {}
+        self._timing_baseline_lock = threading.Lock()
         # Plan B: Nessus-style response behaviour analysis + statistical timing
         self._rba = ResponseBehaviorAnalyzer(self.session)
         self._timing = TimingAnalyzer(self.session, baseline_n=4)
@@ -225,10 +235,17 @@ class SQLInjectionScanner(BaseScanner):
         Sample n benign baseline requests and return (mean_len, stddev_len).
         Result is cached per URL so multiple parameters on the same endpoint
         don't trigger redundant HTTP requests (saves ~4 requests per extra param).
+        Cache expires after _NAT_VAR_CACHE_TTL seconds to prevent stale data
+        during long scans where server responses may change.
         """
+        now = time.monotonic()
         with self._nat_var_lock:
             if url in self._nat_var_cache:
-                return self._nat_var_cache[url]
+                mean, stdev, ts = self._nat_var_cache[url]
+                if now - ts < self._NAT_VAR_CACHE_TTL:
+                    return mean, stdev
+                # Stale — remove and re-sample
+                del self._nat_var_cache[url]
 
         lengths: List[int] = []
         for _ in range(n):
@@ -239,15 +256,15 @@ class SQLInjectionScanner(BaseScanner):
                 pass
         if len(lengths) < 2:
             mean = float(lengths[0]) if lengths else 0.0
-            result = (mean, mean * 0.15)
+            result = (mean, mean * 0.15, time.monotonic())
         else:
             mean = statistics.mean(lengths)
             stdev = statistics.stdev(lengths)
-            result = (mean, stdev)
+            result = (mean, stdev, time.monotonic())
 
         with self._nat_var_lock:
             self._nat_var_cache[url] = result
-        return result
+        return result[0], result[1]
 
     def _get_response_len(self, url: str, param: str, value: str) -> Optional[int]:
         """Helper: inject `value` for `param` and return response length, or None on error."""
@@ -418,6 +435,33 @@ class SQLInjectionScanner(BaseScanner):
         stdev = statistics.stdev(times)
         return mean, stdev
 
+    def _get_time_threshold(self, url: str) -> float:
+        """
+        Return the statistically calibrated time-delay threshold for `url`.
+
+        Uses a cached 3-sample baseline (TTL: _TIMING_CACHE_TTL seconds) so the
+        measurement is shared across all parameters on the same endpoint.
+
+        This fixes the single-sample distortion bug: when fetch_baseline() returns
+        a cached response in ~0 ms, computing `baseline_time + TIME_DELTA` yields
+        TIME_DELTA (3 s) even for servers that naturally respond in 5+ s, causing
+        every payload to trip the first-pass gate and trigger expensive verification.
+
+        Formula: max(mean + 3*stdev, mean + TIME_DELTA, 2.0)
+        """
+        now = time.monotonic()
+        with self._timing_baseline_lock:
+            if url in self._timing_baseline_cache:
+                bl_mean, bl_stdev, ts = self._timing_baseline_cache[url]
+                if now - ts < self._TIMING_CACHE_TTL:
+                    return max(bl_mean + 3.0 * bl_stdev, bl_mean + self.TIME_DELTA, 2.0)
+                del self._timing_baseline_cache[url]
+
+        bl_mean, bl_stdev = self._measure_baseline_timing(url, n=3)
+        with self._timing_baseline_lock:
+            self._timing_baseline_cache[url] = (bl_mean, bl_stdev, time.monotonic())
+        return max(bl_mean + 3.0 * bl_stdev, bl_mean + self.TIME_DELTA, 2.0)
+
     def _verify_time_based(
         self,
         url: str,
@@ -487,13 +531,13 @@ class SQLInjectionScanner(BaseScanner):
         logger.info(f"[SQLi] Scanning URL params: {url}")
 
         # Baseline — proper error handling via fetch_baseline()
-        t0 = time.time()
         baseline_resp = self.fetch_baseline(url, timeout=10)
         if not baseline_resp:
             return
-        baseline_time = time.time() - t0
         baseline_errors = self._extract_error_fingerprints(baseline_resp.text)
-        time_threshold = baseline_time + self.TIME_DELTA
+        # Use statistically calibrated threshold (3-sample mean + 3σ) instead of a
+        # single cached fetch time, which would be ~0 ms and make TIME_DELTA too low.
+        time_threshold = self._get_time_threshold(url)
         baseline_len = len(baseline_resp.text) if baseline_resp.text else 0
 
         for param_name, _ in params:
@@ -782,14 +826,14 @@ class SQLInjectionScanner(BaseScanner):
 
             # Form baseline
             base_data = {i.get("name"): i.get("value", "") for i in inputs if i.get("name")}
-            t0 = time.time()
             baseline_resp = self.fetch_baseline(action, method=method, data=base_data, timeout=10)
-            baseline_time = time.time() - t0
             baseline_errors: set = set()
             if baseline_resp:
                 baseline_errors = self._extract_error_fingerprints(baseline_resp.text)
 
-            time_threshold = baseline_time + self.TIME_DELTA
+            # Statistically calibrated time threshold — shared cache prevents
+            # redundant baseline measurement across parameters on the same form.
+            time_threshold = self._get_time_threshold(action)
             payloads = self.payloads[:self.MAX_FORM_PAYLOADS]
 
             for inp in fuzzable:
@@ -849,15 +893,22 @@ class SQLInjectionScanner(BaseScanner):
                 }
 
             if self._is_time_payload(payload) and elapsed > time_threshold:
-                return {
-                    "vuln_type": "SQLi (Form/Time)",
-                    "url": action,
-                    "param": p_name,
-                    "payload": payload,
-                    "evidence": f"Response {elapsed:.2f}s > threshold {time_threshold:.2f}s",
-                    "detection_method": "time_based",
-                    "confidence": "medium",
-                }
+                # Cross-validate before reporting — mirrors URL-parameter time-based
+                # detection to prevent single-spike false positives in form fields.
+                if self._verify_time_based(action, p_name, payload, time_threshold):
+                    return {
+                        "vuln_type": "SQLi (Form/Time)",
+                        "url": action,
+                        "param": p_name,
+                        "payload": payload,
+                        "evidence": (
+                            f"Time-based (cross-validated): first={elapsed:.2f}s, "
+                            f"threshold={time_threshold:.2f}s"
+                        ),
+                        "detection_method": "time_based",
+                        "confidence": "high",
+                        "verified": True,
+                    }
             return None
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)

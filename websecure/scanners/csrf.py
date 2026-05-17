@@ -78,15 +78,18 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
     Scans the given URL for CSRF vulnerabilities.
     """
     bucket = "a05_csrf"
-    findings = []
-    
+
     try:
         r = session.get(url, timeout=10)
     except requests.exceptions.RequestException as exc:
         _logger.debug(f"[CSRF] GET failed for {url}: {exc!r}")
-        if debug:
-            findings.append({"status": "error", "message": str(exc), "severity": "Info"})
-        # Even on error, we might have results if partial
+        # Report the network error so the dashboard shows it rather than silently skipping.
+        add_result(bucket, {
+            "type": "CSRF Scan Error",
+            "severity": "Info",
+            "url": url,
+            "reason": f"Network error fetching target: {exc!r}",
+        })
         return
 
     # 1. Analyze Cookies (SameSite)

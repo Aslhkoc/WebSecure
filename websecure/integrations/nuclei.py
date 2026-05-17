@@ -332,12 +332,16 @@ class NucleiWrapper(ToolIntegration):
                 except Exception:
                     pass
 
-            # 0 = no findings, 1 = findings found, diğerleri hata
+            # 0 = no findings, 1 = findings found, any other code = error
+            # IMPORTANT: never parse output after a non-zero/non-one exit — the
+            # output file may be incomplete or corrupted, producing phantom findings.
             if proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:500]
-                logger.warning(f"[Nuclei] Exit kodu {proc.returncode} — hata olabilir: {stderr_out}")
-                if proc.returncode >= 2 and not stderr_out:
-                    return []
+                logger.warning(
+                    f"[Nuclei] Exit kodu {proc.returncode} — tarama başarısız, "
+                    f"çıktı ayrıştırılmıyor. stderr={stderr_out!r}"
+                )
+                return []
 
             return self._parse_output(output_file)
         except Exception as e:
