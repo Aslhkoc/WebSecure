@@ -800,6 +800,7 @@ def phase_offensive(ctx: dict):
             _runner_sqlmap(ctx)
     except Exception as _e:
         _logger.warning(f"[phases] sqlmap runner error: {_e}")
+        _report_phase_error("sqlmap", "phases.phase_offensive.sqlmap", _e)
 
     # --- Faz 7: dalfox verify after all XSS scanners ---
     _safe_run("dalfox_verify", lambda: _runner_dalfox_verify(ctx))
@@ -1094,6 +1095,7 @@ def _runner_katana(ctx) -> None:
         _logger.info(f"[phases] katana: {len(unique_urls)} URL keşfedildi")
     except Exception as e:
         _logger.warning(f"[phases] katana runner error: {e}")
+        _report_phase_error("katana", "phases._runner_katana", e)
 
 
 def _runner_browser_crawler(ctx) -> None:
@@ -1255,6 +1257,7 @@ def _runner_subdomain(ctx) -> None:
         _logger.info(f"[phases] Subdomain tarama tamamlandı: {len(results)} bulgu")
     except Exception as e:
         _logger.warning(f"[phases] Subdomain tarama hatası: {e}")
+        _report_phase_error("subdomain", "phases._runner_subdomain", e)
 
 def _runner_open_redirect(ctx) -> None:
     """Open redirect taraması."""
@@ -1273,6 +1276,7 @@ def _runner_open_redirect(ctx) -> None:
         _logger.info(f"[phases] Open redirect tarama tamamlandı: {len(results)} bulgu")
     except Exception as e:
         _logger.warning(f"[phases] Open redirect tarama hatası: {e}")
+        _report_phase_error("open_redirect", "phases._runner_open_redirect", e)
 # ----------------------------- Runner sargıları -----------------------------
 
 def _runner_scanners_ssrf_xxe(ctx) -> None:
@@ -1857,6 +1861,7 @@ def _runner_ssti(ctx) -> None:
                 run_fn(url, session=sess, results=results)
         except Exception as e:
             _logger.warning(f"[phases] SSTI runner error: {e}")
+            _report_phase_error("ssti", "phases._runner_ssti", e)
 
 
 def _runner_idor(ctx) -> None:
@@ -1877,6 +1882,7 @@ def _runner_idor(ctx) -> None:
             mod.run(url, session=sess, results=results)
     except Exception as e:
         _logger.warning(f"[phases] IDOR runner error: {e}")
+        _report_phase_error("idor", "phases._runner_idor", e)
 
 
 def _runner_auth_matrix(ctx) -> None:
@@ -1900,6 +1906,7 @@ def _runner_auth_matrix(ctx) -> None:
             )
     except Exception as e:
         _logger.warning(f"[phases] AuthMatrix runner error: {e}")
+        _report_phase_error("auth_matrix", "phases._runner_auth_matrix", e)
 
 
 def _runner_dom_xss(ctx) -> None:
@@ -1919,6 +1926,7 @@ def _runner_dom_xss(ctx) -> None:
             mod.run(url, session=sess, results=results)
     except Exception as e:
         _logger.warning(f"[phases] DOMXSSScanner runner error: {e}")
+        _report_phase_error("dom_xss", "phases._runner_dom_xss", e)
 
 
 def _runner_cmdi(ctx) -> None:
@@ -1936,6 +1944,7 @@ def _runner_cmdi(ctx) -> None:
             run_fn(url, session=sess, results=results, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] CMDi runner error: {e}")
+        _report_phase_error("cmdi", "phases._runner_cmdi", e)
 
 
 def _runner_lfi(ctx) -> None:
@@ -1952,6 +1961,7 @@ def _runner_lfi(ctx) -> None:
             run_fn(url, session=sess, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] LFI runner error: {e}")
+        _report_phase_error("lfi", "phases._runner_lfi", e)
 
 
 def _runner_cors(ctx) -> None:
@@ -1968,6 +1978,7 @@ def _runner_cors(ctx) -> None:
             run_fn(url, session=sess, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] CORS runner error: {e}")
+        _report_phase_error("cors", "phases._runner_cors", e)
 
 
 def _runner_subdomain_takeover(ctx) -> None:
@@ -1984,6 +1995,7 @@ def _runner_subdomain_takeover(ctx) -> None:
             run_fn(url, session=sess, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] Subdomain Takeover runner error: {e}")
+        _report_phase_error("subdomain_takeover", "phases._runner_subdomain_takeover", e)
 
 
 def _runner_session_scanner(ctx) -> None:
@@ -2005,6 +2017,7 @@ def _runner_session_scanner(ctx) -> None:
                 run_fn(url, session=sess, results=results)
     except Exception as e:
         _logger.warning(f"[phases] Session scanner error: {e}")
+        _report_phase_error("session_scanner", "phases._runner_session_scanner", e)
 
 
 def _runner_crlf_injection(ctx) -> None:
@@ -2022,6 +2035,7 @@ def _runner_crlf_injection(ctx) -> None:
             run_fn(url, session=sess, debug=False, auth_ctx=auth_ctx)
     except Exception as e:
         _logger.warning(f"[phases] CRLF Injection runner error: {e}")
+        _report_phase_error("crlf_injection", "phases._runner_crlf_injection", e)
 
 
 def _runner_waf_fingerprint(ctx) -> None:
@@ -2049,6 +2063,7 @@ def _runner_waf_fingerprint(ctx) -> None:
                 })
     except Exception as e:
         _logger.warning(f"[phases] WAF fingerprint runner error: {e}")
+        _report_phase_error("waf_fingerprint", "phases._runner_waf_fingerprint", e)
 
 
 def _runner_exploit_orchestrator(ctx) -> None:
@@ -2083,6 +2098,7 @@ def _runner_exploit_orchestrator(ctx) -> None:
         add_result("meta", {"stage": "exploit_orchestrator", "status": "skipped:module-not-found"})
     except Exception as e:
         _logger.warning(f"[phases] Exploit orchestrator runner error: {e}")
+        _report_phase_error("exploit_orchestrator", "phases._runner_exploit_orchestrator", e)
 
 
 def _runner_human_adapter(ctx) -> None:
@@ -2104,6 +2120,7 @@ def _runner_human_adapter(ctx) -> None:
         add_result("meta", {"stage": "human_adapter", "status": "skipped:module-not-found"})
     except Exception as e:
         _logger.warning(f"[phases] HumanLike adapter error: {e}")
+        _report_phase_error("human_adapter", "phases._runner_human_adapter", e)
 
 
 _VERIFY_BUCKETS = {
@@ -2237,6 +2254,7 @@ def _runner_prototype_pollution(ctx) -> None:
         add_result("meta", {"stage": "prototype_pollution", "findings": len(findings)})
     except Exception as e:
         _logger.warning(f"[phases] Prototype Pollution runner error: {e}")
+        _report_phase_error("prototype_pollution", "phases._runner_prototype_pollution", e)
 
 
 def _runner_xxe(ctx) -> None:
@@ -2257,6 +2275,7 @@ def _runner_xxe(ctx) -> None:
         add_result("meta", {"stage": "xxe", "findings": len(findings)})
     except Exception as e:
         _logger.warning(f"[phases] XXE runner error: {e}")
+        _report_phase_error("xxe", "phases._runner_xxe", e)
 
 
 def _runner_ssrf(ctx) -> None:
@@ -2277,6 +2296,7 @@ def _runner_ssrf(ctx) -> None:
         add_result("meta", {"stage": "ssrf", "findings": len(findings)})
     except Exception as e:
         _logger.warning(f"[phases] SSRF runner error: {e}")
+        _report_phase_error("ssrf", "phases._runner_ssrf", e)
 
 
 def _runner_headers_scanner(ctx) -> None:
@@ -2298,6 +2318,7 @@ def _runner_headers_scanner(ctx) -> None:
         add_result("meta", {"stage": "headers_scanner", "status": "completed"})
     except Exception as e:
         _logger.warning(f"[phases] Headers Scanner runner error: {e}")
+        _report_phase_error("headers_scanner", "phases._runner_headers_scanner", e)
 
 
 def _runner_race_condition(ctx) -> None:
@@ -2323,6 +2344,7 @@ def _runner_race_condition(ctx) -> None:
         add_result("meta", {"stage": "race_condition", "findings": len(findings)})
     except Exception as e:
         _logger.warning(f"[phases] Race Condition runner error: {e}")
+        _report_phase_error("race_condition", "phases._runner_race_condition", e)
 
 
 # ---- Faz 7: httpx probe + dalfox verify runners -------------------------
@@ -2358,6 +2380,7 @@ def _runner_httpx_probe(ctx) -> None:
         _logger.info(f"[phases] httpx_probe: {result.finding_count} bulgu, techs={len(all_techs)}")
     except Exception as e:
         _logger.warning(f"[phases] httpx_probe runner error: {e}")
+        _report_phase_error("httpx_probe", "phases._runner_httpx_probe", e)
 
 
 def _runner_dalfox_verify(ctx) -> None:
@@ -2418,6 +2441,7 @@ def _runner_dalfox_verify(ctx) -> None:
         )
     except Exception as e:
         _logger.warning(f"[phases] dalfox_verify runner error: {e}")
+        _report_phase_error("dalfox_verify", "phases._runner_dalfox_verify", e)
 
 
 def _runner_session_analysis(ctx) -> None:
