@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import random as _random
 import re
+import time as _time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
@@ -218,23 +219,40 @@ class SSTIScanner(BaseScanner):
         "X-Original-URL",
     ]
 
+    # Total scan budget in seconds — leave margin before the 300s phase watchdog
+    _SCAN_BUDGET_S: float = 240.0
+
     def run(self, target: str, **kwargs):
         endpoints = kwargs.get("endpoints") or [target]
         forms = kwargs.get("forms") or []
 
+        # Hard cap — prevent excessive runtime on large endpoint lists
+        endpoints = endpoints[:5]
+
+        # Absolute deadline so the scanner never blocks the phase watchdog
+        deadline = _time.monotonic() + self._SCAN_BUDGET_S
+
         for url in endpoints:
+            if _time.monotonic() > deadline:
+                _logger.warning("[SSTI] Scan budget exhausted — stopping early")
+                break
             self._scan_url(url)
-            self._scan_headers(url)
-            self._scan_url_as_json(url)  # REST API surface — re-POST params as JSON
+            if _time.monotonic() < deadline:
+                self._scan_headers(url, deadline=deadline)
+            if _time.monotonic() < deadline:
+                self._scan_url_as_json(url)
 
         for form in forms:
+            if _time.monotonic() > deadline:
+                break
             action = form.get("action") or target
             method = (form.get("method") or "GET").upper()
             inputs = form.get("inputs") or []
             self._scan_form(action, method, inputs)
 
         # --- Adım 5: Auto-exploit on confirmed SSTI findings -------------
-        self._run_auto_exploit(endpoints)
+        if _time.monotonic() < deadline:
+            self._run_auto_exploit(endpoints)
 
     def _run_auto_exploit(self, endpoints: List[str]) -> None:
         """
@@ -438,9 +456,12 @@ class SSTIScanner(BaseScanner):
     # Surface: HTTP Headers
     # ------------------------------------------------------------------
 
-    def _scan_headers(self, url: str):
+    def _scan_headers(self, url: str, deadline: Optional[float] = None):
         """Test common HTTP headers for SSTI reflection."""
         for header_name in self._INJECTION_HEADERS:
+            if deadline is not None and _time.monotonic() > deadline:
+                _logger.debug("[SSTI] Header scan deadline reached — stopping early")
+                break
             tier1_hit = self._tier1_probe_header(url, header_name)
             if not tier1_hit:
                 continue
@@ -464,14 +485,43 @@ class SSTIScanner(BaseScanner):
         return False
 
     def _tier1_probe_header(self, url: str, header_name: str) -> Optional[Tuple[str, str]]:
-        for payload, expected_re in _TIER1_PROBES:
+        """
+        Parallel Tier1 header probe — sends all polyglot payloads concurrently,
+        confirms on the first hit. Mirrors _tier1_probe() for URL params.
+        """
+        import concurrent.futures as _cf
+
+        def _probe_header(item: Tuple[str, str]) -> Optional[Tuple[str, str, str]]:
+            payload, expected_re = item
             body = self._request_with_header(url, header_name, payload)
             if body and re.search(expected_re, body):
-                if not self._confirm_header_canary(url, header_name):
-                    _logger.debug(f"[SSTI] Header Tier1 matched but canary failed (reflection): {url} [{header_name}]")
-                    continue
-                return payload, body[:200]
-        return None
+                return payload, expected_re, body
+            return None
+
+        hit_payload: Optional[str] = None
+        hit_body: Optional[str] = None
+
+        with _cf.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_probe_header, item): item for item in _TIER1_PROBES}
+            for fut in _cf.as_completed(futures):
+                result = fut.result()
+                if result:
+                    # Cancel remaining — one confirmed hit is enough for canary check
+                    for f in futures:
+                        f.cancel()
+                    hit_payload, _, hit_body = result
+                    break
+
+        if hit_payload is None:
+            return None
+
+        if not self._confirm_header_canary(url, header_name):
+            _logger.debug(
+                f"[SSTI] Header Tier1 matched but canary FAILED (reflection): "
+                f"{url} [{header_name}]"
+            )
+            return None
+        return hit_payload, (hit_body or "")[:200]
 
     def _request_with_header(self, url: str, header_name: str, payload: str) -> Optional[str]:
         try:

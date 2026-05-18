@@ -31,7 +31,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -512,7 +512,7 @@ class WebDashboard:
         self.host = host
         self.port = port
         self.scan_callback = scan_callback
-        self._server: Optional[HTTPServer] = None
+        self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
     @property
@@ -528,7 +528,7 @@ class WebDashboard:
         Handler.scan_callback = self.scan_callback
 
         try:
-            self._server = HTTPServer((self.host, self.port), Handler)
+            self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         except OSError as exc:
             logger.error(f"[WebUI] Port {self.port} açılamadı: {exc}")
             raise

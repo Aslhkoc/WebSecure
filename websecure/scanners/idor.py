@@ -69,6 +69,9 @@ class IDORScanner(BaseScanner):
         endpoints = kwargs.get("endpoints") or [target]
         sessions = kwargs.get("role_sessions") or {}
 
+        # Hard cap — prevent excessive runtime on large endpoint lists
+        endpoints = endpoints[:15]
+
         if not self.session_b and sessions:
             sessions_list = list(sessions.values())
             if len(sessions_list) >= 2:
@@ -115,94 +118,104 @@ class IDORScanner(BaseScanner):
         """
         Extract numeric IDs from URL params/path, test adjacent IDs.
         Report if sensitive data leaks through other IDs.
+        Pre-fetches the original body ONCE and reuses it across all loops.
+        Parallelises test-ID fetches via ThreadPoolExecutor.
         """
+        import concurrent.futures as _cf
+
         parsed = urlparse(url)
         params = parse_qsl(parsed.query)
 
+        # Pre-fetch ONCE — reused across all param and path loops below
+        original_body = self._fetch(url, self.session) or ""
+        orig_hash = _body_hash(original_body)
+
+        # --- Query parameter IDs ---
         for param_name, param_value in params:
             if not re.match(r"^\d+$", param_value):
                 continue
             base_id = int(param_value)
-            test_ids = list(set([base_id - 2, base_id - 1, base_id + 1, base_id + 2]))
+            valid_test_ids = [
+                tid for tid in set([base_id - 2, base_id - 1, base_id + 1, base_id + 2])
+                if tid > 0
+            ]
 
-            original_body = self._fetch(url, self.session) or ""
-
-            for test_id in test_ids:
-                if test_id <= 0:
-                    continue
-                new_params = dict(params)
-                new_params[param_name] = str(test_id)
-                test_url = urlunparse(parsed._replace(query=urlencode(new_params)))
+            def _check_param_id(
+                test_id: int,
+                _pname: str = param_name,
+                _params: list = params,
+                _orig: str = original_body,
+                _orig_hash: str = orig_hash,
+                _parsed=parsed,
+                _base: int = base_id,
+            ) -> None:
+                new_params = dict(_params)
+                new_params[_pname] = str(test_id)
+                test_url = urlunparse(_parsed._replace(query=urlencode(new_params)))
                 body = self._fetch(test_url, self.session)
-
                 if not body:
-                    continue
-                # Hash kontrolü: aynı içerik ise FP — atla
-                if _body_hash(body) == _body_hash(original_body):
-                    continue
-                # Benzerlik %90 üzerinde ise çok az fark var, anlamsız — atla
-                sim = _similarity(original_body, body)
+                    return
+                if _body_hash(body) == _orig_hash:
+                    return
+                sim = _similarity(_orig, body)
                 if sim >= 0.90:
-                    continue
-
+                    return
                 sensitive = _contains_sensitive(body)
                 if sensitive:
                     self.report_finding(
                         vuln_type="IDOR",
                         url=test_url,
-                        param=param_name,
+                        param=_pname,
                         payload=str(test_id),
                         severity="Medium",
                         evidence=f"Sıralı numaralandırma {sensitive} içeren yanıt ortaya çıkardı",
                         extra={
                             "confidence": "medium",
-                            "original_id": base_id,
+                            "original_id": _base,
                             "tested_id": test_id,
                             "similarity_score": round(sim, 3),
-                            "body_hash_original": _body_hash(original_body),
-                            "body_hash_tested": _body_hash(body),
                         },
                     )
 
-        # Path-based IDs: /api/user/123 -> /api/user/124
+            with _cf.ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(_check_param_id, valid_test_ids))
+
+        # --- Path-based IDs: /api/user/123 -> /api/user/124 ---
         path_parts = parsed.path.split("/")
         for i, part in enumerate(path_parts):
-            if re.match(r"^\d+$", part):
-                base_id = int(part)
-                original_body = self._fetch(url, self.session) or ""
-                for test_id in [base_id - 1, base_id + 1]:
-                    if test_id <= 0:
-                        continue
-                    new_parts = path_parts[:]
-                    new_parts[i] = str(test_id)
-                    new_path = "/".join(new_parts)
-                    test_url = urlunparse(parsed._replace(path=new_path))
-                    body = self._fetch(test_url, self.session)
-                    if not body:
-                        continue
-                    if _body_hash(body) == _body_hash(original_body):
-                        continue
-                    sim_score = _similarity(original_body, body)
-                    if sim_score >= 0.90:
-                        continue
-                    sensitive = _contains_sensitive(body)
-                    if sensitive:
-                        self.report_finding(
-                            vuln_type="IDOR",
-                            url=test_url,
-                            param=f"path[{i}]",
-                            payload=str(test_id),
-                            severity="Medium",
-                            evidence=f"Path tabanlı IDOR {sensitive} içeren yanıt ortaya çıkardı",
-                            extra={
-                                "confidence": "medium",
-                                "original_id": base_id,
-                                "tested_id": test_id,
-                                "similarity_score": round(sim_score, 3),
-                                "body_hash_original": _body_hash(original_body),
-                                "body_hash_tested": _body_hash(body),
-                            },
-                        )
+            if not re.match(r"^\d+$", part):
+                continue
+            base_id = int(part)
+            for test_id in [base_id - 1, base_id + 1]:
+                if test_id <= 0:
+                    continue
+                new_parts = path_parts[:]
+                new_parts[i] = str(test_id)
+                test_url = urlunparse(parsed._replace(path="/".join(new_parts)))
+                body = self._fetch(test_url, self.session)
+                if not body:
+                    continue
+                if _body_hash(body) == orig_hash:
+                    continue
+                sim_score = _similarity(original_body, body)
+                if sim_score >= 0.90:
+                    continue
+                sensitive = _contains_sensitive(body)
+                if sensitive:
+                    self.report_finding(
+                        vuln_type="IDOR",
+                        url=test_url,
+                        param=f"path[{i}]",
+                        payload=str(test_id),
+                        severity="Medium",
+                        evidence=f"Path tabanlı IDOR {sensitive} içeren yanıt ortaya çıkardı",
+                        extra={
+                            "confidence": "medium",
+                            "original_id": base_id,
+                            "tested_id": test_id,
+                            "similarity_score": round(sim_score, 3),
+                        },
+                    )
 
     def _fetch(self, url: str, session) -> Optional[str]:
         try:

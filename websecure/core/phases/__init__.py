@@ -1502,11 +1502,21 @@ def _runner_nosqli(ctx) -> None:
     timeout = float(_get(getattr(ctx, "config", {}) or {}, "timeouts.nosqli", 8.0))
     endpoints = _get(getattr(ctx, "config", {}) or {}, "nosqli.endpoints", None)
     params = _get(getattr(ctx, "config", {}) or {}, "nosqli.params", None)
+    results = _ensure_results_bucket(ctx)
+
+    # Extract HTML forms discovered during the discovery phase
+    forms_meta = (getattr(ctx, "results", {}) or {}).get("forms_meta", [])
+    all_forms: list = []
+    for page in forms_meta:
+        if isinstance(page, dict):
+            all_forms.extend(page.get("forms", []))
 
     run = getattr(mod, "run", None)
     if callable(run):
-        kw = _filter_kwargs(run, dict(url=base_url, base_url=base_url, session=sess, debug=bool(getattr(ctx, "debug", False)),
-                                      timeout=timeout, endpoints=endpoints, params=params))
+        kw = _filter_kwargs(run, dict(url=base_url, base_url=base_url, session=sess,
+                                      debug=bool(getattr(ctx, "debug", False)),
+                                      timeout=timeout, endpoints=endpoints,
+                                      params=params, results=results, forms=all_forms))
         run(**kw)
 
 def _runner_scanners_file_upload(ctx) -> None:
