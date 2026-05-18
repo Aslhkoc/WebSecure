@@ -581,12 +581,14 @@ def phase_portscan(ctx: dict):
     import socket as _socket
     try:
         resolved_ip = _socket.gethostbyname(host)
-        # Private IP aralıkları — stealth mode
-        _private = any([
-            resolved_ip.startswith("192.168."),
-            resolved_ip.startswith("10."),
-            resolved_ip.startswith("172."),
-        ])
+        # RFC-1918 private ranges: 10.x.x.x, 172.16–31.x.x, 192.168.x.x
+        _parts = resolved_ip.split(".")
+        _second = int(_parts[1]) if len(_parts) >= 2 else 0
+        _private = (
+            resolved_ip.startswith("10.") or
+            resolved_ip.startswith("192.168.") or
+            (resolved_ip.startswith("172.") and 16 <= _second <= 31)
+        )
         if _private and nmap_mode == "aggressive":
             nmap_mode = "deep"  # iç ağda aggressive çok gürültülü
     except Exception:
@@ -3010,7 +3012,15 @@ def run_portscan(ctx):
 
     cfg = getattr(ctx, "config", {}) or {}
     nmap_cfg = cfg.get("nmap", {}) or {}
-    results = getattr(ctx, "results", None) or {}
+    # results: ctx.results referansına bağlı kalmalı — yeni dict oluşturma (falsy boş dict'e dikkat)
+    _ctx_results = getattr(ctx, "results", None)
+    if not isinstance(_ctx_results, dict):
+        _ctx_results = {}
+        try:
+            ctx.results = _ctx_results
+        except (AttributeError, TypeError):
+            pass
+    results = _ctx_results
 
     # Nmap disabled ise atla
     if not nmap_cfg.get("enabled", True):
@@ -3048,12 +3058,14 @@ def run_portscan(ctx):
     import socket as _socket
     try:
         resolved_ip = _socket.gethostbyname(host)
-        # Private IP aralıkları — stealth mode
-        _private = any([
-            resolved_ip.startswith("192.168."),
-            resolved_ip.startswith("10."),
-            resolved_ip.startswith("172."),
-        ])
+        # RFC-1918 private ranges: 10.x.x.x, 172.16–31.x.x, 192.168.x.x
+        _parts = resolved_ip.split(".")
+        _second = int(_parts[1]) if len(_parts) >= 2 else 0
+        _private = (
+            resolved_ip.startswith("10.") or
+            resolved_ip.startswith("192.168.") or
+            (resolved_ip.startswith("172.") and 16 <= _second <= 31)
+        )
         if _private and nmap_mode == "aggressive":
             nmap_mode = "deep"  # iç ağda aggressive çok gürültülü
     except Exception:

@@ -139,13 +139,14 @@ def _run_nmap(binary: str, args: List[str], target: str,
               timeout: int = 900) -> Tuple[int, str, str, str]:
     """
     Nmap çalıştırır, XML çıktısını döner.
+    Stdout gerçek zamanlı yazdırılır — kullanıcı tarama ilerlemesini görebilir.
     Returns: (returncode, xml_file_path, stdout, stderr)
     """
     fd, xml_out = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
 
     cmd = [binary] + args + ["-oX", xml_out, target]
-    cmd_str = " ".join(cmd)
+    cmd_str = " ".join(str(a) for a in cmd)
     print(f"\n\033[36m[Nmap]\033[0m {cmd_str}\n")
     logger.info(f"[Nmap] {cmd_str}")
 
@@ -163,30 +164,49 @@ def _run_nmap(binary: str, args: List[str], target: str,
         except Exception:
             pass
 
+        # Gerçek zamanlı stdout okuma — kullanıcı tarama ilerlemesini görür
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+
+        def _drain_stderr():
+            for raw in proc.stderr:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                stderr_lines.append(line)
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
+        deadline = time.monotonic() + timeout
         try:
-            stdout_b, stderr_b = proc.communicate(timeout=timeout)
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                stdout_lines.append(line)
+                print(f"  {line}")          # gerçek zamanlı ekrana yaz
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    msg = f"[Nmap] Zaman aşımı ({timeout}s)"
+                    logger.warning(msg)
+                    print(f"\033[31m{msg}\033[0m")
+                    break
+            proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
-            msg = f"[Nmap] Zaman aşımı ({timeout}s) — {cmd_str}"
-            logger.warning(msg)
-            print(f"\033[31m{msg}\033[0m")
-            return -1, xml_out, "", "timeout"
         finally:
+            stderr_thread.join(timeout=5)
             try:
                 from websecure.core.phases import unregister_child_proc
                 unregister_child_proc(proc)
             except Exception:
                 pass
 
-        stdout = stdout_b.decode("utf-8", errors="replace")
-        stderr = stderr_b.decode("utf-8", errors="replace")
+        stdout = "\n".join(stdout_lines)
+        stderr = "\n".join(stderr_lines)
 
-        if proc.returncode != 0:
-            logger.warning(f"[Nmap] returncode={proc.returncode}\nstderr: {stderr.strip()}")
+        if proc.returncode not in (0, 1, None):
+            logger.warning(f"[Nmap] returncode={proc.returncode}\nstderr: {stderr.strip()[:300]}")
             print(f"\033[33m[Nmap] Uyarı (kod {proc.returncode}):\033[0m {stderr.strip()[:300]}")
 
-        return proc.returncode, xml_out, stdout, stderr
+        return proc.returncode or 0, xml_out, stdout, stderr
 
     except Exception as e:
         logger.error(f"[Nmap] Hata: {e}")
@@ -306,18 +326,21 @@ class NmapWrapper(ToolIntegration):
         mode = (mode or "aggressive").lower()
 
         if mode in ("aggressive", "deep", "standard", "normal"):
-            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout)
+            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout,
+                                        ports=ports, extra_args=extra_args)
         elif mode == "stealth":
             return self._scan_stealth(target, proxy=proxy, timeout=timeout)
         elif mode == "full":
             return self._scan_two_phase(target, root=root, proxy=proxy,
-                                        timeout=timeout, all_ports=True)
+                                        timeout=timeout, all_ports=True,
+                                        ports=ports, extra_args=extra_args)
         elif mode == "fast":
             return self._scan_single(target,
-                                     ["-sT", "-F", "-T4", "--open", "--host-timeout", "60s"],
+                                     ["-sT", "-Pn", "-F", "-T4", "--open", "--host-timeout", "60s"],
                                      proxy=proxy, timeout=180)
         else:
-            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout)
+            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout,
+                                        ports=ports, extra_args=extra_args)
 
     # ------------------------------------------------------------------
     # İki Fazlı Tarama (Ana Strateji)
@@ -325,7 +348,8 @@ class NmapWrapper(ToolIntegration):
 
     def _scan_two_phase(self, target: str, root: bool = False,
                         proxy: Optional[str] = None, timeout: int = 900,
-                        all_ports: bool = False) -> List[Dict[str, Any]]:
+                        all_ports: bool = False, ports: Optional[str] = None,
+                        extra_args: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Faz 1: Tüm TCP portlarını hızlıca tara -> açık portları bul
         Faz 2: Bulunan portlarda derin servis + NSE script analizi
@@ -344,22 +368,34 @@ class NmapWrapper(ToolIntegration):
             # SYN scan — Linux/Mac root veya Windows Admin+Npcap
             if _npcap_ok:
                 print("\033[36m[Nmap]\033[0m Windows Admin + Npcap tespit edildi — SYN scan aktif!")
-            if all_ports:
-                phase1_args = ["-sS", "-p-", "-T4", "--open",
+            if ports:
+                phase1_args = ["-sS", "-Pn", "-p", ports, "-T4", "--open",
                                "--min-rate", "1000", "--max-retries", "2",
-                               "--host-timeout", "300s"]
+                               "--host-timeout", "600s"]
+            elif all_ports:
+                phase1_args = ["-sS", "-Pn", "-p-", "-T4", "--open",
+                               "--min-rate", "1000", "--max-retries", "2",
+                               "--host-timeout", "600s"]
             else:
-                phase1_args = ["-sS", "--top-ports", "65535", "-T4", "--open",
+                phase1_args = ["-sS", "-Pn", "--top-ports", "1000", "-T4", "--open",
                                "--min-rate", "1000", "--max-retries", "2",
-                               "--host-timeout", "300s"]
+                               "--host-timeout", "600s"]
         else:
             # TCP connect scan — raw socket yok (normal kullanıcı veya Npcap yok)
-            top = "10000" if not on_windows else "5000"
-            phase1_args = [
-                "-sT", "--top-ports", top, "-T4", "--open",
-                "--min-rate", "500", "--max-retries", "2",
-                "--host-timeout", "180s",
-            ]
+            # -Pn: İnternet hedeflerinde ICMP genellikle engelli — ping atlamak gerekir
+            top = "1000"
+            if ports:
+                phase1_args = [
+                    "-sT", "-Pn", "-p", ports, "-T4", "--open",
+                    "--min-rate", "300", "--max-retries", "2",
+                    "--host-timeout", "300s",
+                ]
+            else:
+                phase1_args = [
+                    "-sT", "-Pn", "--top-ports", top, "-T4", "--open",
+                    "--min-rate", "300", "--max-retries", "2",
+                    "--host-timeout", "300s",
+                ]
             if on_windows and not _npcap_ok:
                 # raw socket erişimi yok — nmap'e söyle
                 phase1_args += ["--unprivileged"]
@@ -395,7 +431,7 @@ class NmapWrapper(ToolIntegration):
         if _raw_socket:
             # Linux/Mac root veya Windows Admin+Npcap: tam güç
             phase2_args = [
-                "-sS",
+                "-sS", "-Pn",
                 "-sV", "--version-intensity", "9", "--version-all",
                 "-sC",
                 "-O" if not on_windows else "",          # OS detect sadece Linux/Mac
@@ -406,24 +442,30 @@ class NmapWrapper(ToolIntegration):
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,"
                 "vulns.showall=true" + ("" if on_windows else ",unsafe=1"),
                 "--script-timeout", "60s",
-                "--host-timeout", "180s",
+                "--host-timeout", "600s",
                 "-p", ports_str,
                 "-T4",
             ]
         else:
             # TCP connect — raw socket yok (normal kullanıcı)
             phase2_args = [
-                "-sT", "--unprivileged",
+                "-sT", "-Pn",
                 "-sV", "--version-intensity", "7",
                 "-sC",
                 "--script", self._build_script_list(windows_safe=True),
                 "--script-args",
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
                 "--script-timeout", "30s",
-                "--host-timeout", "120s",
+                "--host-timeout", "300s",
                 "-p", ports_str,
                 "-T4",
             ]
+            if on_windows and not _npcap_ok:
+                phase2_args.append("--unprivileged")
+
+        # Kullanıcı ek argümanlarını uygula
+        if extra_args:
+            phase2_args.extend(extra_args)
 
         phase2_args = [a for a in phase2_args if a]  # boşları temizle
         self._inject_proxy(phase2_args, proxy)
