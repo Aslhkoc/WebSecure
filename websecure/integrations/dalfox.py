@@ -325,17 +325,22 @@ class DalfoxWrapper(ToolIntegration):
             for h_name, h_val in (headers or {}).items():
                 cmd.extend(["-H", f"{h_name}: {h_val}"])
 
-            logger.info(f"[dalfox] pipe mode: {len(urls)} URL")
+            _pipe_timeout = max(120, len(urls) * 5)
+            logger.info(f"[dalfox] pipe mode: {len(urls)} URL (timeout={_pipe_timeout}s)")
 
             with open(in_file, "rb") as stdin_f:
-                proc = subprocess.run(
+                proc = subprocess.Popen(
                     cmd,
                     stdin=stdin_f,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
-                    timeout=max(120, len(urls) * 5),
-                    check=False,
                 )
+            try:
+                _, stderr_b = proc.communicate(timeout=_pipe_timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning(f"[dalfox] pipe zaman aşımı ({_pipe_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
 
             dalfox_findings = self._parse_output(out_file)
             findings = self._to_tool_findings(dalfox_findings)
@@ -349,11 +354,6 @@ class DalfoxWrapper(ToolIntegration):
                 findings=findings,
                 duration_s=duration,
             )
-
-        except subprocess.TimeoutExpired:
-            return ToolResult(tool=self.tool_name, target="pipe",
-                              status=ToolStatus.TIMEOUT,
-                              duration_s=time.monotonic() - start)
         except Exception as exc:
             logger.error(f"[dalfox] pipe hatası: {exc!r}", exc_info=True)
             return ToolResult(tool=self.tool_name, target="pipe",

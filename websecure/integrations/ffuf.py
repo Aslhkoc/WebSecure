@@ -199,17 +199,20 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.info(f"Starting FFUF scan on {url}")
-            process = subprocess.run(
+            process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                timeout=600,
-                check=False,
             )
-
-            if process.returncode != 0 and process.stderr:
-                logger.debug(f"FFUF stderr: {process.stderr}")
+            try:
+                _, stderr_b = process.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                logger.warning("[FFUF] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
+            else:
+                if process.returncode != 0 and stderr_b:
+                    logger.debug(f"FFUF stderr: {stderr_b.decode('utf-8', 'ignore')[:300]}")
 
             findings = self._parse_json_output(temp_output)
 
@@ -403,13 +406,17 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.debug(f"[FFUF] Header fuzzing: {header_name} on {url}")
-            subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=120,
             )
+            try:
+                proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning(f"[FFUF] Header fuzz timed out for header={header_name}")
 
             raw = self._parse_json_output(temp_output)
             results = []
@@ -418,10 +425,6 @@ class FFUFWrapper(ToolIntegration):
                 item["fuzz_mode"] = "header_value"
                 results.append(item)
             return results
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[FFUF] Header fuzz timed out for header={header_name}")
-            return []
         except Exception as exc:
             logger.error(f"[FFUF] Header fuzz error for header={header_name}: {exc!r}")
             return []
@@ -472,8 +475,17 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.debug(f"[FFUF] Header name fuzzing on {url}")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=120)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning("[FFUF] Header name fuzz timed out (120s)")
 
             raw = self._parse_json_output(temp_output)
             for item in raw:
@@ -585,8 +597,17 @@ class FeroxbusterWrapper(ToolIntegration):
                 cmd.extend(extra_args)
 
             logger.info(f"Starting Feroxbuster on {target}...")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=600)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                proc.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning("[Feroxbuster] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
 
             results = []
             if os.path.exists(temp_output):

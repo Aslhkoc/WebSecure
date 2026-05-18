@@ -234,17 +234,20 @@ class SQLMapWrapper(ToolIntegration):
                 cmd.extend(["--proxy", proxy.replace("socks5h://", "socks5://")])
 
             logger.info(f"Starting SQLMap binary scan on {target}...")
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=300,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            stdout = proc.stdout or ""
-            stderr = proc.stderr or ""
+            try:
+                stdout_b, stderr_b = proc.communicate(timeout=300)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning("[SQLMap] Zaman aşımı (300s) — kısmi sonuçlar ayrıştırılıyor")
+                stdout_b, stderr_b = b"", b""
+            stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+            stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
 
             # Primary: parse structured CSV written by --results-file
             results = _parse_sqlmap_csv(csv_path, target)
@@ -270,9 +273,6 @@ class SQLMapWrapper(ToolIntegration):
 
             return results
 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"SQLMap timed out on {target}")
-            return []
         except Exception as e:
             logger.error(f"SQLMap binary execution error: {e}")
             return []

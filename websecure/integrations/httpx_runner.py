@@ -251,18 +251,28 @@ class HttpxWrapper(ToolIntegration):
                 custom_headers=custom_headers or {},
             )
 
-            logger.info(f"[httpx] {len(urls)} URL prob ediliyor...")
-            proc = subprocess.run(
+            # Gerçekçi timeout: paralel thread sayısına göre hesapla, max 300s
+            _timeout = max(60, min(
+                (len(urls) * self.timeout_s) // max(self.threads, 1) + 30,
+                300
+            ))
+            logger.info(f"[httpx] {len(urls)} URL prob ediliyor (timeout={_timeout}s)...")
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                timeout=max(60, self.timeout_s * min(len(urls), 100)),
-                check=False,
             )
-
-            if proc.returncode not in (0, 1):
-                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
-                logger.warning(f"[httpx] Çıkış kodu {proc.returncode}: {stderr_out}")
+            try:
+                _, stderr_b = proc.communicate(timeout=_timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning(f"[httpx] Zaman aşımı ({_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
+                stderr_b = b""
+            else:
+                if proc.returncode not in (0, 1):
+                    stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
+                    logger.warning(f"[httpx] Çıkış kodu {proc.returncode}: {stderr_out}")
 
             probe_results = self._parse_output(out_file)
             findings = self._build_findings(probe_results)
@@ -285,13 +295,6 @@ class HttpxWrapper(ToolIntegration):
                 },
             )
 
-        except subprocess.TimeoutExpired:
-            logger.warning("[httpx] Zaman aşımı")
-            return ToolResult(
-                tool=self.tool_name, target=urls[0] if urls else "",
-                status=ToolStatus.TIMEOUT,
-                duration_s=time.monotonic() - start,
-            )
         except Exception as exc:
             logger.error(f"[httpx] Hata: {exc!r}", exc_info=True)
             return ToolResult(

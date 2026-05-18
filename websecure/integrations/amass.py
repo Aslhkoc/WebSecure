@@ -233,17 +233,21 @@ class AmassWrapper(ToolIntegration):
             cmd.extend(["-config", config_path])
 
         logger.info(f"[Amass] enum başlatılıyor -> domain={domain}  passive={passive}")
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            timeout=timeout_s,
-            check=False,
         )
-
-        if proc.returncode not in (0, 1):
-            stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
-            logger.warning(f"[Amass] enum çıkış kodu {proc.returncode}: {stderr_out}")
+        try:
+            _, stderr_b = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            logger.warning(f"[Amass] enum zaman aşımı ({timeout_s}s) — kısmi sonuçlar ayrıştırılıyor")
+        else:
+            if proc.returncode not in (0, 1):
+                stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
+                logger.warning(f"[Amass] enum çıkış kodu {proc.returncode}: {stderr_out}")
 
         return self._parse_json_output(out_prefix + ".json")
 
@@ -470,17 +474,21 @@ class SubfinderIntegration(ToolIntegration):
                 cmd.append("-all")
 
             logger.info(f"[subfinder] Pasif enum başlıyor: {domain}")
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                timeout=timeout_s,
-                check=False,
             )
-
-            if proc.returncode not in (0, 1):
-                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
-                logger.warning(f"[subfinder] Çıkış kodu {proc.returncode}: {stderr_out}")
+            try:
+                _, stderr_b = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                logger.warning(f"[subfinder] Zaman aşımı ({timeout_s}s) — kısmi sonuçlar ayrıştırılıyor")
+            else:
+                if proc.returncode not in (0, 1):
+                    stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
+                    logger.warning(f"[subfinder] Çıkış kodu {proc.returncode}: {stderr_out}")
 
             subdomains = self._parse_output(out_file)
             findings = self._build_findings(domain, subdomains)
@@ -497,11 +505,6 @@ class SubfinderIntegration(ToolIntegration):
                 extra={"domain": domain, "subdomains": list(subdomains)},
             )
 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[subfinder] Zaman aşımı ({timeout_s}s)")
-            return ToolResult(tool=self.tool_name, target=target,
-                              status=ToolStatus.TIMEOUT,
-                              duration_s=time.monotonic() - start)
         except Exception as exc:
             logger.error(f"[subfinder] Hata: {exc!r}", exc_info=True)
             return ToolResult(tool=self.tool_name, target=target,
