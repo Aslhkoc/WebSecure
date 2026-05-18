@@ -1100,7 +1100,9 @@ def _runner_katana(ctx) -> None:
         wrapper.depth = depth
         wrapper.crawl_duration_s = crawl_duration_s
         wrapper.rate_limit = rate_limit
-        result = wrapper.run(url, depth=depth, js_crawl=js_crawl)
+        # Proxy'i geç — Tor aktifse gerçek IP sızmasın
+        _katana_proxy = _resolve_proxy(ctx)
+        result = wrapper.run(url, depth=depth, js_crawl=js_crawl, proxy=_katana_proxy)
         unique_urls = result.extra.get("unique_urls", [])
         endpoints_data = result.extra.get("endpoints", [])
         timed_out = result.extra.get("timed_out", False)
@@ -3545,9 +3547,10 @@ def _resolve_proxy(ctx) -> str | None:
         return _tor_proxy
 
     # 1. Check if Tor is active via proxy_manager
+    # CRITICAL: socks5h:// routes DNS through Tor too — prevents DNS leak to ISP
     tor = _get_config(ctx, "proxy.tor.enabled", False)
     if tor:
-        return "socks5://127.0.0.1:9050"
+        return "socks5h://127.0.0.1:9050"
 
     # 2. Check explicit proxy
     proxy_url = _get_config(ctx, "http.proxy")

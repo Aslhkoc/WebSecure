@@ -156,6 +156,10 @@ class KatanaWrapper(ToolIntegration):
            Timeout'da proc.kill() çağrılır — Windows'ta da process gerçekten ölür.
         3. Timeout'da bile o ana kadar yazılan kısmi çıktı parse edilir,
            bulgu listesi döndürülür (TIMEOUT yerine SUCCESS, timed_out=True).
+
+        Gizlilik
+        ---------
+        proxy kwarg: "socks5h://..." veya "http://..." — katana bu proxy üzerinden çalışır.
         """
         if not self.is_available():
             logger.warning("[katana] Binary bulunamadı, atlanıyor.")
@@ -166,6 +170,7 @@ class KatanaWrapper(ToolIntegration):
         headless = kwargs.get("headless", self.headless)
         form_extraction = kwargs.get("form_extraction", True)
         known_files = kwargs.get("known_files", True)
+        proxy = kwargs.get("proxy")
 
         start = time.monotonic()
         fd, out_file = tempfile.mkstemp(suffix=".jsonl", prefix="ws_katana_")
@@ -180,11 +185,13 @@ class KatanaWrapper(ToolIntegration):
                 headless=headless,
                 form_extraction=form_extraction,
                 known_files=known_files,
+                proxy=proxy,
             )
 
             logger.info(
                 f"[katana] Crawling → {target}  depth={depth}  js={js_crawl}  "
                 f"rate={self.rate_limit}/s  timeout={self.crawl_duration_s}s"
+                f"{'  proxy=' + proxy if proxy else ''}"
             )
 
             # Popen kullan — subprocess.run Windows'ta TimeoutExpired'da prosesi öldürmüyor
@@ -275,6 +282,7 @@ class KatanaWrapper(ToolIntegration):
         headless: bool,
         form_extraction: bool,
         known_files: bool,
+        proxy: Optional[str] = None,
     ) -> List[str]:
         # Ensure URL has a protocol prefix — katana rejects bare hostnames
         if target and not target.startswith(("http://", "https://")):
@@ -324,6 +332,13 @@ class KatanaWrapper(ToolIntegration):
 
         if self.scope_regex and "-scope-regex" in _supported:
             cmd.extend(["-scope-regex", self.scope_regex])
+
+        # Proxy desteği — socks5h:// katana'da desteklenmez, socks5:// olarak geçirilir
+        # (katana kendi DNS çözümlemesi yapar — Tor için sadece socks5:// geçerli)
+        if proxy:
+            proxy_for_katana = proxy.replace("socks5h://", "socks5://")
+            cmd.extend(["-proxy", proxy_for_katana])
+            logger.info(f"[katana] Proxy aktif: {proxy_for_katana}")
 
         return cmd
 

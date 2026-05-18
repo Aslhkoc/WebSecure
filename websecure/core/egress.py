@@ -59,24 +59,81 @@ def _start_tor_if_needed() -> bool:
         return False
 
 
+def _tor_cookie_auth() -> Optional[bytes]:
+    """
+    Tor'un CookieAuthentication dosyasını oku.
+    Tor varsayılan olarak cookie auth kullanır — boş şifre çalışmayabilir.
+    """
+    cookie_paths = [
+        # Linux/Mac standart
+        os.path.expanduser("~/.tor/control_auth_cookie"),
+        "/var/run/tor/control.authcookie",
+        "/var/lib/tor/control_auth_cookie",
+        # Windows Tor Browser
+        os.path.expandvars(r"%APPDATA%\tor\control_auth_cookie"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie"),
+        r"C:\Users\Acer\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie",
+        r"C:\Users\Acer\AppData\Roaming\tor\control_auth_cookie",
+    ]
+    for path in cookie_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    return f.read()
+        except Exception:
+            continue
+    return None
+
+
 def new_tor_identity() -> bool:
-    """Tor NEWNYM komutu ile yeni kimlik al (yeni IP)."""
-    try:
-        s = socket.create_connection(("127.0.0.1", TOR_CONTROL_PORT), timeout=5)
-        s.sendall(b'AUTHENTICATE ""\r\nSIGNAL NEWNYM\r\nQUIT\r\n')
-        resp = s.recv(1024)
-        s.close()
-        if b"250" in resp:
-            time.sleep(2)  # Yeni devre kurulumu için bekle
-            _logger.info("[egress] Yeni Tor kimliği alındı.")
+    """
+    Tor NEWNYM komutu ile yeni kimlik al (yeni IP).
+
+    Auth sırası:
+    1. Boş şifre (CookieAuthentication 0 veya HashedControlPassword "")
+    2. Cookie dosyası (varsayılan Tor kurulumu — en yaygın)
+    """
+    def _send_newnym(auth_cmd: bytes) -> bool:
+        try:
+            s = socket.create_connection(("127.0.0.1", TOR_CONTROL_PORT), timeout=5)
+            s.sendall(auth_cmd + b"\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
+            resp = s.recv(1024)
+            s.close()
+            return b"250" in resp
+        except Exception as e:
+            _logger.debug(f"[egress] NEWNYM sendall hatası: {e}")
+            return False
+
+    # 1. Boş şifre dene
+    if _send_newnym(b'AUTHENTICATE ""'):
+        _logger.info("[egress] Yeni Tor kimliği alındı (boş auth).")
+        time.sleep(2)
+        try:
+            from websecure.core.circuit_breaker import cb_reset as _cb_reset
+            _cb_reset()
+        except Exception:
+            pass
+        return True
+
+    # 2. Cookie auth dene
+    cookie = _tor_cookie_auth()
+    if cookie:
+        cookie_hex = cookie.hex()
+        if _send_newnym(f'AUTHENTICATE {cookie_hex}'.encode()):
+            _logger.info("[egress] Yeni Tor kimliği alındı (cookie auth).")
+            time.sleep(2)
             try:
                 from websecure.core.circuit_breaker import cb_reset as _cb_reset
                 _cb_reset()
             except Exception:
                 pass
             return True
-    except Exception as e:
-        _logger.debug(f"[egress] NEWNYM başarısız: {e}")
+        _logger.warning("[egress] Cookie auth da başarısız. Tor control port erişilemiyor.")
+    else:
+        _logger.warning(
+            "[egress] NEWNYM başarısız — Tor cookie dosyası bulunamadı. "
+            "torrc'ye 'CookieAuthentication 0' ekleyin veya control port şifresi ayarlayın."
+        )
     return False
 
 
@@ -262,11 +319,21 @@ def _egress_health_check(session, cfg: dict, results: dict) -> None:
         # verify bayrağını faz bağlamına göre hesapla
         ver = verify_for_phase(cfg, 'egress', u)
 
-        # Proxy BYPASS gerekiyorsa call-level override yap
+        # Proxy configured ama cevap vermiyorsa — bypass ETMEYİZ, uyarı ver
+        # Bypass edilirse gerçek IP sızar (privacy leak).
         call_kwargs = dict(timeout=6, allow_redirects=True, verify=ver)
         if any_proxy and not proxy_alive:
-            # Proxy configured fakat **up değil** -> bypass
-            call_kwargs['proxies'] = {}
+            _logger.error(
+                "[egress] UYARI: Proxy yapılandırıldı ama canlı değil! "
+                "Gerçek IP sızmasını önlemek için egress health check isteği ATLANACAK."
+            )
+            observations.append({
+                "endpoint": u,
+                "error": "proxy_down:skipped_to_prevent_ip_leak",
+                "used_proxy": False,
+                "ip_leaked": True,
+            })
+            continue
 
         try:
             r = session.get(u, **call_kwargs)

@@ -238,10 +238,13 @@ class SessionHunter(BaseScanner):
     def _brute_common(self, url: str, bucket: str, workers: int = 8, phase_timeout: int = 60):
         """Dictionary attack: try well-known weak session ID values."""
         ua = self.session.headers.get("User-Agent", "Mozilla/5.0")
+        # Proxy ayarlarını session'dan al — Tor/proxy ile gizlilik korunur
+        _proxies = dict(self.session.proxies) if self.session.proxies else None
 
         def check_one(name: str, value: str) -> Optional[Dict]:
             try:
-                resp = requests.get(
+                # self.session kullan — proxy (Tor) devre dışı kalmasın
+                resp = self.session.get(
                     url,
                     headers={"Cookie": f"{name}={value}", "User-Agent": ua},
                     timeout=5,
@@ -304,7 +307,8 @@ class SessionHunter(BaseScanner):
             for val in candidates:
                 for name in _SESSION_NAMES[:5]:
                     try:
-                        resp = requests.get(
+                        # self.session kullan — proxy (Tor) devre dışı kalmasın
+                        resp = self.session.get(
                             url,
                             headers={"Cookie": f"{name}={val}", "User-Agent": ua},
                             timeout=4,
