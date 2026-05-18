@@ -1088,13 +1088,22 @@ def _runner_katana(ctx) -> None:
         # Ensure URL has protocol prefix before passing to katana
         if url and not url.startswith(("http://", "https://")):
             url = "https://" + url
-        # Config'den derinlik ve JS tarama seçeneklerini al
+        # Config'den derinlik, süre ve JS tarama seçeneklerini al
         cfg = getattr(ctx, "config", {}) or {}
-        depth = int((cfg.get("discovery") or {}).get("max_depth") or 3)
-        js_crawl = bool((cfg.get("katana") or {}).get("js_crawl", True))
+        katana_cfg = cfg.get("katana") or {}
+        # max_depth default 2 — agresif 3 her zaman timeout sebebidir
+        depth = int(katana_cfg.get("depth") or (cfg.get("discovery") or {}).get("max_depth") or 2)
+        js_crawl = bool(katana_cfg.get("js_crawl", True))
+        # crawl_duration_s config'den alınabilir; default 120s
+        crawl_duration_s = int(katana_cfg.get("crawl_duration_s") or 120)
+        rate_limit = int(katana_cfg.get("rate_limit") or 50)
+        wrapper.depth = depth
+        wrapper.crawl_duration_s = crawl_duration_s
+        wrapper.rate_limit = rate_limit
         result = wrapper.run(url, depth=depth, js_crawl=js_crawl)
         unique_urls = result.extra.get("unique_urls", [])
         endpoints_data = result.extra.get("endpoints", [])
+        timed_out = result.extra.get("timed_out", False)
         # ctx.results["endpoints"] 'a katana URL'lerini ekle
         if unique_urls:
             ctx_results = getattr(ctx, "results", None)
@@ -1122,11 +1131,15 @@ def _runner_katana(ctx) -> None:
             add_result("meta", f.to_dict())
         add_result("meta", {
             "stage": "katana",
-            "status": "ok",
+            "status": "partial" if timed_out else "ok",
             "endpoints": len(unique_urls),
             "duration_s": round(result.duration_s, 1),
+            "timed_out": timed_out,
         })
-        _logger.info(f"[phases] katana: {len(unique_urls)} URL keşfedildi")
+        _logger.info(
+            f"[phases] katana: {len(unique_urls)} URL keşfedildi"
+            f"{'  [kısmi-timeout]' if timed_out else ''}"
+        )
     except Exception as e:
         _logger.warning(f"[phases] katana runner error: {e}")
         _report_phase_error("katana", "phases._runner_katana", e)

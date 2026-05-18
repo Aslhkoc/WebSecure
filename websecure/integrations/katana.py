@@ -76,14 +76,14 @@ class KatanaWrapper(ToolIntegration):
     def __init__(
         self,
         binary_path: Optional[str] = None,
-        depth: int = 3,
+        depth: int = 2,             # 3'ten düşürüldü — exponential büyüme önlenir
         js_crawl: bool = True,
         headless: bool = False,
         threads: int = 10,
         parallelism: int = 10,
-        rate_limit: int = 150,
-        timeout_s: int = 30,
-        crawl_duration_s: int = 300,
+        rate_limit: int = 50,       # 150'den düşürüldü — WAF tetiklemez, timeout azalır
+        timeout_s: int = 10,        # 30'dan düşürüldü — istek başına zaman aşımı
+        crawl_duration_s: int = 120,  # 300'den düşürüldü — toplam 2 dakika yeterli
         scope_regex: str = "",
     ) -> None:
         super().__init__(binary_path or "katana")
@@ -96,6 +96,24 @@ class KatanaWrapper(ToolIntegration):
         self.timeout_s = timeout_s
         self.crawl_duration_s = crawl_duration_s
         self.scope_regex = scope_regex
+        # Binary keşfi — tools/ klasörüne de bak
+        self._check_binary()
+
+    def _check_binary(self) -> None:
+        """Binary yolunu çöz: PATH → tools/ klasörü."""
+        if shutil.which(self.binary):
+            return
+        root = Path(__file__).resolve().parent.parent.parent
+        for candidate in [
+            root / "tools" / "katana" / "katana.exe",
+            root / "tools" / "katana" / "katana",
+            root / "tools" / "katana.exe",
+        ]:
+            if candidate.exists():
+                self._binary_path = str(candidate)
+                logger.info(f"[katana] Binary bulundu: {candidate}")
+                return
+        logger.warning("[katana] Binary bulunamadı — crawling devre dışı.")
 
     # ------------------------------------------------------------------ #
     # ToolIntegration arayüzü
@@ -106,10 +124,11 @@ class KatanaWrapper(ToolIntegration):
         return "katana"
 
     def is_available(self) -> bool:
-        return (
-            shutil.which(self.binary) is not None
-            or (self._binary_path is not None and Path(self._binary_path).exists())
-        )
+        if shutil.which(self.binary) is not None:
+            return True
+        if self._binary_path and Path(self._binary_path).exists():
+            return True
+        return False
 
     def version(self) -> Optional[str]:
         if not self.is_available():
@@ -129,14 +148,14 @@ class KatanaWrapper(ToolIntegration):
         """
         katana çalıştır, keşfedilen endpoint'leri döndür.
 
-        Anahtar argümanlar
-        ------------------
-        depth            : int — tarama derinliği
-        js_crawl         : bool — JS bundle analizi
-        headless         : bool — tarayıcısız/başlıklı mod
-        form_extraction  : bool — form input analizi
-        known_files      : bool — robots.txt, sitemap.xml, vb.
-        extensions_match : List[str] — yalnızca bu uzantıları tara
+        Timeout davranışı
+        -----------------
+        1. Katana'ya -ct flag ile kendi süre limitini ver (crawl_duration_s - 5s).
+           Katana graceful exit yapar, çıktı dosyası tamamdır.
+        2. Python tarafı Popen + communicate(timeout) kullanır.
+           Timeout'da proc.kill() çağrılır — Windows'ta da process gerçekten ölür.
+        3. Timeout'da bile o ana kadar yazılan kısmi çıktı parse edilir,
+           bulgu listesi döndürülür (TIMEOUT yerine SUCCESS, timed_out=True).
         """
         if not self.is_available():
             logger.warning("[katana] Binary bulunamadı, atlanıyor.")
@@ -149,7 +168,7 @@ class KatanaWrapper(ToolIntegration):
         known_files = kwargs.get("known_files", True)
 
         start = time.monotonic()
-        fd, out_file = tempfile.mkstemp(suffix=".json", prefix="ws_katana_")
+        fd, out_file = tempfile.mkstemp(suffix=".jsonl", prefix="ws_katana_")
         os.close(fd)
 
         try:
@@ -163,17 +182,49 @@ class KatanaWrapper(ToolIntegration):
                 known_files=known_files,
             )
 
-            logger.info(f"[katana] Crawling -> {target}  depth={depth}  js={js_crawl}")
-            proc = subprocess.run(
+            logger.info(
+                f"[katana] Crawling → {target}  depth={depth}  js={js_crawl}  "
+                f"rate={self.rate_limit}/s  timeout={self.crawl_duration_s}s"
+            )
+
+            # Popen kullan — subprocess.run Windows'ta TimeoutExpired'da prosesi öldürmüyor
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                timeout=self.crawl_duration_s,
-                check=False,
             )
 
-            if proc.returncode not in (0, 1):
-                stderr_out = (proc.stderr or b"").decode("utf-8", "ignore")[:300]
+            # Child process kaydı (signal handler desteği)
+            try:
+                from websecure.core.phases import register_child_proc
+                register_child_proc(proc)
+            except Exception:
+                pass
+
+            timed_out = False
+            stderr_b = b""
+            try:
+                _, stderr_b = proc.communicate(timeout=self.crawl_duration_s)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                logger.warning(
+                    f"[katana] Subprocess zaman aşımı ({self.crawl_duration_s}s) — "
+                    "process öldürülüyor, kısmi sonuçlar kullanılacak"
+                )
+                proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
+            finally:
+                try:
+                    from websecure.core.phases import unregister_child_proc
+                    unregister_child_proc(proc)
+                except Exception:
+                    pass
+
+            if not timed_out and proc.returncode not in (0, 1):
+                stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:400]
                 logger.warning(f"[katana] Çıkış kodu {proc.returncode}: {stderr_out}")
 
             endpoints = self._parse_output(out_file)
@@ -182,28 +233,23 @@ class KatanaWrapper(ToolIntegration):
 
             logger.info(
                 f"[katana] {target}: {len(endpoints)} endpoint keşfedildi  "
-                f"{duration:.1f}s"
+                f"{duration:.1f}s{'  [kısmi-timeout]' if timed_out else ''}"
             )
 
             return ToolResult(
                 tool=self.tool_name,
                 target=target,
-                status=ToolStatus.SUCCESS,
+                status=ToolStatus.SUCCESS,   # kısmi sonuçlar da kullanılabilir
                 findings=findings,
                 duration_s=duration,
                 extra={
                     "endpoint_count": len(endpoints),
                     "endpoints": [vars(e) for e in endpoints],
                     "unique_urls": list({e.url for e in endpoints}),
+                    "timed_out": timed_out,
                 },
             )
 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[katana] Zaman aşımı ({self.crawl_duration_s}s)")
-            return ToolResult(
-                tool=self.tool_name, target=target, status=ToolStatus.TIMEOUT,
-                duration_s=time.monotonic() - start,
-            )
         except Exception as exc:
             logger.error(f"[katana] Hata: {exc!r}", exc_info=True)
             return ToolResult(
@@ -239,17 +285,26 @@ class KatanaWrapper(ToolIntegration):
             self.binary,
             "-u", target,
             "-o", out_file,
-            "-jsonl",           # katana v1.6+ JSONL çıktı (eski -json flag'i kaldırıldı)
+            "-jsonl",           # katana v1.6+ JSONL çıktı
             "-silent",
+            "-no-color",
             "-depth", str(depth),
             "-c", str(self.parallelism),
             "-p", str(self.threads),
-            "-rl", str(self.rate_limit),  # rate-limit kısa formu
+            "-rl", str(self.rate_limit),
             "-timeout", str(self.timeout_s),
         ]
 
-        # Optional flags — only append if supported by the installed version
+        # Katana'nın kendi toplam süre limitini ekle — graceful exit sağlar
+        # subprocess timeout'dan 5s önce katana'nın kendisi durur
+        ct_seconds = max(10, self.crawl_duration_s - 5)
         _supported = self._get_supported_flags()
+
+        # -ct / -crawl-duration — toplam tarama süresi sınırı (en kritik fix)
+        if "-ct" in _supported:
+            cmd.extend(["-ct", f"{ct_seconds}s"])
+        elif "-crawl-duration" in _supported:
+            cmd.extend(["-crawl-duration", f"{ct_seconds}s"])
 
         if js_crawl and "-js-crawl" in _supported:
             cmd.append("-js-crawl")
@@ -269,9 +324,6 @@ class KatanaWrapper(ToolIntegration):
 
         if self.scope_regex and "-scope-regex" in _supported:
             cmd.extend(["-scope-regex", self.scope_regex])
-
-        # -field flag was removed in newer katana versions — skip it entirely.
-        # -json already outputs all fields we need.
 
         return cmd
 
@@ -293,17 +345,17 @@ class KatanaWrapper(ToolIntegration):
                 check=False,
             )
             help_text = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
-            # Extract flag names: lines starting with whitespace then dash
             import re as _re
             for m in _re.finditer(r"\s(-{1,2}[\w-]+)", help_text):
                 supported.add(m.group(1))
         except Exception as exc:
             logger.debug(f"[katana] Flag discovery failed: {exc!r}")
-            # Conservative defaults for when help fails
+            # Conservative defaults — en yaygın katana flag'leri
             supported = {
                 "-js-crawl", "-headless", "-form-extraction",
-                "-known-files", "-silent", "-json", "-depth",
-                "-c", "-p", "-rate-limit", "-timeout", "-u", "-o",
+                "-known-files", "-silent", "-no-color", "-jsonl",
+                "-depth", "-c", "-p", "-rl", "-timeout",
+                "-ct", "-u", "-o", "-scope-regex",
             }
 
         self._supported_flags_cache = supported  # type: ignore[attr-defined]
@@ -346,15 +398,17 @@ class KatanaWrapper(ToolIntegration):
     def _parse_endpoint(self, data: Dict[str, Any]) -> Optional[KatanaEndpoint]:
         try:
             req = data.get("request") or {}
-            # katana v1 JSON: {"request":{"endpoint":"https://..."}} — "endpoint" inside request
-            # older/fallback: top-level "url" or "endpoint"
-            url = req.get("endpoint") or req.get("url") or data.get("url") or data.get("endpoint") or ""
+            url = (
+                req.get("endpoint")
+                or req.get("url")
+                or data.get("url")
+                or data.get("endpoint")
+                or ""
+            )
             if not url:
                 return None
 
-            # Parametreleri çıkart
             params: List[str] = []
-            body = req.get("body", "") or ""
             query = urlparse(url).query
             if query:
                 params = [p.split("=")[0] for p in query.split("&") if "=" in p]
@@ -383,7 +437,6 @@ class KatanaWrapper(ToolIntegration):
         if not endpoints:
             return findings
 
-        # JS kaynaklı endpoint'ler — yüksek değer (gizli API'lar)
         js_endpoints = [e for e in endpoints if "js" in e.source.lower()]
         form_endpoints = [e for e in endpoints if "form" in e.source.lower()]
         api_endpoints = [
@@ -391,7 +444,6 @@ class KatanaWrapper(ToolIntegration):
             if any(seg in e.url for seg in ["/api/", "/v1/", "/v2/", "/graphql", "/rest/"])
         ]
 
-        # Keşif özeti
         findings.append(ToolFinding(
             title=f"Web Crawler — {len(endpoints)} Endpoint Keşfedildi",
             severity=ToolSeverity.INFO,
@@ -407,7 +459,6 @@ class KatanaWrapper(ToolIntegration):
             verified=True,
         ))
 
-        # JS'ten keşfedilen endpoint'ler — orta öncelik
         if js_endpoints:
             findings.append(ToolFinding(
                 title=f"JavaScript'ten Endpoint Keşfi — {len(js_endpoints)} URL",
@@ -424,7 +475,6 @@ class KatanaWrapper(ToolIntegration):
                 verified=False,
             ))
 
-        # Potansiyel API endpoint'ler
         if api_endpoints:
             findings.append(ToolFinding(
                 title=f"API Endpoint Keşfi — {len(api_endpoints)} Endpoint",
@@ -447,7 +497,7 @@ class KatanaWrapper(ToolIntegration):
 
 def crawl_target(
     target: str,
-    depth: int = 3,
+    depth: int = 2,
     js_crawl: bool = True,
 ) -> List[str]:
     """
