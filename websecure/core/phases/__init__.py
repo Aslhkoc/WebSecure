@@ -9,6 +9,7 @@ from websecure.core.phases._hprofile import (  # noqa: F401
 )
 
 from websecure.core.utils import _ws_import_any, _ws_maybe_import_any
+import concurrent.futures as _cf
 import logging
 import logging as _logging
 import importlib
@@ -955,21 +956,111 @@ def clear_critical_error(ctx: Any) -> None:
 
 # ----------------------------- Faz çalıştırma izolasyonu (no try/except) -----------------------------
 
-# Per-phase timeout overrides. Phases not listed here use the default (300s).
-# Nmap/port_scan needs much longer because it runs a two-stage scan internally.
+# Per-phase timeout overrides. Phases not listed here use _DEFAULT_PHASE_TIMEOUT.
+# Timeouts are intentionally tight — aggressive mode must finish in a reasonable time.
 _PHASE_TIMEOUTS: Dict[str, int] = {
-    "port_scan":      900,   # nmap two-stage: up to 15 min
-    "portscan":       900,
-    "sqlmap":         600,   # sqlmap time-based blind can be slow
-    "passive_recon":  600,   # OSINT APIs + DNS + cert lookups can be slow
-    "nuclei":      480,   # template-based, many checks
-    "feroxbuster": 420,
-    "ffuf":        420,
-    "amass":       600,
-    "subdomain":   480,
-    "owasp_and_nuclei": 480,
+    # ── Heavy external tools ───────────────────────────────────────────────
+    "port_scan":          900,   # nmap two-stage: up to 15 min
+    "portscan":           900,
+    "sqlmap":             600,   # time-based blind SQL injection
+    "passive_recon":      600,   # OSINT APIs + DNS + cert lookups
+    "amass":              600,
+    "nuclei":             480,   # many templates
+    "subdomain":          480,
+    "owasp_and_nuclei":   480,
+    "feroxbuster":        300,   # recursive dir brute-force (was 420)
+    "ffuf":               300,   # content + file fuzzing (was 420)
+    # ── Crawlers / probers ─────────────────────────────────────────────────
+    "discovery":          240,
+    "katana":             180,
+    "browser_crawler":    180,
+    "js_analysis":        150,
+    "httpx_probe":        120,
+    # ── Active injection scanners (have their own internal budgets) ────────
+    "ssti":               260,   # internal _SCAN_BUDGET_S = 240s
+    "xss":                240,
+    "dalfox_verify":      180,
+    "nosqli":              90,   # internal JS_PHASE_BUDGET = 25s
+    "idor":                90,
+    "sqli":               120,
+    # ── Medium active scanners ─────────────────────────────────────────────
+    "csrf":               120,
+    "lfi":                120,
+    "cmdi":               120,
+    "xxe":                120,
+    "ssrf":               120,
+    "jwt":                120,
+    "dom_xss":            120,
+    "races":              120,
+    "race_condition":     120,
+    "mass_assignment":    120,
+    "auth_matrix":        120,
+    "prototype_pollution": 90,
+    "scanners.ssrf_xxe":  120,
+    "scanners.request_smuggling": 120,
+    "scanners.graphql":    90,
+    "scanners.graphql_attacks": 90,
+    "scanners.ws_fuzz":    90,
+    "scanners.file_upload": 90,
+    "scanners.tls":        90,
+    # ── Fast / light scanners ──────────────────────────────────────────────
+    "waf_detect":          60,
+    "waf_fingerprint":     60,
+    "headers_scanner":     90,
+    "session_scanner":     90,
+    "cors":                90,
+    "crlf_injection":      90,
+    "open_redirect":       90,
+    "subdomain_takeover":  90,
+    "session_analysis":    60,
+    "human_adapter":       30,
+    "verify_and_score":    60,
+    "reporting":           60,
+    "exploit_orchestrator": 120,
 }
-_DEFAULT_PHASE_TIMEOUT = 300  # 5 minutes for all other phases
+_DEFAULT_PHASE_TIMEOUT = 120  # 2 min default (was 5 min — too long for light scanners)
+
+# ---------------------------------------------------------------------------
+# Parallel phase groups — phases in the same list run concurrently via
+# ThreadPoolExecutor; groups execute in order (each group blocks until all
+# members finish or time-out).  Phases not listed in any group run
+# sequentially (see run_plan_if_needed).
+# ---------------------------------------------------------------------------
+_PARALLEL_GROUPS: List[List[str]] = [
+    # Recon: independent passive sources — run together, shave ~10 min off recon
+    ["subdomain", "passive_recon"],
+    # Crawlers: share the same target, independent outputs
+    ["katana", "browser_crawler"],
+    # HTTP probing: independent of each other
+    ["httpx_probe", "js_analysis"],
+    # Content discovery: different result buckets, no shared state
+    ["ffuf", "feroxbuster"],
+    # Signature scanners: read-only against the target
+    ["nuclei", "owasp_and_nuclei"],
+    # Offensive injection suite — all test different vuln classes,
+    # all depend on discovery results (written before this group starts)
+    [
+        "nosqli", "ssti", "idor", "csrf", "cors",
+        "xxe", "ssrf", "lfi", "cmdi", "jwt",
+        "prototype_pollution", "dom_xss", "mass_assignment",
+        "races", "race_condition", "crlf_injection", "open_redirect",
+        "headers_scanner", "session_scanner", "waf_fingerprint",
+        "auth_matrix", "subdomain_takeover",
+        "scanners.ssrf_xxe", "scanners.request_smuggling",
+        "scanners.graphql", "scanners.graphql_attacks",
+        "scanners.ws_fuzz", "scanners.file_upload", "scanners.tls",
+        "xss", "dalfox_verify",
+    ],
+    # Slow but independent: SQL injection + port scan run concurrently
+    ["sqlmap", "port_scan"],
+]
+
+# Build phase-id → group-index lookup (used in run_plan_if_needed)
+_PHASE_TO_GROUP: Dict[str, int] = {
+    pid: gi
+    for gi, group in enumerate(_PARALLEL_GROUPS)
+    for pid in group
+}
 
 
 def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
@@ -3419,36 +3510,113 @@ def run_plan_if_needed(ctx: dict):
     # Mark start
     results.setdefault("meta", {})["scan_start"] = _t.time()
 
+    # ------------------------------------------------------------------
+    # Global scan deadline — stops the entire scan after N minutes so
+    # aggressive mode never runs for 4+ hours.  Configurable via
+    # config.global_timeout_s (default: 90 minutes).
+    # ------------------------------------------------------------------
+    cfg_obj = (ctx if isinstance(ctx, dict) else vars(ctx) if hasattr(ctx, "__dict__") else {})
+    _global_cfg = (cfg_obj.get("config") or {}) if isinstance(cfg_obj, dict) else {}
+    if not isinstance(_global_cfg, dict):
+        _global_cfg = {}
+    _global_timeout_s = int(_global_cfg.get("global_timeout_s", 90 * 60))  # 90 min default
+    _global_deadline = _t.monotonic() + _global_timeout_s
+    _logger.info("[phases] Global scan budget: %d min", _global_timeout_s // 60)
+
+    _is_debug = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
+
+    # ------------------------------------------------------------------
+    # Helper: run one plan item, used by both serial and parallel paths
+    # ------------------------------------------------------------------
+    def _run_phase_item(item: Dict[str, Any]) -> None:
+        pid     = item.get("id")
+        runner  = item.get("runner")
+        enabled = item.get("enabled", False)
+        if not (enabled and callable(runner)):
+            if _is_debug:
+                _logger.debug("Skipping phase %s (enabled=%s)", pid, enabled)
+            return
+        if item.get("visible", True):
+            phase_title = item.get("title", pid)
+            print(f"[•] Faz: {phase_title}")
+            try:
+                from websecure.core.reporting import get_live_monitor
+                get_live_monitor().log_phase(phase_title)
+            except (ImportError, AttributeError) as exc:
+                _logger.debug("[phases] LiveMonitor log_phase unavailable: %r", exc)
+        start_t = _t.time()
+        _safe(ctx, lambda: runner(ctx), pid)
+        if _is_debug:
+            print(f"    -> {pid} finished in {_t.time() - start_t:.2f}s")
+
+    # ------------------------------------------------------------------
+    # Build lookup: phase_id -> plan item
+    # ------------------------------------------------------------------
+    _phase_map: Dict[str, Dict[str, Any]] = {
+        item.get("id"): item for item in plan if item.get("id")
+    }
+    _executed: set = set()  # tracks ids already dispatched
+
+    # ------------------------------------------------------------------
+    # Execute in parallel groups first, then leftover phases sequentially
+    # ------------------------------------------------------------------
+    for group_ids in _PARALLEL_GROUPS:
+        if _SCAN_CANCEL.is_set():
+            _logger.info("[phases] Scan cancelled — stopping plan execution")
+            break
+        if _t.monotonic() > _global_deadline:
+            _logger.warning(
+                "[phases] Global scan timeout (%d min) — stopping early", _global_timeout_s // 60
+            )
+            add_result("errors", {
+                "type": "global_scan_timeout",
+                "timeout_secs": _global_timeout_s,
+                "message": f"Scan exceeded {_global_timeout_s // 60}min global deadline",
+            })
+            break
+
+        # Collect enabled items that belong to this group and are in the plan
+        group_items = [_phase_map[pid] for pid in group_ids if pid in _phase_map]
+        for it in group_items:
+            _executed.add(it.get("id"))
+
+        enabled_items = [
+            it for it in group_items
+            if it.get("enabled", False) and callable(it.get("runner"))
+        ]
+        if not enabled_items:
+            continue
+
+        if len(enabled_items) == 1:
+            # Single phase — no overhead of thread pool
+            _run_phase_item(enabled_items[0])
+        else:
+            _logger.info(
+                "[phases] Parallel group (%d phases): %s",
+                len(enabled_items), [it.get("id") for it in enabled_items]
+            )
+            with _cf.ThreadPoolExecutor(max_workers=min(len(enabled_items), 8)) as pool:
+                futs = {pool.submit(_run_phase_item, it): it.get("id") for it in enabled_items}
+                for fut in _cf.as_completed(futs):
+                    try:
+                        fut.result()
+                    except Exception as exc:
+                        _logger.error(
+                            "[phases] Parallel phase error (id=%s): %s", futs[fut], exc
+                        )
+
+    # Sequential tail: phases not in any parallel group (waf_detect, discovery, etc.)
     for item in plan:
         if _SCAN_CANCEL.is_set():
             _logger.info("[phases] Scan cancelled — stopping plan execution")
             break
-
+        if _t.monotonic() > _global_deadline:
+            _logger.warning("[phases] Global deadline reached during tail phases — stopping")
+            break
         pid = item.get("id")
-        runner = item.get("runner")
-        enabled = item.get("enabled", False)
-
-        if enabled and callable(runner):
-            if item.get("visible", True):
-                phase_title = item.get('title', pid)
-                print(f"[•] Faz: {phase_title}")
-                try:
-                    from websecure.core.reporting import get_live_monitor
-                    get_live_monitor().log_phase(phase_title)
-                except (ImportError, AttributeError) as exc:
-                    _logger.debug("[phases] LiveMonitor log_phase unavailable: %r", exc)
-
-            # Run with timeout protection — _safe() enforces 240s max per phase
-            start_t = _t.time()
-            _safe(ctx, lambda: runner(ctx), pid)
-            dur = _t.time() - start_t
-            _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
-            if _d:
-                print(f"    -> {pid} finished in {dur:.2f}s")
-        else:
-            _d = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
-            if _d:
-                _logger.debug("Skipping phase %s (enabled=%s)", pid, enabled)
+        if pid in _executed:
+            continue
+        _run_phase_item(item)
 
     results["meta"]["scan_end"] = _t.time()
     try:
