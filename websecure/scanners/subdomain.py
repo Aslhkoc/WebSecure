@@ -126,7 +126,7 @@ class DNSBruteForce:
                     logger.info(f"[Subdomain] SecLists DNS listesi bulundu: {len(words)} kelime")
                     return words
                 except Exception as exc:
-                    pass
+                    logger.debug("[DNSBruteForce] SecLists read error for %s: %s", p, exc)
 
         logger.info(f"[Subdomain] Dahili liste kullanılıyor ({len(self._BUILTIN)} kelime)")
         return list(self._BUILTIN)
@@ -152,7 +152,7 @@ class DNSBruteForce:
                         found.append(res)
                         logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} -> {res['ip']}")
                 except Exception as exc:
-                    pass
+                    logger.debug("[DNSBruteForce] Future error: %s", exc)
 
         logger.info(f"[Subdomain] DNS brute-force tamamlandı: {len(found)} subdomain")
         return found

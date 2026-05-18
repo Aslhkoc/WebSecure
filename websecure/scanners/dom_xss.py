@@ -352,8 +352,7 @@ class DOMXSSScanner(BaseScanner):
             "verified": True,
             "confidence": "high",
         }
-        self.add("offensive", finding)
-        add_result("offensive", finding)
+        self.add("offensive", finding)  # self.add() already calls add_result() internally
         _logger.warning(f"[DOMXSSScanner] DOM XSS found: {url} param={param}")
 
 

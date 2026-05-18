@@ -371,7 +371,8 @@ class AuthMatrixScanner(BaseScanner):
         })
 
         for finding in escalations:
-            add_result("offensive", finding)
+            # BUG FIX: was calling add_result() AND self.add() — self.add() already
+            # calls add_result() internally, causing every finding to be stored twice.
             self.add("offensive", finding)
 
         for item in missing_auth:
@@ -383,7 +384,6 @@ class AuthMatrixScanner(BaseScanner):
                 "verified": True,
                 "confidence": "high",
             }
-            add_result("offensive", finding)
             self.add("offensive", finding)
 
         _logger.info(

@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any, Set, Optional
 
 from .base import BaseScanner
+from websecure.core.reporting import add_result as _add_result
 
 logger = logging.getLogger(__name__)
 
@@ -961,7 +962,9 @@ def run(target: str, session=None, results=None, **kwargs):
     if js_urls:
         logger.info(f"[PassiveRecon] {len(js_urls)} JS dosyası taranıyor")
         js_scanner = PassiveJSScanner(session, results)
-        results["passive"].extend(js_scanner.scan(js_urls))
+        for finding in js_scanner.scan(js_urls):
+            _add_result("passive", finding)
+            results["passive"].append(finding)
 
     # 4. Cloud Altyapı Tespiti
     cloud_scanner = CloudDetector(session, results)

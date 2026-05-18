@@ -589,8 +589,13 @@ class ResponseBehaviorAnalyzer:
         Quick error reflection check: inject payload, return (found, matches).
         Does NOT compare to baseline — for fast pre-screening.
         """
+        from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params[param] = [payload]
+        injected_url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
         try:
-            resp = self.session.get(url, timeout=timeout)
+            resp = self.session.get(injected_url, timeout=timeout)
             body = resp.text or ""
         except Exception:
             return False, []

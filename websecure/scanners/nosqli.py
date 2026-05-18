@@ -177,8 +177,8 @@ class NoSQLiScanner(BaseScanner):
             base_resp = None
             try:
                 base_resp = self.session.post(ep, json={"username": "x", "password": "y"}, timeout=6)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[NoSQLiScanner] Base request failed for %s: %s", ep, exc)
 
             for f in js_prober.probe(ep, self.session, base_resp):
                 self.report_finding(**f)
@@ -500,7 +500,8 @@ class NoSQLiJSInjectionProber:
                             ),
                         })
                         break  # one hit per field
-                except Exception:
+                except Exception as exc:
+                    logger.debug("[JSInjectionProber] Probe error for %s: %s", url, exc)
                     continue
         return findings
 
@@ -555,6 +556,7 @@ class MongoDBDataExtractor:
                 resp = session.post(url, json=payload, timeout=timeout)
                 if resp.status_code == 200 and len(resp.content) > 10:
                     return ch
-            except Exception:
+            except Exception as exc:
+                logger.debug("[MongoDBDataExtractor] Probe error: %s", exc)
                 continue
         return None

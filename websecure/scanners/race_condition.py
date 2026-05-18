@@ -111,14 +111,16 @@ def _build_raw_request(
 
 def _send_and_receive(sock, payload_head: bytes, payload_last: bytes) -> Tuple[int, str]:
     """
-    Send *payload_head* (all bytes except the last), wait for synchronization
-    signal, then send *payload_last*.  Returns (status_code, body_excerpt).
+    Send *payload_head*, then *payload_last* (last-byte sync pattern).
+    Returns (status_code, body_excerpt) matching the declared return type.
     """
     try:
         sock.sendall(payload_head)
-        return sock, True
+        sock.sendall(payload_last)
+        return _read_response(sock)
     except Exception as exc:
-        return sock, False
+        logger.debug("[Race] _send_and_receive error: %s", exc)
+        return 0, ""
 
 
 def _read_response(sock: socket.socket, timeout: float = 5.0) -> Tuple[int, str]:

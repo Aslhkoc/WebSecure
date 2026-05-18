@@ -83,9 +83,10 @@ class CookieFlagScanner(BaseScanner):
                 results = analyzer.analyze_response(r)
                 for res in results:
                     key = f"{res.name}:{path}"
-                    if key in seen_cookies or not res.issues:
-                        seen_cookies.add(key)
+                    if key in seen_cookies:
                         continue
+                    if not res.issues:
+                        continue  # Don't mark as seen — same cookie may have issues at another path
                     seen_cookies.add(key)
                     self.report_finding(
                         type="Cookie Security Flag",

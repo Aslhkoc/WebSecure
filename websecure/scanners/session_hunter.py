@@ -111,6 +111,7 @@ class SessionHunter(BaseScanner):
         try:
             resp = self.session.get(url, timeout=8)
         except Exception as exc:
+            logger.debug("[SessionHunter] _analyze_live_cookies failed for %s: %s", url, exc)
             return
 
         for cookie in resp.cookies:

@@ -98,6 +98,7 @@ except ImportError:
 _CURRENT_RPS = contextvars.ContextVar("CURRENT_RPS", default=2)
 _LAST_IDENTITY = contextvars.ContextVar("LAST_IDENTITY", default=None)
 _LAST_CANARY_TS = 0.0
+_LAST_CANARY_TS_LOCK = threading.Lock()
 
 def set_active_phase(name: str) -> None:
     ACTIVE_PHASE.set(name)
@@ -202,9 +203,10 @@ def _maybe_recover_from_backoff() -> None:
     global _LAST_CANARY_TS
     now = time.time()
     canary_gap = float(_HTTP_POLICY["rate_limit"]["canary_interval_seconds"])
-    if now - _LAST_CANARY_TS < canary_gap:
-        return
-    _LAST_CANARY_TS = now
+    with _LAST_CANARY_TS_LOCK:
+        if now - _LAST_CANARY_TS < canary_gap:
+            return
+        _LAST_CANARY_TS = now
     rps = int(_CURRENT_RPS.get())
     prof = _HTTP_POLICY["phase_profiles"].get(ACTIVE_PHASE.get(), {})
     max_rps = int(prof.get("max_rps", rps))

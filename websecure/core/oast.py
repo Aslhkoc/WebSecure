@@ -282,7 +282,7 @@ class GenericOSATClient(_BaseOSAT, IOSATClient):
                 for ev in (data.get("events") or []):
                     if str(ev.get("token", "")) in tokens: found.append(ev)
         except Exception as exc:
-            pass
+            _logger.debug("[OAST] poll_async error: %s", exc)
         return found
 
 class InteractshClient(_BaseOSAT, IOSATClient):
@@ -695,6 +695,7 @@ class OASTPollerThread:
                             f"[OAST] Verified finding via callback: token={token[:12]} "
                             f"confidence={confidence} ({self._confidence_label(confidence)})"
                         )
+                        break  # one event verifies exactly one token — stop searching
 
 
 # Global singleton - started/stopped by flow_runner
@@ -977,7 +978,8 @@ class OASTCorrelationEngine:
                 # Try substring search in raw request
                 raw = str(event.get("raw-request") or event.get("request") or "")
                 for t, inj in self._injections.items():
-                    if t and t in raw:
+                    # Word-boundary check prevents token substring false matches
+                    if t and t in raw.split():
                         tok, injection = t, inj
                         break
             if not injection:

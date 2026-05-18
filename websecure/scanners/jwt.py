@@ -11,6 +11,9 @@ from .base import BaseScanner
 
 logger = logging.getLogger(__name__)
 
+# OOB host for SSRF/JKU probing — overridable via OOB infrastructure
+_OOB_HOST = "oob-wsp.invalid"
+
 _PROTECTED_PATHS = [
     "/api/me", "/api/user", "/api/admin", "/admin",
     "/dashboard", "/profile", "/api/v1/user", "/api/v1/admin",
@@ -459,9 +462,8 @@ class JWTScanner(BaseScanner):
 
 def run(url: str, session=None, debug: bool = False, **kwargs) -> int:
     """Module-level adapter for generic runners."""
-    scanner = JWTScanner(session=session, debug=debug)
-    if "results" in kwargs and isinstance(kwargs["results"], dict):
-        scanner.results = kwargs["results"]
+    results = kwargs.get("results") if isinstance(kwargs.get("results"), dict) else None
+    scanner = JWTScanner(session=session, results=results, debug=debug)
     return scanner.run(url)
 
 # ============================================================================

@@ -673,7 +673,7 @@ class H2CLSmugglingProber(BaseScanner):
         t0 = time.time()
         try:
             sock.sendall(req)
-            resp_raw = _recv_all(sock, timeout=3.0)
+            resp_raw = _recv_all(sock, timeout=8.0)  # increased from 3.0 to allow stall detection
             elapsed  = time.time() - t0
             resp_str = resp_raw.decode("utf-8", errors="replace")
             # If we see two HTTP responses = smuggling worked
@@ -691,8 +691,9 @@ class H2CLSmugglingProber(BaseScanner):
                         "response_snippet": resp_str[:300],
                     },
                 }
-            # Timing: if server stalls exactly on CL bytes = TE accepted by back-end
-            if elapsed >= 2.5:
+            # Timing: server stalls near full timeout = TE accepted by back-end
+            # Raised from 2.5s (too low → false positives on slow networks) to 7.0s
+            if elapsed >= 7.0:
                 return {
                     "vuln_type": "HTTP Request Smuggling — h2.CL (Timing)",
                     "url": f"https://{host}{path}", "severity": "High",
@@ -765,7 +766,7 @@ class H2TESmugglingProber(BaseScanner):
         t0 = time.time()
         try:
             sock.sendall(req)
-            resp_raw = _recv_all(sock, timeout=3.0)
+            resp_raw = _recv_all(sock, timeout=8.0)  # increased from 3.0 to allow stall detection
             elapsed  = time.time() - t0
             resp_str = resp_raw.decode("utf-8", errors="replace")
             if resp_str.count("HTTP/1.") >= 2:
@@ -782,7 +783,8 @@ class H2TESmugglingProber(BaseScanner):
                         "response_snippet": resp_str[:300],
                     },
                 }
-            if elapsed >= 2.5:
+            # Raised from 2.5s (too low → false positives on slow networks) to 7.0s
+            if elapsed >= 7.0:
                 return {
                     "vuln_type": "HTTP Request Smuggling — h2.TE (Timing)",
                     "url": f"https://{host}{path}", "severity": "High",

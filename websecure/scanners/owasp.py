@@ -670,7 +670,11 @@ def run_nuclei_signatures(
         if not line or line[0] not in "{[":  # JSON değilse atla (try'siz filtre)
             continue
 
-        obj = _json.loads(line)  # geçersiz JSON olursa yükselir; susturma yok
+        try:
+            obj = _json.loads(line)
+        except _json.JSONDecodeError as exc:
+            logger.debug("[OWASPScanner] Nuclei output JSON parse error: %s", exc)
+            continue
         if not isinstance(obj, dict):
             continue
 

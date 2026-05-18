@@ -335,7 +335,7 @@ class InfoDisclosureProbe:
 class GraphQLScanner(BaseScanner):
     name = "graphql"
 
-    def run(self, url: str) -> Dict[str, Any]:
+    def run(self, url: str, **kwargs) -> Dict[str, Any]:
         """
         Scans a single endpoint or discovers endpoints if url is a base URL.
         Note: The BaseScanner interface expects 'url' to be the target.
@@ -402,7 +402,8 @@ class GraphQLScanner(BaseScanner):
                 
                 # 2. POST with empty query or typename
                 r_post = self.session.post(target, json={"query": "{__typename}"}, timeout=5)
-                if r_post.status_code == 200 and ("data" in r_post.text or "errors" in r.text):
+                # BUG FIX: was checking r.text (GET response) instead of r_post.text
+                if r_post.status_code == 200 and ("data" in r_post.text or "errors" in r_post.text):
                     found.append(target)
                 elif r_post.status_code == 400 and "graphql" in r_post.text.lower():
                     # If it says "Bad Request: GraphQL query missing", it's an endpoint!
@@ -414,7 +415,7 @@ class GraphQLScanner(BaseScanner):
 
 def run(target: str, session=None, **kwargs):
     scanner = GraphQLScanner(session)
-    scanner.run(target)
+    scanner.run(target, **kwargs)
 
 
 

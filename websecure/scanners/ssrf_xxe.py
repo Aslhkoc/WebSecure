@@ -274,9 +274,8 @@ class SSRFScanner(BaseScanner):
             if self.config.oast.enable_metadata_probes:
                 self._test_internal_ports(url, param, bucket)
 
-        # Body-based SSRF: probe POST endpoints
-        if qs:
-            self._test_body_ssrf(url, bucket)
+        # Body-based SSRF: probe POST endpoints regardless of query params
+        self._test_body_ssrf(url, bucket)
 
         # OAST DNS callback
         if self.config.oast.dns_domain:

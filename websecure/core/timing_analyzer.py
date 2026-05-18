@@ -113,10 +113,13 @@ class TimingAnalyzer:
     _CV_TRIALS: int = 3
     _CV_REQUIRED: int = 3   # 3/3 — all must hit (no false-positive budget)
 
+    # Baseline cache TTL — stale baselines cause false positives on changing servers
+    _CACHE_TTL: float = 300.0  # seconds
+
     def __init__(self, session: Any, *, baseline_n: int = 5) -> None:
         self.session = session
         self.baseline_n = baseline_n
-        self._cache: Dict[str, TimingBaseline] = {}
+        self._cache: Dict[str, Tuple[TimingBaseline, float]] = {}  # (baseline, timestamp)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -137,7 +140,10 @@ class TimingAnalyzer:
         cache_key = f"{url}|{param}"
         with self._lock:
             if cache_key in self._cache:
-                return self._cache[cache_key]
+                bl, ts = self._cache[cache_key]
+                if time.monotonic() - ts < self._CACHE_TTL:
+                    return bl
+                del self._cache[cache_key]  # expired — remove stale entry
 
         times: List[float] = []
         for _ in range(self.baseline_n):
@@ -171,7 +177,7 @@ class TimingAnalyzer:
             k_factor=k,
         )
         with self._lock:
-            self._cache[cache_key] = bl
+            self._cache[cache_key] = (bl, time.monotonic())
 
         _logger.debug(
             f"[TA] Baseline {url} param={param}: "

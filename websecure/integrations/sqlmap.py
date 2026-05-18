@@ -107,7 +107,7 @@ class SQLMapWrapper(ToolIntegration):
         return "sqlmap"
 
     def __init__(self, binary_path: str = "sqlmap"):
-        super().__init__("")
+        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
         self._binary_name = binary_path
 
     def is_available(self) -> bool:

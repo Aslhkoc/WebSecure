@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-import os, json, re, subprocess, shlex, time
+import os, json, re, subprocess, shlex, time, threading
 from pathlib import Path
 from typing import List, Iterable, Dict, Any, Tuple, Set
 
@@ -348,8 +348,9 @@ def get_payloads(
         sync_wordlists(cfg)
 
     ck = _cache_key(category, marker, tech_tags)
-    if ck in _PAYLOAD_CACHE:
-        return list(_PAYLOAD_CACHE[ck])
+    with _PAYLOAD_CACHE_LOCK:
+        if ck in _PAYLOAD_CACHE:
+            return list(_PAYLOAD_CACHE[ck])
 
     items = load_external_payloads(category, marker=marker)
 
@@ -365,7 +366,8 @@ def get_payloads(
 
     items = filter_by_technology(items, category, tech_tags)
 
-    _PAYLOAD_CACHE[ck] = list(items)
+    with _PAYLOAD_CACHE_LOCK:
+        _PAYLOAD_CACHE[ck] = list(items)
     return items
 
 __all__ = [
@@ -394,6 +396,7 @@ ALLOWED_CATEGORIES = {
 }
 
 _PAYLOAD_CACHE: dict[tuple[str, str | None, tuple[str, None] | None], list[str]] = {}
+_PAYLOAD_CACHE_LOCK = threading.Lock()
 
 def _cache_key(category: str, marker: str | None, tech_tags: Iterable[str] | None) -> tuple[
     str, str | None, tuple[str, None] | None]:

@@ -94,7 +94,10 @@ class IDORScanner(BaseScanner):
 
         if sim > 0.70 and body_a != body_b:
             sensitive = _contains_sensitive(body_b)
-            if sensitive:
+            # Only report if body_a also has sensitive data — confirms this is a protected
+            # resource that Session B should not be able to access (prevents false positives
+            # where both sessions legitimately see the same public data)
+            if sensitive and _contains_sensitive(body_a):
                 self.report_finding(
                     vuln_type="IDOR",
                     url=url,

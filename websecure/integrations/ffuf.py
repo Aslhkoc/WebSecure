@@ -42,7 +42,7 @@ class FFUFWrapper(ToolIntegration):
         return "ffuf"
 
     def __init__(self, binary_path: str = "ffuf"):
-        super().__init__("")
+        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
         self._binary_name = binary_path
         self._check_binary()
 
@@ -508,7 +508,7 @@ class FeroxbusterWrapper(ToolIntegration):
         return "feroxbuster"
 
     def __init__(self):
-        super().__init__("")
+        super().__init__("feroxbuster")  # pass binary name so self.binary resolves correctly
         self._binary_name = "feroxbuster"
         self._find_binary()
 
@@ -585,7 +585,8 @@ class FeroxbusterWrapper(ToolIntegration):
                 cmd.extend(extra_args)
 
             logger.info(f"Starting Feroxbuster on {target}...")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=False, timeout=600)
 
             results = []
             if os.path.exists(temp_output):

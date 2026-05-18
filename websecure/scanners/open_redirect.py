@@ -279,7 +279,8 @@ class OpenRedirectScanner(BaseScanner):
                     key = f"{probe_url}|{param}|{payload}"
                     if key not in tested:
                         tested.add(key)
-                        test_url = f"{probe_url}?{param}={quote(payload)}"
+                        # safe="%" preserves existing percent-encoding in pre-encoded payloads
+                        test_url = f"{probe_url}?{param}={quote(payload, safe='%')}"
                         probe_tasks.append((test_url, param, payload, probe_url))
                     if len(probe_tasks) >= MAX_PROBE_REQUESTS:
                         break

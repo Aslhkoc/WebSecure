@@ -357,7 +357,8 @@ class WebSocketFuzzer(BaseScanner):
                 resp = conn.recv(2.0)
 
                 # Flag suspicious origins that still connect
-                if origin is None or origin in ("null", "https://evil.com", "https://attacker.com"):
+                # origin is None = no Origin header sent — not a bypass, skip
+                if origin is not None and origin in ("null", "https://evil.com", "https://attacker.com"):
                     sev = "High" if origin and "evil" in origin else "Medium"
                     self.add(bucket, self.create_finding(
                         type="WebSocket — Origin Policy Not Enforced",

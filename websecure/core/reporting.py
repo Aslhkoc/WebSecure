@@ -233,8 +233,14 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
                 results[bkey] = bval
             elif bval and isinstance(results.get(bkey), list):
                 # Var olan listeyi _buckets ile birleştir (tekrar olmadan)
-                existing = {id(x) for x in results[bkey]}
-                results[bkey] = results[bkey] + [x for x in bval if id(x) not in existing]
+                # Content-based fingerprint — id() compares object identity, not content
+                def _fp(x):
+                    try:
+                        return json.dumps(x, sort_keys=True, default=str)
+                    except Exception:
+                        return str(x)
+                existing = {_fp(x) for x in results[bkey]}
+                results[bkey] = results[bkey] + [x for x in bval if _fp(x) not in existing]
     except Exception as _be:
         log_warn(f"[reporting] _buckets merge atlandı: {_be!r}")
 
@@ -289,17 +295,14 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
         if isinstance(rep_formats, list) and "html" not in rep_formats:
              should_gen = False
              
+        report_path = os.path.join(out_dir, "report.html")  # define before conditional
         if should_gen:
-            report_path = os.path.join(out_dir, "report.html")
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
-
-            
-        print(f"\n\033[92m[+] HTML Report Generated: {report_path}\033[0m")
-        print(f"\033[90m    (Contains detailed findings, evidence, Nmap results, SSL info)\033[0m")
-        
-        # Add to written artifacts
-        out["written"]["html"] = report_path
+            print(f"\n\033[92m[+] HTML Report Generated: {report_path}\033[0m")
+            print(f"\033[90m    (Contains detailed findings, evidence, Nmap results, SSL info)\033[0m")
+            # Add to written artifacts
+            out["written"]["html"] = report_path
     except Exception as e:
         log_err(f"HTML Report generation failed: {e}")
 
@@ -574,9 +577,11 @@ def add_result(bucket: str, item: Any) -> None:
         if bucket not in _buckets:
             _buckets[bucket] = []
         _buckets[bucket].append(safe_it)
-        # Keep _GLOBAL_RESULTS in sync for get_global_results() callers
-        with _GLOBAL_LOCK:
-            _GLOBAL_RESULTS[bucket].append(safe_it)
+
+    # Keep _GLOBAL_RESULTS in sync — acquire _GLOBAL_LOCK separately to avoid
+    # nested lock deadlock (_lock RLock nested inside _GLOBAL_LOCK Lock)
+    with _GLOBAL_LOCK:
+        _GLOBAL_RESULTS[bucket].append(safe_it)
 
         # [WS3] Universal Evidence Handling
         # If item has 'evidence', we log it specifically or save artifacts

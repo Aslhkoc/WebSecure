@@ -206,7 +206,7 @@ class NmapWrapper(ToolIntegration):
     _HIGH_RISK_PORTS = {21, 22, 23, 25, 110, 143, 3306, 5432, 5900, 6379, 27017, 1433, 3389}
 
     def __init__(self, binary_path: str = "nmap"):
-        super().__init__("")
+        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
         self._binary_name = binary_path
         self._find_binary()
 
@@ -431,8 +431,10 @@ class NmapWrapper(ToolIntegration):
         rc2, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
         if rc2 not in (0, 1):
             code_note = " (Windows raw socket kısıtlaması)" if rc2 in _WINDOWS_CRASH_CODES else ""
-            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}{code_note}")
-        results = NmapParser.parse_xml(xml2) if xml2 else []
+            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}{code_note} — XML ayrıştırılmıyor.")
+            results = []  # Don't parse on error — XML may be incomplete or missing
+        else:
+            results = NmapParser.parse_xml(xml2) if xml2 else []
         try:
             os.remove(xml2)
         except Exception:
