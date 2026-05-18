@@ -135,6 +135,16 @@ def _is_root() -> bool:
         return False
 
 
+def _rm_xml(path: Optional[str]) -> None:
+    """Geçici nmap XML dosyasını sessizce siler."""
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
 def _run_nmap(binary: str, args: List[str], target: str,
               timeout: int = 900) -> Tuple[int, str, str, str]:
     """
@@ -302,7 +312,7 @@ class NmapWrapper(ToolIntegration):
         return findings
 
     # ------------------------------------------------------------------
-    # Ana tarama metodu
+    # Ana tarama metodu — mod yönlendirici
     # ------------------------------------------------------------------
 
     def scan(self,
@@ -313,269 +323,409 @@ class NmapWrapper(ToolIntegration):
              timeout: int = 900,
              proxy: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Akıllı iki fazlı tarama.
-        mode="aggressive" -> 2-faz + UDP (root varsa)
-        mode="stealth"    -> TCP connect, yavaş, gizli
-        mode="fast"       -> tek faz, hızlı
+        Mod tabanlı nmap taraması.
+
+        aggressive  — T4, SYN+UDP, -A, tüm NSE kategorileri (vuln/exploit/brute)
+        stealth     — T2, SYN half-open, paket fragmentasyon, decoy, minimal script
+        normal      — T3, SYN, default+vuln scriptler, dengeli
+        deep        — aggressive + tüm 65535 port
+        full        — deep ile aynı
+        fast        — T4, top-100 port, script yok, hızlı keşif
         """
         if not self.is_available():
             print("\033[31m[Nmap] Bulunamadı. sudo apt install nmap\033[0m")
             return []
 
+        on_windows = _is_windows()
         root = _is_root()
+        _npcap_ok = on_windows and root and _has_npcap()
+        _raw = (root and not on_windows) or _npcap_ok   # SYN / raw socket erişimi var mı
+
+        if _raw and _npcap_ok:
+            print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN scan aktif")
+        elif _raw:
+            print("\033[36m[Nmap]\033[0m Root — SYN scan aktif")
+        else:
+            print("\033[36m[Nmap]\033[0m Raw socket yok — TCP connect modunda")
+
         mode = (mode or "aggressive").lower()
 
-        if mode in ("aggressive", "deep", "standard", "normal"):
-            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout,
-                                        ports=ports, extra_args=extra_args)
+        if mode == "aggressive":
+            return self._scan_aggressive(target, raw=_raw, on_windows=on_windows,
+                                         all_ports=False, ports=ports,
+                                         extra_args=extra_args, proxy=proxy, timeout=timeout)
         elif mode == "stealth":
-            return self._scan_stealth(target, proxy=proxy, timeout=timeout)
-        elif mode == "full":
-            return self._scan_two_phase(target, root=root, proxy=proxy,
-                                        timeout=timeout, all_ports=True,
-                                        ports=ports, extra_args=extra_args)
+            return self._scan_stealth(target, raw=_raw, on_windows=on_windows,
+                                      ports=ports, extra_args=extra_args,
+                                      proxy=proxy, timeout=timeout)
+        elif mode in ("normal", "standard"):
+            return self._scan_normal(target, raw=_raw, on_windows=on_windows,
+                                     ports=ports, extra_args=extra_args,
+                                     proxy=proxy, timeout=timeout)
+        elif mode in ("deep", "full"):
+            return self._scan_aggressive(target, raw=_raw, on_windows=on_windows,
+                                         all_ports=True, ports=ports,
+                                         extra_args=extra_args, proxy=proxy, timeout=timeout)
         elif mode == "fast":
-            return self._scan_single(target,
-                                     ["-sT", "-Pn", "-F", "-T4", "--open", "--host-timeout", "60s"],
-                                     proxy=proxy, timeout=180)
+            return self._scan_fast(target, raw=_raw, on_windows=on_windows,
+                                   ports=ports, proxy=proxy, timeout=min(timeout, 300))
         else:
-            return self._scan_two_phase(target, root=root, proxy=proxy, timeout=timeout,
-                                        ports=ports, extra_args=extra_args)
+            return self._scan_aggressive(target, raw=_raw, on_windows=on_windows,
+                                         ports=ports, extra_args=extra_args,
+                                         proxy=proxy, timeout=timeout)
 
     # ------------------------------------------------------------------
-    # İki Fazlı Tarama (Ana Strateji)
+    # AGRESİF — T4, SYN+UDP, -A, tüm NSE kategorileri
     # ------------------------------------------------------------------
 
-    def _scan_two_phase(self, target: str, root: bool = False,
-                        proxy: Optional[str] = None, timeout: int = 900,
-                        all_ports: bool = False, ports: Optional[str] = None,
-                        extra_args: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def _scan_aggressive(self, target: str, raw: bool, on_windows: bool,
+                         all_ports: bool = False, ports: Optional[str] = None,
+                         extra_args: Optional[List[str]] = None,
+                         proxy: Optional[str] = None, timeout: int = 900) -> List[Dict[str, Any]]:
         """
-        Faz 1: Tüm TCP portlarını hızlıca tara -> açık portları bul
-        Faz 2: Bulunan portlarda derin servis + NSE script analizi
-        UDP:   Root varsa kritik UDP portları
+        AGRESİF TARAMA:
+          Faz-1: SYN (veya TCP connect) + -Pn + T4 + top-1000 port keşfi
+          Faz-2: -sS -sV -A -O + tüm NSE kategorileri + vuln/exploit/brute
+          UDP:   raw socket varsa kritik UDP portları
         """
+        print(f"\n\033[36;1m[Nmap AGRESİF]\033[0m Faz-1 — Port keşfi ({target})...")
 
-        # ----- FAZ 1: Port Keşfi -----
-        print(f"\033[36m[Nmap Faz-1]\033[0m Port keşfi başlıyor ({target})...")
-        on_windows = _is_windows()
-
-        # Raw socket erişimi: Linux/Mac root, VEYA Windows Admin+Npcap
-        _npcap_ok = on_windows and root and _has_npcap()
-        _raw_socket = (root and not on_windows) or _npcap_ok
-
-        if _raw_socket:
-            # SYN scan — Linux/Mac root veya Windows Admin+Npcap
-            if _npcap_ok:
-                print("\033[36m[Nmap]\033[0m Windows Admin + Npcap tespit edildi — SYN scan aktif!")
-            if ports:
-                phase1_args = ["-sS", "-Pn", "-p", ports, "-T4", "--open",
-                               "--min-rate", "1000", "--max-retries", "2",
-                               "--host-timeout", "600s"]
-            elif all_ports:
-                phase1_args = ["-sS", "-Pn", "-p-", "-T4", "--open",
-                               "--min-rate", "1000", "--max-retries", "2",
-                               "--host-timeout", "600s"]
-            else:
-                phase1_args = ["-sS", "-Pn", "--top-ports", "1000", "-T4", "--open",
-                               "--min-rate", "1000", "--max-retries", "2",
-                               "--host-timeout", "600s"]
+        # --- FAZ 1: Hızlı port keşfi ---
+        scan1 = "-sS" if raw else "-sT"
+        if ports:
+            port_args1 = ["-p", ports]
+        elif all_ports:
+            port_args1 = ["-p-"]
         else:
-            # TCP connect scan — raw socket yok (normal kullanıcı veya Npcap yok)
-            # -Pn: İnternet hedeflerinde ICMP genellikle engelli — ping atlamak gerekir
-            top = "1000"
-            if ports:
-                phase1_args = [
-                    "-sT", "-Pn", "-p", ports, "-T4", "--open",
-                    "--min-rate", "300", "--max-retries", "2",
-                    "--host-timeout", "300s",
-                ]
-            else:
-                phase1_args = [
-                    "-sT", "-Pn", "--top-ports", top, "-T4", "--open",
-                    "--min-rate", "300", "--max-retries", "2",
-                    "--host-timeout", "300s",
-                ]
-            if on_windows and not _npcap_ok:
-                # raw socket erişimi yok — nmap'e söyle
-                phase1_args += ["--unprivileged"]
+            port_args1 = ["--top-ports", "1000"]
 
-        self._inject_proxy(phase1_args, proxy)
-        rc1, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 240))
+        phase1 = (
+            [scan1, "-Pn", "--open"] + port_args1 +
+            ["-T4", "--min-rate", "1000" if raw else "500",
+             "--max-retries", "2", "--host-timeout", "600s"]
+        )
+        if on_windows and not raw:
+            phase1 += ["--unprivileged"]
 
-        # Açık portları ayıkla (nmap crash etse bile kısmi XML'den kurtarmayı dene)
-        open_ports = NmapParser.extract_open_ports_safe(xml1) if xml1 else []
-        try:
-            if xml1:
-                os.remove(xml1)
-        except Exception:
-            pass
+        self._inject_proxy(phase1, proxy)
+        t1 = max(timeout // 2, 300)
+        rc1, xml1, _, _ = _run_nmap(self.binary, phase1, target, timeout=t1)
+        open_ports = NmapParser.extract_open_ports_safe(xml1)
+        _rm_xml(xml1)
 
         if rc1 not in (0, 1) and not open_ports:
-            code_note = " (Windows raw socket kısıtlaması)" if rc1 in _WINDOWS_CRASH_CODES else ""
-            print(f"\033[33m[Nmap Faz-1]\033[0m Nmap hata kodu {rc1}{code_note} — çıktı yok.")
+            print(f"\033[33m[Nmap AGRESİF Faz-1]\033[0m rc={rc1} — açık port bulunamadı, tarama durdu.")
             return []
-
         if not open_ports:
-            print(f"\033[33m[Nmap Faz-1]\033[0m {target} üzerinde açık port bulunamadı.")
+            print(f"\033[33m[Nmap AGRESİF]\033[0m {target} üzerinde açık port yok.")
             return []
 
-        print(f"\033[32m[Nmap Faz-1]\033[0m {len(open_ports)} açık port bulundu: "
+        print(f"\033[32m[Nmap AGRESİF Faz-1]\033[0m {len(open_ports)} port → "
               f"{','.join(map(str, sorted(open_ports)[:30]))}{'...' if len(open_ports) > 30 else ''}")
 
-        # ----- FAZ 2: Derin Analiz -----
-        print(f"\033[36m[Nmap Faz-2]\033[0m Derin servis + script analizi ({len(open_ports)} port)...")
-
+        # --- FAZ 2: Derin servis + script analizi ---
+        print(f"\033[36;1m[Nmap AGRESİF]\033[0m Faz-2 — Derin analiz ({len(open_ports)} port)...")
         ports_str = ",".join(map(str, sorted(open_ports)))
 
-        if _raw_socket:
-            # Linux/Mac root veya Windows Admin+Npcap: tam güç
-            phase2_args = [
-                "-sS", "-Pn",
+        if raw:
+            # Tam güç: SYN + sürüm 9 + OS + -A + tüm NSE
+            phase2 = [
+                "-sS", "-Pn", "-T4",
                 "-sV", "--version-intensity", "9", "--version-all",
-                "-sC",
-                "-O" if not on_windows else "",          # OS detect sadece Linux/Mac
-                "--osscan-guess" if not on_windows else "",
-                "-A" if not on_windows else "",
-                "--script", self._build_script_list(windows_safe=on_windows),
+                "-O", "--osscan-guess",
+                "-A",
+                "--script", (
+                    "default,auth,discovery,vuln,exploit,malware,safe,brute,"
+                    "banner,ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,"
+                    "ssl-poodle,ssl-ccs-injection,http-title,http-headers,http-methods,"
+                    "http-auth-finder,http-server-header,http-robots.txt,http-git,"
+                    "http-shellshock,http-vuln-cve2017-5638,http-vuln-cve2015-1635,"
+                    "http-backup-finder,http-default-accounts,"
+                    "ssh-auth-methods,ssh-hostkey,ssh2-enum-algos,"
+                    "ftp-anon,ftp-bounce,ftp-vsftpd-backdoor,"
+                    "smtp-commands,smtp-open-relay,smtp-enum-users,"
+                    "smb-os-discovery,smb-security-mode,smb-enum-shares,"
+                    "smb-vuln-ms17-010,smb-vuln-ms08-067,"
+                    "mysql-info,mysql-empty-password,mysql-databases,"
+                    "ms-sql-info,ms-sql-empty-password,"
+                    "rdp-enum-encryption,rdp-vuln-ms12-020,"
+                    "dns-recursion,dns-zone-transfer,"
+                    "snmp-info,snmp-sysdescr,"
+                    "mongodb-info,redis-info"
+                ),
                 "--script-args",
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,"
-                "vulns.showall=true" + ("" if on_windows else ",unsafe=1"),
+                "vulns.showall=true,unsafe=1",
+                "--script-timeout", "90s",
+                "--host-timeout", "600s",
+                "-p", ports_str,
+            ]
+            if on_windows:
+                # Windows'ta OS detection kısıtlı — kaldır
+                phase2 = [a for a in phase2
+                          if a not in ("-O", "--osscan-guess", "-A")]
+        else:
+            # TCP connect — raw socket yok
+            phase2 = [
+                "-sT", "-Pn", "-T4",
+                "-sV", "--version-intensity", "7",
+                "-sC",
+                "--script", (
+                    "default,auth,safe,vuln,"
+                    "banner,ssl-cert,ssl-enum-ciphers,http-title,http-headers,"
+                    "http-methods,http-auth-finder,http-server-header,http-robots.txt,"
+                    "http-git,http-backup-finder,http-default-accounts,"
+                    "ssh-auth-methods,ssh-hostkey,ssh2-enum-algos,"
+                    "ftp-anon,ftp-syst,smtp-commands,smtp-open-relay,"
+                    "smb-security-mode,smb-enum-shares,"
+                    "mysql-info,mysql-empty-password,"
+                    "ms-sql-info,ms-sql-empty-password,"
+                    "rdp-enum-encryption,dns-recursion,"
+                    "mongodb-info,redis-info"
+                ),
+                "--script-args",
+                "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
                 "--script-timeout", "60s",
                 "--host-timeout", "600s",
                 "-p", ports_str,
-                "-T4",
             ]
-        else:
-            # TCP connect — raw socket yok (normal kullanıcı)
-            phase2_args = [
-                "-sT", "-Pn",
-                "-sV", "--version-intensity", "7",
-                "-sC",
-                "--script", self._build_script_list(windows_safe=True),
-                "--script-args",
-                "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
-                "--script-timeout", "30s",
-                "--host-timeout", "300s",
-                "-p", ports_str,
-                "-T4",
-            ]
-            if on_windows and not _npcap_ok:
-                phase2_args.append("--unprivileged")
+            if on_windows:
+                phase2 += ["--unprivileged"]
 
-        # Kullanıcı ek argümanlarını uygula
         if extra_args:
-            phase2_args.extend(extra_args)
+            phase2.extend(extra_args)
 
-        phase2_args = [a for a in phase2_args if a]  # boşları temizle
-        self._inject_proxy(phase2_args, proxy)
-
-        rc2, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
+        self._inject_proxy(phase2, proxy)
+        rc2, xml2, _, _ = _run_nmap(self.binary, phase2, target, timeout=timeout)
         if rc2 not in (0, 1):
-            code_note = " (Windows raw socket kısıtlaması)" if rc2 in _WINDOWS_CRASH_CODES else ""
-            print(f"\033[33m[Nmap Faz-2]\033[0m Nmap hata kodu {rc2}{code_note} — XML ayrıştırılmıyor.")
-            results = []  # Don't parse on error — XML may be incomplete or missing
-        else:
-            results = NmapParser.parse_xml(xml2) if xml2 else []
-        try:
-            os.remove(xml2)
-        except Exception:
-            pass
+            print(f"\033[33m[Nmap AGRESİF Faz-2]\033[0m rc={rc2} — kısmi XML kurtarılıyor...")
+        results = NmapParser.parse_xml(xml2) if xml2 else []
+        _rm_xml(xml2)
 
-        # ----- UDP Taraması (root + raw socket gerektirir) -----
-        if _raw_socket:
+        # --- UDP: raw socket varsa kritik portlar ---
+        if raw:
             print(f"\033[36m[Nmap UDP]\033[0m Kritik UDP portları taranıyor...")
             udp_args = [
-                "-sU",
+                "-sU", "-Pn", "-T4",
                 "--version-intensity", "5",
-                "--script", "snmp-info,snmp-sysdescr,snmp-brute,dns-recursion,"
-                            "dns-service-discovery,ntp-info,tftp-enum,dhcp-discover,"
-                            "sip-methods",
+                "--script", (
+                    "snmp-info,snmp-sysdescr,snmp-brute,"
+                    "dns-recursion,dns-service-discovery,"
+                    "ntp-info,tftp-enum,dhcp-discover,"
+                    "sip-methods,upnp-info"
+                ),
                 "-p", _UDP_PORTS,
-                "-T4", "--max-retries", "1",
+                "--max-retries", "1",
+                "--host-timeout", "300s",
             ]
             self._inject_proxy(udp_args, proxy)
             _, xml_udp, _, _ = _run_nmap(self.binary, udp_args, target, timeout=300)
-            udp_results = NmapParser.parse_xml(xml_udp)
-            try:
-                os.remove(xml_udp)
-            except Exception:
-                pass
-            results.extend(udp_results)
-            if udp_results:
-                print(f"\033[32m[Nmap UDP]\033[0m {len(udp_results)} UDP servis bulundu.")
+            udp_res = NmapParser.parse_xml(xml_udp)
+            _rm_xml(xml_udp)
+            if udp_res:
+                results.extend(udp_res)
+                print(f"\033[32m[Nmap UDP]\033[0m {len(udp_res)} UDP servis bulundu.")
 
         if results:
-            print(f"\n\033[32m[Nmap]\033[0m Tarama tamamlandı — {len(results)} açık port/servis.\n")
+            print(f"\n\033[32;1m[Nmap AGRESİF]\033[0m Tamamlandı — {len(results)} port/servis.\n")
         return results
 
     # ------------------------------------------------------------------
-    # Stealth Tarama
+    # STEALTH — T2, SYN half-open, fragmentasyon, decoy, minimal script
     # ------------------------------------------------------------------
 
-    def _scan_stealth(self, target: str, proxy: Optional[str] = None,
-                      timeout: int = 900) -> List[Dict[str, Any]]:
+    def _scan_stealth(self, target: str, raw: bool, on_windows: bool,
+                      ports: Optional[str] = None, extra_args: Optional[List[str]] = None,
+                      proxy: Optional[str] = None, timeout: int = 900) -> List[Dict[str, Any]]:
         """
-        TCP connect scan — root gerektirmez, Windows uyumlu.
-        "Stealth" = raw socket yok, SYN yok. Timing T4 — T2 değil.
-        T2 ile 1000 port = 2500+ saniye; T4 ile = 30 saniye.
+        STEALTH TARAMA:
+          - T2 timing: çok yavaş → IDS alarm eşiğinin altında kalır
+          - SYN half-open: bağlantı tamamlanmaz → log bırakmaz (raw socket gerektirir)
+          - -f: paket fragmentasyon → DPI atlatır
+          - -D RND:3: decoy IP'ler → kaynak tespitini zorlaştırır
+          - Minimal script: sadece safe → gürültü üretmez
+          - Düşük version intensity → az prob → az iz
         """
-        print(f"\033[36m[Nmap Stealth Faz-1]\033[0m Port keşfi ({target})...")
-        on_windows = _is_windows()
+        print(f"\n\033[35;1m[Nmap STEALTH]\033[0m Faz-1 — Sessiz port keşfi ({target})...")
 
-        # T4 kullan — T2 1000 portu 2500+ saniyede tamamlar, kesinlikle timeout
-        phase1_args = [
-            "-sT", "--top-ports", "2000", "-T4", "--open",
-            "--max-retries", "2", "--min-rate", "300",
-            "--host-timeout", "120s",
-        ]
-        self._inject_proxy(phase1_args, proxy)
-        _, xml1, _, _ = _run_nmap(self.binary, phase1_args, target, timeout=max(timeout // 2, 120))
+        port_args = ["-p", ports] if ports else ["--top-ports", "1000"]
+
+        if raw:
+            # SYN half-open + fragmentasyon + decoy = maksimum gizlilik
+            phase1 = (
+                ["-sS", "-Pn", "--open"] + port_args +
+                ["-T2", "--max-retries", "1", "--scan-delay", "500ms",
+                 "-f", "--data-length", "25", "-D", "RND:3",
+                 "--host-timeout", "900s"]
+            )
+        else:
+            # TCP connect — raw socket yok, en azından T2 yavaşlık sağlar
+            phase1 = (
+                ["-sT", "-Pn", "--open"] + port_args +
+                ["-T2", "--max-retries", "1",
+                 "--host-timeout", "900s"]
+            )
+            if on_windows:
+                phase1 += ["--unprivileged"]
+
+        self._inject_proxy(phase1, proxy)
+        t1 = max(timeout // 2, 300)
+        _, xml1, _, _ = _run_nmap(self.binary, phase1, target, timeout=t1)
         open_ports = NmapParser.extract_open_ports_safe(xml1)
-        try:
-            os.remove(xml1)
-        except Exception:
-            pass
+        _rm_xml(xml1)
 
         if not open_ports:
-            print("[Nmap Stealth] Açık port bulunamadı.")
+            print(f"\033[33m[Nmap STEALTH]\033[0m {target} üzerinde açık port yok.")
             return []
 
-        print(f"[Nmap Stealth Faz-2] {len(open_ports)} porta derin analiz...")
+        print(f"\033[35m[Nmap STEALTH Faz-1]\033[0m {len(open_ports)} port → "
+              f"{','.join(map(str, sorted(open_ports)[:30]))}")
+
+        # --- FAZ 2: Sessiz servis analizi ---
+        print(f"\033[35;1m[Nmap STEALTH]\033[0m Faz-2 — Sessiz servis analizi ({len(open_ports)} port)...")
         ports_str = ",".join(map(str, sorted(open_ports)))
-        phase2_args = [
-            "-sT", "-sV", "--version-intensity", "7",
-            "--script", self._build_script_list(safe_only=True, windows_safe=on_windows),
-            "--script-timeout", "30s",
-            "--host-timeout", "120s",
-            "-p", ports_str, "-T4",
-        ]
-        self._inject_proxy(phase2_args, proxy)
-        _, xml2, _, _ = _run_nmap(self.binary, phase2_args, target, timeout=timeout)
+
+        if raw:
+            phase2 = [
+                "-sS", "-Pn", "-T2",
+                "-sV", "--version-intensity", "2",     # Düşük yoğunluk = az gürültü
+                "--script", "default,safe",             # Sadece safe = IDS radarı altında
+                "--script-args", "http.useragent=Mozilla/5.0",
+                "--script-timeout", "30s",
+                "--host-timeout", "600s",
+                "-p", ports_str,
+                "-f", "--data-length", "25",            # Fragmentasyon korunuyor
+            ]
+        else:
+            phase2 = [
+                "-sT", "-Pn", "-T2",
+                "-sV", "--version-intensity", "2",
+                "--script", "default,safe",
+                "--script-args", "http.useragent=Mozilla/5.0",
+                "--script-timeout", "30s",
+                "--host-timeout", "600s",
+                "-p", ports_str,
+            ]
+            if on_windows:
+                phase2 += ["--unprivileged"]
+
+        if extra_args:
+            phase2.extend(extra_args)
+
+        self._inject_proxy(phase2, proxy)
+        _, xml2, _, _ = _run_nmap(self.binary, phase2, target, timeout=timeout)
         results = NmapParser.parse_xml(xml2)
-        try:
-            os.remove(xml2)
-        except Exception:
-            pass
+        _rm_xml(xml2)
 
         if results:
-            print(f"\033[32m[Nmap Stealth]\033[0m Tamamlandı — {len(results)} açık port/servis.")
+            print(f"\033[35m[Nmap STEALTH]\033[0m Tamamlandı — {len(results)} açık port/servis.")
         return results
 
     # ------------------------------------------------------------------
-    # Tek Faz (hızlı fallback)
+    # NORMAL — T3, dengeli, default+vuln scriptler
     # ------------------------------------------------------------------
 
-    def _scan_single(self, target: str, args: List[str],
-                     proxy: Optional[str] = None, timeout: int = 300) -> List[Dict[str, Any]]:
+    def _scan_normal(self, target: str, raw: bool, on_windows: bool,
+                     ports: Optional[str] = None, extra_args: Optional[List[str]] = None,
+                     proxy: Optional[str] = None, timeout: int = 900) -> List[Dict[str, Any]]:
+        """
+        NORMAL TARAMA:
+          - T3: dengeli hız (IDS riski ve keşif arasında denge)
+          - SYN veya TCP connect
+          - version intensity 5: orta derinlik
+          - default + safe + vuln scriptler
+        """
+        print(f"\n\033[36m[Nmap NORMAL]\033[0m Faz-1 — Port keşfi ({target})...")
+
+        scan_t = "-sS" if raw else "-sT"
+        port_args = ["-p", ports] if ports else ["--top-ports", "1000"]
+
+        phase1 = (
+            [scan_t, "-Pn", "--open"] + port_args +
+            ["-T3", "--max-retries", "2", "--host-timeout", "600s"]
+        )
+        if on_windows and not raw:
+            phase1 += ["--unprivileged"]
+
+        self._inject_proxy(phase1, proxy)
+        t1 = max(timeout // 2, 240)
+        _, xml1, _, _ = _run_nmap(self.binary, phase1, target, timeout=t1)
+        open_ports = NmapParser.extract_open_ports_safe(xml1)
+        _rm_xml(xml1)
+
+        if not open_ports:
+            print(f"\033[33m[Nmap NORMAL]\033[0m {target} üzerinde açık port yok.")
+            return []
+
+        print(f"\033[32m[Nmap NORMAL Faz-1]\033[0m {len(open_ports)} port → "
+              f"{','.join(map(str, sorted(open_ports)[:30]))}")
+
+        print(f"\033[36m[Nmap NORMAL]\033[0m Faz-2 — Servis analizi ({len(open_ports)} port)...")
+        ports_str = ",".join(map(str, sorted(open_ports)))
+
+        phase2 = [
+            scan_t, "-Pn", "-T3",
+            "-sV", "--version-intensity", "5",
+            "-sC",
+            "--script", "default,safe,vuln",
+            "--script-args", "http.useragent=Mozilla/5.0,vulns.showall=true",
+            "--script-timeout", "60s",
+            "--host-timeout", "600s",
+            "-p", ports_str,
+        ]
+        if on_windows and not raw:
+            phase2 += ["--unprivileged"]
+        if extra_args:
+            phase2.extend(extra_args)
+
+        self._inject_proxy(phase2, proxy)
+        _, xml2, _, _ = _run_nmap(self.binary, phase2, target, timeout=timeout)
+        results = NmapParser.parse_xml(xml2)
+        _rm_xml(xml2)
+
+        if results:
+            print(f"\033[32m[Nmap NORMAL]\033[0m Tamamlandı — {len(results)} açık port/servis.")
+        return results
+
+    # ------------------------------------------------------------------
+    # FAST — T4, top-100, script yok, hızlı keşif
+    # ------------------------------------------------------------------
+
+    def _scan_fast(self, target: str, raw: bool, on_windows: bool,
+                   ports: Optional[str] = None, proxy: Optional[str] = None,
+                   timeout: int = 180) -> List[Dict[str, Any]]:
+        """
+        FAST: T4, top-100 port (veya -F), versiyon yok, script yok.
+        Saniyeler içinde açık portları listeler.
+        """
+        print(f"\n\033[36m[Nmap FAST]\033[0m Hızlı port keşfi ({target})...")
+
+        scan_t = "-sS" if raw else "-sT"
+        port_args = ["-p", ports] if ports else ["-F"]   # -F = nmap'in top-100 portu
+
+        args = (
+            [scan_t, "-Pn", "--open"] + port_args +
+            ["-T4", "--host-timeout", "60s"]
+        )
+        if on_windows and not raw:
+            args += ["--unprivileged"]
+
         self._inject_proxy(args, proxy)
         _, xml, _, _ = _run_nmap(self.binary, args, target, timeout=timeout)
         results = NmapParser.parse_xml(xml)
-        try:
-            os.remove(xml)
-        except Exception:
-            pass
+        _rm_xml(xml)
+
+        if results:
+            print(f"\033[32m[Nmap FAST]\033[0m {len(results)} açık port bulundu.")
         return results
+
+    # ------------------------------------------------------------------
+    # Yardımcı: temp XML temizle
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rm_temp(path: Optional[str]) -> None:
+        _rm_xml(path)
 
     # ------------------------------------------------------------------
     # Yardımcılar
@@ -652,15 +802,38 @@ class NmapWrapper(ToolIntegration):
         return NmapParser.extract_open_ports_safe(xml_file)
 
     def quick_web_scan(self, target: str) -> List[Dict[str, Any]]:
-        """Web odaklı hızlı tarama."""
-        return self._scan_single(
-            target,
-            ["-sT", "-sV", "--version-intensity", "7", "-sC",
-             "--script", "http-title,http-headers,http-methods,ssl-cert,banner",
-             "-p", "80,443,8080,8443,8000,8888,9090,3000,4000,5000",
-             "-T4", "--open"],
-            timeout=120,
-        )
+        """Web odaklı hızlı tarama — sadece web portları, T4, web scriptleri."""
+        on_windows = _is_windows()
+        root = _is_root()
+        _npcap_ok = on_windows and root and _has_npcap()
+        raw = (root and not on_windows) or _npcap_ok
+
+        scan_t = "-sS" if raw else "-sT"
+        args = [
+            scan_t, "-Pn", "--open",
+            "-p", "80,443,8080,8443,8000,8888,9090,3000,4000,5000",
+            "-T4",
+            "-sV", "--version-intensity", "7",
+            "-sC",
+            "--script",
+            "http-title,http-headers,http-methods,http-auth-finder,"
+            "http-server-header,http-robots.txt,http-git,http-backup-finder,"
+            "ssl-cert,ssl-enum-ciphers,banner",
+            "--script-args", "http.useragent=Mozilla/5.0",
+            "--script-timeout", "30s",
+            "--host-timeout", "120s",
+        ]
+        if on_windows and not raw:
+            args += ["--unprivileged"]
+
+        self._inject_proxy(args, None)
+        _, xml, _, _ = _run_nmap(self.binary, args, target, timeout=120)
+        results = NmapParser.parse_xml(xml)
+        _rm_xml(xml)
+
+        if results:
+            print(f"\033[32m[Nmap quick_web_scan]\033[0m {len(results)} web portu bulundu.")
+        return results
 
 
 # ---------------------------------------------------------------------------
