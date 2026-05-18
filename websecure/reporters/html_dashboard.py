@@ -22,6 +22,112 @@ def _escape(s):
             .replace("'", "&#39;"))
 
 
+# ---------------------------------------------------------------------------
+# Helper: cap large string values inside finding detail dicts.
+# Without this, a single finding with a full 50 KB HTTP response body inflates
+# the embedded JS literal to several MB and causes browser parse failures.
+# ---------------------------------------------------------------------------
+_LARGE_DETAIL_KEYS = {
+    "response", "raw_response", "body", "html", "content",
+    "page_source", "source", "html_content", "page", "text",
+    "raw_body", "response_body", "res_body",
+}
+
+
+def _cap_detail(d, max_str: int = 1500, max_large: int = 400):
+    """Return a copy of dict *d* with overly-long strings trimmed."""
+    if not isinstance(d, dict):
+        return d
+    out: dict = {}
+    for k, v in d.items():
+        cap = max_large if k.lower() in _LARGE_DETAIL_KEYS else max_str
+        if isinstance(v, str):
+            out[k] = v[:cap] + f"…[+{len(v)-cap}]" if len(v) > cap else v
+        elif isinstance(v, dict):
+            out[k] = _cap_detail(v, max_str, max_large)
+        elif isinstance(v, list):
+            capped = []
+            for item in v[:50]:
+                if isinstance(item, dict):
+                    capped.append(_cap_detail(item, max_str, max_large))
+                elif isinstance(item, str) and len(item) > max_str:
+                    capped.append(item[:max_str] + "…")
+                else:
+                    capped.append(item)
+            out[k] = capped
+        else:
+            out[k] = v
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Helper: parse nmap ssl-cert script text into a cert dict.
+# Used as fallback when results["tls"]["certificate"] is absent.
+# ---------------------------------------------------------------------------
+def _parse_nmap_ssl_cert(text: str) -> dict:
+    """Parse nmap ssl-cert NSE script output into a cert dict for ssl_html."""
+    import re as _re
+    from datetime import datetime as _dt
+
+    cert: dict = {}
+    for line in text.splitlines():
+        line = line.strip()
+        lower = line.lower()
+
+        if lower.startswith("subject:"):
+            m = _re.search(r"commonName\s*=\s*([^/,\n]+)", line, _re.I)
+            if m:
+                cert["subject_CN"] = m.group(1).strip()
+
+        elif lower.startswith("issuer:"):
+            m = _re.search(r"commonName\s*=\s*([^/,\n]+)", line, _re.I)
+            if m:
+                cert["issuer_CN"] = m.group(1).strip()
+            m2 = _re.search(r"organizationName\s*=\s*([^/,\n]+)", line, _re.I)
+            if m2:
+                cert["issuer_O"] = m2.group(1).strip()
+
+        elif _re.match(r"not valid before\s*:", line, _re.I):
+            ts = line.split(":", 1)[1].strip()
+            cert["not_before"] = ts
+
+        elif _re.match(r"not valid after\s*:", line, _re.I):
+            ts = line.split(":", 1)[1].strip()
+            cert["not_after"] = ts
+            try:
+                exp = _dt.fromisoformat(
+                    ts.rstrip("Z").replace(" ", "T").split("+")[0]
+                )
+                cert["days_remaining"] = (_dt.now().date() - exp.date()).days * -1
+            except Exception:
+                pass
+
+        elif lower.startswith("sha-1:") or lower.startswith("sha1:"):
+            cert["fingerprint"] = line.split(":", 1)[1].strip()
+
+        elif lower.startswith("sha-256:") or lower.startswith("sha256:"):
+            cert.setdefault("fingerprint", line.split(":", 1)[1].strip())
+
+        elif _re.match(r"subject alt(ernative)? name", line, _re.I):
+            san_raw = line.split(":", 1)[1].strip() if ":" in line else ""
+            san_list = [
+                s.strip().split(":")[-1]
+                for s in san_raw.split(",")
+                if _re.match(r"\s*(DNS|IP)\s*:", s, _re.I)
+            ]
+            if san_list:
+                cert["san"] = san_list
+
+    if cert.get("subject_CN") or cert.get("not_after"):
+        cert.setdefault("valid", True)
+        cert.setdefault(
+            "self_signed",
+            bool(cert.get("issuer_CN"))
+            and cert.get("subject_CN", "").lower() == cert.get("issuer_CN", "").lower(),
+        )
+    return cert
+
+
 def render_html_dashboard(results: dict) -> str:
     """
     Generates a modern, dark-mode, single-file HTML dashboard from the scan results.
@@ -471,7 +577,35 @@ def render_html_dashboard(results: dict) -> str:
         """
 
     # Serialize findings for JS
-    findings_json = json.dumps(findings, default=str).replace("<", "\\u003c").replace(">", "\\u003e")
+    # -------------------------------------------------------------------
+    # Cap large string values inside each finding's "detail" dict BEFORE
+    # JSON serialisation.  Raw HTTP response bodies can easily be 50-200 KB
+    # each; with hundreds of findings that pushes the inline <script> block
+    # past 2 MB, which causes the browser JS engine to silently fail while
+    # parsing the literal → data stays [] → table renders empty → clicks
+    # do nothing.
+    # -------------------------------------------------------------------
+    _ser_findings = [
+        {**_f, "detail": _cap_detail(_f.get("detail") or {})}
+        for _f in findings
+    ]
+    findings_json = (
+        json.dumps(_ser_findings, default=str)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+    # Hard safety cap: if still > 2 MB, strip detail entirely
+    if len(findings_json) > 2_000_000:
+        _ser_findings_min = [
+            {**_f, "detail": {"message": "Detail omitted — payload too large for inline report."}}
+            for _f in findings
+        ]
+        findings_json = (
+            json.dumps(_ser_findings_min, default=str)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+        )
+    _data_size_kb = len(findings_json) // 1024
 
     # --- Ports Data Prep ---
     ports_html = ""
@@ -709,6 +843,34 @@ def render_html_dashboard(results: dict) -> str:
     else:
         tls_data = tls_raw
     cert = tls_data.get("certificate") or {}
+
+    # -------------------------------------------------------------------
+    # Fallback: build cert dict from nmap ssl-cert script output when the
+    # tls results bucket has no "certificate" key (common when only nmap
+    # ran and the dedicated TLS scanner was skipped / timed out).
+    # nmap_data is already normalised a few hundred lines above.
+    # -------------------------------------------------------------------
+    if not cert and isinstance(nmap_data, list):
+        import re as _re_ssl
+        for _np in nmap_data:
+            if not isinstance(_np, dict):
+                continue
+            _scripts = _np.get("scripts") or {}
+            _ssl_text = _scripts.get("ssl-cert") or ""
+            if not _ssl_text:
+                continue
+            _nc = _parse_nmap_ssl_cert(_ssl_text)
+            if not _nc:
+                continue
+            cert = _nc
+            # Augment with TLS version from ssl-enum-ciphers (first TLSvX.Y line)
+            _enum_text = _scripts.get("ssl-enum-ciphers") or ""
+            for _el in _enum_text.splitlines():
+                if _re_ssl.match(r"\s*TLSv[0-9.]+\s*:", _el):
+                    cert.setdefault("tls_version", _el.strip().rstrip(":"))
+                    break
+            break  # use first port that has ssl-cert (usually 443)
+
     if cert:
         valid_icon = "[OK] Valid" if cert.get("valid") else "[X] Invalid"
         if cert.get("self_signed"):
@@ -1125,7 +1287,16 @@ def render_html_dashboard(results: dict) -> str:
     try {{
         data = { findings_json };
     }} catch(e) {{
-        console.error('[WebSecure] Failed to parse findings data:', e);
+        console.error('[WebSecure] Failed to parse findings data ({_data_size_kb} KB):', e);
+        // Show a visible error so the user knows why the table is empty
+        (function() {{
+            var tb = document.getElementById('tableBody');
+            if (tb) {{
+                tb.innerHTML = '<tr><td colspan="6" style="color:var(--sev-critical);padding:1.5rem;text-align:center;">'
+                    + '&#9888; Findings data parse error ({_data_size_kb} KB inline). '
+                    + 'Open browser DevTools (F12 &rarr; Console) for details.</td></tr>';
+            }}
+        }})();
     }}
     try {{
         sessions = { sessions_json };
