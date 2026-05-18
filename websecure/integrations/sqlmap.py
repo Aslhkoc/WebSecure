@@ -111,7 +111,20 @@ class SQLMapWrapper(ToolIntegration):
         self._binary_name = binary_path
 
     def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None
+        if shutil.which(self.binary) is not None:
+            return True
+        # SQLMap is often a Python script in the tools/ directory — check there too
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent.parent
+        for candidate in [
+            root / "tools" / "sqlmap" / "sqlmap.py",
+            root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py",
+            root / "tools" / "sqlmap" / "sqlmap.exe",
+        ]:
+            if candidate.exists():
+                self._binary_path = str(candidate)
+                return True
+        return False
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — SQL injection scan on target."""

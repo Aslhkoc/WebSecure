@@ -832,22 +832,34 @@ Notlar
     - ctx.results        (dict) : (opsiyonel) sonuç kovası
     - ctx.debug          (bool) : (opsiyonel) hata ayıklama
 """
+_reporting_mod = None  # module-level sentinel — resolved lazily by get_results()
+
+
 def get_results() -> dict:
     """Return the central results bucket if available, else an empty dict.
-    Prefers core.reporting.get_results when present. No try/except.
+    Prefers core.reporting.get_results when present.
     """
+    global _reporting_mod
     mod = _reporting_mod
     if mod is None:
-        if _iul.find_spec("websecure.core.reporting") is not None:
-            import importlib as _im
-            mod = _im.import_module("websecure.core.reporting")
-        elif _iul.find_spec("reporting") is not None:
-            import importlib as _im
-            mod = _im.import_module("reporting")
+        try:
+            if _iul.find_spec("websecure.core.reporting") is not None:
+                import importlib as _im
+                mod = _im.import_module("websecure.core.reporting")
+                _reporting_mod = mod
+            elif _iul.find_spec("reporting") is not None:
+                import importlib as _im
+                mod = _im.import_module("reporting")
+                _reporting_mod = mod
+        except Exception:
+            pass
     fn = getattr(mod, "get_results", None) if mod is not None else None
     if callable(fn):
-        val = fn()
-        return val if isinstance(val, dict) else {}
+        try:
+            val = fn()
+            return val if isinstance(val, dict) else {}
+        except Exception:
+            return {}
     # Fallback: no global results provider
     return {}
 
@@ -904,6 +916,26 @@ def _ensure_results_bucket(ctx: Any) -> Dict[str, Any]:
         setattr(ctx, "results", {})
         bucket = ctx.results
     return bucket
+
+
+def _merge_results(ctx: Any, res: Any) -> None:
+    """Merge a scanner result dict into ctx.results (safe, no-op on bad input)."""
+    if not isinstance(res, dict):
+        return
+    ctx_results = getattr(ctx, "results", None)
+    if not isinstance(ctx_results, dict):
+        return
+    for key, val in res.items():
+        if isinstance(val, list):
+            ctx_results.setdefault(key, []).extend(val)
+        elif isinstance(val, dict):
+            existing = ctx_results.get(key)
+            if isinstance(existing, dict):
+                existing.update(val)
+            else:
+                ctx_results[key] = val
+        else:
+            ctx_results[key] = val
 
 def _host_from_url(u: str) -> str:
     try_netloc = urlparse(u or "").netloc
@@ -1957,10 +1989,11 @@ def _runner_lfi(ctx) -> None:
         return
     url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
     sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
     try:
         run_fn = getattr(mod, "run", None)
         if callable(run_fn):
-            run_fn(url, session=sess, debug=False)
+            run_fn(url, session=sess, results=results, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] LFI runner error: {e}")
         _report_phase_error("lfi", "phases._runner_lfi", e)
@@ -1974,10 +2007,11 @@ def _runner_cors(ctx) -> None:
         return
     url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
     sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
     try:
         run_fn = getattr(mod, "run", None)
         if callable(run_fn):
-            run_fn(url, session=sess, debug=False)
+            run_fn(url, session=sess, results=results, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] CORS runner error: {e}")
         _report_phase_error("cors", "phases._runner_cors", e)
@@ -1991,10 +2025,11 @@ def _runner_subdomain_takeover(ctx) -> None:
         return
     url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
     sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
     try:
         run_fn = getattr(mod, "run", None)
         if callable(run_fn):
-            run_fn(url, session=sess, debug=False)
+            run_fn(url, session=sess, results=results, debug=False)
     except Exception as e:
         _logger.warning(f"[phases] Subdomain Takeover runner error: {e}")
         _report_phase_error("subdomain_takeover", "phases._runner_subdomain_takeover", e)
@@ -4121,7 +4156,7 @@ def run_sqlmap_scan(ctx) -> None:
             
         cmd_args = list(extra_args)
         if param_str:
-            cmd_args.append(f"-p {param_str}")  # Force test these params
+            cmd_args.extend(["-p", param_str])  # Force test these params
         
         # [WS3] Boost Level/Risk for High-Value Targets
         # If the URL contains high-value params, we might want to boost intensity
@@ -4147,6 +4182,9 @@ def run_sqlmap_scan(ctx) -> None:
                 entry["detail"] = f
                 
             add_result("sqlmap", entry)
+            # SQLi is always offensive — route Critical/High to offensive bucket too
+            if str(entry.get("severity", "")).lower() in ("critical", "high"):
+                add_result("offensive", entry)
     else:
         add_result("sqlmap", {"status": "finished", "findings": 0})
 

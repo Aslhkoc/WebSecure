@@ -70,7 +70,7 @@ class NucleiWrapper(ToolIntegration):
     """
 
     def __init__(self, binary_path: str = "nuclei"):
-        super().__init__("")
+        super().__init__(binary_path)
         self._binary_name = binary_path
         self._check_binary()
 
