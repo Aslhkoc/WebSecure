@@ -29,9 +29,6 @@ Araçlar
 - httpx     : HTTP/2 hızlı prob + tech detect [YENİ]
 - katana    : JS-aware web crawler            [YENİ]
 - dalfox    : XSS doğrulama                  [YENİ]
-- metasploit: CVE exploit doğrulama (check)  [YENİ]
-- burp      : Burp Suite Pro API import       [YENİ]
-
 SARIF
 -----
 ```python
@@ -147,22 +144,6 @@ DalfoxWrapper = _dalfox.get("DalfoxWrapper")
 DalfoxFinding = _dalfox.get("DalfoxFinding")
 verify_xss = _dalfox.get("verify_xss")
 
-# Metasploit (YENİ)
-_msf = _safe_import("websecure.integrations.metasploit", [
-    "MetasploitIntegration", "MetasploitRPCClient",
-    "check_cves_with_metasploit", "_CVE_TO_MODULE",
-])
-MetasploitIntegration = _msf.get("MetasploitIntegration")
-MetasploitRPCClient = _msf.get("MetasploitRPCClient")
-check_cves_with_metasploit = _msf.get("check_cves_with_metasploit")
-
-# Burp Suite (YENİ)
-_burp = _safe_import("websecure.integrations.burp", [
-    "BurpIntegration", "BurpSuiteAPIClient", "import_burp_findings",
-])
-BurpIntegration = _burp.get("BurpIntegration")
-BurpSuiteAPIClient = _burp.get("BurpSuiteAPIClient")
-import_burp_findings = _burp.get("import_burp_findings")
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +174,6 @@ def _auto_register_tools() -> ToolRegistry:
         ("sqlmap",       SQLMapWrapper),
         # Port scanning
         ("nmap",         NmapWrapper),
-        # Enterprise (optional)
-        ("metasploit",   MetasploitIntegration),
-        ("burp",         BurpIntegration),
     ]
 
     for name, cls in _tool_classes:
@@ -246,8 +224,6 @@ __all__ = [
     "HttpxWrapper",
     "KatanaWrapper",
     "DalfoxWrapper",
-    "MetasploitIntegration",
-    "BurpIntegration",
     # Kısayol fonksiyonlar
     "run_nuclei_scan",
     "run_nuclei_with_correlation",
@@ -256,8 +232,6 @@ __all__ = [
     "probe_hosts",
     "crawl_target",
     "verify_xss",
-    "check_cves_with_metasploit",
-    "import_burp_findings",
     # ParamDiscovery
     "ParamDiscoveryPipeline",
     "ParamDiscoveryResult",
