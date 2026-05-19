@@ -159,6 +159,8 @@ def render_html_dashboard(results: dict) -> str:
             "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
             "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
             "interactsh", "oast",
+            "clickjacking", "param_pollution", "bypass_403", "business_logic",
+            "oauth2", "cache_poisoning", "host_header",
         ]
     )
 

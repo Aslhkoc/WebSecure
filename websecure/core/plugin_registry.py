@@ -126,6 +126,10 @@ class PluginRegistry:
             ("websecure.scanners.prototype_pollution", None,                 "offensive"),
             ("websecure.scanners.crlf_injection",   None,                   "offensive"),
             ("websecure.scanners.race_condition",    None,                   "offensive"),
+            ("websecure.scanners.clickjacking",     "ClickjackingScanner",  "offensive"),
+            ("websecure.scanners.param_pollution",  "ParamPollutionScanner","offensive"),
+            ("websecure.scanners.bypass_403",       "FourOhThreeScanner",   "offensive"),
+            ("websecure.scanners.business_logic",   "BusinessLogicScanner", "offensive"),
         ]
 
         for module_path, class_name, phase in _BUILTIN_SCANNERS:

@@ -368,51 +368,72 @@ class HeaderScanner(BaseScanner):
         }
 
     # ------------------------------------------------------------------
-    # Host Header Injection
+    # Host Header Injection — deep variant (password reset, routing, ambiguous)
     # ------------------------------------------------------------------
     _EVIL_HOST = "evil.websecure.internal"
+
+    # Password reset / forgot-password paths commonly vulnerable to host poisoning
+    _RESET_PATHS = [
+        "/forgot-password", "/reset-password", "/password-reset",
+        "/account/password/reset", "/auth/forgot", "/user/forgot-password",
+        "/api/auth/forgot-password", "/api/password-reset",
+    ]
 
     def _test_host_header_injection(self, url: str) -> t.List[HeaderFinding]:
         findings = []
         parsed = urlparse(url)
         real_host = parsed.netloc
+        base = f"{parsed.scheme}://{real_host}"
 
-        test_headers_list = [
-            {"Host": self._EVIL_HOST},
-            {"Host": f"{real_host}.{self._EVIL_HOST}"},
-            {"Host": real_host, "X-Forwarded-Host": self._EVIL_HOST},
-            {"Host": real_host, "X-Host": self._EVIL_HOST},
+        # --- Variant set: (header_dict, technique_name) ---
+        inject_variants = [
+            # Classic reflection tests
+            ({"Host": self._EVIL_HOST},                                          "Host override"),
+            ({"Host": f"{real_host}.{self._EVIL_HOST}"},                         "Host subdomain append"),
+            ({"Host": real_host, "X-Forwarded-Host": self._EVIL_HOST},          "X-Forwarded-Host"),
+            ({"Host": real_host, "X-Host": self._EVIL_HOST},                    "X-Host"),
+            ({"Host": real_host, "X-Original-Host": self._EVIL_HOST},           "X-Original-Host"),
+            ({"Host": real_host, "X-Forwarded-Server": self._EVIL_HOST},        "X-Forwarded-Server"),
+            # Port injection: trick app into building URLs with evil port
+            ({"Host": f"{real_host}:1337"},                                      "Host port injection"),
+            # Absolute-URL routing bypass (some proxies forward the absolute URL)
+            ({"Host": self._EVIL_HOST, "X-Forwarded-Proto": "https"},           "Host+Proto override"),
+            # Duplicate Host (first vs last server behavior)
+            ({"Host": real_host, "X-Real-Host": self._EVIL_HOST},               "X-Real-Host"),
         ]
 
-        for inject_headers in test_headers_list:
+        for inject_headers, technique in inject_variants:
             try:
                 resp = self._do_get(url, inject_headers)
                 body = (getattr(resp, "text", "") or "")[:8000]
                 resp_headers = dict(getattr(resp, "headers", {}))
-
-                # Check reflection in body or Location header
                 location = resp_headers.get("Location", "")
-                if self._EVIL_HOST in body or self._EVIL_HOST in location:
-                    injected_header = next(
-                        k for k, v in inject_headers.items() if self._EVIL_HOST in v
+                set_cookie = resp_headers.get("Set-Cookie", "")
+
+                if self._EVIL_HOST in body or self._EVIL_HOST in location or self._EVIL_HOST in set_cookie:
+                    injected_val = next(
+                        (v for v in inject_headers.values() if self._EVIL_HOST in v), self._EVIL_HOST
+                    )
+                    injected_key = next(
+                        (k for k, v in inject_headers.items() if self._EVIL_HOST in v), "Host"
                     )
                     findings.append(HeaderFinding(
                         title="Host Header Injection",
                         severity="High",
                         description=(
-                            f"Server reflects injected '{injected_header}: {self._EVIL_HOST}' "
-                            "in response body or Location header — password-reset link hijacking, "
-                            "cache poisoning, and SSRF are possible."
+                            f"[{technique}] Server reflects injected Host value into response. "
+                            "Enables: password-reset link hijacking, web cache poisoning, SSRF routing."
                         ),
                         evidence={
-                            "injected_header": injected_header,
-                            "injected_value": inject_headers[injected_header],
-                            "location": location,
+                            "technique": technique,
+                            "injected_header": injected_key,
+                            "injected_value": injected_val,
+                            "location": location[:200],
                             "body_snippet": body[:300],
                         },
                         recommendation=(
-                            "Validate the Host header against a server-side whitelist. "
-                            "Never use the Host header to construct URLs in responses."
+                            "Validate the Host header against a strict server-side whitelist. "
+                            "Never use the Host header to construct URLs in responses or emails."
                         ),
                         tags=["Host-Header", "Cache-Poisoning", "SSRF"],
                     ))
@@ -420,19 +441,87 @@ class HeaderScanner(BaseScanner):
                         "type": "Host Header Injection",
                         "severity": "High",
                         "url": url,
-                        "parameter": injected_header,
-                        "payload": inject_headers[injected_header],
+                        "technique": technique,
+                        "parameter": injected_key,
+                        "payload": injected_val,
                         "evidence": body[:300],
                         "cwe": "CWE-20",
                         "owasp": "A03:2021",
                     })
-                    break  # one confirmed finding per URL is enough
-            except Exception as exc:
+                    break
+            except Exception:
+                continue
+
+        # --- Password reset link poisoning ---
+        findings.extend(self._test_password_reset_poisoning(base))
+        return findings
+
+    def _test_password_reset_poisoning(self, base: str) -> t.List[HeaderFinding]:
+        """
+        Test password reset endpoints for Host header poisoning.
+        A vulnerable server will embed the injected host in the reset email link.
+        We detect this by checking if the injected value appears in the response body.
+        """
+        findings = []
+        for path in self._RESET_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                # First probe: GET to check if endpoint exists
+                r_check = self.session.get(url, timeout=5, verify=False, allow_redirects=True)
+                if r_check.status_code in (404, 410):
+                    continue
+
+                # Poison probe: POST with injected Host + dummy email
+                poison_headers = {
+                    "Host": self._EVIL_HOST,
+                    "X-Forwarded-Host": self._EVIL_HOST,
+                }
+                r_poison = self.session.post(
+                    url,
+                    data={"email": "test@example.com", "username": "test"},
+                    headers=poison_headers,
+                    timeout=8,
+                    verify=False,
+                    allow_redirects=True,
+                )
+                body = (r_poison.text or "")[:5000]
+                if self._EVIL_HOST in body:
+                    findings.append(HeaderFinding(
+                        title="Password Reset Poisoning via Host Header",
+                        severity="Critical",
+                        description=(
+                            f"Password reset endpoint {path} reflects injected Host header in response. "
+                            "An attacker can poison reset emails to point to an evil server, "
+                            "stealing victim reset tokens."
+                        ),
+                        evidence={
+                            "path": path,
+                            "injected_host": self._EVIL_HOST,
+                            "body_snippet": body[:300],
+                        },
+                        recommendation=(
+                            "Build password reset URLs from a server-side configured base URL, "
+                            "never from the request's Host header."
+                        ),
+                        tags=["Host-Header", "Password-Reset", "Account-Takeover"],
+                    ))
+                    add_result("offensive", {
+                        "type": "Password Reset Poisoning via Host Header",
+                        "severity": "Critical",
+                        "url": url,
+                        "payload": self._EVIL_HOST,
+                        "evidence": body[:300],
+                        "cwe": "CWE-640",
+                        "owasp": "A07:2021",
+                    })
+                    break
+            except Exception:
                 continue
         return findings
 
     # ------------------------------------------------------------------
-    # Cache Poisoning (X-Forwarded-Host / X-Forwarded-Scheme reflection)
+    # Cache Poisoning — deep variant (unkeyed headers, fat GET, param cloaking,
+    #                                 cache deception, DoS-via-cache)
     # ------------------------------------------------------------------
     _CACHE_POISON_HEADERS = [
         "X-Forwarded-Host",
@@ -441,53 +530,258 @@ class HeaderScanner(BaseScanner):
         "X-Rewrite-URL",
         "X-Forwarded-Proto",
         "X-Forwarded-For",
+        # Additional unkeyed headers often present in CDN/reverse proxy stacks
+        "X-Host",
+        "X-Forwarded-Server",
+        "X-HTTP-Host-Override",
+        "Forwarded",
+        "X-Original-Forwarded-For",
+        "True-Client-IP",
     ]
 
     def _test_cache_poisoning(self, url: str) -> t.List[HeaderFinding]:
         findings = []
-        canary = "cachepoisontest.websecure.internal"
+        import random
+        import string
+        # Use a unique canary per scan run to avoid cross-test pollution
+        canary = "wscache" + "".join(random.choices(string.ascii_lowercase, k=6)) + ".internal"
+        parsed = urlparse(url)
 
+        # --- 1. Unkeyed header reflection ---
         for header_name in self._CACHE_POISON_HEADERS:
+            header_val = canary if "For" not in header_name else f"1.2.3.4, {canary}"
             try:
-                resp = self._do_get(url, {header_name: canary})
+                # Add a cache-buster query param to avoid polluting live cache
+                bust_url = url + ("&" if parsed.query else "?") + f"cb={canary[:8]}"
+                resp = self._do_get(bust_url, {header_name: header_val})
                 body = (getattr(resp, "text", "") or "")[:8000]
-                resp_headers = dict(getattr(resp, "headers", {}))
-                location = resp_headers.get("Location", "")
+                resp_h = dict(getattr(resp, "headers", {}))
+                location = resp_h.get("Location", "")
 
                 if canary in body or canary in location:
+                    cache_control = resp_h.get("Cache-Control", "")
+                    age = resp_h.get("Age", "")
+                    cacheable = "no-store" not in cache_control and "private" not in cache_control
+
+                    severity = "Critical" if cacheable else "High"
                     findings.append(HeaderFinding(
-                        title="Cache Poisoning via Header Reflection",
-                        severity="High",
+                        title="Web Cache Poisoning — Unkeyed Header Reflection",
+                        severity=severity,
                         description=(
-                            f"Server reflects '{header_name}: {canary}' into response body "
-                            "or Location — if the response is cached, an attacker can "
-                            "poison the cache for all users."
+                            f"Header '{header_name}' is reflected into the response and is NOT "
+                            f"part of the cache key. Cache-Control: {cache_control or 'not set'}. "
+                            f"{'Response is cacheable — full poisoning possible.' if cacheable else 'Response marked non-cacheable — limited impact.'}"
                         ),
                         evidence={
                             "header": header_name,
-                            "value": canary,
+                            "canary": canary,
+                            "cache_control": cache_control,
+                            "age_header": age,
+                            "cacheable": cacheable,
                             "body_snippet": body[:300],
-                            "location": location,
+                            "location": location[:200],
                         },
                         recommendation=(
-                            "Strip or validate untrusted forwarding headers at the reverse-proxy "
-                            "layer. Ensure cache keys include all headers that influence response content."
+                            "Configure the CDN/cache layer to include all response-influencing headers "
+                            "in the cache key, or strip them at the edge before they reach the origin."
                         ),
-                        tags=["Cache-Poisoning", "Headers"],
+                        tags=["Cache-Poisoning", "Unkeyed-Header"],
                     ))
                     add_result("offensive", {
-                        "type": "Cache Poisoning",
-                        "severity": "High",
+                        "type": "Web Cache Poisoning",
+                        "severity": severity,
                         "url": url,
+                        "technique": "unkeyed_header",
                         "parameter": header_name,
-                        "payload": canary,
+                        "payload": header_val,
                         "evidence": body[:300],
                         "cwe": "CWE-444",
                         "owasp": "A05:2021",
                     })
                     break
-            except Exception as exc:
+            except Exception:
                 continue
+
+        # --- 2. Fat GET attack (body parameter overrides query string) ---
+        findings.extend(self._test_fat_get(url, canary))
+
+        # --- 3. Parameter cloaking (semicolon delimiter) ---
+        findings.extend(self._test_param_cloaking(url, canary))
+
+        # --- 4. Web cache deception ---
+        findings.extend(self._test_cache_deception(url))
+
+        return findings
+
+    def _test_fat_get(self, url: str, canary: str) -> t.List[HeaderFinding]:
+        """
+        Fat GET: send a GET request with a body parameter that may override
+        the URL query string on the origin, but the cache key only uses the URL.
+        """
+        findings = []
+        parsed = urlparse(url)
+        qs_params = dict(parse_qsl(parsed.query))
+        if not qs_params:
+            return findings  # Need query params to test
+
+        for param_name in list(qs_params.keys())[:3]:
+            try:
+                # Baseline
+                base_resp = self.session.get(url, timeout=6, verify=False)
+                base_body = (base_resp.text or "")[:5000]
+
+                # Fat GET: same URL, but body overrides param
+                fat_resp = self.session.request(
+                    "GET", url,
+                    data={param_name: canary},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=6, verify=False,
+                )
+                fat_body = (fat_resp.text or "")[:5000]
+                if canary in fat_body and canary not in base_body:
+                    findings.append(HeaderFinding(
+                        title="Web Cache Poisoning — Fat GET Body Override",
+                        severity="High",
+                        description=(
+                            f"Parameter '{param_name}' in GET request body overrides the URL query "
+                            "string value on the origin. If the cache keys only on the URL, "
+                            "an attacker can poison the cache with a body-injected value."
+                        ),
+                        evidence={
+                            "param": param_name,
+                            "canary": canary,
+                            "body_snippet": fat_body[:300],
+                        },
+                        recommendation=(
+                            "Configure cache to treat GET-with-body as non-cacheable, "
+                            "or normalize requests before caching."
+                        ),
+                        tags=["Cache-Poisoning", "Fat-GET"],
+                    ))
+                    add_result("offensive", {
+                        "type": "Web Cache Poisoning — Fat GET",
+                        "severity": "High",
+                        "url": url,
+                        "technique": "fat_get",
+                        "parameter": param_name,
+                        "evidence": fat_body[:300],
+                        "cwe": "CWE-444",
+                    })
+            except Exception:
+                continue
+        return findings
+
+    def _test_param_cloaking(self, url: str, canary: str) -> t.List[HeaderFinding]:
+        """
+        Parameter cloaking: use semicolon as separator to inject a hidden parameter
+        that the origin sees but the cache ignores.
+        e.g. /search?q=legit;evil=<canary>
+        """
+        findings = []
+        parsed = urlparse(url)
+        if not parsed.query:
+            return findings
+
+        try:
+            # Inject via semicolon after existing query
+            cloak_url = url + f";wscachecloak={canary}"
+            resp = self.session.get(cloak_url, timeout=6, verify=False)
+            body = (resp.text or "")[:5000]
+            if canary in body:
+                findings.append(HeaderFinding(
+                    title="Web Cache Poisoning — Parameter Cloaking",
+                    severity="High",
+                    description=(
+                        "Semicolon-delimited parameter is reflected in response but may be "
+                        "invisible to the cache key parser. Allows cache key normalization bypass."
+                    ),
+                    evidence={"canary": canary, "cloak_url": cloak_url, "body_snippet": body[:300]},
+                    recommendation=(
+                        "Ensure the cache normalizes all URL parameter delimiters consistently "
+                        "with the origin server."
+                    ),
+                    tags=["Cache-Poisoning", "Param-Cloaking"],
+                ))
+                add_result("offensive", {
+                    "type": "Web Cache Poisoning — Parameter Cloaking",
+                    "severity": "High",
+                    "url": url,
+                    "technique": "param_cloaking",
+                    "evidence": body[:300],
+                    "cwe": "CWE-444",
+                })
+        except Exception:
+            pass
+        return findings
+
+    def _test_cache_deception(self, url: str) -> t.List[HeaderFinding]:
+        """
+        Web Cache Deception: append a static-looking path extension to a dynamic
+        authenticated page to trick the cache into storing authenticated content.
+        e.g. /account → /account/nonexistent.css
+        """
+        findings = []
+        parsed = urlparse(url)
+        base_path = parsed.path.rstrip("/") or "/"
+        deception_suffixes = [
+            f"{base_path}/ws_cache_test.css",
+            f"{base_path}/ws_cache_test.js",
+            f"{base_path}/ws_cache_test.jpg",
+            f"{base_path}/ws_cache_test.png",
+        ]
+        try:
+            # Baseline: original URL
+            base_resp = self.session.get(url, timeout=6, verify=False)
+            base_status = base_resp.status_code
+            base_body = (base_resp.text or "")[:3000]
+            if base_status not in (200,):
+                return findings
+            # Check if baseline contains any sensitive markers
+            sensitive_markers = ["email", "username", "account", "profile", "password", "token"]
+            has_sensitive = any(m in base_body.lower() for m in sensitive_markers)
+            if not has_sensitive:
+                return findings
+
+            for suffix_url in deception_suffixes[:2]:
+                deception_url_full = f"{parsed.scheme}://{parsed.netloc}{suffix_url}"
+                try:
+                    dec_resp = self.session.get(deception_url_full, timeout=6, verify=False)
+                    dec_body = (dec_resp.text or "")[:3000]
+                    if dec_resp.status_code == 200 and any(m in dec_body.lower() for m in sensitive_markers):
+                        cache_ctrl = dec_resp.headers.get("Cache-Control", "")
+                        if "no-store" not in cache_ctrl and "private" not in cache_ctrl:
+                            findings.append(HeaderFinding(
+                                title="Web Cache Deception",
+                                severity="High",
+                                description=(
+                                    f"Authenticated page content served at {suffix_url} with a "
+                                    "static file extension. If cached, any user requesting this URL "
+                                    "will receive the victim's authenticated response."
+                                ),
+                                evidence={
+                                    "deception_url": deception_url_full,
+                                    "cache_control": cache_ctrl,
+                                    "body_snippet": dec_body[:300],
+                                },
+                                recommendation=(
+                                    "Configure the cache to never store responses for authenticated pages. "
+                                    "Use Cache-Control: no-store, private on all authenticated endpoints."
+                                ),
+                                tags=["Cache-Deception", "Auth-Bypass"],
+                            ))
+                            add_result("offensive", {
+                                "type": "Web Cache Deception",
+                                "severity": "High",
+                                "url": deception_url_full,
+                                "technique": "cache_deception",
+                                "evidence": dec_body[:300],
+                                "cwe": "CWE-525",
+                            })
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
         return findings
 
 # ============================================================================

@@ -578,12 +578,17 @@ class OAuth2AttackSurface(BaseScanner):
         legit    = parsed.netloc or "app.example.com"
         results: List[Dict] = []
 
-        # -- 1. Discover OAuth endpoints
+        # -- 1. Discover OAuth endpoints + OpenID config
         oauth_endpoints = self._discover_oauth_endpoints(target)
         _logger6.info("[OAuth2] Discovered %d endpoints", len(oauth_endpoints))
 
+        # -- 2. OpenID Connect misconfiguration audit
+        oidc = self._check_oidc_config(target)
+        if oidc:
+            results.extend(oidc)
+
         for ep in oauth_endpoints:
-            # -- 2. redirect_uri bypass
+            # -- 3. redirect_uri bypass
             for bypass_tpl in self._REDIRECT_BYPASSES:
                 bypass = bypass_tpl.format(evil=_OOB_HOST, legit=legit)
                 test_url = self._inject_redirect_uri(ep, bypass)
@@ -605,17 +610,43 @@ class OAuth2AttackSurface(BaseScanner):
                 except Exception as exc:
                     _logger6.debug("[OAuth2] redirect_uri probe: %s", exc)
 
-            # -- 3. State CSRF check
+            # -- 4. State CSRF check
             state_result = self._check_state_csrf(ep)
             if state_result:
                 results.append(state_result)
                 self.report_finding(**state_result)
 
-            # -- 4. Token/code reuse check
+            # -- 5. Token/code reuse check
             reuse = self._check_code_reuse(ep)
             if reuse:
                 results.append(reuse)
                 self.report_finding(**reuse)
+
+            # -- 6. Implicit flow enabled (deprecated, insecure)
+            implicit = self._check_implicit_flow(ep)
+            if implicit:
+                results.append(implicit)
+                self.report_finding(**implicit)
+
+            # -- 7. PKCE downgrade attack
+            pkce = self._check_pkce_downgrade(ep)
+            if pkce:
+                results.append(pkce)
+                self.report_finding(**pkce)
+
+        # -- 8. Token introspection endpoint publicly accessible
+        introspect = self._check_token_introspection(target)
+        results.extend(introspect)
+
+        # -- 9. Token leakage via Referer header
+        token_leak = self._check_token_in_referer(target)
+        results.extend(token_leak)
+
+        # -- 10. Refresh token rotation bypass
+        refresh = self._check_refresh_token_rotation(target)
+        if refresh:
+            results.append(refresh)
+            self.report_finding(**refresh)
 
         return results
 
@@ -677,7 +708,6 @@ class OAuth2AttackSurface(BaseScanner):
 
     def _check_code_reuse(self, endpoint: str) -> Optional[Dict]:
         """Detect if authorization codes can be replayed."""
-        # We check for an existing 'code' param (if any) and replay it
         parsed = urlparse(endpoint)
         qs     = parse_qs(parsed.query)
         code   = (qs.get("code") or qs.get("authorization_code") or [None])[0]
@@ -698,6 +728,281 @@ class OAuth2AttackSurface(BaseScanner):
                 }
         except Exception as exc:
             _logger6.debug("[OAuth2] code reuse: %s", exc)
+        return None
+
+    # ------------------------------------------------------------------
+    # NEW DEEP OAuth2 METHODS
+    # ------------------------------------------------------------------
+
+    def _check_oidc_config(self, base: str) -> List[Dict]:
+        """
+        Fetch /.well-known/openid-configuration and audit for insecure settings:
+        - implicit/password/client_credentials flows enabled (deprecated/dangerous)
+        - id_token_signing_alg_values_supported includes 'none'
+        - request_uri_parameter_supported (SSRF risk)
+        - Missing PKCE enforcement
+        """
+        results: List[Dict] = []
+        config_url = base.rstrip("/") + "/.well-known/openid-configuration"
+        try:
+            r = self.session.get(config_url, timeout=8, verify=False)
+            if r.status_code != 200:
+                return results
+            try:
+                cfg = r.json()
+            except Exception:
+                return results
+
+            # Implicit flow still supported?
+            grant_types = cfg.get("grant_types_supported", [])
+            response_types = cfg.get("response_types_supported", [])
+            if "implicit" in grant_types or any("token" in rt for rt in response_types):
+                results.append({
+                    "vuln_type": "OAuth2/OIDC Implicit Flow Enabled",
+                    "url": config_url, "severity": "High",
+                    "description": (
+                        "Server advertises support for implicit flow (response_type=token). "
+                        "Implicit flow is deprecated in OAuth 2.1 — access tokens are exposed "
+                        "in URL fragments and browser history."
+                    ),
+                    "evidence": {"grant_types": grant_types, "response_types": response_types},
+                })
+                self.report_finding(**results[-1])
+
+            # Resource Owner Password Credentials (ROPC) — allows password exfiltration
+            if "password" in grant_types:
+                results.append({
+                    "vuln_type": "OAuth2 Password Grant (ROPC) Enabled",
+                    "url": config_url, "severity": "High",
+                    "description": (
+                        "Resource Owner Password Credentials grant is enabled. "
+                        "This requires the client to handle user passwords directly — "
+                        "phishing and credential harvesting risk."
+                    ),
+                    "evidence": {"grant_types": grant_types},
+                })
+                self.report_finding(**results[-1])
+
+            # alg:none in supported signing algorithms
+            algs = cfg.get("id_token_signing_alg_values_supported", [])
+            if "none" in algs:
+                results.append({
+                    "vuln_type": "OAuth2/OIDC alg:none Supported",
+                    "url": config_url, "severity": "Critical",
+                    "description": (
+                        "Server advertises 'none' as a supported id_token signing algorithm. "
+                        "Attackers can forge ID tokens with no signature."
+                    ),
+                    "evidence": {"algs_supported": algs},
+                })
+                self.report_finding(**results[-1])
+
+            # request_uri_parameter_supported → SSRF via JAR (JWT Secured Authorization Requests)
+            if cfg.get("request_uri_parameter_supported"):
+                results.append({
+                    "vuln_type": "OAuth2/OIDC request_uri Parameter Supported (SSRF Risk)",
+                    "url": config_url, "severity": "Medium",
+                    "description": (
+                        "Server supports request_uri parameter, which allows the authorization "
+                        "endpoint to fetch an external JWT. An attacker can use this to trigger "
+                        "SSRF from the authorization server."
+                    ),
+                    "evidence": {"request_uri_supported": True},
+                })
+                self.report_finding(**results[-1])
+
+        except Exception as exc:
+            _logger6.debug("[OAuth2] OIDC config: %s", exc)
+        return results
+
+    def _check_implicit_flow(self, endpoint: str) -> Optional[Dict]:
+        """Test if the authorization endpoint accepts response_type=token (implicit flow)."""
+        try:
+            test_url = endpoint
+            parsed = urlparse(endpoint)
+            qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            qs["response_type"] = "token"
+            qs.setdefault("client_id", "test_client")
+            qs.setdefault("redirect_uri", "https://legit.example.com/cb")
+            test_url = urlunparse(parsed._replace(query=urlencode(qs)))
+            r = self.session.get(test_url, timeout=8, verify=False, allow_redirects=False)
+            loc = r.headers.get("location", "")
+            # If redirected with access_token in fragment → implicit flow confirmed
+            if "access_token" in loc or r.status_code in (200, 302, 303):
+                if "error" not in loc.lower() and "unsupported_response_type" not in loc.lower():
+                    return {
+                        "vuln_type": "OAuth2 Implicit Flow Accepted",
+                        "url": test_url, "severity": "High",
+                        "description": (
+                            "Authorization endpoint accepted response_type=token (implicit flow). "
+                            "Access tokens exposed in browser URL fragment — visible in history, "
+                            "Referer headers, and server logs."
+                        ),
+                        "evidence": {"location": loc[:200], "status": r.status_code},
+                    }
+        except Exception as exc:
+            _logger6.debug("[OAuth2] implicit flow: %s", exc)
+        return None
+
+    def _check_pkce_downgrade(self, endpoint: str) -> Optional[Dict]:
+        """
+        Test PKCE downgrade: send an authorization request WITHOUT code_challenge
+        to an endpoint that should require PKCE (RFC 7636).
+        If the server accepts the request without enforcing PKCE → downgrade vulnerability.
+        """
+        try:
+            parsed = urlparse(endpoint)
+            qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            # Remove any existing PKCE params to force downgrade
+            qs.pop("code_challenge", None)
+            qs.pop("code_challenge_method", None)
+            qs["response_type"] = "code"
+            qs.setdefault("client_id", "test_client")
+            qs.setdefault("redirect_uri", "https://legit.example.com/cb")
+            qs.setdefault("state", "ws_pkce_test")
+            test_url = urlunparse(parsed._replace(query=urlencode(qs)))
+            r = self.session.get(test_url, timeout=8, verify=False, allow_redirects=False)
+            loc = r.headers.get("location", "")
+            body = (r.text or "").lower()
+            # Server should reject with error=invalid_request + code_challenge_required
+            if r.status_code in (200, 302, 303) and "code_challenge" not in body and "pkce" not in body:
+                if "error" not in loc.lower():
+                    return {
+                        "vuln_type": "OAuth2 PKCE Downgrade — code_challenge Not Enforced",
+                        "url": test_url, "severity": "High",
+                        "description": (
+                            "Authorization endpoint accepted a request without PKCE code_challenge. "
+                            "Public clients (SPAs, mobile apps) are vulnerable to authorization "
+                            "code interception attacks (RFC 7636 not enforced)."
+                        ),
+                        "evidence": {"location": loc[:200], "status": r.status_code},
+                    }
+        except Exception as exc:
+            _logger6.debug("[OAuth2] PKCE downgrade: %s", exc)
+        return None
+
+    def _check_token_introspection(self, base: str) -> List[Dict]:
+        """
+        Check if the token introspection endpoint (RFC 7662) is publicly accessible
+        without authentication — allows anyone to validate/inspect access tokens.
+        """
+        results: List[Dict] = []
+        introspect_paths = [
+            "/oauth/introspect", "/oauth2/introspect", "/auth/introspect",
+            "/connect/introspect", "/api/oauth/introspect", "/token/introspect",
+        ]
+        dummy_token = "ws_probe_token_" + "a" * 20
+        for path in introspect_paths:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.post(
+                    url,
+                    data={"token": dummy_token},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=6, verify=False,
+                )
+                body = (r.text or "").lower()
+                if r.status_code == 200 and ("active" in body or "exp" in body or "sub" in body):
+                    results.append({
+                        "vuln_type": "OAuth2 Token Introspection Endpoint Exposed",
+                        "url": url, "severity": "High",
+                        "description": (
+                            "Token introspection endpoint is accessible without client authentication. "
+                            "Allows any party to probe token validity and extract claims (sub, scope, exp)."
+                        ),
+                        "evidence": {"path": path, "status": r.status_code, "body_snippet": (r.text or "")[:200]},
+                    })
+                    self.report_finding(**results[-1])
+                    break
+            except Exception as exc:
+                _logger6.debug("[OAuth2] introspect %s: %s", path, exc)
+        return results
+
+    def _check_token_in_referer(self, base: str) -> List[Dict]:
+        """
+        Check if access tokens or authorization codes appear in URLs that could
+        leak via Referer header when navigating from OAuth callback pages.
+        Detects: tokens in redirect_uri, tokens in page links, Referrer-Policy absence.
+        """
+        results: List[Dict] = []
+        callback_paths = ["/oauth/callback", "/auth/callback", "/callback", "/oauth2/callback"]
+        for path in callback_paths:
+            url = base.rstrip("/") + path
+            try:
+                # Simulate a callback URL with a token fragment
+                token_url = url + "?access_token=ws_probe_token&token_type=bearer"
+                r = self.session.get(token_url, timeout=6, verify=False)
+                headers = dict(r.headers)
+                referrer_policy = headers.get("Referrer-Policy", "")
+                csp = headers.get("Content-Security-Policy", "")
+
+                body = (r.text or "")
+                if r.status_code in (200,) and ("access_token" in body or "token" in body.lower()):
+                    if not referrer_policy or referrer_policy in ("", "no-referrer-when-downgrade", "unsafe-url"):
+                        results.append({
+                            "vuln_type": "OAuth2 Token Leakage Risk via Referer",
+                            "url": token_url, "severity": "Medium",
+                            "description": (
+                                f"OAuth callback page at {path} lacks a strict Referrer-Policy. "
+                                "If the page links to third-party resources, access tokens in the URL "
+                                "may be leaked via the Referer header."
+                            ),
+                            "evidence": {
+                                "referrer_policy": referrer_policy or "not set",
+                                "path": path,
+                                "status": r.status_code,
+                            },
+                        })
+                        self.report_finding(**results[-1])
+                        break
+            except Exception as exc:
+                _logger6.debug("[OAuth2] referer leak %s: %s", path, exc)
+        return results
+
+    def _check_refresh_token_rotation(self, base: str) -> Optional[Dict]:
+        """
+        Test refresh token rotation: if a refresh token remains valid after
+        being used once, an attacker who steals an old refresh token can still use it.
+        We probe the token endpoint with a dummy token to detect permissive behavior.
+        """
+        token_paths = ["/oauth/token", "/oauth2/token", "/auth/token", "/token"]
+        for path in token_paths:
+            url = base.rstrip("/") + path
+            try:
+                dummy_refresh = "ws_old_refresh_token_" + "b" * 20
+                r1 = self.session.post(
+                    url,
+                    data={"grant_type": "refresh_token", "refresh_token": dummy_refresh},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=8, verify=False,
+                )
+                body1 = (r1.text or "").lower()
+                # If server returns a new token on first use (expected), then:
+                if r1.status_code == 200 and "access_token" in body1:
+                    # Use the SAME refresh token again
+                    r2 = self.session.post(
+                        url,
+                        data={"grant_type": "refresh_token", "refresh_token": dummy_refresh},
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        timeout=8, verify=False,
+                    )
+                    body2 = (r2.text or "").lower()
+                    if r2.status_code == 200 and "access_token" in body2:
+                        return {
+                            "vuln_type": "OAuth2 Refresh Token Rotation Not Enforced",
+                            "url": url, "severity": "High",
+                            "description": (
+                                "Refresh token was accepted on second use without rotation. "
+                                "A stolen refresh token remains valid indefinitely, "
+                                "enabling persistent account compromise."
+                            ),
+                            "evidence": {
+                                "first_use_status": r1.status_code,
+                                "second_use_status": r2.status_code,
+                            },
+                        }
+            except Exception as exc:
+                _logger6.debug("[OAuth2] refresh rotation %s: %s", path, exc)
         return None
 
 

@@ -26,6 +26,7 @@ _ALL_OFFENSIVE_MODULES = [
     "file_upload", "dom_xss", "headers", "tls",
     "auth_scanners", "owasp", "infrastructure", "passive_recon",
     "js_analyzer", "session_scanner", "cors", "clickjacking", "hsts",
+    "param_pollution", "bypass_403", "business_logic",
 ]
 
 def _enable_all_modules(cfg: dict) -> None:

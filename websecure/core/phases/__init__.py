@@ -743,6 +743,11 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.prototype_pollution",
         "websecure.scanners.headers",
         "websecure.scanners.race_condition",
+        # Faz 20 — yeni eklenen kapsamlı tarayıcılar
+        "websecure.scanners.clickjacking",
+        "websecure.scanners.param_pollution",
+        "websecure.scanners.bypass_403",
+        "websecure.scanners.business_logic",
     ]
     for m in _url_first:
         label = m.rsplit(".", 1)[-1]
