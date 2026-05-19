@@ -482,8 +482,23 @@ class AuthMatrixScanner(BaseScanner):
 
 
 def run(target: str, session=None, results=None, debug=False, **kwargs):
-    scanner = AuthMatrixScanner(session=session, results=results, debug=debug)
-    scanner.run(target, **kwargs)
+    """
+    Top-level entry point: runs AuthMatrixScanner + full AuthAdim6 chain
+    (OAuth2, SAML, 2FA bypass, password-reset poisoning, privilege escalation, BOLA/IDOR).
+    AuthAdim6Scanner is instantiated after its class definition (end of file) via
+    a deferred call so that forward references resolve correctly.
+    """
+    # Phase 1 — Auth matrix (role × endpoint coverage)
+    AuthMatrixScanner(session=session, results=results, debug=debug).run(target, **kwargs)
+
+    # Phase 2 — Full auth attack chain (OAuth2 deep, SAML, 2FA, password-reset,
+    #            privilege escalation, BOLA/IDOR).  Class defined later in this
+    #            module; use importlib self-reference to avoid forward-ref issues.
+    import importlib as _il
+    _mod = _il.import_module(__name__)
+    _adim6_cls = getattr(_mod, "AuthAdim6Scanner", None)
+    if _adim6_cls is not None:
+        _adim6_cls(session=session, results=results, debug=debug).run(target, **kwargs)
 
 # ============================================================================
 # ADIM 6 — OAuth 2.0 / SAML / 2FA / Password Reset / PrivEsc / BOLA-IDOR

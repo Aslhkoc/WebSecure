@@ -27,6 +27,7 @@ _ALL_OFFENSIVE_MODULES = [
     "auth_scanners", "owasp", "infrastructure", "passive_recon",
     "js_analyzer", "session_scanner", "cors", "clickjacking", "hsts",
     "param_pollution", "bypass_403", "business_logic",
+    "open_redirect", "lfi", "cmdi", "subdomain_takeover", "headers",
 ]
 
 def _enable_all_modules(cfg: dict) -> None:

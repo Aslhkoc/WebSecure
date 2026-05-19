@@ -117,7 +117,8 @@ class PluginRegistry:
             ("websecure.scanners.request_smuggling", None,                  "offensive"),
             ("websecure.scanners.ws_fuzz",          "WebSocketFuzzer",      "offensive"),
             ("websecure.scanners.session_scanner",   "SessionScanner",       "offensive"),
-            ("websecure.scanners.auth_matrix",      "AuthMatrixScanner",    "offensive"),
+            # auth_matrix.py merged into auth_scanners.py — correct module path:
+            ("websecure.scanners.auth_scanners",    "AuthMatrixScanner",    "offensive"),
             ("websecure.scanners.dom_xss",          "DOMXSSScanner",        "browser"),
             ("websecure.scanners.passive_recon",    None,                   "discovery"),
             ("websecure.scanners.tls",              None,                   "tls"),
@@ -130,6 +131,13 @@ class PluginRegistry:
             ("websecure.scanners.param_pollution",  "ParamPollutionScanner","offensive"),
             ("websecure.scanners.bypass_403",       "FourOhThreeScanner",   "offensive"),
             ("websecure.scanners.business_logic",   "BusinessLogicScanner", "offensive"),
+            # Previously unwired scanners — now fully registered:
+            ("websecure.scanners.open_redirect",    "OpenRedirectScanner",  "offensive"),
+            ("websecure.scanners.lfi",              "LFIScanner",           "offensive"),
+            ("websecure.scanners.cmdi",             "CmdiScanner",          "offensive"),
+            ("websecure.scanners.cors",             "CORSScanner",          "offensive"),
+            ("websecure.scanners.subdomain_takeover","SubdomainTakeoverScanner","offensive"),
+            ("websecure.scanners.headers",          None,                   "sec_headers"),
         ]
 
         for module_path, class_name, phase in _BUILTIN_SCANNERS:
