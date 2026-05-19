@@ -1927,25 +1927,23 @@ def _run_scan_phases(
             smart_login(session, cfg, driver=driver, base_url=url, debug=debug, event_cb=_on_auth_event)
 
 
-        # [WS3] SESSION HUNTER (User Code #1 Integration)
-        # If Profile is Aggressive or user demands deep check, try hijacking/prediction
-        # Check if auth failed OR if we just want to test robustness
+        # [WS3] SESSION SCANNER — weak session brute-force + timestamp prediction
+        # Runs on aggressive/safe_full profiles (already wired into phases runner;
+        # this block provides a direct call path for standalone main.py invocations)
         _prof = (cfg.get("settings") or {}).get("scan_profile")
-        if _prof in ["aggressive", "safe_full"]: 
-             # Import locally to avoid circle if TopLevel
-             try:
-                 from websecure.scanners.session_hunter import run_session_hunter
-                 print("\n[*] Session Hunter Başlatılıyor (Tahmin & Brute Force)...")
-                 hunter_res = run_session_hunter(url, session, threads=20) # 20 threads safe default
-                 if hunter_res:
-                     print(f"[!] DİKKAT: {len(hunter_res)} adet zayıf/tahmin edilebilir oturum bulundu!")
-                     # Add to results?
-                     if callable(globals().get("add_result")):
-                         add_result("auth_weakness", {"hunter_findings": hunter_res})
-             except ImportError:
-                 print("[!] Session Hunter modülü yüklenemedi.")
-             except Exception as e:
-                 print(f"[!] Session Hunter hatası: {e}")
+        if _prof in ["aggressive", "safe_full"]:
+            try:
+                from websecure.scanners.session_scanner import run
+                print("\n[*] Session Scanner Başlatılıyor (Brute Force + Tahmin)...")
+                hunter_res = run(url, session=session, threads=20)
+                if hunter_res:
+                    print(f"[!] DİKKAT: {len(hunter_res)} adet oturum güvenlik bulgusu!")
+                    if callable(globals().get("add_result")):
+                        add_result("auth_weakness", {"session_findings": hunter_res})
+            except ImportError:
+                print("[!] Session Scanner modülü yüklenemedi.")
+            except Exception as e:
+                print(f"[!] Session Scanner hatası: {e}")
 
         _auth = (cfg.get('auth') or {}) if isinstance(cfg, dict) else {}
         _auto = (_auth.get('auto_signup') or {}) if isinstance(_auth, dict) else {}

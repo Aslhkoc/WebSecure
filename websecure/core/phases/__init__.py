@@ -726,7 +726,6 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.graphql",
         "websecure.scanners.csrf",
         "websecure.scanners.passive_recon",
-        "websecure.scanners.session_hunter",
         "websecure.scanners.sqli",
         "websecure.scanners.xss",
         "websecure.scanners.auth_scanners",
@@ -742,8 +741,6 @@ def phase_offensive(ctx: dict):
         "websecure.scanners.session_scanner",
         # Faz 3 — bağlı olmayan scanner'lar
         "websecure.scanners.prototype_pollution",
-        "websecure.scanners.xxe",
-        "websecure.scanners.ssrf",
         "websecure.scanners.headers",
         "websecure.scanners.race_condition",
     ]
@@ -2408,48 +2405,6 @@ def _runner_prototype_pollution(ctx) -> None:
     except Exception as e:
         _logger.warning(f"[phases] Prototype Pollution runner error: {e}")
         _report_phase_error("prototype_pollution", "phases._runner_prototype_pollution", e)
-
-
-def _runner_xxe(ctx) -> None:
-    """Standalone XXE taraması (ssrf_xxe birleşiğinden bağımsız)."""
-    mod = _opt_import("websecure.scanners.xxe")
-    if not mod:
-        add_result("meta", {"stage": "xxe", "status": "skipped:module-not-found"})
-        return
-    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
-    sess = getattr(ctx, "session", None)
-    debug = bool(getattr(ctx, "debug", False))
-    try:
-        findings = mod.run(url, session=sess, debug=debug) or []
-        for f in findings:
-            add_result("xxe", f)
-            if f.get("severity") in ("Critical", "High", "Medium"):
-                add_result("offensive", f)
-        add_result("meta", {"stage": "xxe", "findings": len(findings)})
-    except Exception as e:
-        _logger.warning(f"[phases] XXE runner error: {e}")
-        _report_phase_error("xxe", "phases._runner_xxe", e)
-
-
-def _runner_ssrf(ctx) -> None:
-    """Standalone SSRF taraması (ssrf_xxe birleşiğinden bağımsız)."""
-    mod = _opt_import("websecure.scanners.ssrf")
-    if not mod:
-        add_result("meta", {"stage": "ssrf", "status": "skipped:module-not-found"})
-        return
-    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
-    sess = getattr(ctx, "session", None)
-    debug = bool(getattr(ctx, "debug", False))
-    try:
-        findings = mod.run(url, session=sess, debug=debug) or []
-        for f in findings:
-            add_result("ssrf", f)
-            if f.get("severity") in ("Critical", "High", "Medium"):
-                add_result("offensive", f)
-        add_result("meta", {"stage": "ssrf", "findings": len(findings)})
-    except Exception as e:
-        _logger.warning(f"[phases] SSRF runner error: {e}")
-        _report_phase_error("ssrf", "phases._runner_ssrf", e)
 
 
 def _runner_headers_scanner(ctx) -> None:

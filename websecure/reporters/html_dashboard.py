@@ -153,7 +153,7 @@ def render_html_dashboard(results: dict) -> str:
             "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
             "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
             "headers", "security_headers", "rate_limit", "request_smuggling",
-            "session_hunter", "mass_assignment", "ws_fuzz", "infrastructure",
+            "session_scanner", "mass_assignment", "ws_fuzz", "infrastructure",
             "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
             "discovery", "passive", "subdomains", "vulnerability",
             "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",

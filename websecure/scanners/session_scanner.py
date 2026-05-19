@@ -15,11 +15,14 @@ Adim 12 — Siniflar:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
+import math
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeoutError
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urljoin, urlencode
 
@@ -39,6 +42,29 @@ _SENSITIVE_NAMES = re.compile(
     r"(sess|token|auth|jwt|sid|csrftoken|xsrf|remember|login|uid|user|account)",
     re.I,
 )
+
+# Weak/common session ID values to brute-force (from session_hunter.py)
+_WEAK_SESSION_VALUES = [
+    "admin", "administrator", "user", "guest", "test", "demo",
+    "root", "debug", "trace", "token", "auth", "session", "cookie",
+    "abc123", "123456", "password", "qwerty", "0", "1", "true",
+    "false", "", "null", "undefined",
+]
+
+# Session cookie names to test against
+_SESSION_COOKIE_NAMES = [
+    "PHPSESSID", "JSESSIONID", "session", "sess", "sid",
+    "connect.sid", "ASP.NET_SessionId", "auth", "token",
+]
+
+try:
+    from websecure.core.auth_flow import _looks_authenticated
+except ImportError:
+    def _looks_authenticated(text, resp=None, hints=None):
+        text_lower = (text or "").lower()
+        return any(k in text_lower for k in (
+            "dashboard", "logout", "sign out", "my account", "welcome"
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +574,166 @@ class ConcurrentSessionBypassProber(BaseScanner):
 
 
 # ---------------------------------------------------------------------------
+# WeakSessionBruteForcer  (ported from session_hunter._brute_common)
+# ---------------------------------------------------------------------------
+
+class WeakSessionBruteForcer(BaseScanner):
+    """
+    Dictionary attack against well-known weak session ID values.
+    Tries every combination of _SESSION_COOKIE_NAMES × _WEAK_SESSION_VALUES
+    and checks whether the server treats the request as authenticated.
+
+    SOLID/SRP: Only weak-value brute force testing.
+    """
+
+    MAX_WORKERS = 8
+    PHASE_TIMEOUT = 60
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        findings: List[Dict] = []
+        workers = int(kwargs.get("threads", self.MAX_WORKERS))
+        phase_timeout = int(kwargs.get("op_timeout", self.PHASE_TIMEOUT))
+        ua = (self.session.headers.get("User-Agent") if self.session else None) or "Mozilla/5.0"
+
+        def check_one(name: str, value: str) -> Optional[Dict]:
+            try:
+                resp = self.session.get(
+                    target,
+                    headers={"Cookie": f"{name}={value}", "User-Agent": ua},
+                    timeout=5,
+                    verify=False,
+                )
+                if _looks_authenticated(resp.text, resp):
+                    return {
+                        "type": "Weak Session ID — Dictionary Attack",
+                        "severity": "Critical",
+                        "url": target,
+                        "cookie": f"{name}={value}",
+                        "status": resp.status_code,
+                        "description": (
+                            f"Access gained with trivial session: {name}={value!r}. "
+                            "Server accepts a well-known weak session identifier."
+                        ),
+                        "remediation": (
+                            "Use cryptographically random session IDs (os.urandom(32)). "
+                            "Never accept predictable or dictionary-word values."
+                        ),
+                    }
+            except Exception as exc:
+                logger.debug("[WeakSessionBruteForcer] %s=%s: %s", name, value, exc)
+            return None
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(check_one, name, val): (name, val)
+                for name in _SESSION_COOKIE_NAMES[:6]
+                for val in _WEAK_SESSION_VALUES
+            }
+            try:
+                for f in as_completed(futures, timeout=phase_timeout):
+                    result = f.result()
+                    if result:
+                        self.report_finding(**result)
+                        findings.append(result)
+            except _FutureTimeoutError:
+                logger.warning(
+                    "[WeakSessionBruteForcer] Phase timed out after %ds", phase_timeout
+                )
+                for f in futures:
+                    f.cancel()
+
+        return findings
+
+
+# ---------------------------------------------------------------------------
+# TimestampSessionPredictor  (ported from session_hunter._predict_timestamp_sessions)
+# ---------------------------------------------------------------------------
+
+class TimestampSessionPredictor(BaseScanner):
+    """
+    Timestamp-seed prediction attack.
+    Generates candidate session IDs derived from Unix timestamps over the last
+    15 minutes (30-second intervals → ~30 seeds × 6 hash variants = 180 probes).
+
+    Covers: MD5, SHA256, SHA1, base64, user-prefixed MD5 variants.
+
+    SOLID/SRP: Only timestamp-based session prediction testing.
+    """
+
+    MAX_WORKERS = 8
+    PHASE_TIMEOUT = 60
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        findings: List[Dict] = []
+        workers = int(kwargs.get("threads", self.MAX_WORKERS))
+        phase_timeout = int(kwargs.get("op_timeout", self.PHASE_TIMEOUT))
+        ua = (self.session.headers.get("User-Agent") if self.session else None) or "Mozilla/5.0"
+
+        now = int(time.time())
+        seeds = list(range(now - 900, now, 30))   # 15 min window, 30s intervals
+        logger.info("[TimestampSessionPredictor] Testing %d timestamp seeds", len(seeds))
+
+        def test_seed(ts: int) -> Optional[Dict]:
+            ts_str = str(ts)
+            candidates = [
+                hashlib.md5(ts_str.encode()).hexdigest(),
+                hashlib.md5(ts_str.encode()).hexdigest()[:26],
+                hashlib.sha256(f"session:{ts}".encode()).hexdigest()[:32],
+                base64.urlsafe_b64encode(ts_str.encode()).decode().rstrip("="),
+                hashlib.md5(f"user:1:{ts}".encode()).hexdigest(),
+                hashlib.sha1(ts_str.encode()).hexdigest(),
+            ]
+            for val in candidates:
+                for name in _SESSION_COOKIE_NAMES[:5]:
+                    try:
+                        resp = self.session.get(
+                            target,
+                            headers={"Cookie": f"{name}={val}", "User-Agent": ua},
+                            timeout=4,
+                            verify=False,
+                        )
+                        if _looks_authenticated(resp.text, resp):
+                            return {
+                                "type": "Predictable Session ID — Timestamp Seed",
+                                "severity": "Critical",
+                                "url": target,
+                                "seed_timestamp": ts,
+                                "cookie": f"{name}={val}",
+                                "description": (
+                                    f"Session derived from Unix timestamp {ts} was accepted. "
+                                    "Server uses time-based session generation — "
+                                    "trivially brute-forceable within a 15-minute window."
+                                ),
+                                "remediation": (
+                                    "Session IDs must be generated from a CSPRNG (os.urandom). "
+                                    "Never derive session tokens from predictable inputs like timestamps."
+                                ),
+                            }
+                    except Exception as exc:
+                        logger.debug(
+                            "[TimestampSessionPredictor] ts=%d name=%s: %s", ts, name, exc
+                        )
+            return None
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(test_seed, ts): ts for ts in seeds}
+            try:
+                for f in as_completed(futures, timeout=phase_timeout):
+                    result = f.result()
+                    if result:
+                        self.report_finding(**result)
+                        findings.append(result)
+            except _FutureTimeoutError:
+                logger.warning(
+                    "[TimestampSessionPredictor] Phase timed out after %ds", phase_timeout
+                )
+                for f in futures:
+                    f.cancel()
+
+        return findings
+
+
+# ---------------------------------------------------------------------------
 # SessionScanner (Adım 12 orchestrator)
 # ---------------------------------------------------------------------------
 
@@ -577,6 +763,8 @@ class SessionScanner(BaseScanner):
             ("JWTExpiryBypassProber",          JWTExpiryBypassProber),
             ("BrowserFingerprintBypassProber", BrowserFingerprintBypassProber),
             ("ConcurrentSessionBypassProber",  ConcurrentSessionBypassProber),
+            ("WeakSessionBruteForcer",         WeakSessionBruteForcer),
+            ("TimestampSessionPredictor",      TimestampSessionPredictor),
         ]
 
         for name, ScannerClass in sub_scanners:

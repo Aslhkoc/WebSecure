@@ -25,7 +25,7 @@ _ALL_OFFENSIVE_MODULES = [
     "open_redirect", "idor", "race_condition", "prototype_pollution",
     "file_upload", "dom_xss", "headers", "tls",
     "auth_scanners", "owasp", "infrastructure", "passive_recon",
-    "js_analyzer", "session_hunter", "cors", "clickjacking", "hsts",
+    "js_analyzer", "session_scanner", "cors", "clickjacking", "hsts",
 ]
 
 def _enable_all_modules(cfg: dict) -> None:
