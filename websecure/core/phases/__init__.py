@@ -5844,6 +5844,13 @@ def run(target, cfg, *, session=None, debug=False, event_cb=None):
     ctx = _build_ctx(target, cfg, session=session, debug=debug)
     _ensure_session(ctx)
 
+    # Authenticated scan: config["auth"] varsa oturum aç
+    try:
+        from websecure.core.auth_manager import AuthManager as _AM
+        _AM.authenticate(ctx)
+    except Exception as _auth_err:
+        _logger.debug(f"[run] AuthManager skip: {_auth_err}")
+
     # Plan çalıştırma (tüm fazlar + rapor)
     if _is_from_modules(_run_plan_if_needed, "core.flow_runner", "flow_runner") and callable(_run_plan_if_needed):
         _run_plan_if_needed(ctx, event_cb=event_cb)
