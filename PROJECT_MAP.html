@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebSecure — Proje Haritası</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',monospace;font-size:13px;}
+h1{text-align:center;padding:24px 0 6px;font-size:22px;color:#58a6ff;letter-spacing:2px;}
+.subtitle{text-align:center;color:#8b949e;margin-bottom:18px;font-size:12px;}
+.tabs{display:flex;justify-content:center;gap:10px;margin-bottom:20px;}
+.tab{padding:8px 28px;border-radius:6px;cursor:pointer;font-size:13px;border:1px solid #30363d;background:#161b22;color:#8b949e;transition:all .2s;}
+.tab.active{background:#1f6feb;color:#fff;border-color:#1f6feb;}
+.pane{display:none;padding:0 18px 40px;}
+.pane.active{display:block;}
+
+/* ===== TREE PANEL ===== */
+#tree-root{max-width:1200px;margin:0 auto;}
+.tree-node{margin-left:0;}
+.tree-item{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:5px;cursor:pointer;user-select:none;transition:background .15s;white-space:nowrap;}
+.tree-item:hover{background:#21262d;}
+.tree-item .arrow{width:14px;color:#58a6ff;font-size:11px;flex-shrink:0;}
+.tree-item .icon{font-size:14px;flex-shrink:0;}
+.tree-item .label{font-size:12.5px;flex:1;}
+.tree-item .badge{font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;flex-shrink:0;}
+.tree-children{display:none;margin-left:22px;border-left:1px solid #21262d;padding-left:4px;}
+.tree-children.open{display:block;}
+
+/* badge colors */
+.b-core{background:#0d419d;color:#79c0ff;}
+.b-scanner{background:#1a472a;color:#56d364;}
+.b-wordlist{background:#5a1e02;color:#ffa657;}
+.b-config{background:#3d1f00;color:#f0883e;}
+.b-test{background:#2d1f69;color:#d2a8ff;}
+.b-integration{background:#1b2a3b;color:#58a6ff;}
+.b-cli{background:#3b2300;color:#e3b341;}
+.b-db{background:#1c1c2e;color:#bc8cff;}
+.b-api{background:#1a2d1a;color:#3fb950;}
+.b-driver{background:#2a1f1a;color:#ff7b72;}
+.b-web{background:#1a2530;color:#79c0ff;}
+
+/* file detail popup */
+.detail{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:#161b22;border:1px solid #30363d;border-radius:10px;padding:22px 26px;
+  max-width:600px;width:92%;z-index:999;box-shadow:0 8px 40px #000a;}
+.detail h3{color:#58a6ff;margin-bottom:10px;font-size:15px;}
+.detail .meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+.detail .tag{font-size:11px;padding:2px 8px;border-radius:8px;border:1px solid #30363d;}
+.detail .desc{color:#8b949e;line-height:1.6;font-size:12.5px;margin-bottom:12px;}
+.detail .deps h4{color:#e3b341;font-size:12px;margin-bottom:6px;}
+.detail .deps ul{list-style:none;display:flex;flex-wrap:wrap;gap:5px;}
+.detail .deps ul li{background:#21262d;padding:2px 8px;border-radius:4px;font-size:11px;color:#79c0ff;}
+.detail .close-btn{position:absolute;top:10px;right:14px;cursor:pointer;color:#8b949e;font-size:18px;}
+.overlay{display:none;position:fixed;inset:0;background:#000000aa;z-index:998;}
+
+/* ===== REPORT PANEL ===== */
+#report-root{max-width:1200px;margin:0 auto;}
+.search-box{width:100%;padding:8px 14px;background:#161b22;border:1px solid #30363d;
+  border-radius:6px;color:#c9d1d9;font-size:13px;margin-bottom:16px;outline:none;}
+.search-box:focus{border-color:#1f6feb;}
+.category-header{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:10px 16px;margin-bottom:4px;cursor:pointer;display:flex;align-items:center;gap:8px;
+  font-size:13px;color:#c9d1d9;transition:background .15s;}
+.category-header:hover{background:#21262d;}
+.category-content{display:none;margin-bottom:10px;}
+.category-content.open{display:block;}
+.file-card{background:#0d1117;border:1px solid #21262d;border-radius:6px;
+  padding:12px 16px;margin:4px 0;transition:border-color .2s;}
+.file-card:hover{border-color:#58a6ff;}
+.file-card h4{color:#58a6ff;font-size:12.5px;font-family:monospace;margin-bottom:5px;}
+.file-card .fc-desc{color:#8b949e;font-size:12px;line-height:1.55;margin-bottom:7px;}
+.file-card .fc-deps{display:flex;flex-wrap:wrap;gap:4px;}
+.file-card .fc-dep{background:#21262d;color:#79c0ff;font-size:10.5px;padding:1px 7px;border-radius:4px;}
+.file-card .fc-type{font-size:10px;padding:1px 7px;border-radius:8px;float:right;margin-top:-2px;}
+.hidden{display:none;}
+</style>
+</head>
+<body>
+
+<h1>🔐 WebSecure — Proje Haritası</h1>
+<p class="subtitle">v20.0.0 · Tüm dosyalar · İnteraktif ağaç + detaylı rapor</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('tree')">🌳 İnteraktif Ağaç</div>
+  <div class="tab" onclick="switchTab('report')">📋 Detaylı Rapor</div>
+</div>
+
+<!-- ========================== TREE PANE ========================== -->
+<div id="pane-tree" class="pane active">
+<div id="tree-root"></div>
+</div>
+
+<!-- ========================== REPORT PANE ========================== -->
+<div id="pane-report" class="pane">
+<div id="report-root">
+<input class="search-box" type="text" placeholder="🔍 Dosya adı veya açıklama ara..." oninput="filterReport(this.value)">
+<div id="report-content"></div>
+</div>
+</div>
+
+<!-- Detail Popup -->
+<div class="overlay" id="overlay" onclick="closeDetail()"></div>
+<div class="detail" id="detail-box">
+  <span class="close-btn" onclick="closeDetail()">✕</span>
+  <h3 id="d-title"></h3>
+  <div class="meta" id="d-meta"></div>
+  <div class="desc" id="d-desc"></div>
+  <div class="deps" id="d-deps"></div>
+</div>
+
+<script>
+// =====================================================================
+// DATA
+// =====================================================================
+const FILES = [
+  // ---- KÖK ----
+  {id:"config_json", path:"config.json", type:"config", icon:"⚙️",
+   desc:"Ana yapılandırma dosyası. Hedef URL, tarama profili (aggressive/stealth), auth ayarları, proxy, rapor formatı, bildirim kanalları (Slack/Teams/PagerDuty), WAF bypass, rate limit, OAST/interactsh endpoint ve tüm modül açma/kapama ayarlarını içerir.",
+   deps:["websecure/core/utils/config.py","config.schema.json","websecure/core/profiles.py","websecure/core/scan_profile.py"]},
+  {id:"config_schema", path:"config.schema.json", type:"config", icon:"📐",
+   desc:"config.json'un JSON Schema doğrulama dosyası. Startup'ta config.json bu schema'ya göre validate edilir. Hatalı config kullanımını önler.",
+   deps:["config.json","websecure/core/startup.py"]},
+  {id:"install_py", path:"install.py", type:"tool", icon:"🔧",
+   desc:"Otomatik kurulum scripti. Gerekli Python paketlerini, harici araçları (nmap, nuclei, amass, dalfox, ffuf, httpx, katana) ve Chrome driver'ı kurar/günceller.",
+   deps:["drivers/chromedriver.exe","websecure/core/startup.py"]},
+  {id:"pytest_ini", path:"pytest.ini", type:"config", icon:"🧪",
+   desc:"Pytest yapılandırması. Test dizini (tests/), timeout (30s), çıktı formatı ve test dosya/sınıf/fonksiyon adı desenlerini tanımlar.",
+   deps:["tests/"]},
+  {id:"claude_md", path:"CLAUDE.md", type:"config", icon:"📝",
+   desc:"Claude AI geliştirme kuralları. SOLID prensipleri, OOP zorunluluğu, git push kuralları ve dosya yönetim politikalarını içerir.",
+   deps:[]},
+  {id:"session_json", path:"session.json", type:"config", icon:"💾",
+   desc:"Aktif tarama oturumu verisi. Checkpoint/resume için tarama durumu, bulunan endpoint'ler ve tamamlanan fazlar buraya kaydedilir.",
+   deps:["websecure/core/checkpoint.py","websecure/core/session_manager.py"]},
+
+  // ---- DRIVERS ----
+  {id:"chromedriver", path:"drivers/chromedriver.exe", type:"driver", icon:"🌐",
+   desc:"Google Chrome WebDriver binary. Playwright/Selenium tabanlı taramalar, DOM XSS tespiti ve JS-heavy SPA crawling için kullanılır.",
+   deps:["websecure/core/browser_crawler.py","websecure/scanners/dom_xss.py"]},
+  {id:"interactsh", path:"drivers/interactsh-client.exe", type:"driver", icon:"📡",
+   desc:"Out-of-Band (OAST) interaktif callback sunucusu. Kör SSRF, XXE, SSTI ve RCE tespitlerinde DNS/HTTP callback altyapısını sağlar.",
+   deps:["websecure/core/oast.py","websecure/scanners/ssrf_xxe.py","websecure/integrations/nuclei.py"]},
+
+  // ---- websecure/__init__.py ----
+  {id:"ws_init", path:"websecure/__init__.py", type:"core", icon:"📦",
+   desc:"Ana paket init dosyası. Versiyon (v20.0.0), DB modelleri, FP learner, CVSS skorer ve temel bileşenleri lazy-import ile başlatır. Geriye dönük uyumluluk katmanı içerir.",
+   deps:["websecure/core/utils/__init__.py","websecure/scanners/base.py","websecure/db/__init__.py","websecure/core/fp_learner.py"]},
+  {id:"ws_main", path:"websecure/__main__.py", type:"core", icon:"🚀",
+   desc:"Python modül giriş noktası. `python -m websecure` komutunu `main()` fonksiyonuna yönlendirir.",
+   deps:["websecure/main.py"]},
+
+  // ---- API ----
+  {id:"api_server", path:"websecure/api/server.py", type:"api", icon:"🌐",
+   desc:"Saf stdlib REST API sunucusu (Flask/FastAPI yok). GET/POST /api/v1/scans, /findings, /health, /score endpoint'leri. Tarama başlatma, bulgu sorgulama, FP işaretleme ve skor görüntüleme destekler.",
+   deps:["websecure/db/repository.py","websecure/core/reporting.py","websecure/core/score_tracker.py"]},
+
+  // ---- CLI ----
+  {id:"cli_commands", path:"websecure/cli/commands.py", type:"cli", icon:"⌨️",
+   desc:"Ana CLI giriş noktası. scan, init, diff, serve, queue, schedule, completion alt komutlarını yönetir. TUI + webhook entegrasyonu ile tarama başlatır.",
+   deps:["websecure/cli/tui.py","websecure/cli/wizard.py","websecure/cli/diff.py","websecure/cli/queue_manager.py","websecure/cli/scheduler.py","websecure/cli/webhook.py","websecure/cli/web_ui.py"]},
+  {id:"cli_tui", path:"websecure/cli/tui.py", type:"cli", icon:"🖥️",
+   desc:"İnteraktif Terminal Arayüzü (TUI). Rich kütüphanesi varsa canlı bulgu tablosu + progress bar + log paneli; yoksa sade metin fallback. SOLID: RichTUI/PlainTUI her ikisi de BaseTUI'dan türer.",
+   deps:["websecure/core/reporting.py","websecure/core/live_monitor.py"]},
+  {id:"cli_wizard", path:"websecure/cli/wizard.py", type:"cli", icon:"🧙",
+   desc:"`websecure init` komutunun interaktif sihirbazı. Hedef URL, profil, auth, proxy, rapor formatı ve bildirim kanalı sorularını sorarak config.json üretir.",
+   deps:["config.json","websecure/core/utils/config.py"]},
+  {id:"cli_diff", path:"websecure/cli/diff.py", type:"cli", icon:"🔀",
+   desc:"İki tarama sonucu JSON'unu karşılaştırır. SHA256 fingerprint bazlı eşleşme; yeni/düzelen/gerileyen/değişmeyen bulguları listeler.",
+   deps:["websecure/core/reporting.py"]},
+  {id:"cli_queue", path:"websecure/cli/queue_manager.py", type:"cli", icon:"📋",
+   desc:"Çok hedefli tarama kuyruğu yöneticisi. JSON kalıcılık (~/.websecure/queue.json), FIFO + öncelik, paralel işleme, pending/running/completed/failed/cancelled durumları.",
+   deps:["websecure/cli/commands.py","websecure/core/scan_runner.py"]},
+  {id:"cli_scheduler", path:"websecure/cli/scheduler.py", type:"cli", icon:"⏰",
+   desc:"Cron tabanlı tarama zamanlama sistemi. Cron ifadesi desteği, JSON kalıcılık, arka plan daemon thread, APScheduler bağımlılığı yok.",
+   deps:["websecure/cli/queue_manager.py"]},
+  {id:"cli_webhook", path:"websecure/cli/webhook.py", type:"cli", icon:"🔔",
+   desc:"Bulgu ve tarama olaylarını HTTP webhook ile dışarı gönderir. on_finding/on_critical/on_complete/on_error. 3x retry, üstel geri çekilme, HMAC-SHA256 imzalama, async gönderim.",
+   deps:["websecure/core/reporting.py","websecure/core/notification.py"]},
+  {id:"cli_web_ui", path:"websecure/cli/web_ui.py", type:"cli", icon:"🌐",
+   desc:"Yerel HTTP web dashboard (stdlib only). Canlı bulgu tablosu (SSE/polling), tarama durumu, log paneli. /api/status, /api/findings, /api/logs, POST /api/scan endpoint'leri.",
+   deps:["websecure/web/index.html","websecure/core/reporting.py"]},
+  {id:"cli_autocomplete", path:"websecure/cli/autocomplete.py", type:"cli", icon:"✨",
+   desc:"Bash/Zsh/Fish shell tamamlama betikleri üretici. `websecure completion bash/zsh/fish` komutuyla shell'e yüklenir.",
+   deps:["websecure/cli/commands.py"]},
+
+  // ---- CONFIG / PLAYBOOKS ----
+  {id:"pb_cmdi", path:"websecure/config/playbooks/cmdi_persistence.yml", type:"config", icon:"📜",
+   desc:"CMDI → Kalıcı Erişim exploit zinciri playbook'u. OS Command Injection bulgusu tespit edilince otomatik reverse shell + crontab backdoor zincirini tetikler.",
+   deps:["websecure/core/chain_reactor.py","websecure/scanners/cmdi.py"]},
+  {id:"pb_cors", path:"websecure/config/playbooks/cors_jwt_ato.yml", type:"config", icon:"📜",
+   desc:"CORS Misconfiguration → JWT Çalma → Account Takeover zinciri. CORS + JWT bulguları bir arada tespit edilince tam ATO zincirini otomatik çalıştırır.",
+   deps:["websecure/core/chain_reactor.py","websecure/scanners/cors.py","websecure/scanners/jwt.py"]},
+  {id:"pb_ssti", path:"websecure/config/playbooks/ssti_rce_data_exfil.yml", type:"config", icon:"📜",
+   desc:"SSTI → RCE → Veri Sızıntısı zinciri playbook'u. Template injection üzerinden RCE ve hassas veri exfil zincirini otomatik çalıştırır.",
+   deps:["websecure/core/chain_reactor.py","websecure/scanners/ssti.py"]},
+  {id:"pb_xxe", path:"websecure/config/playbooks/xxe_ssrf_internal.yml", type:"config", icon:"📜",
+   desc:"XXE → SSRF → İç Ağ Erişimi zinciri. XXE aracılığıyla SSRF'e pivot atıp iç ağ servislerine erişim zincirini tetikler.",
+   deps:["websecure/core/chain_reactor.py","websecure/scanners/ssrf_xxe.py"]},
+  {id:"prof_api", path:"websecure/config/profiles/api_only.yml", type:"config", icon:"🔷",
+   desc:"API-Only tarama profili. REST/GraphQL/gRPC API yüzeyini tarar. Tarayıcı tabanlı scanner'lar ve subdomain devre dışı; auth/IDOR/SQLi/SSRF/mass-assignment odaklı.",
+   deps:["websecure/core/profiles.py","websecure/core/scan_profile.py"]},
+  {id:"prof_auth", path:"websecure/config/profiles/authenticated.yml", type:"config", icon:"🔷",
+   desc:"Kimlik doğrulamalı tarama profili. Oturum gerektiren endpoint'lere erişim için session/token/cookie yönetimini aktif eder.",
+   deps:["websecure/core/auth_manager.py","websecure/core/profiles.py"]},
+  {id:"prof_bb", path:"websecure/config/profiles/bug_bounty.yml", type:"config", icon:"🔷",
+   desc:"Bug Bounty profili. Minimum false positive, OOB/OAST ile kör tespit, güçlü WAF bypass. Sadece doğrulanmış Critical/High bulgular raporlanır.",
+   deps:["websecure/core/waf_bypass.py","websecure/core/oast.py","websecure/core/fp_reducer.py","websecure/core/profiles.py"]},
+  {id:"prof_cicd", path:"websecure/config/profiles/cicd.yml", type:"config", icon:"🔷",
+   desc:"CI/CD pipeline tarama profili. Hızlı, sessiz tarama; CI gate ile yüksek/kritik bulgu varsa build'i durdurur.",
+   deps:["websecure/core/profiles.py","websecure/core/reporting.py"]},
+  {id:"prof_compliance", path:"websecure/config/profiles/compliance.yml", type:"config", icon:"🔷",
+   desc:"Uyumluluk (OWASP Top-10 / PCI-DSS) tarama profili. Standart güvenlik kontrollerini sistematik olarak denetler.",
+   deps:["websecure/scanners/owasp.py","websecure/core/profiles.py"]},
+
+  // ---- CORE ----
+  {id:"core_alerts", path:"websecure/core/alerts.py", type:"core", icon:"🔔",
+   desc:"Ses uyarı yöneticisi (AlertManager). Critical/High/Medium bulgularda farklı frekanslarda sesli bip uyarısı verir. winsound kullanır, thread-safe.",
+   deps:["websecure/core/reporting.py"]},
+  {id:"core_analysis", path:"websecure/core/analysis.py", type:"core", icon:"🔬",
+   desc:"Konsolide analiz modülü. Regex güvenliği, endpoint depolama, anomali tespiti, WAF tespiti + atlatma, CAPTCHA çözme, login sayfası keşfi bileşenlerini içerir.",
+   deps:["websecure/core/http.py","websecure/core/payloads.py"]},
+  {id:"core_async", path:"websecure/core/async_runner.py", type:"core", icon:"⚡",
+   desc:"Tam async I/O tarama motoru. asyncio + aiohttp tabanlı, semaphore ile concurrency kontrolü, connection pooling, timeout/retry. CPU-bound olmayan taramalar için kullanılır.",
+   deps:["websecure/core/http.py","websecure/core/reporting.py"]},
+  {id:"core_auth_flow", path:"websecure/core/auth_flow.py", type:"core", icon:"🔑",
+   desc:"Kimlik doğrulama akış modülü. smart_login, form login, CSRF token yenileme, session canlılık kontrolü, WebDriver senkronizasyonu, rol bazlı session oluşturma fonksiyonları.",
+   deps:["websecure/core/http.py","websecure/core/auth/flows.py","websecure/core/auth/providers.py"]},
+  {id:"core_auth_mgr", path:"websecure/core/auth_manager.py", type:"core", icon:"🛡️",
+   desc:"Kimlik doğrulamalı tarama orkestratörü. form/basic/bearer/cookie/api_key/jwt auth tiplerini destekler. AuthManager.authenticate(ctx) ile tüm tarama oturumunu yetkili hale getirir.",
+   deps:["websecure/core/auth_flow.py","websecure/core/session_factory.py"]},
+  {id:"core_bl_conc", path:"websecure/core/bl_concurrency.py", type:"core", icon:"⚙️",
+   desc:"Business logic concurrency yardımcıları. HTTP session ile paralel istek atma, rate-limit farkında thread pool yönetimi.",
+   deps:["websecure/core/http.py","websecure/core/rate_controller.py"]},
+  {id:"core_browser", path:"websecure/core/browser_crawler.py", type:"core", icon:"🌐",
+   desc:"Playwright tabanlı Tier-2 tarayıcı crawler'ı. JavaScript-heavy SPA'lar için. HTTP crawler az endpoint bulunca devreye girer; form submit, JS event, XHR/fetch yakalama.",
+   deps:["drivers/chromedriver.exe","websecure/core/crawler.py"]},
+  {id:"core_chain", path:"websecure/core/chain_reactor.py", type:"core", icon:"⛓️",
+   desc:"Otomatik Exploit Zinciri Motoru v3.0. ExploitGraph (DAG), ChainNode/ChainEdge, 10+ ChainRule, PlaybookLoader (YAML), CVSSChainCalculator, MultiHopDetector (DFS). XSS+CSRF→ATO, SQLi→CredDump→ATO, SSRF→CloudCompromise zincirlerini otomatik oluşturur.",
+   deps:["websecure/config/playbooks/*.yml","websecure/core/cvss.py","websecure/core/reporting.py"]},
+  {id:"core_checkpoint", path:"websecure/core/checkpoint.py", type:"core", icon:"💾",
+   desc:"Tarama durumu kaydet/devam et sistemi. Atomik JSON write (temp→rename), tamamlanan fazlar + endpoint listesini saklar. Kesilen taramaları kaldığı yerden devam ettirir.",
+   deps:["session.json","websecure/core/reporting.py"]},
+  {id:"core_circuit", path:"websecure/core/circuit_breaker.py", type:"core", icon:"⚡",
+   desc:"Tarama seviyesi devre kesici. CLOSED→OPEN→HALF-OPEN state machine. HTTP blok oranı eşiği aşılınca taramayı durdurur; CircuitBreakerTripped exception fırlatır.",
+   deps:["websecure/core/http.py","websecure/core/exceptions.py"]},
+  {id:"core_conc", path:"websecure/core/concurrency.py", type:"core", icon:"🔄",
+   desc:"Eşzamanlılık ve dayanıklılık motoru. ScanTask (öncelik+meta), PriorityTaskQueue (heapq, thread-safe), ScanDeduplicator (SHA256+LRU). Aynı parametreyi tekrar test etmeyi önler.",
+   deps:["websecure/core/exceptions.py"]},
+  {id:"core_corr", path:"websecure/core/correlation_engine.py", type:"core", icon:"🔗",
+   desc:"Çapraz tarama korelasyon motoru. Fingerprint eşleşme, escalation tespiti, zincir tespiti (SQLi+IDOR→Veri Sızıntısı), persistence tespiti (N tarama boyunca düzelmemiş bulgular).",
+   deps:["websecure/core/chain_reactor.py","websecure/db/repository.py"]},
+  {id:"core_crawler", path:"websecure/core/crawler.py", type:"core", icon:"🕷️",
+   desc:"Tier-1 HTTP crawler + gelişmiş endpoint keşif. HTTPCrawler (BFS, link/form/JS), OpenAPIImporter (Swagger 2.x/3.x), GraphQLSchemaImporter, GRPCProber, APIVersionScanner, ParameterMiner, FormMutationFuzzer, SitemapGenerator. CrawlerOrchestrator tümünü koordine eder.",
+   deps:["websecure/core/http.py","websecure/core/analysis.py","websecure/core/form_parser.py"]},
+  {id:"core_cvss", path:"websecure/core/cvss.py", type:"core", icon:"📊",
+   desc:"CVSS v3.1 skoring motoru. Bulgu tiplerine göre base vektör eşlemesi, auth/WAF bağlam düzeltmeleri, CVSS skoru hesaplama. Tüm raporlarda risk skoru bu modülden gelir.",
+   deps:["websecure/core/reporting.py"]},
+  {id:"core_egress", path:"websecure/core/egress.py", type:"core", icon:"🌍",
+   desc:"Egress politikası, IP gizleme ve Tor/proxy yönetimi. Tor başlatma/kontrol, proxy pool rotasyonu, IP değiştirme, çıkış IP doğrulama.",
+   deps:["websecure/core/http.py","config.json"]},
+  {id:"core_ep_prio", path:"websecure/core/endpoint_prioritizer.py", type:"core", icon:"🎯",
+   desc:"Akıllı endpoint önceliklendirici. Auth sayfası bonusu, parametre zenginliği, dinamik path segmenti, Content-Type, JS dosyası ve API prefix skorlama. En tehlikeli hedefleri önce tarar.",
+   deps:["websecure/core/crawler.py"]},
+  {id:"core_evasion", path:"websecure/core/evasion.py", type:"core", icon:"🥷",
+   desc:"Gelişmiş WAF atlatma motoru. WAFBypassAdapter ve BypassStrategyEngine'e primitifler sağlar. Request smuggling, CRLF injection, encoding varyasyonları, header manipülasyonu.",
+   deps:["websecure/core/waf_bypass.py","websecure/core/mutator.py"]},
+  {id:"core_evidence", path:"websecure/core/evidence_chain.py", type:"core", icon:"🔍",
+   desc:"Kanıt zinciri oluşturucu. Bireysel bulguları saldırı zincirlerine dönüştürür: SQLi→credential dump→ATO, XSS→session hijack, IDOR+SQLi→veri exfil. Her zincir HTTP kanıtı içerir.",
+   deps:["websecure/core/chain_reactor.py","websecure/core/reporting.py"]},
+  {id:"core_except", path:"websecure/core/exceptions.py", type:"core", icon:"⚠️",
+   desc:"Merkezi exception hiyerarşisi. ScanError, PayloadError, AuthError, NetworkError, WAFBlockedError vb. Her exception; url, param, payload ve orijinal hata mesajını taşır.",
+   deps:[]},
+  {id:"core_exploit", path:"websecure/core/exploit_orchestrator.py", type:"core", icon:"💥",
+   desc:"Merkezi exploit koordinatörü. Detection→Exploitation→Post-exploitation köprüsü. Her vuln tipi için ExploitStrategy alt sınıfı. Yalnızca config'de exploitation.enabled=true ise çalışır.",
+   deps:["websecure/core/post_exploit.py","websecure/core/evidence_chain.py","websecure/core/chain_reactor.py"]},
+  {id:"core_flows", path:"websecure/core/flows.py", type:"core", icon:"🔄",
+   desc:"Tarama akış tanımları ve orchestration helpers. Faz bazlı tarama akışını (keşif → fingerprint → saldırı → raporlama) koordine eder.",
+   deps:["websecure/core/scan_runner.py","websecure/core/phases/_context.py"]},
+  {id:"core_form", path:"websecure/core/form_parser.py", type:"core", icon:"📝",
+   desc:"HTML form parser. Tüm input/select/textarea alanlarını, hidden token'ları, action URL'lerini ve method değerlerini çıkarır. CSRF token otomatik tespiti.",
+   deps:["websecure/core/crawler.py","websecure/scanners/csrf.py"]},
+  {id:"core_fp_learn", path:"websecure/core/fp_learner.py", type:"core", icon:"🧠",
+   desc:"Otomatik False Positive öğrenme motoru. FP onayı → kural üretimi, Bayesian güven skoru, joker URL pattern desteği, JSON+DB kalıcı saklama. Bir sonraki taramada otomatik FP damgası.",
+   deps:["websecure/db/repository.py","websecure/core/reporting.py"]},
+  {id:"core_fp_red", path:"websecure/core/fp_reducer.py", type:"core", icon:"✂️",
+   desc:"False positive azaltma motoru. Tekrarlanabilirlik testi (N kez doğrulama), güven skoru hesaplama, cross-scanner dedup gate, kararsız bulgu filtreleme.",
+   deps:["websecure/core/fp_learner.py","websecure/core/reporting.py"]},
+  {id:"core_http", path:"websecure/core/http.py", type:"core", icon:"🌐",
+   desc:"Pekiştirilmiş HTTP oturumu (hardened_session). WAFBypassAdapter entegrasyonu, retry mekanizması, SSL/TLS yönetimi, timeout kontrolü, socket port kontrolü. Tüm HTTP isteklerinin temeli.",
+   deps:["websecure/core/waf_bypass.py","websecure/core/egress.py"]},
+  {id:"core_human", path:"websecure/core/human_adapter.py", type:"core", icon:"🧑",
+   desc:"İnsan benzeri davranış adaptörü. Think-time duraklamaları, okuma gecikmesi, düzensiz aralıklar, mouse/scroll simülasyonu. Mekanik tarama örüntülerini gizler.",
+   deps:["websecure/core/http.py","websecure/core/analysis.py"]},
+  {id:"core_live", path:"websecure/core/live_monitor.py", type:"core", icon:"📺",
+   desc:"Gerçek zamanlı terminal monitörü. Her HTTP isteği, payload, IP rotasyonu, checkpoint ve bulguyu renkli ANSI çıktısıyla terminale yazar. Rich varsa şık, yoksa sade.",
+   deps:["websecure/core/alerts.py","websecure/core/reporting.py"]},
+  {id:"core_mutator", path:"websecure/core/mutator.py", type:"core", icon:"🔀",
+   desc:"Payload mutasyon motoru. SQL commenting, case varyasyonu, URL/double-URL encoding, whitespace ikamesi, HTML entity encoding, zlib/bz2/base64 encoding ile WAF imzalarını atlatır.",
+   deps:["websecure/core/evasion.py"]},
+  {id:"core_notif", path:"websecure/core/notification.py", type:"core", icon:"📨",
+   desc:"Harici bildirim entegrasyonları. JIRA ticket, GitHub Issues, Slack mesajı, Microsoft Teams, PagerDuty alert. BaseNotifier soyut sınıfı ile SOLID/LSP uyumlu.",
+   deps:["websecure/cli/webhook.py"]},
+  {id:"core_oast", path:"websecure/core/oast.py", type:"core", icon:"📡",
+   desc:"Out-of-Band (OAST) saldırı altyapısı. interactsh-client.exe ile DNS/HTTP callback sunucusu. Kör SSRF, XXE, RCE tespitlerinde payload'ların tetiklenip tetiklenmediğini doğrular.",
+   deps:["drivers/interactsh-client.exe","websecure/scanners/ssrf_xxe.py","websecure/integrations/nuclei.py"]},
+  {id:"core_pe", path:"websecure/core/payload_engine.py", type:"core", icon:"🎯",
+   desc:"Üst düzey payload ve wordlist sistemi. CMSFingerprinter, PayloadMutationEngine (N mutant), PayloadScorer (Bayesian), CVEPayloadMap, EncodingVariantGenerator, WordlistUpdater. CMS-aware payload seçimi.",
+   deps:["websecure/core/payloads.py","websecure/wordlists/","websecure/core/tech_fingerprint.py"]},
+  {id:"core_payloads", path:"websecure/core/payloads.py", type:"core", icon:"💣",
+   desc:"Temel payload yükleme/yönetim modülü. get_payloads(), load_external_payloads() fonksiyonları. Wordlist dosyalarından payload'ları okur, dedup yapar, kategorize eder.",
+   deps:["websecure/wordlists/","websecure/core/payload_engine.py"]},
+  {id:"core_plug_mkt", path:"websecure/core/plugin_marketplace.py", type:"core", icon:"🏪",
+   desc:"Plugin/harici scanner modülü yükleme ve güncelleme sistemi. Yerel plugin dizini otomatik keşfi, git repo'dan plugin kurulumu, etkinleştirme/devre dışı bırakma.",
+   deps:["websecure/core/plugin_registry.py"]},
+  {id:"core_plug_reg", path:"websecure/core/plugin_registry.py", type:"core", icon:"📋",
+   desc:"Plugin keşif ve kayıt sistemi. Built-in scanner'ları ve Python entry_points ('websecure.scanners') üzerinden üçüncü parti scanner'ları kaydeder.",
+   deps:["websecure/scanners/base.py"]},
+  {id:"core_post", path:"websecure/core/post_exploit.py", type:"core", icon:"🏴",
+   desc:"Post-exploitation framework. RCE doğrulandıktan sonra çalışır. Sistem bilgisi, ağ keşfi, credential dump, persistence mekanizması, lateral movement adımları.",
+   deps:["websecure/core/exploit_orchestrator.py"]},
+  {id:"core_profiles", path:"websecure/core/profiles.py", type:"core", icon:"👤",
+   desc:"Tarama profili sistemi v2.0. ScanProfile (ABC, Template Method), ProfileRegistry (Singleton), ProfileLoader (YAML). aggressive/stealth/cicd/bug_bounty profillerini yönetir.",
+   deps:["websecure/config/profiles/*.yml","websecure/core/scan_profile.py"]},
+  {id:"core_rate", path:"websecure/core/rate_controller.py", type:"core", icon:"🎚️",
+   desc:"Adaptif rate control motoru. Sunucu yanıt süresi, HTTP 429/503/WAF blok ve başarı oranına göre istek hızını dinamik ayarlar. Token bucket + üstel backoff.",
+   deps:["websecure/core/http.py","websecure/core/waf_fingerprint.py"]},
+  {id:"core_redact", path:"websecure/core/redaction.py", type:"core", icon:"🔒",
+   desc:"Hassas veri maskeleme sistemi. Raporlamadan önce password, token, secret, cookie, API key değerlerini *** ile maskeler. GDPR uyumlu rapor çıktısı.",
+   deps:["websecure/core/reporting.py"]},
+  {id:"core_repgen", path:"websecure/core/report_generator.py", type:"core", icon:"📄",
+   desc:"Rapor oluşturma ve dışa aktarma modülü. finalize_reports(), SARIF 2.1.0, JUnit XML, Markdown ve PDF rapor formatlarını üretir. reporting.py'den ayrıştırıldı.",
+   deps:["websecure/core/reporting.py","websecure/integrations/sarif.py"]},
+  {id:"core_reporting", path:"websecure/core/reporting.py", type:"core", icon:"📊",
+   desc:"Merkezi bulgu toplama ve raporlama. add_result() global bulgu kaydedici; CI gate (kritik bulgu → build fail); HTML/JSON/Markdown rapor şablonları. Tüm scanner'ların bağlandığı ana hub.",
+   deps:["websecure/core/redaction.py","websecure/core/report_generator.py","websecure/core/cvss.py","websecure/core/alerts.py","websecure/db/repository.py"]},
+  {id:"core_resp_an", path:"websecure/core/response_analyzer.py", type:"core", icon:"🔬",
+   desc:"Yanıt davranışı analiz motoru (Nessus-inspired). Injection sonrası yanıtların NASIL değiştiğini analiz eder. BaselineCapture, SQLErrorDetector, ResponseBehaviorAnalyzer.",
+   deps:["websecure/scanners/sqli.py","websecure/scanners/ssti.py","websecure/scanners/xss.py"]},
+  {id:"core_scan_prof", path:"websecure/core/scan_profile.py", type:"core", icon:"⚙️",
+   desc:"Profil seçme/uygulama yardımcıları. Sadece 2 mod: Agresif (tam kapsam, maksimum hız) ve Stealth (tam kapsam, yavaş, WAF bypass). Profil bağlamına göre tüm modülleri yapılandırır.",
+   deps:["websecure/core/profiles.py","config.json"]},
+  {id:"core_scan_run", path:"websecure/core/scan_runner.py", type:"core", icon:"▶️",
+   desc:"Scanner orchestration yardımcıları. _call_scanner_if_available() ve _bind_offensive(). Checkpoint+ETA entegrasyonu. Tüm tarama fazlarını sırayla veya paralel çalıştırır.",
+   deps:["websecure/core/checkpoint.py","websecure/core/flows.py","websecure/core/concurrency.py"]},
+  {id:"core_score", path:"websecure/core/score_tracker.py", type:"core", icon:"📈",
+   desc:"Güvenlik skoru trendi hesaplama. CVSS-ağırlıklı 0-100 güvenlik skoru, tarama başına skor kaydı, trend analizi (yükseliyor/düşüyor/stabil), delta hesaplama.",
+   deps:["websecure/core/cvss.py","websecure/db/repository.py"]},
+  {id:"core_sess_fac", path:"websecure/core/session_factory.py", type:"core", icon:"🏭",
+   desc:"HTTP session oluşturma ve yapılandırma fabrikası. ensure_session(), proxy/session yapılandırması, proxy doğrulama, session'a header/cookie/auth ekleme.",
+   deps:["websecure/core/http.py","websecure/core/egress.py","config.json"]},
+  {id:"core_sess_mgr", path:"websecure/core/session_manager.py", type:"core", icon:"🗂️",
+   desc:"Session ve cookie güvenlik analizi. CookieAuditResult, CookieSecurityAnalyzer (HttpOnly/Secure/SameSite), SessionEntropyAnalyzer (Shannon entropy), SessionLifecycleProber.",
+   deps:["websecure/scanners/session_scanner.py"]},
+  {id:"core_startup", path:"websecure/core/startup.py", type:"core", icon:"🚀",
+   desc:"Tarama başlangıç kontrolleri. Bağımlılık doğrulama, otomatik araç kurulumu (_ensure_* fonksiyonları). main.py'yi sade tutar, tüm startup mantığı buradadır.",
+   deps:["install.py","websecure/core/tool_manager.py"]},
+  {id:"core_tech", path:"websecure/core/tech_fingerprint.py", type:"core", icon:"🔍",
+   desc:"Ön tarama teknoloji tespiti. CMS/framework/tech-stack fingerprinting. Header, meta tag, JS dosyası, cookie adı ve error mesajı analizi. Sonuçlar payload seçimini optimize eder.",
+   deps:["websecure/core/payload_engine.py","websecure/core/http.py"]},
+  {id:"core_timing", path:"websecure/core/timing_analyzer.py", type:"core", icon:"⏱️",
+   desc:"İstatistiksel timing analizi. Kör injection tespitinde doğal sunucu titremesini ve ağ spike'larını elimine eder. Z-score tabanlı outlier tespiti.",
+   deps:["websecure/scanners/sqli.py","websecure/scanners/ssti.py","websecure/scanners/cmdi.py"]},
+  {id:"core_toolmgr", path:"websecure/core/tool_manager.py", type:"core", icon:"🔧",
+   desc:"Harici araç yönetimi. Amass, httpx, katana, dalfox, Metasploit, Burp Suite kurulum tespiti, başlatma, durdurma. ToolRegistry üzerinden tüm araçlara erişim.",
+   deps:["websecure/integrations/amass.py","websecure/integrations/nuclei.py","websecure/integrations/ffuf.py"]},
+  {id:"core_url", path:"websecure/core/url_utils.py", type:"core", icon:"🔗",
+   desc:"URL işleme yardımcıları. URL normalizasyonu, parametre çıkarma, scope kontrolü, iç/dış link ayrımı. Tüm scanner'ların URL manipülasyonu bu modülü kullanır.",
+   deps:[]},
+  {id:"core_waf_byp", path:"websecure/core/waf_bypass.py", type:"core", icon:"🛡️",
+   desc:"WAF bypass motoru. WAFBypassAdapter (requests HTTPAdapter alt sınıfı), BypassStrategyEngine. 20+ bypass tekniği: encoding, header manipulation, chunked transfer, case variation.",
+   deps:["websecure/core/evasion.py","websecure/core/mutator.py","websecure/core/waf_fingerprint.py"]},
+  {id:"core_waf_fp", path:"websecure/core/waf_fingerprint.py", type:"core", icon:"🔍",
+   desc:"WAF parmak izi tespiti. Cloudflare, Akamai, AWS WAF, F5, Imperva, ModSecurity imzalarını tanır. Probe payload'larına verilen yanıtları analiz eder.",
+   deps:["websecure/core/http.py","websecure/core/analysis.py"]},
+  {id:"core_xss_cb", path:"websecure/core/xss_callback.py", type:"core", icon:"🎣",
+   desc:"Gerçek zamanlı XSS cookie/token exfil altyapısı. 127.0.0.1'de rastgele porta bağlanan mini HTTP sunucusu. XSS payload'ları çalınan cookie/token/localStorage'ı buraya gönderir.",
+   deps:["websecure/scanners/xss.py","websecure/scanners/dom_xss.py"]},
+
+  // ---- CORE/AUTH ----
+  {id:"auth_flows", path:"websecure/core/auth/flows.py", type:"core", icon:"🔐",
+   desc:"Auth akış implementasyonları. Email OTP (IMAP ile inbox okuma) ve OAuth 2.0 Device Code grant akışı.",
+   deps:["websecure/core/auth/providers.py","websecure/core/auth/totp.py"]},
+  {id:"auth_providers", path:"websecure/core/auth/providers.py", type:"core", icon:"🔐",
+   desc:"Auth provider'ları. TOTP, Email OTP, OAuth provider sınıfları. config.json'daki auth tipine göre doğru provider'ı seçer.",
+   deps:["websecure/core/auth/totp.py","websecure/core/auth/flows.py"]},
+  {id:"auth_totp", path:"websecure/core/auth/totp.py", type:"core", icon:"🔐",
+   desc:"TOTP (Time-based One-Time Password) implementasyonu. RFC 6238 uyumlu, HMAC-SHA1 tabanlı. 2FA korumalı uygulamaların otomatik taranmasına olanak sağlar.",
+   deps:["websecure/core/auth_flow.py"]},
+
+  // ---- CORE/UTILS ----
+  {id:"utils_config", path:"websecure/core/utils/config.py", type:"core", icon:"⚙️",
+   desc:"Config yükleme yardımcıları. config.json okuma, schema doğrulama, ortam değişkeni override, varsayılan değer birleştirme.",
+   deps:["config.json","config.schema.json"]},
+  {id:"utils_helpers", path:"websecure/core/utils/helpers.py", type:"core", icon:"🔧",
+   desc:"Metin yardımcıları, auth helpers ve TTL cache. random_string(), normalize_url(), TTLCache sınıfı. Tüm modüllerin kullandığı genel amaçlı yardımcılar.",
+   deps:[]},
+  {id:"utils_net", path:"websecure/core/utils/net.py", type:"core", icon:"🌐",
+   desc:"Ağ yardımcıları. URL parse/build, DNS çözümleme, IP aralığı kontrolü, scope doğrulama, proxy URL parse.",
+   deps:[]},
+  {id:"utils_system", path:"websecure/core/utils/system.py", type:"core", icon:"💻",
+   desc:"Sistem yardımcıları. Modül import yardımcıları, araç binary keşfi, OS bağımlı yol yönetimi, thread-safe import.",
+   deps:[]},
+  {id:"utils_wordlists", path:"websecure/core/utils/wordlists.py", type:"core", icon:"📚",
+   desc:"Harici wordlist suite yol yönetimi. SecLists, PayloadAllTheThings gibi harici wordlist koleksiyonlarının sisteme göre otomatik yol tespiti.",
+   deps:["websecure/wordlists/"]},
+
+  // ---- CORE/PHASES ----
+  {id:"phases_ctx", path:"websecure/core/phases/_context.py", type:"core", icon:"📦",
+   desc:"Tarama modu sabitleri ve ScanContext dataclass. Saf veri yapıları, iç bağımlılık yok. Tüm fazlar bu context objesini paylaşır.",
+   deps:[]},
+  {id:"phases_hprof", path:"websecure/core/phases/_hprofile.py", type:"core", icon:"📦",
+   desc:"Adaptif HTTP profil yöneticisi. HProfilePolicy (sabit config) ve HProfileManager (runtime, HTTP 429/403 blok oranına göre profil değiştirir).",
+   deps:["websecure/core/rate_controller.py"]},
+
+  // ---- CORE/CLI ----
+  {id:"cli_interactive", path:"websecure/core/cli/interactive.py", type:"core", icon:"⌨️",
+   desc:"İnteraktif sihirbaz prompt'ları. setup_tor(), setup_auth(), setup_proxy() fonksiyonları. main()'i sade tutar; dry_run/batch modunda devre dışı.",
+   deps:["websecure/core/egress.py","websecure/core/auth_manager.py"]},
+
+  // ---- SCANNERS ----
+  {id:"sc_base", path:"websecure/scanners/base.py", type:"scanner", icon:"🏗️",
+   desc:"BaseScanner soyut temel sınıfı. Tüm scanner'ların implement ettiği interface. run_parallel_probes(), scan() abstract method, severity normalizasyonu, add_result() köprüsü. OOP mimarisinin temeli.",
+   deps:["websecure/core/reporting.py","websecure/core/http.py","websecure/core/payloads.py","websecure/core/analysis.py"]},
+  {id:"sc_xss", path:"websecure/scanners/xss.py", type:"scanner", icon:"🎯",
+   desc:"XSS (Cross-Site Scripting) tarayıcısı. Reflected, Stored, DOM tabanlı. URL params, POST form, JSON body, HTTP header, cookie saldırı yüzeyleri. Mutator ile WAF bypass. HTMLParser kanary tespiti.",
+   deps:["websecure/scanners/base.py","websecure/core/mutator.py","websecure/core/response_analyzer.py","websecure/wordlists/xss.txt","websecure/integrations/dalfox.py"]},
+  {id:"sc_sqli", path:"websecure/scanners/sqli.py", type:"scanner", icon:"💉",
+   desc:"SQL Injection tarayıcısı. Error-based, Boolean-based, Time-based blind, Union-based. TimingAnalyzer ile doğrulama, SQLErrorDetector. sqlmap entegrasyonu ile otomatik exploit.",
+   deps:["websecure/scanners/base.py","websecure/core/mutator.py","websecure/core/timing_analyzer.py","websecure/core/response_analyzer.py","websecure/wordlists/sqli.txt","websecure/integrations/sqlmap.py"]},
+  {id:"sc_ssti", path:"websecure/scanners/ssti.py", type:"scanner", icon:"🔥",
+   desc:"Server-Side Template Injection (SSTI) tarayıcısı. 3 katmanlı: polyglot probe → engine fingerprinting → PoC kanıtı. Jinja2, Twig, Mako, Velocity, FreeMarker motor tespiti.",
+   deps:["websecure/scanners/base.py","websecure/core/payloads.py","websecure/wordlists/ssti.txt","websecure/core/timing_analyzer.py"]},
+  {id:"sc_lfi", path:"websecure/scanners/lfi.py", type:"scanner", icon:"📁",
+   desc:"Local File Inclusion (LFI) tarayıcısı. LFILogPoisoningChain (Apache/Nginx log + webshell), LFIProcEnvironRCE (/proc/self/environ), LFIPHPFilterChain (base64 RCE), LFISSHKeyReader, LFIDirectoryTraversalProber.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/lfi.txt","websecure/core/reporting.py"]},
+  {id:"sc_ssrf_xxe", path:"websecure/scanners/ssrf_xxe.py", type:"scanner", icon:"🌐",
+   desc:"SSRF ve XXE tarayıcısı. SSRF: cloud metadata (169.254.169.254), iç servis prob, DNS rebinding. XXE: entity injection, parameter entity, out-of-band XML. OAST entegrasyonu.",
+   deps:["websecure/scanners/base.py","websecure/core/oast.py","websecure/wordlists/ssrf.txt","websecure/wordlists/xxe.txt","websecure/integrations/nuclei.py"]},
+  {id:"sc_cors", path:"websecure/scanners/cors.py", type:"scanner", icon:"🔓",
+   desc:"CORS Misconfiguration tarayıcısı. Wildcard + credentials tespiti, arbitrary origin reflection, null origin bypass, subdomain güven zinciri, preflight bypass.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_cmdi", path:"websecure/scanners/cmdi.py", type:"scanner", icon:"💻",
+   desc:"OS Command Injection (CMDi) tarayıcısı. URL parametre enjeksiyonu, error-based + time-based tespit. BaseScanner.run_parallel_probes() ile paralel tarama.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/cmdi.txt","websecure/core/timing_analyzer.py"]},
+  {id:"sc_idor", path:"websecure/scanners/idor.py", type:"scanner", icon:"🚪",
+   desc:"IDOR (Insecure Direct Object Reference) tarayıcısı. Sayısal ID fuzz, UUID tahmin, hash bypass, yatay/dikey privilege escalation tespiti.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py","websecure/wordlists/params.txt"]},
+  {id:"sc_jwt", path:"websecure/scanners/jwt.py", type:"scanner", icon:"🎟️",
+   desc:"JWT güvenlik tarayıcısı. Algorithm confusion (none/RS256→HS256), weak secret brute-force, JKU/JWK injection, kid path traversal, expired token kabul, OAST callback.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/jwt_secrets.txt","websecure/core/oast.py"]},
+  {id:"sc_graphql", path:"websecure/scanners/graphql.py", type:"scanner", icon:"📊",
+   desc:"GraphQL güvenlik tarayıcısı. Introspection tespit, query derinlik saldırısı, batching abuse, field suggestion bilgi sızdırma, IDOR via GraphQL, NoSQLi enjeksiyonu.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_tls", path:"websecure/scanners/tls.py", type:"scanner", icon:"🔒",
+   desc:"TLS/SSL yapılandırma tarayıcısı. Protokol desteği (SSLv2/v3/TLS1.0/1.1), zayıf cipher suite tespiti, sertifika geçerliliği, HSTS eksikliği.",
+   deps:["websecure/scanners/infrastructure.py","websecure/scanners/base.py"]},
+  {id:"sc_dom_xss", path:"websecure/scanners/dom_xss.py", type:"scanner", icon:"🌐",
+   desc:"DOM-tabanlı XSS tarayıcısı (Playwright). URL param/fragment/storage/postMessage enjeksiyonu. DOMXSSMonkeyPatchProber (JS sink override + canary), PostMessageInterceptionProber, StoredXSSCorrelator.",
+   deps:["websecure/scanners/base.py","drivers/chromedriver.exe","websecure/core/browser_crawler.py","websecure/core/xss_callback.py"]},
+  {id:"sc_proto_poll", path:"websecure/scanners/prototype_pollution.py", type:"scanner", icon:"☣️",
+   desc:"Prototype Pollution tarayıcısı. JSON body __proto__/constructor.prototype enjeksiyonu, query-string pollution, deep-merge sink prob, Node.js server-side PP, gadget tespiti (lodash/jQuery/Handlebars).",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_race", path:"websecure/scanners/race_condition.py", type:"scanner", icon:"🏃",
+   desc:"Race Condition / TOCTOU tarayıcısı. N eşzamanlı özdeş istek, token/kupon yeniden kullanım testi, rate-limit bypass. Duplicate 2xx yanıt race window kanıtı.",
+   deps:["websecure/scanners/base.py","websecure/core/concurrency.py"]},
+  {id:"sc_403", path:"websecure/scanners/bypass_403.py", type:"scanner", icon:"🚧",
+   desc:"HTTP 403 Forbidden Bypass tarayıcısı. Path normalizasyon, header injection (X-Forwarded-For, X-Real-IP), verb tampering, URL encoding, API versiyon bypass, Content-Type/Accept header switching.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_headers", path:"websecure/scanners/headers.py", type:"scanner", icon:"📋",
+   desc:"Güvenlik başlığı tarayıcısı (legacy stub). infrastructure.py'ye yönlendirir. HeaderScanner, get_security_headers(), analyze_response_headers() adapter fonksiyonları.",
+   deps:["websecure/scanners/infrastructure.py"]},
+  {id:"sc_csrf", path:"websecure/scanners/csrf.py", type:"scanner", icon:"🎭",
+   desc:"CSRF tarayıcısı. Formlarda anti-CSRF token eksikliği, zayıf SameSite attribute, login CSRF tespiti. JSON/multipart request ile bypass.",
+   deps:["websecure/scanners/base.py","websecure/core/form_parser.py"]},
+  {id:"sc_open_red", path:"websecure/scanners/open_redirect.py", type:"scanner", icon:"↪️",
+   desc:"Open Redirect tarayıcısı. Crawler çıktısından redirect parametrelerini toplar, 30+ bypass payload dener. Location header ve JS redirect tespiti. WAF bypass: encoding + protocol tricks.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/open_redirect.txt","websecure/core/crawler.py"]},
+  {id:"sc_crlf", path:"websecure/scanners/crlf_injection.py", type:"scanner", icon:"↩️",
+   desc:"CRLF Injection / HTTP Response Splitting tarayıcısı. CRLFScanner, HeaderInjectionProber, ResponseSplittingExploiter, CachePoisoningChain, LogPoisoningChain.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_nosqli", path:"websecure/scanners/nosqli.py", type:"scanner", icon:"🗄️",
+   desc:"NoSQL Injection tarayıcısı. MongoDB operator injection ($gt, $ne, $regex, $where), JSON body ve URL param saldırı yüzeyleri.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/nosqli.txt"]},
+  {id:"sc_subdomain", path:"websecure/scanners/subdomain.py", type:"scanner", icon:"🌍",
+   desc:"Subdomain enumeration. DNS brute-force (wordlist bazlı, threadli), subfinder binary, Amass binary, sertifika şeffaflık logu (crt.sh). Bulunan subdomainler phases'a yazılır.",
+   deps:["websecure/wordlists/subdomains.txt","websecure/integrations/amass.py"]},
+  {id:"sc_subdomain_to", path:"websecure/scanners/subdomain_takeover.py", type:"scanner", icon:"🏴",
+   desc:"Subdomain Takeover tespiti. CNAMEDanglingChecker (dangling CNAME → cloud servis kontrolü), CloudServiceFingerprintDB (25+ bulut servis imzası).",
+   deps:["websecure/scanners/subdomain.py","websecure/scanners/base.py"]},
+  {id:"sc_file_up", path:"websecure/scanners/file_upload.py", type:"scanner", icon:"📤",
+   desc:"Dosya yükleme zafiyet tarayıcısı. Extension bypass (.php5/.phtml/.phar), Content-Type bypass, webshell upload (PHP/ASPX/JSP), SVG XSS, path traversal dosya adı, ZIP Slip, polyglot JPEG+PHP.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_mass_assign", path:"websecure/scanners/mass_assignment.py", type:"scanner", icon:"📦",
+   desc:"Mass Assignment tarayıcısı. JSON body'ye gizli parametreler ekleme (isAdmin, role, price, is_verified). Yanıttaki ayrıcalık değişikliği tespiti.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/params.txt"]},
+  {id:"sc_hpp", path:"websecure/scanners/param_pollution.py", type:"scanner", icon:"🔀",
+   desc:"HTTP Parameter Pollution (HPP) tarayıcısı. QueryStringHPPProber, PostBodyHPPProber, ServerParseProfiler, HPPWAFBypassProber, ContentTypeSwitchingProber. WAF kurallarını bölünmüş payload ile atlatır.",
+   deps:["websecure/scanners/base.py","websecure/wordlists/params.txt"]},
+  {id:"sc_smuggling", path:"websecure/scanners/request_smuggling.py", type:"scanner", icon:"📦",
+   desc:"HTTP Request Smuggling tarayıcısı. CL.TE, TE.CL, TE.TE teknikleri. Timing saldırısı (CL > gerçek body) ve differential response tespiti.",
+   deps:["websecure/scanners/base.py","websecure/core/timing_analyzer.py"]},
+  {id:"sc_ws", path:"websecure/scanners/ws_fuzz.py", type:"scanner", icon:"🔌",
+   desc:"WebSocket fuzzing tarayıcısı. WS endpoint keşfi, raw WebSocket bağlantısı (stdlib), XSS/SQLi/NoSQLi/SSTI/CMDi payload enjeksiyonu, origin manipulation, subprotocol fuzz.",
+   deps:["websecure/scanners/base.py","websecure/core/payloads.py"]},
+  {id:"sc_js", path:"websecure/scanners/js_analyzer.py", type:"scanner", icon:"📜",
+   desc:"JavaScript dosya analizi. Tüm JS dosyalarını keşfeder; gizli API endpoint'leri, yollar, rotalar çıkarır. Hardcoded secret, token, API key tespiti.",
+   deps:["websecure/scanners/base.py","websecure/core/crawler.py"]},
+  {id:"sc_biz", path:"websecure/scanners/business_logic.py", type:"scanner", icon:"🏢",
+   desc:"İş mantığı zafiyet tarayıcısı. NegativeValueProber (negatif miktar/fiyat), WorkflowSkipProber (çok adımlı bypass), PrivilegeEscalationProber, LimitBypassProber (rate/kupon/miktar abuse).",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_session", path:"websecure/scanners/session_scanner.py", type:"scanner", icon:"🍪",
+   desc:"Session güvenlik tarayıcısı. CookieFlagScanner (HttpOnly/Secure/SameSite), SessionFixationExploiter, CookieInjectionProber, JWTExpiryBypassProber, BrowserFingerprintBypassProber, ConcurrentSessionBypassProber.",
+   deps:["websecure/scanners/base.py","websecure/core/session_manager.py"]},
+  {id:"sc_passive", path:"websecure/scanners/passive_recon.py", type:"scanner", icon:"👁️",
+   desc:"Pasif keşif (Passive Recon). Header bilgisi, meta tag, robots.txt, sitemap.xml, WHOIS, DNS kayıtları analizi. Aktif istek göndermeden hedef hakkında bilgi toplar.",
+   deps:["websecure/scanners/base.py","websecure/core/analysis.py"]},
+  {id:"sc_infra", path:"websecure/scanners/infrastructure.py", type:"scanner", icon:"🏗️",
+   desc:"Konsolide altyapı tarayıcısı. Güvenlik başlıkları analizi (CSP, HSTS, X-Frame-Options, Referrer-Policy) ve TLS/SSL politika analizi. headers.py + tls.py birleşimi.",
+   deps:["websecure/scanners/base.py","websecure/core/reporting.py"]},
+  {id:"sc_auth_scan", path:"websecure/scanners/auth_scanners.py", type:"scanner", icon:"🔐",
+   desc:"Auth ve yetkilendirme tarayıcıları. Broken Auth tespiti, Broken Access Control, auth matrix taraması, default credential deneme, brute-force koruması testi. (auth.py + auth_matrix.py birleşimi)",
+   deps:["websecure/scanners/base.py","websecure/core/auth_manager.py","websecure/wordlists/passwords_top1000.txt"]},
+  {id:"sc_owasp", path:"websecure/scanners/owasp.py", type:"scanner", icon:"🛡️",
+   desc:"OWASP Top-10 ve ek kontroller orkestratörü. Diğer tüm scanner'ları OWASP kategorilerine göre sıralı çalıştırır. Nuclei, ffuf, nmap gibi harici araçları da entegre eder.",
+   deps:["websecure/scanners/base.py","websecure/integrations/nuclei.py","websecure/integrations/ffuf.py","websecure/integrations/nmap.py"]},
+  {id:"sc_clickjack", path:"websecure/scanners/clickjacking.py", type:"scanner", icon:"🖱️",
+   desc:"Clickjacking tarayıcısı. X-Frame-Options eksikliği, CSP frame-ancestors kontrolü, iframe sandboxlanabilirlik testi.",
+   deps:["websecure/scanners/base.py","websecure/scanners/infrastructure.py"]},
+
+  // ---- WORDLISTS ----
+  {id:"wl_api", path:"websecure/wordlists/api_paths.txt", type:"wordlist", icon:"📝",
+   desc:"API path wordlist'i (579 satır). /api/v1/, /graphql, /swagger, /admin, /internal gibi yaygın API endpoint yolları. subdomain + owasp taramalarında kullanılır.",
+   deps:["websecure/core/crawler.py","websecure/integrations/ffuf.py","websecure/scanners/passive_recon.py"]},
+  {id:"wl_cmdi", path:"websecure/wordlists/cmdi.txt", type:"wordlist", icon:"📝",
+   desc:"OS Command Injection payload listesi. ;id, |whoami, $(cmd), backtick, newline bypass, Windows ve Unix komut enjeksiyonu varyasyonları.",
+   deps:["websecure/scanners/cmdi.py","websecure/core/payloads.py"]},
+  {id:"wl_dirs", path:"websecure/wordlists/dirs.txt", type:"wordlist", icon:"📝",
+   desc:"Dizin/path brute-force wordlist'i (420 satır). /admin, /backup, /config, /uploads, /.git, /.env gibi hassas dizinler. ffuf ve directory taramaları için.",
+   deps:["websecure/integrations/ffuf.py","websecure/core/crawler.py"]},
+  {id:"wl_files", path:"websecure/wordlists/files.txt", type:"wordlist", icon:"📝",
+   desc:"Hassas dosya adları wordlist'i. config.php, .htaccess, wp-config.php, .env, id_rsa gibi hedef dosyalar. LFI ve path traversal taramalarında kullanılır.",
+   deps:["websecure/scanners/lfi.py","websecure/integrations/ffuf.py"]},
+  {id:"wl_jwt", path:"websecure/wordlists/jwt_secrets.txt", type:"wordlist", icon:"📝",
+   desc:"JWT weak secret wordlist'i. Yaygın JWT imzalama secretleri (secret, password, 123456, jwt_secret vb.) brute-force saldırısı için.",
+   deps:["websecure/scanners/jwt.py"]},
+  {id:"wl_lfi", path:"websecure/wordlists/lfi.txt", type:"wordlist", icon:"📝",
+   desc:"LFI (Local File Inclusion) payload listesi (535 satır). ../../../etc/passwd, null byte bypass, encoding bypass, Windows path traversal varyasyonları.",
+   deps:["websecure/scanners/lfi.py","websecure/core/payloads.py"]},
+  {id:"wl_nosqli", path:"websecure/wordlists/nosqli.txt", type:"wordlist", icon:"📝",
+   desc:"NoSQL Injection payload listesi. MongoDB $gt/$ne/$regex/$where operator enjeksiyonları, JSON bazlı bypass teknikleri.",
+   deps:["websecure/scanners/nosqli.py","websecure/core/payloads.py"]},
+  {id:"wl_redir", path:"websecure/wordlists/open_redirect.txt", type:"wordlist", icon:"📝",
+   desc:"Open Redirect bypass payload listesi. Protocol-relative URL, double-slash, @-sign, unicode karakter, javascript: scheme varyasyonları.",
+   deps:["websecure/scanners/open_redirect.py"]},
+  {id:"wl_params", path:"websecure/wordlists/params.txt", type:"wordlist", icon:"📝",
+   desc:"Yaygın HTTP parametre adları listesi. id, user, admin, role, price, redirect, url, token, callback gibi hedef parametreler. IDOR, HPP, Mass Assignment için.",
+   deps:["websecure/scanners/idor.py","websecure/scanners/param_pollution.py","websecure/scanners/mass_assignment.py","websecure/integrations/ffuf.py"]},
+  {id:"wl_pass", path:"websecure/wordlists/passwords_top1000.txt", type:"wordlist", icon:"📝",
+   desc:"Top 1000 şifre listesi (571 satır). Broken Auth ve default credential brute-force saldırıları için auth_scanners.py tarafından kullanılır.",
+   deps:["websecure/scanners/auth_scanners.py"]},
+  {id:"wl_sqli", path:"websecure/wordlists/sqli.txt", type:"wordlist", icon:"📝",
+   desc:"SQL Injection payload listesi (608 satır). Error-based, boolean-based, time-based blind, UNION-based, stacked queries varyasyonları. MySQL/PostgreSQL/MSSQL/Oracle.",
+   deps:["websecure/scanners/sqli.py","websecure/core/payloads.py","websecure/integrations/sqlmap.py"]},
+  {id:"wl_ssrf", path:"websecure/wordlists/ssrf.txt", type:"wordlist", icon:"📝",
+   desc:"SSRF payload listesi. Cloud metadata endpoint'leri (AWS/GCP/Azure), iç ağ adres aralıkları, localhost bypass, DNS rebinding payload'ları.",
+   deps:["websecure/scanners/ssrf_xxe.py","websecure/core/payloads.py"]},
+  {id:"wl_ssti", path:"websecure/wordlists/ssti.txt", type:"wordlist", icon:"📝",
+   desc:"SSTI payload listesi. Jinja2, Twig, Mako, Velocity, FreeMarker motor tespiti için polyglot ve motor-spesifik expression'lar.",
+   deps:["websecure/scanners/ssti.py","websecure/core/payloads.py"]},
+  {id:"wl_sub", path:"websecure/wordlists/subdomains.txt", type:"wordlist", icon:"📝",
+   desc:"Subdomain enumeration wordlist'i (554 satır). www, api, mail, admin, staging, dev, vpn gibi yaygın subdomain adları. DNS brute-force için.",
+   deps:["websecure/scanners/subdomain.py","websecure/integrations/amass.py"]},
+  {id:"wl_values", path:"websecure/wordlists/values.txt", type:"wordlist", icon:"📝",
+   desc:"Genel test değerleri listesi. Farklı scanner'ların parametre değer fuzzing'inde kullandığı temel input değerleri.",
+   deps:["websecure/core/payloads.py","websecure/integrations/ffuf.py"]},
+  {id:"wl_xss", path:"websecure/wordlists/xss.txt", type:"wordlist", icon:"📝",
+   desc:"XSS payload listesi (628 satır). Reflected/stored XSS, HTMLParser bypass, event handler varyasyonları, CSP bypass, Angular/Vue/React framework-spesifik payload'lar.",
+   deps:["websecure/scanners/xss.py","websecure/core/payloads.py","websecure/integrations/dalfox.py"]},
+  {id:"wl_xxe", path:"websecure/wordlists/xxe.txt", type:"wordlist", icon:"📝",
+   desc:"XXE (XML External Entity) payload listesi. External entity, parameter entity, blind XXE (OOB), SVG/XLSX/DOCX vektörleri.",
+   deps:["websecure/scanners/ssrf_xxe.py","websecure/core/payloads.py"]},
+
+  // ---- INTEGRATIONS ----
+  {id:"int_base", path:"websecure/integrations/base.py", type:"integration", icon:"🔌",
+   desc:"Tüm harici araç entegrasyonları için temel soyut sınıflar. ToolIntegration (ABC), ToolResult veri modeli. SOLID OCP/DIP uyumlu — yeni araç eklemek base'i değiştirmez.",
+   deps:[]},
+  {id:"int_amass", path:"websecure/integrations/amass.py", type:"integration", icon:"🌍",
+   desc:"Amass subdomain + ASN keşif entegrasyonu. Pasif enumeration (Shodan/Censys/VirusTotal), aktif DNS brute-force, ASN/CIDR keşfi, Amass DB geçmiş tarama verisi.",
+   deps:["websecure/integrations/base.py","websecure/scanners/subdomain.py","websecure/wordlists/subdomains.txt"]},
+  {id:"int_dalfox", path:"websecure/integrations/dalfox.py", type:"integration", icon:"🦊",
+   desc:"dalfox XSS analiz ve doğrulama entegrasyonu. WebSecure XSS bulgularını dalfox ile doğrular, tekil URL/parametre XSS taraması, DOM XSS desteği.",
+   deps:["websecure/integrations/base.py","websecure/scanners/xss.py","websecure/wordlists/xss.txt"]},
+  {id:"int_ffuf", path:"websecure/integrations/ffuf.py", type:"integration", icon:"🔨",
+   desc:"ffuf + feroxbuster fuzzing araçları entegrasyonu. Dizin, dosya, parametre, sanal host fuzzing. Çıktı JSON parse ve bulgu normalize etme.",
+   deps:["websecure/integrations/base.py","websecure/wordlists/dirs.txt","websecure/wordlists/api_paths.txt","websecure/wordlists/params.txt"]},
+  {id:"int_httpx", path:"websecure/integrations/httpx_runner.py", type:"integration", icon:"🌐",
+   desc:"httpx — HTTP/2 destekli hızlı prob ve teknoloji tespiti. HTTP/1.1/2/3, Wappalyzer tabanlı tech stack tespiti, status code/content-type/title/server header toplama.",
+   deps:["websecure/integrations/base.py","websecure/core/tech_fingerprint.py"]},
+  {id:"int_katana", path:"websecure/integrations/katana.py", type:"integration", icon:"🗡️",
+   desc:"katana web crawler entegrasyonu (ProjectDiscovery). Headless browser + standart HTTP, JavaScript bundle endpoint çıkarımı, form/API endpoint/parametre keşfi.",
+   deps:["websecure/integrations/base.py","websecure/core/crawler.py"]},
+  {id:"int_nmap", path:"websecure/integrations/nmap.py", type:"integration", icon:"🗺️",
+   desc:"Nmap entegrasyonu (maksimum kapsam). Faz 1: -p- --open -T4 port keşfi. Faz 2: bulunan portlarda -sV --version-intensity 9 + NSE scriptler. Stealth profilde -sT -T2.",
+   deps:["websecure/integrations/base.py","websecure/scanners/infrastructure.py"]},
+  {id:"int_nuclei", path:"websecure/integrations/nuclei.py", type:"integration", icon:"☢️",
+   desc:"Nuclei vulnerability scanner entegrasyonu. tools/nuclei/nuclei.exe otomatik keşif, v2+v3 uyumluluk, tech-aware template seçimi, interactsh OAST entegrasyonu.",
+   deps:["websecure/integrations/base.py","websecure/core/oast.py","drivers/interactsh-client.exe","websecure/core/tech_fingerprint.py"]},
+  {id:"int_sarif", path:"websecure/integrations/sarif.py", type:"integration", icon:"📋",
+   desc:"SARIF 2.1.0 normalizasyon modülü. Tüm harici araç çıktıları ve native bulgular SARIF formatına dönüştürülür. GitHub Code Scanning, VS Code SARIF Viewer, Azure DevOps uyumlu.",
+   deps:["websecure/integrations/base.py","websecure/core/report_generator.py"]},
+  {id:"int_sqlmap", path:"websecure/integrations/sqlmap.py", type:"integration", icon:"💉",
+   desc:"sqlmap entegrasyonu. WebSecure SQLi bulgularını sqlmap ile otomatik exploit eder. CSV çıktı parse, risk/level parametresi, proxy desteği.",
+   deps:["websecure/integrations/base.py","websecure/scanners/sqli.py","websecure/wordlists/sqli.txt"]},
+
+  // ---- DB ----
+  {id:"db_database", path:"websecure/db/database.py", type:"db", icon:"🗄️",
+   desc:"SQLite tabanlı merkezi bulgu veritabanı. Bağlantı havuzu, migration. Tablolar: tenants, projects, scans, findings, fp_rules, score_history. Bağımlılık yok (stdlib sqlite3).",
+   deps:[]},
+  {id:"db_repo", path:"websecure/db/repository.py", type:"db", icon:"🗄️",
+   desc:"SQLite CRUD repository'leri. ScanRepository, FindingRepository, TenantRepository, ProjectRepository, ScoreRepository. SOLID SRP: her repository tek model sorumlusu.",
+   deps:["websecure/db/database.py"]},
+
+  // ---- WEB ----
+  {id:"web_index", path:"websecure/web/index.html", type:"web", icon:"🌐",
+   desc:"Web dashboard HTML arayüzü. websecure serve komutuyla sunulan local web UI. Canlı bulgu tablosu, tarama durumu ve log panelini tarayıcıda gösterir.",
+   deps:["websecure/cli/web_ui.py"]},
+
+  // ---- TESTS ----
+  {id:"test_conf", path:"tests/conftest.py", type:"test", icon:"🧪",
+   desc:"Paylaşımlı pytest fixture'ları. mock_session (requests mock), mock_config, target_url, sample_findings fixture'ları. Tüm unit testlerin ortak altyapısı.",
+   deps:["tests/unit/","tests/integration/"]},
+  {id:"test_smoke", path:"tests/test_system_smoke.py", type:"test", icon:"🧪",
+   desc:"Sistem smoke testleri. Tüm core modüllerin import hatası olmadan yüklenip yüklenmediğini doğrular. CI/CD'nin ilk koşusu — en hızlı regresyon tespiti.",
+   deps:["websecure/scanners/","websecure/core/"]},
+  {id:"test_chain", path:"tests/test_chaining.py", type:"test", icon:"🧪",
+   desc:"Chain Reactor v3.0 testleri. XSS+CSRF→ATO, InfoLeak+IDOR→MassLeak, LFI→LogPoisoning→RCE (3-hop), SQLi→CredDump→ATO (4-hop), SSRF→CloudCompromise zincirleri.",
+   deps:["websecure/core/chain_reactor.py","websecure/core/evidence_chain.py"]},
+  {id:"test_severity", path:"tests/integration/test_severity_pipeline.py", type:"test", icon:"🧪",
+   desc:"Severity pipeline entegrasyon testi. scanner → add_result → CI gate akışında severity değerlerinin doğru aktığını doğrular. Mock kullanmaz.",
+   deps:["websecure/core/reporting.py","websecure/core/cvss.py"]},
+  {id:"test_auth", path:"tests/unit/test_auth_flow.py", type:"test", icon:"🧪",
+   desc:"auth_flow.py unit testleri. smart_login, form login, session canlılık, CSRF token yenileme, rol bazlı session oluşturma senaryoları.",
+   deps:["websecure/core/auth_flow.py","tests/conftest.py"]},
+  {id:"test_base", path:"tests/unit/test_base_scanner.py", type:"test", icon:"🧪",
+   desc:"BaseScanner unit testleri. run_parallel_probes(), severity normalizasyonu, add_result köprüsü, abstract method zorlaması.",
+   deps:["websecure/scanners/base.py","tests/conftest.py"]},
+  {id:"test_except", path:"tests/unit/test_exceptions.py", type:"test", icon:"🧪",
+   desc:"Exception hiyerarşisi testleri. Her exception tipinin url/param/payload bilgilerini doğru taşıdığını ve mesaj formatının tutarlı olduğunu doğrular.",
+   deps:["websecure/core/exceptions.py"]},
+  {id:"test_header", path:"tests/unit/test_header_scanner.py", type:"test", icon:"🧪",
+   desc:"Header Scanner unit testleri. CSP, HSTS, X-Frame-Options, Referrer-Policy eksiklik tespiti senaryoları.",
+   deps:["websecure/scanners/infrastructure.py","websecure/scanners/headers.py","tests/conftest.py"]},
+  {id:"test_idor", path:"tests/unit/test_idor_scanner.py", type:"test", icon:"🧪",
+   desc:"IDOR Scanner unit testleri. ID fuzz, UUID bypass, yatay/dikey privilege escalation senaryoları.",
+   deps:["websecure/scanners/idor.py","tests/conftest.py"]},
+  {id:"test_nosqli", path:"tests/unit/test_nosqli_scanner.py", type:"test", icon:"🧪",
+   desc:"NoSQL Injection Scanner unit testleri. MongoDB operator injection senaryoları, false positive filtreleme.",
+   deps:["websecure/scanners/nosqli.py","tests/conftest.py"]},
+  {id:"test_open_red", path:"tests/unit/test_open_redirect.py", type:"test", icon:"🧪",
+   desc:"Open Redirect Scanner unit testleri. 30+ payload bypass senaryosu, Location header parse, JS redirect tespiti.",
+   deps:["websecure/scanners/open_redirect.py","tests/conftest.py"]},
+  {id:"test_reporting", path:"tests/unit/test_reporting.py", type:"test", icon:"🧪",
+   desc:"Reporting modülü unit testleri. add_result(), redact_sensitive(), severity normalizasyonu, HTML/JSON/Markdown rapor çıktısı doğrulama.",
+   deps:["websecure/core/reporting.py","websecure/core/redaction.py"]},
+  {id:"test_sqli", path:"tests/unit/test_sqli_scanner.py", type:"test", icon:"🧪",
+   desc:"SQL Injection Scanner unit testleri. Error-based, boolean-based, time-based blind senaryolar, timing analiz doğrulaması.",
+   deps:["websecure/scanners/sqli.py","tests/conftest.py"]},
+  {id:"test_ssti", path:"tests/unit/test_ssti_scanner.py", type:"test", icon:"🧪",
+   desc:"SSTI Scanner unit testleri. Polyglot probe, Jinja2/Twig motor fingerprint, PoC kanıtı oluşturma.",
+   deps:["websecure/scanners/ssti.py","tests/conftest.py"]},
+  {id:"test_subdomain", path:"tests/unit/test_subdomain_scanner.py", type:"test", icon:"🧪",
+   desc:"Subdomain Scanner unit testleri. DNS brute-force, crt.sh parse, subdomain takeover tespiti.",
+   deps:["websecure/scanners/subdomain.py","websecure/scanners/subdomain_takeover.py","tests/conftest.py"]},
+  {id:"test_url", path:"tests/unit/test_url_utils.py", type:"test", icon:"🧪",
+   desc:"url_utils.py unit testleri. URL normalizasyon, parametre çıkarma, scope kontrolü, iç/dış link ayrımı.",
+   deps:["websecure/core/url_utils.py"]},
+  {id:"test_helpers", path:"tests/unit/test_utils_helpers.py", type:"test", icon:"🧪",
+   desc:"utils/helpers.py unit testleri. random_string(), normalize_url(), TTLCache sınıfı testleri.",
+   deps:["websecure/core/utils/helpers.py"]},
+  {id:"test_xss", path:"tests/unit/test_xss_scanner.py", type:"test", icon:"🧪",
+   desc:"XSS Scanner unit testleri. Reflected/stored XSS tespiti, WAF bypass, HTMLParser kanary doğrulama.",
+   deps:["websecure/scanners/xss.py","tests/conftest.py"]},
+];
+
+// =====================================================================
+// TREE STRUCTURE DEFINITION
+// =====================================================================
+const TREE = {
+  label:"📁 WebSecure (Proje Kökü)", badge:"", children:[
+    {label:"⚙️ config.json", id:"config_json", badge:"config"},
+    {label:"📐 config.schema.json", id:"config_schema", badge:"config"},
+    {label:"🔧 install.py", id:"install_py", badge:"tool"},
+    {label:"🧪 pytest.ini", id:"pytest_ini", badge:"config"},
+    {label:"📝 CLAUDE.md", id:"claude_md", badge:"config"},
+    {label:"💾 session.json", id:"session_json", badge:"config"},
+    {label:"📁 drivers/", badge:"driver", children:[
+      {label:"🌐 chromedriver.exe", id:"chromedriver", badge:"driver"},
+      {label:"📡 interactsh-client.exe", id:"interactsh", badge:"driver"},
+    ]},
+    {label:"📦 websecure/", badge:"core", children:[
+      {label:"📦 __init__.py", id:"ws_init", badge:"core"},
+      {label:"🚀 __main__.py", id:"ws_main", badge:"core"},
+      {label:"📁 api/", badge:"api", children:[
+        {label:"🌐 server.py", id:"api_server", badge:"api"},
+      ]},
+      {label:"📁 cli/", badge:"cli", children:[
+        {label:"⌨️ commands.py", id:"cli_commands", badge:"cli"},
+        {label:"🖥️ tui.py", id:"cli_tui", badge:"cli"},
+        {label:"🧙 wizard.py", id:"cli_wizard", badge:"cli"},
+        {label:"🔀 diff.py", id:"cli_diff", badge:"cli"},
+        {label:"📋 queue_manager.py", id:"cli_queue", badge:"cli"},
+        {label:"⏰ scheduler.py", id:"cli_scheduler", badge:"cli"},
+        {label:"🔔 webhook.py", id:"cli_webhook", badge:"cli"},
+        {label:"🌐 web_ui.py", id:"cli_web_ui", badge:"cli"},
+        {label:"✨ autocomplete.py", id:"cli_autocomplete", badge:"cli"},
+      ]},
+      {label:"📁 config/", badge:"config", children:[
+        {label:"📁 playbooks/", badge:"config", children:[
+          {label:"📜 cmdi_persistence.yml", id:"pb_cmdi", badge:"config"},
+          {label:"📜 cors_jwt_ato.yml", id:"pb_cors", badge:"config"},
+          {label:"📜 ssti_rce_data_exfil.yml", id:"pb_ssti", badge:"config"},
+          {label:"📜 xxe_ssrf_internal.yml", id:"pb_xxe", badge:"config"},
+        ]},
+        {label:"📁 profiles/", badge:"config", children:[
+          {label:"🔷 api_only.yml", id:"prof_api", badge:"config"},
+          {label:"🔷 authenticated.yml", id:"prof_auth", badge:"config"},
+          {label:"🔷 bug_bounty.yml", id:"prof_bb", badge:"config"},
+          {label:"🔷 cicd.yml", id:"prof_cicd", badge:"config"},
+          {label:"🔷 compliance.yml", id:"prof_compliance", badge:"config"},
+        ]},
+      ]},
+      {label:"📁 core/", badge:"core", children:[
+        {label:"📁 auth/", badge:"core", children:[
+          {label:"🔐 flows.py", id:"auth_flows", badge:"core"},
+          {label:"🔐 providers.py", id:"auth_providers", badge:"core"},
+          {label:"🔐 totp.py", id:"auth_totp", badge:"core"},
+        ]},
+        {label:"📁 cli/", badge:"core", children:[
+          {label:"⌨️ interactive.py", id:"cli_interactive", badge:"core"},
+        ]},
+        {label:"📁 phases/", badge:"core", children:[
+          {label:"📦 _context.py", id:"phases_ctx", badge:"core"},
+          {label:"📦 _hprofile.py", id:"phases_hprof", badge:"core"},
+        ]},
+        {label:"📁 utils/", badge:"core", children:[
+          {label:"⚙️ config.py", id:"utils_config", badge:"core"},
+          {label:"🔧 helpers.py", id:"utils_helpers", badge:"core"},
+          {label:"🌐 net.py", id:"utils_net", badge:"core"},
+          {label:"💻 system.py", id:"utils_system", badge:"core"},
+          {label:"📚 wordlists.py", id:"utils_wordlists", badge:"core"},
+        ]},
+        {label:"🔔 alerts.py", id:"core_alerts", badge:"core"},
+        {label:"🔬 analysis.py", id:"core_analysis", badge:"core"},
+        {label:"⚡ async_runner.py", id:"core_async", badge:"core"},
+        {label:"🔑 auth_flow.py", id:"core_auth_flow", badge:"core"},
+        {label:"🛡️ auth_manager.py", id:"core_auth_mgr", badge:"core"},
+        {label:"⚙️ bl_concurrency.py", id:"core_bl_conc", badge:"core"},
+        {label:"🌐 browser_crawler.py", id:"core_browser", badge:"core"},
+        {label:"⛓️ chain_reactor.py", id:"core_chain", badge:"core"},
+        {label:"💾 checkpoint.py", id:"core_checkpoint", badge:"core"},
+        {label:"⚡ circuit_breaker.py", id:"core_circuit", badge:"core"},
+        {label:"🔄 concurrency.py", id:"core_conc", badge:"core"},
+        {label:"🔗 correlation_engine.py", id:"core_corr", badge:"core"},
+        {label:"🕷️ crawler.py", id:"core_crawler", badge:"core"},
+        {label:"📊 cvss.py", id:"core_cvss", badge:"core"},
+        {label:"🌍 egress.py", id:"core_egress", badge:"core"},
+        {label:"🎯 endpoint_prioritizer.py", id:"core_ep_prio", badge:"core"},
+        {label:"🥷 evasion.py", id:"core_evasion", badge:"core"},
+        {label:"🔍 evidence_chain.py", id:"core_evidence", badge:"core"},
+        {label:"⚠️ exceptions.py", id:"core_except", badge:"core"},
+        {label:"💥 exploit_orchestrator.py", id:"core_exploit", badge:"core"},
+        {label:"🔄 flows.py", id:"core_flows", badge:"core"},
+        {label:"📝 form_parser.py", id:"core_form", badge:"core"},
+        {label:"🧠 fp_learner.py", id:"core_fp_learn", badge:"core"},
+        {label:"✂️ fp_reducer.py", id:"core_fp_red", badge:"core"},
+        {label:"🌐 http.py", id:"core_http", badge:"core"},
+        {label:"🧑 human_adapter.py", id:"core_human", badge:"core"},
+        {label:"📺 live_monitor.py", id:"core_live", badge:"core"},
+        {label:"🔀 mutator.py", id:"core_mutator", badge:"core"},
+        {label:"📨 notification.py", id:"core_notif", badge:"core"},
+        {label:"📡 oast.py", id:"core_oast", badge:"core"},
+        {label:"🎯 payload_engine.py", id:"core_pe", badge:"core"},
+        {label:"💣 payloads.py", id:"core_payloads", badge:"core"},
+        {label:"🏪 plugin_marketplace.py", id:"core_plug_mkt", badge:"core"},
+        {label:"📋 plugin_registry.py", id:"core_plug_reg", badge:"core"},
+        {label:"🏴 post_exploit.py", id:"core_post", badge:"core"},
+        {label:"👤 profiles.py", id:"core_profiles", badge:"core"},
+        {label:"🎚️ rate_controller.py", id:"core_rate", badge:"core"},
+        {label:"🔒 redaction.py", id:"core_redact", badge:"core"},
+        {label:"📄 report_generator.py", id:"core_repgen", badge:"core"},
+        {label:"📊 reporting.py", id:"core_reporting", badge:"core"},
+        {label:"🔬 response_analyzer.py", id:"core_resp_an", badge:"core"},
+        {label:"⚙️ scan_profile.py", id:"core_scan_prof", badge:"core"},
+        {label:"▶️ scan_runner.py", id:"core_scan_run", badge:"core"},
+        {label:"📈 score_tracker.py", id:"core_score", badge:"core"},
+        {label:"🏭 session_factory.py", id:"core_sess_fac", badge:"core"},
+        {label:"🗂️ session_manager.py", id:"core_sess_mgr", badge:"core"},
+        {label:"🚀 startup.py", id:"core_startup", badge:"core"},
+        {label:"🔍 tech_fingerprint.py", id:"core_tech", badge:"core"},
+        {label:"⏱️ timing_analyzer.py", id:"core_timing", badge:"core"},
+        {label:"🔧 tool_manager.py", id:"core_toolmgr", badge:"core"},
+        {label:"🔗 url_utils.py", id:"core_url", badge:"core"},
+        {label:"🛡️ waf_bypass.py", id:"core_waf_byp", badge:"core"},
+        {label:"🔍 waf_fingerprint.py", id:"core_waf_fp", badge:"core"},
+        {label:"🎣 xss_callback.py", id:"core_xss_cb", badge:"core"},
+      ]},
+      {label:"📁 db/", badge:"db", children:[
+        {label:"🗄️ database.py", id:"db_database", badge:"db"},
+        {label:"🗄️ repository.py", id:"db_repo", badge:"db"},
+      ]},
+      {label:"📁 integrations/", badge:"integration", children:[
+        {label:"🔌 base.py", id:"int_base", badge:"integration"},
+        {label:"🌍 amass.py", id:"int_amass", badge:"integration"},
+        {label:"🦊 dalfox.py", id:"int_dalfox", badge:"integration"},
+        {label:"🔨 ffuf.py", id:"int_ffuf", badge:"integration"},
+        {label:"🌐 httpx_runner.py", id:"int_httpx", badge:"integration"},
+        {label:"🗡️ katana.py", id:"int_katana", badge:"integration"},
+        {label:"🗺️ nmap.py", id:"int_nmap", badge:"integration"},
+        {label:"☢️ nuclei.py", id:"int_nuclei", badge:"integration"},
+        {label:"📋 sarif.py", id:"int_sarif", badge:"integration"},
+        {label:"💉 sqlmap.py", id:"int_sqlmap", badge:"integration"},
+      ]},
+      {label:"📁 scanners/", badge:"scanner", children:[
+        {label:"🏗️ base.py", id:"sc_base", badge:"scanner"},
+        {label:"🔐 auth_scanners.py", id:"sc_auth_scan", badge:"scanner"},
+        {label:"🏢 business_logic.py", id:"sc_biz", badge:"scanner"},
+        {label:"🚧 bypass_403.py", id:"sc_403", badge:"scanner"},
+        {label:"🖱️ clickjacking.py", id:"sc_clickjack", badge:"scanner"},
+        {label:"💻 cmdi.py", id:"sc_cmdi", badge:"scanner"},
+        {label:"🔓 cors.py", id:"sc_cors", badge:"scanner"},
+        {label:"↩️ crlf_injection.py", id:"sc_crlf", badge:"scanner"},
+        {label:"🎭 csrf.py", id:"sc_csrf", badge:"scanner"},
+        {label:"🌐 dom_xss.py", id:"sc_dom_xss", badge:"scanner"},
+        {label:"📤 file_upload.py", id:"sc_file_up", badge:"scanner"},
+        {label:"📊 graphql.py", id:"sc_graphql", badge:"scanner"},
+        {label:"📋 headers.py", id:"sc_headers", badge:"scanner"},
+        {label:"🚪 idor.py", id:"sc_idor", badge:"scanner"},
+        {label:"🏗️ infrastructure.py", id:"sc_infra", badge:"scanner"},
+        {label:"📜 js_analyzer.py", id:"sc_js", badge:"scanner"},
+        {label:"🎟️ jwt.py", id:"sc_jwt", badge:"scanner"},
+        {label:"📁 lfi.py", id:"sc_lfi", badge:"scanner"},
+        {label:"📦 mass_assignment.py", id:"sc_mass_assign", badge:"scanner"},
+        {label:"🗄️ nosqli.py", id:"sc_nosqli", badge:"scanner"},
+        {label:"↪️ open_redirect.py", id:"sc_open_red", badge:"scanner"},
+        {label:"🛡️ owasp.py", id:"sc_owasp", badge:"scanner"},
+        {label:"🔀 param_pollution.py", id:"sc_hpp", badge:"scanner"},
+        {label:"👁️ passive_recon.py", id:"sc_passive", badge:"scanner"},
+        {label:"☣️ prototype_pollution.py", id:"sc_proto_poll", badge:"scanner"},
+        {label:"🏃 race_condition.py", id:"sc_race", badge:"scanner"},
+        {label:"📦 request_smuggling.py", id:"sc_smuggling", badge:"scanner"},
+        {label:"🍪 session_scanner.py", id:"sc_session", badge:"scanner"},
+        {label:"💉 sqli.py", id:"sc_sqli", badge:"scanner"},
+        {label:"🌐 ssrf_xxe.py", id:"sc_ssrf_xxe", badge:"scanner"},
+        {label:"🔥 ssti.py", id:"sc_ssti", badge:"scanner"},
+        {label:"🌍 subdomain.py", id:"sc_subdomain", badge:"scanner"},
+        {label:"🏴 subdomain_takeover.py", id:"sc_subdomain_to", badge:"scanner"},
+        {label:"🔒 tls.py", id:"sc_tls", badge:"scanner"},
+        {label:"🔌 ws_fuzz.py", id:"sc_ws", badge:"scanner"},
+        {label:"🎯 xss.py", id:"sc_xss", badge:"scanner"},
+      ]},
+      {label:"📁 web/", badge:"web", children:[
+        {label:"🌐 index.html", id:"web_index", badge:"web"},
+      ]},
+      {label:"📁 wordlists/", badge:"wordlist", children:[
+        {label:"📝 api_paths.txt (579 satır)", id:"wl_api", badge:"wordlist"},
+        {label:"📝 cmdi.txt", id:"wl_cmdi", badge:"wordlist"},
+        {label:"📝 dirs.txt (420 satır)", id:"wl_dirs", badge:"wordlist"},
+        {label:"📝 files.txt", id:"wl_files", badge:"wordlist"},
+        {label:"📝 jwt_secrets.txt", id:"wl_jwt", badge:"wordlist"},
+        {label:"📝 lfi.txt (535 satır)", id:"wl_lfi", badge:"wordlist"},
+        {label:"📝 nosqli.txt", id:"wl_nosqli", badge:"wordlist"},
+        {label:"📝 open_redirect.txt", id:"wl_redir", badge:"wordlist"},
+        {label:"📝 params.txt", id:"wl_params", badge:"wordlist"},
+        {label:"📝 passwords_top1000.txt (571 satır)", id:"wl_pass", badge:"wordlist"},
+        {label:"📝 sqli.txt (608 satır)", id:"wl_sqli", badge:"wordlist"},
+        {label:"📝 ssrf.txt", id:"wl_ssrf", badge:"wordlist"},
+        {label:"📝 ssti.txt", id:"wl_ssti", badge:"wordlist"},
+        {label:"📝 subdomains.txt (554 satır)", id:"wl_sub", badge:"wordlist"},
+        {label:"📝 values.txt", id:"wl_values", badge:"wordlist"},
+        {label:"📝 xss.txt (628 satır)", id:"wl_xss", badge:"wordlist"},
+        {label:"📝 xxe.txt", id:"wl_xxe", badge:"wordlist"},
+      ]},
+    ]},
+    {label:"📁 tests/", badge:"test", children:[
+      {label:"🧪 conftest.py", id:"test_conf", badge:"test"},
+      {label:"🧪 test_system_smoke.py", id:"test_smoke", badge:"test"},
+      {label:"🧪 test_chaining.py", id:"test_chain", badge:"test"},
+      {label:"📁 integration/", badge:"test", children:[
+        {label:"🧪 test_severity_pipeline.py", id:"test_severity", badge:"test"},
+      ]},
+      {label:"📁 unit/", badge:"test", children:[
+        {label:"🧪 test_auth_flow.py", id:"test_auth", badge:"test"},
+        {label:"🧪 test_base_scanner.py", id:"test_base", badge:"test"},
+        {label:"🧪 test_exceptions.py", id:"test_except", badge:"test"},
+        {label:"🧪 test_header_scanner.py", id:"test_header", badge:"test"},
+        {label:"🧪 test_idor_scanner.py", id:"test_idor", badge:"test"},
+        {label:"🧪 test_nosqli_scanner.py", id:"test_nosqli", badge:"test"},
+        {label:"🧪 test_open_redirect.py", id:"test_open_red", badge:"test"},
+        {label:"🧪 test_reporting.py", id:"test_reporting", badge:"test"},
+        {label:"🧪 test_sqli_scanner.py", id:"test_sqli", badge:"test"},
+        {label:"🧪 test_ssti_scanner.py", id:"test_ssti", badge:"test"},
+        {label:"🧪 test_subdomain_scanner.py", id:"test_subdomain", badge:"test"},
+        {label:"🧪 test_url_utils.py", id:"test_url", badge:"test"},
+        {label:"🧪 test_utils_helpers.py", id:"test_helpers", badge:"test"},
+        {label:"🧪 test_xss_scanner.py", id:"test_xss", badge:"test"},
+      ]},
+    ]},
+  ]
+};
+
+// =====================================================================
+// BADGE CLASS MAP
+// =====================================================================
+const BADGE_CLASS = {
+  core:"b-core", scanner:"b-scanner", wordlist:"b-wordlist", config:"b-config",
+  test:"b-test", integration:"b-integration", cli:"b-cli", db:"b-db",
+  api:"b-api", driver:"b-driver", web:"b-web", tool:"b-core"
+};
+const BADGE_LABEL = {
+  core:"CORE", scanner:"SCANNER", wordlist:"WORDLIST", config:"CONFIG",
+  test:"TEST", integration:"ENTEGRASYON", cli:"CLI", db:"VERİTABANI",
+  api:"API", driver:"DRIVER", web:"WEB", tool:"ARAÇ"
+};
+const FILE_MAP = {};
+FILES.forEach(f=>{ FILE_MAP[f.id]=f; });
+
+// =====================================================================
+// TREE RENDER
+// =====================================================================
+function renderTree(node, container){
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tree-node';
+  const item = document.createElement('div');
+  item.className = 'tree-item';
+  const arrow = document.createElement('span');
+  arrow.className = 'arrow';
+  const hasChildren = node.children && node.children.length > 0;
+  arrow.textContent = hasChildren ? '▶' : '';
+  const icon = document.createElement('span');
+  icon.className = 'icon';
+  icon.textContent = node.label.split(' ')[0];
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = node.label.split(' ').slice(1).join(' ');
+  item.appendChild(arrow);
+  item.appendChild(label);
+  if(node.badge){
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (BADGE_CLASS[node.badge]||'');
+    badge.textContent = BADGE_LABEL[node.badge]||node.badge;
+    item.appendChild(badge);
+  }
+  wrapper.appendChild(item);
+  if(hasChildren){
+    const childContainer = document.createElement('div');
+    childContainer.className = 'tree-children';
+    node.children.forEach(child=>renderTree(child, childContainer));
+    wrapper.appendChild(childContainer);
+    item.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const open = childContainer.classList.toggle('open');
+      arrow.textContent = open ? '▼' : '▶';
+    });
+  }
+  if(node.id && FILE_MAP[node.id]){
+    item.style.cursor='pointer';
+    item.addEventListener('click',(e)=>{
+      e.stopPropagation();
+      if(hasChildren){
+        const children = wrapper.querySelector('.tree-children');
+        const a = wrapper.querySelector('.arrow');
+        const open = children.classList.toggle('open');
+        a.textContent = open ? '▼' : '▶';
+      }
+      showDetail(node.id);
+    });
+  }
+  container.appendChild(wrapper);
+}
+
+// =====================================================================
+// DETAIL POPUP
+// =====================================================================
+function showDetail(id){
+  const f = FILE_MAP[id];
+  if(!f) return;
+  document.getElementById('d-title').textContent = f.path;
+  const meta = document.getElementById('d-meta');
+  meta.innerHTML = '';
+  const t = document.createElement('span');
+  t.className = 'tag ' + (BADGE_CLASS[f.type]||'');
+  t.textContent = BADGE_LABEL[f.type]||f.type;
+  meta.appendChild(t);
+  document.getElementById('d-desc').textContent = f.desc;
+  const deps = document.getElementById('d-deps');
+  if(f.deps && f.deps.length > 0){
+    deps.innerHTML = '<h4>🔗 Bağlı Dosyalar:</h4><ul>' +
+      f.deps.map(d=>`<li>${d}</li>`).join('') + '</ul>';
+  } else {
+    deps.innerHTML = '<p style="color:#8b949e;font-size:11px;">Dış bağımlılık yok.</p>';
+  }
+  document.getElementById('detail-box').style.display='block';
+  document.getElementById('overlay').style.display='block';
+}
+function closeDetail(){
+  document.getElementById('detail-box').style.display='none';
+  document.getElementById('overlay').style.display='none';
+}
+
+// =====================================================================
+// REPORT RENDER
+// =====================================================================
+const CATEGORIES = [
+  {key:"config",    label:"⚙️ Config & Yapılandırma Dosyaları"},
+  {key:"driver",    label:"🔧 Driver & Binary Araçlar"},
+  {key:"core",      label:"🔬 Core Modüller (Tarama Altyapısı)"},
+  {key:"scanner",   label:"🎯 Scanner Modülleri (Saldırı/Tarama)"},
+  {key:"wordlist",  label:"📝 Wordlist Dosyaları"},
+  {key:"integration",label:"🔌 Entegrasyon Modülleri (Harici Araçlar)"},
+  {key:"cli",       label:"⌨️ CLI Arayüz Modülleri"},
+  {key:"api",       label:"🌐 API Modülleri"},
+  {key:"db",        label:"🗄️ Veritabanı Modülleri"},
+  {key:"web",       label:"🌐 Web Arayüzü"},
+  {key:"test",      label:"🧪 Test Dosyaları"},
+];
+
+function buildReport(){
+  const container = document.getElementById('report-content');
+  CATEGORIES.forEach(cat=>{
+    const files = FILES.filter(f=>f.type===cat.key || (cat.key==='config' && f.type==='tool'));
+    if(!files.length) return;
+    const hdr = document.createElement('div');
+    hdr.className='category-header';
+    hdr.innerHTML=`<span style="font-size:16px">▶</span> ${cat.label} <span style="margin-left:auto;font-size:11px;color:#8b949e">${files.length} dosya</span>`;
+    const content = document.createElement('div');
+    content.className='category-content';
+    content.dataset.cat=cat.key;
+    files.forEach(f=>{
+      const card = document.createElement('div');
+      card.className='file-card';
+      card.dataset.search=(f.path+' '+f.desc+' '+(f.deps||[]).join(' ')).toLowerCase();
+      card.innerHTML=`
+        <h4>${f.path} <span class="fc-type ${BADGE_CLASS[f.type]||''}">${BADGE_LABEL[f.type]||f.type}</span></h4>
+        <div class="fc-desc">${f.desc}</div>
+        <div class="fc-deps">${(f.deps||[]).map(d=>`<span class="fc-dep">${d}</span>`).join('')}</div>
+      `;
+      content.appendChild(card);
+    });
+    hdr.addEventListener('click',()=>{
+      const open = content.classList.toggle('open');
+      hdr.querySelector('span').textContent = open ? '▼' : '▶';
+    });
+    container.appendChild(hdr);
+    container.appendChild(content);
+  });
+}
+
+function filterReport(q){
+  q = q.toLowerCase().trim();
+  document.querySelectorAll('.file-card').forEach(card=>{
+    const match = !q || card.dataset.search.includes(q);
+    card.classList.toggle('hidden', !match);
+  });
+  if(q){
+    document.querySelectorAll('.category-content').forEach(c=>{
+      const visible = Array.from(c.querySelectorAll('.file-card')).some(fc=>!fc.classList.contains('hidden'));
+      c.classList.toggle('open', visible);
+      const hdr = c.previousElementSibling;
+      if(hdr) hdr.querySelector('span').textContent = visible ? '▼' : '▶';
+    });
+  }
+}
+
+// =====================================================================
+// TAB SWITCH
+// =====================================================================
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',['tree','report'][i]===t));
+  document.querySelectorAll('.pane').forEach(el=>el.classList.remove('active'));
+  document.getElementById('pane-'+t).classList.add('active');
+}
+
+// =====================================================================
+// INIT
+// =====================================================================
+renderTree(TREE, document.getElementById('tree-root'));
+buildReport();
+</script>
+</body>
+</html>
