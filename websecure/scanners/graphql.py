@@ -331,6 +331,506 @@ class InfoDisclosureProbe:
         return out
 
 
+# =============================================================================
+# GraphQLBatchDoSProber — Batch amplification and alias bombing
+# =============================================================================
+
+class GraphQLBatchDoSProber(BaseScanner):
+    """
+    GraphQL Batch DoS via amplification and alias bombing.
+
+    Sends 100 identical operations in a single HTTP request and measures
+    response time. Also fires an alias-bomb query (100 aliases in one op).
+
+    Severity:
+    - High         if response time > 5 s (amplification possible)
+    - Informational if batch accepted but response is fast
+    """
+
+    name = "graphql_batch_dos"
+    phase = "offensive"
+
+    _BATCH_SIZE = 100
+    _ALIAS_COUNT = 100
+    _TIMING_THRESHOLD = 5.0  # seconds
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [target]
+        client = GraphQLClient(self.session)
+        for ep in endpoints:
+            self._probe_batch(client, ep, bucket)
+            self._probe_alias_bomb(client, ep, bucket)
+        return self.results
+
+    def _probe_batch(self, client: GraphQLClient, url: str, bucket: str):
+        batch = [{"query": "{ __typename }"}] * self._BATCH_SIZE
+        t0 = _t.time()
+        try:
+            r = client.session.post(
+                url, json=batch, headers=DEFAULT_HEADERS, timeout=30
+            )
+            elapsed = _t.time() - t0
+            if r.status_code == 200:
+                if elapsed > self._TIMING_THRESHOLD:
+                    self.add(bucket, {
+                        "type": "GraphQL Batch DoS — Amplification (Timing)",
+                        "severity": "High",
+                        "url": url,
+                        "batch_size": self._BATCH_SIZE,
+                        "evidence": (
+                            f"{self._BATCH_SIZE}-op batch took {elapsed:.2f}s "
+                            f"(threshold {self._TIMING_THRESHOLD}s) — amplification possible"
+                        ),
+                    })
+                    logger.warning(f"[GraphQL-BatchDoS] Timing anomaly at {url}: {elapsed:.2f}s")
+                elif (r.text or "").strip().startswith("["):
+                    self.add(bucket, {
+                        "type": "GraphQL Batch Queries Accepted (No Timing Anomaly)",
+                        "severity": "Informational",
+                        "url": url,
+                        "batch_size": self._BATCH_SIZE,
+                        "evidence": (
+                            f"{self._BATCH_SIZE}-op batch accepted in {elapsed:.2f}s "
+                            f"— batch is enabled but no amplification detected"
+                        ),
+                    })
+        except Exception as exc:
+            logger.debug(f"[GraphQL-BatchDoS] Batch probe failed for {url}: {exc!r}")
+
+    def _probe_alias_bomb(self, client: GraphQLClient, url: str, bucket: str):
+        aliases = " ".join([f"a{i}: __typename" for i in range(self._ALIAS_COUNT)])
+        q = {"query": f"{{ {aliases} }}"}
+        code, j, _, dt = client.post(url, q)
+        if code == 200 and "errors" not in (j or {}):
+            severity = "High" if dt > self._TIMING_THRESHOLD else "Informational"
+            self.add(bucket, {
+                "type": "GraphQL Alias Bombing — Excessive Alias Processing",
+                "severity": severity,
+                "url": url,
+                "alias_count": self._ALIAS_COUNT,
+                "latency_s": round(dt, 3),
+                "evidence": (
+                    f"{self._ALIAS_COUNT}-alias query accepted in {dt:.2f}s — "
+                    + ("timing anomaly detected" if severity == "High" else "fast response")
+                ),
+            })
+            logger.info(f"[GraphQL-BatchDoS] Alias bomb at {url}: {dt:.2f}s ({severity})")
+
+
+# =============================================================================
+# GraphQLMutationProber — Discover and probe sensitive mutations
+# =============================================================================
+
+class GraphQLMutationProber(BaseScanner):
+    """
+    Discovers available GraphQL mutations via introspection and probes
+    sensitive ones for information disclosure in error responses.
+
+    Severity:
+    - Informational for any discovered mutation
+    - Medium        if error responses disclose internal details
+    """
+
+    name = "graphql_mutation"
+    phase = "offensive"
+
+    _SENSITIVE_NAMES = {
+        "deleteuser", "updatepassword", "createadmin", "updaterole",
+        "deleteaccount", "setadmin", "promoterole", "assignrole",
+        "resetpassword", "changepassword", "deleteall", "harddelete",
+    }
+
+    _INTROSPECT_MUTATIONS = {
+        "query": (
+            "{ __schema { mutationType { fields { name args { name type { name } } } } } }"
+        )
+    }
+
+    _SENSITIVE_PATTERNS = [
+        r"(?i)traceback|stack trace|at \w+\.java:\d+",
+        r"(?i)/home/\w+|/var/www|/srv/",
+        r"(?i)SELECT\s+\w|INSERT\s+INTO|UPDATE\s+\w+\s+SET",
+        r"(?i)password\s*=|secret\s*=|api_key\s*=",
+    ]
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [target]
+        client = GraphQLClient(self.session)
+        for ep in endpoints:
+            self._probe(client, ep, bucket)
+        return self.results
+
+    def _probe(self, client: GraphQLClient, url: str, bucket: str):
+        code, j, raw, dt = client.post(url, self._INTROSPECT_MUTATIONS)
+        if code != 200 or not isinstance(j, dict):
+            return
+
+        mutation_type = ((j.get("data") or {}).get("__schema") or {}).get("mutationType")
+        if not isinstance(mutation_type, dict):
+            return
+
+        fields = mutation_type.get("fields") or []
+        if not fields:
+            return
+
+        for field in fields:
+            name = (field.get("name") or "")
+            self.add(bucket, {
+                "type": "GraphQL Mutation Discovered",
+                "severity": "Informational",
+                "url": url,
+                "mutation": name,
+                "args": [a.get("name") for a in (field.get("args") or [])],
+                "evidence": f"Mutation '{name}' exposed via introspection",
+            })
+
+            # Probe sensitive mutations with null/empty args
+            if name.lower() in self._SENSITIVE_NAMES:
+                null_vars = {a.get("name"): None for a in (field.get("args") or [])}
+                probe_q = {
+                    "query": f"mutation M {{ {name} }}",
+                    "variables": null_vars,
+                }
+                p_code, p_j, p_raw, p_dt = client.post(url, probe_q)
+                for pat in self._SENSITIVE_PATTERNS:
+                    m = re.search(pat, p_raw or "")
+                    if m:
+                        snippet = (p_raw or "")[max(0, m.start() - 30): m.end() + 30]
+                        self.add(bucket, {
+                            "type": "GraphQL Sensitive Mutation — Error Info Disclosure",
+                            "severity": "Medium",
+                            "url": url,
+                            "mutation": name,
+                            "evidence": (
+                                f"Sensitive pattern in error for mutation '{name}': "
+                                f"...{snippet}..."
+                            ),
+                        })
+                        logger.warning(
+                            f"[GraphQL-Mutation] Info disclosure in mutation '{name}' at {url}"
+                        )
+                        break
+
+
+# =============================================================================
+# GraphQLCSRFProber — CSRF via form-encoded and text/plain GraphQL
+# =============================================================================
+
+class GraphQLCSRFProber(BaseScanner):
+    """
+    Tests whether GraphQL endpoints accept non-JSON content types,
+    which enables CSRF attacks from arbitrary web origins.
+
+    Severity:
+    - High if server returns valid GraphQL data for form-encoded or text/plain body
+    """
+
+    name = "graphql_csrf"
+    phase = "offensive"
+
+    _FORM_QUERY = "query=%7B__typename%7D"        # URL-encoded: query={__typename}
+    _TEXT_BODY = '{"query":"{ __typename }"}'
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [target]
+        for ep in endpoints:
+            self._probe(ep, bucket)
+        return self.results
+
+    def _probe(self, url: str, bucket: str):
+        # 1. application/x-www-form-urlencoded
+        try:
+            r = self.session.post(
+                url,
+                data=self._FORM_QUERY,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10,
+            )
+            body = r.text or ""
+            if r.status_code == 200 and ('"data"' in body or "__typename" in body):
+                if not re.search(r"(?i)content.type.*not.*supported|unsupported.*media", body):
+                    self.add(bucket, {
+                        "type": "GraphQL CSRF — Form-Encoded Query Accepted",
+                        "severity": "High",
+                        "url": url,
+                        "content_type": "application/x-www-form-urlencoded",
+                        "evidence": (
+                            "Server returned valid GraphQL response for form-encoded request "
+                            f"(no CSRF protection): {body[:200]}"
+                        ),
+                    })
+                    logger.warning(f"[GraphQL-CSRF] Form-encoded accepted at {url}")
+        except Exception as exc:
+            logger.debug(f"[GraphQL-CSRF] Form-encoded probe failed for {url}: {exc!r}")
+
+        # 2. text/plain
+        try:
+            r2 = self.session.post(
+                url,
+                data=self._TEXT_BODY,
+                headers={"Content-Type": "text/plain"},
+                timeout=10,
+            )
+            body2 = r2.text or ""
+            if r2.status_code == 200 and ('"data"' in body2 or "__typename" in body2):
+                if not re.search(r"(?i)content.type.*not.*supported|unsupported.*media", body2):
+                    self.add(bucket, {
+                        "type": "GraphQL CSRF — text/plain Query Accepted",
+                        "severity": "High",
+                        "url": url,
+                        "content_type": "text/plain",
+                        "evidence": (
+                            "Server returned valid GraphQL response for text/plain request "
+                            f"(no CSRF protection): {body2[:200]}"
+                        ),
+                    })
+                    logger.warning(f"[GraphQL-CSRF] text/plain accepted at {url}")
+        except Exception as exc:
+            logger.debug(f"[GraphQL-CSRF] text/plain probe failed for {url}: {exc!r}")
+
+
+# =============================================================================
+# GraphQLAuthBypassProber — Auth bypass via null tokens and admin field injection
+# =============================================================================
+
+class GraphQLAuthBypassProber(BaseScanner):
+    """
+    Probes for GraphQL authentication bypass using null/invalid tokens and
+    admin-privilege field injection in mutation variables.
+
+    Severity:
+    - Critical if admin mutation succeeds without valid auth
+    - High     if data is returned with invalid/missing auth (auth bypass)
+    - Medium   if introspection is accessible without any auth
+    """
+
+    name = "graphql_auth_bypass"
+    phase = "offensive"
+
+    _NULL_AUTH_HEADERS = [
+        {"Authorization": "null"},
+        {"Authorization": "Bearer null"},
+        {"Authorization": "Bearer undefined"},
+        {"Authorization": "Bearer "},
+        {},  # no auth header at all
+    ]
+
+    _ADMIN_MUTATIONS = [
+        '{"query": "mutation { createAdmin(isAdmin: true) { id } }"}',
+        '{"query": "mutation { updateRole(role: \\"admin\\") { id } }"}',
+    ]
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [target]
+        client = GraphQLClient(self.session)
+        for ep in endpoints:
+            self._probe_introspection_no_auth(client, ep, bucket)
+            self._probe_null_auth(client, ep, bucket)
+            self._probe_admin_mutations(client, ep, bucket)
+        return self.results
+
+    def _probe_introspection_no_auth(self, client: GraphQLClient, url: str, bucket: str):
+        """Check if __typename is accessible without any credentials."""
+        with _DropAuth(client.session):
+            code, j, _, dt = client.post(url, {"query": "{ __typename }"})
+        if code == 200 and (j or {}).get("data"):
+            self.add(bucket, {
+                "type": "GraphQL Introspection Unprotected (No Auth)",
+                "severity": "Medium",
+                "url": url,
+                "evidence": (
+                    "__typename returned data without auth credentials — "
+                    "introspection endpoint is publicly accessible"
+                ),
+                "latency_s": round(dt, 3),
+            })
+            logger.info(f"[GraphQL-AuthBypass] Introspection unprotected at {url}")
+
+    def _probe_null_auth(self, client: GraphQLClient, url: str, bucket: str):
+        """Try null/empty/missing auth tokens and check if data is returned."""
+        query = {"query": "{ __typename }"}
+        original_headers = dict(getattr(client.session, "headers", {}) or {})
+
+        for auth_headers in self._NULL_AUTH_HEADERS:
+            session_headers = getattr(client.session, "headers", None)
+            if isinstance(session_headers, dict):
+                # Set invalid auth
+                if "Authorization" in auth_headers:
+                    session_headers["Authorization"] = auth_headers["Authorization"]
+                else:
+                    session_headers.pop("Authorization", None)
+            try:
+                code, j, _, dt = client.post(url, query)
+                if code == 200 and (j or {}).get("data"):
+                    self.add(bucket, {
+                        "type": "GraphQL Auth Bypass — Null/Missing Token Accepted",
+                        "severity": "High",
+                        "url": url,
+                        "auth_header_used": auth_headers.get("Authorization", "<none>"),
+                        "evidence": (
+                            f"Server returned data with auth header "
+                            f"'{auth_headers.get('Authorization', '<none>')}' — "
+                            "authentication is not enforced"
+                        ),
+                        "latency_s": round(dt, 3),
+                    })
+                    logger.warning(
+                        f"[GraphQL-AuthBypass] Null auth bypass at {url}: "
+                        f"auth='{auth_headers.get('Authorization', '<none>')}'"
+                    )
+            except Exception as exc:
+                logger.debug(f"[GraphQL-AuthBypass] Null auth probe failed for {url}: {exc!r}")
+            finally:
+                # Restore original auth
+                if isinstance(session_headers, dict):
+                    orig_auth = original_headers.get("Authorization")
+                    if orig_auth:
+                        session_headers["Authorization"] = orig_auth
+                    else:
+                        session_headers.pop("Authorization", None)
+
+    def _probe_admin_mutations(self, client: GraphQLClient, url: str, bucket: str):
+        """Try admin-privilege mutations with forged variables."""
+        for mutation_json in self._ADMIN_MUTATIONS:
+            try:
+                payload = json.loads(mutation_json)
+                code, j, raw, dt = client.post(url, payload)
+                if code == 200 and (j or {}).get("data"):
+                    self.add(bucket, {
+                        "type": "GraphQL Auth Bypass — Admin Mutation Succeeded",
+                        "severity": "Critical",
+                        "url": url,
+                        "mutation": payload.get("query", "")[:100],
+                        "evidence": (
+                            f"Admin mutation returned data: {raw[:200]}"
+                        ),
+                        "latency_s": round(dt, 3),
+                    })
+                    logger.warning(
+                        f"[GraphQL-AuthBypass] Admin mutation succeeded at {url}"
+                    )
+            except Exception as exc:
+                logger.debug(
+                    f"[GraphQL-AuthBypass] Admin mutation probe failed for {url}: {exc!r}"
+                )
+
+
+# =============================================================================
+# GraphQLPersistedQueryBypassProber — APQ bypass and legacy ID-based queries
+# =============================================================================
+
+class GraphQLPersistedQueryBypassProber(BaseScanner):
+    """
+    Probes for persisted query bypass vulnerabilities.
+
+    Attempts APQ (Automatic Persisted Queries) with a fake hash and checks
+    if the server executes the query instead of returning PersistedQueryNotFound.
+    Also tries legacy numeric ID-based query formats.
+
+    Severity:
+    - Medium if server executes the query (persisted query bypass)
+    """
+
+    name = "graphql_persisted"
+    phase = "offensive"
+
+    _APQ_FAKE_HASH = "a" * 64  # 64-char fake sha256
+
+    _APQ_PAYLOADS = [
+        # Standard APQ format (Apollo)
+        {
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "a" * 64,
+                }
+            },
+            "query": "{ __typename }",
+        },
+        # Hash-only (no query field) — server should reject
+        {
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "b" * 64,
+                }
+            },
+        },
+    ]
+
+    # Legacy numeric ID formats
+    _ID_PAYLOADS = [
+        {"id": 1},
+        {"id": "1"},
+        {"queryId": "1"},
+        {"queryId": 1},
+        {"operationId": "1"},
+    ]
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        bucket = self.name
+        self.results.setdefault(bucket, [])
+        endpoints: List[str] = kwargs.get("endpoints") or [target]
+        client = GraphQLClient(self.session)
+        for ep in endpoints:
+            self._probe_apq(client, ep, bucket)
+            self._probe_id_formats(client, ep, bucket)
+        return self.results
+
+    def _probe_apq(self, client: GraphQLClient, url: str, bucket: str):
+        for payload in self._APQ_PAYLOADS:
+            code, j, raw, dt = client.post(url, payload)
+            if code != 200:
+                continue
+            body = raw or ""
+            # Server should return PersistedQueryNotFound for unknown hash
+            is_not_found = re.search(
+                r"PersistedQueryNotFound|persisted.*query.*not.*found",
+                body, re.I
+            )
+            has_data = bool((j or {}).get("data"))
+            if has_data and not is_not_found:
+                self.add(bucket, {
+                    "type": "GraphQL Persisted Query Bypass",
+                    "severity": "Medium",
+                    "url": url,
+                    "payload": payload,
+                    "evidence": (
+                        f"Server returned data for fake APQ hash "
+                        f"'{self._APQ_FAKE_HASH[:16]}...' — "
+                        "persisted query validation not enforced: "
+                        + body[:200]
+                    ),
+                    "latency_s": round(dt, 3),
+                })
+                logger.warning(f"[GraphQL-Persisted] APQ bypass at {url}")
+
+    def _probe_id_formats(self, client: GraphQLClient, url: str, bucket: str):
+        for payload in self._ID_PAYLOADS:
+            code, j, raw, dt = client.post(url, payload)
+            if code == 200 and (j or {}).get("data"):
+                self.add(bucket, {
+                    "type": "GraphQL Legacy Query ID Format Accepted",
+                    "severity": "Medium",
+                    "url": url,
+                    "payload": payload,
+                    "evidence": (
+                        f"Server returned data for legacy ID payload {payload} — "
+                        f"query whitelist bypass possible: {raw[:200]}"
+                    ),
+                    "latency_s": round(dt, 3),
+                })
+                logger.warning(f"[GraphQL-Persisted] Legacy ID format accepted at {url}")
+
+
 # --- Main Scanner Class ---
 class GraphQLScanner(BaseScanner):
     name = "graphql"
@@ -376,7 +876,21 @@ class GraphQLScanner(BaseScanner):
                         "latency_s": round(f.latency, 3) if f.latency else None,
                     })
                     vulns += 1
-        
+
+        # Extended attack probers — DoS, mutations, CSRF, auth bypass, persisted query bypass
+        extended_probers = [
+            GraphQLBatchDoSProber(session=self.session, results=self.results),
+            GraphQLMutationProber(session=self.session, results=self.results),
+            GraphQLCSRFProber(session=self.session, results=self.results),
+            GraphQLAuthBypassProber(session=self.session, results=self.results),
+            GraphQLPersistedQueryBypassProber(session=self.session, results=self.results),
+        ]
+        for prober in extended_probers:
+            prober.run(url, endpoints=endpoints)
+            # Merge counts from extended probers into vulns total
+            bucket_results = self.results.get(prober.name, [])
+            vulns += len(bucket_results)
+
         self.set_summary(bucket, vulns)
         return self.results
 

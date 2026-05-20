@@ -649,3 +649,753 @@ class TLSAdim9Scanner(BaseScanner):
             except Exception as exc:
                 _tls_logger.warning("[TLSAdim9] %s: %s", prober.name, exc)
         return all_results
+
+
+# ============================================================================
+# DEEP CIPHER + PROTOCOL ATTACK CLASSES
+# WeakCipherSuiteProber, HSTSMissingProber, TLSProtocolDowngradeProber,
+# CertificateValidationProber, TLSCompressionProber, TLSDeepScanner
+# ============================================================================
+import datetime
+import re
+import subprocess
+
+
+_deep_logger = logging.getLogger(__name__ + ".deep")
+
+
+# ===========================================================================
+# WeakCipherSuiteProber — RC4, DES, NULL, EXPORT cipher detection
+# ===========================================================================
+class WeakCipherSuiteProber(BaseScanner):
+    """
+    Test server for weak cipher suite acceptance: RC4, DES/3DES, NULL, EXPORT.
+    Falls back to openssl subprocess if local OpenSSL can't negotiate the cipher.
+    """
+    name = "tls_weak_cipher"
+
+    _CIPHER_TESTS = [
+        ("RC4",    "RC4-SHA:RC4-MD5",            "Critical"),
+        ("3DES",   "DES-CBC3-SHA",                "High"),
+        ("DES",    "DES-CBC-SHA",                 "Critical"),
+        ("NULL",   "NULL-MD5:NULL-SHA",           "Critical"),
+        ("EXPORT", "EXP-RC4-MD5:EXP-DES-CBC-SHA","Critical"),
+    ]
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or 443
+
+        for cipher_name, cipher_str, severity in self._CIPHER_TESTS:
+            finding = self._probe_cipher(host, port, cipher_name, cipher_str, severity)
+            if finding:
+                results.append(finding)
+                self.report_finding(**finding)
+
+        return results
+
+    def _probe_cipher(self, host: str, port: int,
+                      cipher_name: str, cipher_str: str, severity: str) -> Optional[Dict]:
+        # Attempt 1: via ssl module
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            try:
+                ctx.set_ciphers(cipher_str)
+            except ssl.SSLError:
+                # Local OpenSSL does not know this cipher — try subprocess fallback
+                return self._probe_cipher_subprocess(host, port, cipher_name, cipher_str, severity)
+
+            with socket.create_connection((host, port), timeout=6) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    negotiated = s.cipher()
+                    if negotiated:
+                        return {
+                            "vuln_type": f"Weak Cipher Suite — {cipher_name}",
+                            "url": f"https://{host}:{port}",
+                            "severity": severity,
+                            "description": (
+                                f"Server accepted weak cipher suite '{negotiated[0]}' "
+                                f"(category: {cipher_name}). This cipher is considered "
+                                "cryptographically broken and should be disabled immediately."
+                            ),
+                            "evidence": {
+                                "cipher_name": cipher_name,
+                                "negotiated_cipher": negotiated[0],
+                                "protocol": negotiated[1],
+                                "host": host,
+                            },
+                        }
+        except (ssl.SSLError, socket.error, OSError):
+            pass
+        except AttributeError:
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[WeakCipher] %s probe error: %s", cipher_name, exc)
+
+        return self._probe_cipher_subprocess(host, port, cipher_name, cipher_str, severity)
+
+    def _probe_cipher_subprocess(self, host: str, port: int,
+                                  cipher_name: str, cipher_str: str, severity: str) -> Optional[Dict]:
+        """Fallback: use openssl s_client subprocess to test cipher."""
+        try:
+            result = subprocess.run(
+                ["openssl", "s_client", "-cipher", cipher_str,
+                 "-connect", f"{host}:{port}", "-no_tls1_3"],
+                input=b"",
+                capture_output=True,
+                timeout=8,
+            )
+            output = result.stdout.decode("utf-8", errors="replace") + \
+                     result.stderr.decode("utf-8", errors="replace")
+            # Successful handshake marker
+            if "Cipher    :" in output and "NONE" not in output:
+                # Extract cipher name from output
+                for line in output.splitlines():
+                    if "Cipher    :" in line:
+                        negotiated_name = line.split(":")[-1].strip()
+                        return {
+                            "vuln_type": f"Weak Cipher Suite — {cipher_name}",
+                            "url": f"https://{host}:{port}",
+                            "severity": severity,
+                            "description": (
+                                f"Server accepted weak cipher suite '{negotiated_name}' "
+                                f"(category: {cipher_name}) via openssl s_client probe. "
+                                "This cipher is considered cryptographically broken."
+                            ),
+                            "evidence": {
+                                "cipher_name": cipher_name,
+                                "negotiated_cipher": negotiated_name,
+                                "method": "openssl_subprocess",
+                                "host": host,
+                            },
+                        }
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[WeakCipher] subprocess fallback error: %s", exc)
+
+        return None
+
+
+# ===========================================================================
+# HSTSMissingProber — HSTS header analysis + HTTP redirect + mixed content
+# ===========================================================================
+class HSTSMissingProber(BaseScanner):
+    """
+    Check HSTS configuration, HTTP→HTTPS redirect, and mixed content.
+    """
+    name = "tls_hsts"
+
+    _ONE_YEAR = 31536000  # seconds
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or 443
+        https_url = f"https://{host}" + (f":{port}" if port != 443 else "")
+
+        # 1. HSTS header check
+        hsts_findings = self._check_hsts(https_url)
+        for f in hsts_findings:
+            results.append(f)
+            self.report_finding(**f)
+
+        # 2. HTTP → HTTPS redirect check
+        redirect_finding = self._check_http_redirect(host, parsed.port or 80)
+        if redirect_finding:
+            results.append(redirect_finding)
+            self.report_finding(**redirect_finding)
+
+        # 3. Mixed content check
+        mixed_finding = self._check_mixed_content(https_url)
+        if mixed_finding:
+            results.append(mixed_finding)
+            self.report_finding(**mixed_finding)
+
+        return results
+
+    def _check_hsts(self, https_url: str) -> List[Dict]:
+        findings = []
+        try:
+            resp = self.session.get(https_url, timeout=10, allow_redirects=True)
+            hsts = resp.headers.get("Strict-Transport-Security", "")
+
+            if not hsts:
+                findings.append({
+                    "vuln_type": "HSTS Missing",
+                    "url": https_url,
+                    "severity": "High",
+                    "description": (
+                        "The server does not send a Strict-Transport-Security (HSTS) header. "
+                        "Without HSTS, users are vulnerable to SSL stripping attacks."
+                    ),
+                    "evidence": {"header": "Strict-Transport-Security", "value": None},
+                })
+                return findings
+
+            # Parse max-age
+            max_age = 0
+            max_age_match = re.search(r"max-age\s*=\s*(\d+)", hsts, re.IGNORECASE)
+            if max_age_match:
+                max_age = int(max_age_match.group(1))
+
+            if max_age < self._ONE_YEAR:
+                findings.append({
+                    "vuln_type": "HSTS max-age Too Short",
+                    "url": https_url,
+                    "severity": "Medium",
+                    "description": (
+                        f"HSTS max-age is {max_age} seconds (< {self._ONE_YEAR} / 1 year). "
+                        "A short max-age reduces protection against SSL stripping."
+                    ),
+                    "evidence": {"hsts_header": hsts, "max_age": max_age},
+                })
+
+            if "includesubdomains" not in hsts.lower():
+                findings.append({
+                    "vuln_type": "HSTS Missing includeSubDomains",
+                    "url": https_url,
+                    "severity": "Low",
+                    "description": (
+                        "HSTS header is missing the 'includeSubDomains' directive. "
+                        "Subdomains are not protected against SSL stripping."
+                    ),
+                    "evidence": {"hsts_header": hsts},
+                })
+
+            if "preload" not in hsts.lower():
+                findings.append({
+                    "vuln_type": "HSTS Missing preload",
+                    "url": https_url,
+                    "severity": "Informational",
+                    "description": (
+                        "HSTS header is missing the 'preload' directive. "
+                        "Without preload, users are unprotected on their first visit."
+                    ),
+                    "evidence": {"hsts_header": hsts},
+                })
+
+        except Exception as exc:
+            _deep_logger.debug("[HSTS] check failed: %s", exc)
+
+        return findings
+
+    def _check_http_redirect(self, host: str, port: int) -> Optional[Dict]:
+        """Check that HTTP redirects to HTTPS."""
+        http_url = f"http://{host}" + (f":{port}" if port not in (80, 443) else "")
+        try:
+            resp = self.session.get(http_url, timeout=8, allow_redirects=False)
+            location = resp.headers.get("Location", "")
+            if resp.status_code not in (301, 302, 307, 308) or not location.startswith("https://"):
+                return {
+                    "vuln_type": "HTTP to HTTPS Redirect Missing",
+                    "url": http_url,
+                    "severity": "High",
+                    "description": (
+                        f"HTTP request to {http_url} does not redirect to HTTPS "
+                        f"(status={resp.status_code}, Location={location!r}). "
+                        "Users accessing via HTTP are not automatically upgraded."
+                    ),
+                    "evidence": {
+                        "status_code": resp.status_code,
+                        "location": location,
+                    },
+                }
+        except Exception as exc:
+            _deep_logger.debug("[HSTS] HTTP redirect check failed: %s", exc)
+        return None
+
+    def _check_mixed_content(self, https_url: str) -> Optional[Dict]:
+        """Scan HTTPS page HTML for http:// src/href references."""
+        try:
+            resp = self.session.get(https_url, timeout=10)
+            html = resp.text or ""
+            # Find http:// in src= or href= attributes
+            mixed = re.findall(
+                r'(?:src|href|action)\s*=\s*["\']?(http://[^\s"\'<>]+)',
+                html, re.IGNORECASE
+            )
+            if mixed:
+                return {
+                    "vuln_type": "Mixed Content on HTTPS Page",
+                    "url": https_url,
+                    "severity": "Medium",
+                    "description": (
+                        f"HTTPS page loads {len(mixed)} resource(s) over insecure HTTP. "
+                        "Mixed content allows network attackers to tamper with page resources."
+                    ),
+                    "evidence": {
+                        "mixed_urls": mixed[:5],
+                        "total_count": len(mixed),
+                    },
+                }
+        except Exception as exc:
+            _deep_logger.debug("[HSTS] Mixed content check failed: %s", exc)
+        return None
+
+
+# ===========================================================================
+# TLSProtocolDowngradeProber — SSLv2/v3/TLS1.0/1.1 downgrade testing
+# ===========================================================================
+class TLSProtocolDowngradeProber(BaseScanner):
+    """
+    Test for dangerous legacy protocol support:
+    SSLv2 (DROWN), SSLv3 (POODLE), TLSv1.0 (BEAST), TLSv1.1 (deprecated).
+    """
+    name = "tls_downgrade"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or 443
+
+        tests = [
+            ("SSLv2",   self._probe_sslv2,  host, port),
+            ("SSLv3",   self._probe_sslv3,  host, port),
+            ("TLSv1.0", self._probe_tlsv10, host, port),
+            ("TLSv1.1", self._probe_tlsv11, host, port),
+        ]
+
+        for proto_name, probe_fn, h, p in tests:
+            try:
+                finding = probe_fn(h, p)
+                if finding:
+                    results.append(finding)
+                    self.report_finding(**finding)
+            except Exception as exc:
+                _deep_logger.debug("[Downgrade] %s probe error: %s", proto_name, exc)
+
+        return results
+
+    def _probe_sslv2(self, host: str, port: int) -> Optional[Dict]:
+        """DROWN: SSLv2 support check."""
+        try:
+            proto = getattr(ssl, "PROTOCOL_SSLv2", None)
+            if proto is None:
+                raise AttributeError("PROTOCOL_SSLv2 not available")
+            ctx = ssl.SSLContext(proto)
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            with socket.create_connection((host, port), timeout=6) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    ver = s.version()
+                    if ver:
+                        return {
+                            "vuln_type": "SSLv2 Supported (DROWN)",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Critical",
+                            "description": (
+                                f"Server supports SSLv2 (negotiated: {ver}). "
+                                "Vulnerable to DROWN attack — allows decryption of RSA TLS sessions. "
+                                "Disable SSLv2 immediately."
+                            ),
+                            "evidence": {"protocol": "SSLv2", "negotiated": ver, "host": host},
+                        }
+        except AttributeError:
+            pass  # Python/OpenSSL removed SSLv2 — server almost certainly doesn't support it
+        except ssl.SSLError:
+            pass  # Handshake failed — server correctly rejects SSLv2
+        except (socket.error, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[Downgrade] SSLv2 probe error: %s", exc)
+        return None
+
+    def _probe_sslv3(self, host: str, port: int) -> Optional[Dict]:
+        """POODLE: SSLv3 support check."""
+        try:
+            proto = getattr(ssl, "PROTOCOL_SSLv3", None)
+            if proto is None:
+                raise AttributeError("PROTOCOL_SSLv3 not available")
+            ctx = ssl.SSLContext(proto)
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            with socket.create_connection((host, port), timeout=6) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    ver = s.version()
+                    if ver:
+                        return {
+                            "vuln_type": "SSLv3 Supported (POODLE)",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Critical",
+                            "description": (
+                                f"Server supports SSLv3 (negotiated: {ver}). "
+                                "Vulnerable to POODLE attack — allows CBC padding oracle decryption. "
+                                "Disable SSLv3 immediately."
+                            ),
+                            "evidence": {"protocol": "SSLv3", "negotiated": ver, "host": host},
+                        }
+        except AttributeError:
+            pass  # SSLv3 constant unavailable in this Python/OpenSSL build
+        except ssl.SSLError:
+            pass  # Handshake failed — server correctly rejects SSLv3
+        except (socket.error, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[Downgrade] SSLv3 probe error: %s", exc)
+        return None
+
+    def _probe_tlsv10(self, host: str, port: int) -> Optional[Dict]:
+        """BEAST: TLS 1.0 support check."""
+        try:
+            if not (hasattr(ssl, "TLSVersion") and hasattr(ssl.TLSVersion, "TLSv1")):
+                raise AttributeError("TLSv1 constant not available")
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            ctx.maximum_version = ssl.TLSVersion.TLSv1
+            with socket.create_connection((host, port), timeout=6) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    ver = s.version()
+                    if ver:
+                        return {
+                            "vuln_type": "TLS 1.0 Supported (BEAST)",
+                            "url": f"https://{host}:{port}",
+                            "severity": "High",
+                            "description": (
+                                f"Server supports TLS 1.0 (negotiated: {ver}). "
+                                "Vulnerable to BEAST attack and deprecated per RFC 8996. "
+                                "Disable TLS 1.0 and use TLS 1.2/1.3 only."
+                            ),
+                            "evidence": {"protocol": "TLSv1.0", "negotiated": ver, "host": host},
+                        }
+        except AttributeError:
+            pass
+        except ssl.SSLError:
+            pass
+        except (socket.error, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[Downgrade] TLSv1.0 probe error: %s", exc)
+        return None
+
+    def _probe_tlsv11(self, host: str, port: int) -> Optional[Dict]:
+        """TLS 1.1 deprecation check."""
+        try:
+            if not (hasattr(ssl, "TLSVersion") and hasattr(ssl.TLSVersion, "TLSv1_1")):
+                raise AttributeError("TLSv1_1 constant not available")
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_1
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_1
+            with socket.create_connection((host, port), timeout=6) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    ver = s.version()
+                    if ver:
+                        return {
+                            "vuln_type": "TLS 1.1 Supported (Deprecated)",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Medium",
+                            "description": (
+                                f"Server supports TLS 1.1 (negotiated: {ver}). "
+                                "TLS 1.1 is deprecated per RFC 8996. "
+                                "Upgrade to TLS 1.2/1.3."
+                            ),
+                            "evidence": {"protocol": "TLSv1.1", "negotiated": ver, "host": host},
+                        }
+        except AttributeError:
+            pass
+        except ssl.SSLError:
+            pass
+        except (socket.error, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[Downgrade] TLSv1.1 probe error: %s", exc)
+        return None
+
+
+# ===========================================================================
+# CertificateValidationProber — expiry, hostname, self-signed, issuer
+# ===========================================================================
+class CertificateValidationProber(BaseScanner):
+    """
+    Full certificate validation: expiry, hostname match, self-signed detection,
+    and near-expiry warnings.
+    """
+    name = "tls_cert"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or 443
+
+        findings = self._probe_cert(host, port)
+        for f in findings:
+            results.append(f)
+            self.report_finding(**f)
+
+        return results
+
+    def _probe_cert(self, host: str, port: int) -> List[Dict]:
+        findings = []
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+
+            with socket.create_connection((host, port), timeout=10) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    cert = s.getpeercert()
+
+            if not cert:
+                findings.append({
+                    "vuln_type": "Certificate Not Retrieved",
+                    "url": f"https://{host}:{port}",
+                    "severity": "High",
+                    "description": "Could not retrieve TLS certificate from server.",
+                    "evidence": {"host": host},
+                })
+                return findings
+
+            # Expiry check
+            not_after_str = cert.get("notAfter", "")
+            if not_after_str:
+                try:
+                    not_after = datetime.datetime.strptime(
+                        not_after_str, "%b %d %H:%M:%S %Y %Z"
+                    ).replace(tzinfo=datetime.timezone.utc)
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    delta = not_after - now
+
+                    if delta.total_seconds() < 0:
+                        findings.append({
+                            "vuln_type": "Certificate Expired",
+                            "url": f"https://{host}:{port}",
+                            "severity": "High",
+                            "description": (
+                                f"TLS certificate expired on {not_after_str}. "
+                                "Browsers will reject this certificate."
+                            ),
+                            "evidence": {"not_after": not_after_str, "host": host},
+                        })
+                    elif delta.days < 30:
+                        findings.append({
+                            "vuln_type": "Certificate Expiring Soon",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Medium",
+                            "description": (
+                                f"TLS certificate expires in {delta.days} days ({not_after_str}). "
+                                "Renew the certificate before expiry to avoid service disruption."
+                            ),
+                            "evidence": {
+                                "not_after": not_after_str,
+                                "days_remaining": delta.days,
+                                "host": host,
+                            },
+                        })
+                    else:
+                        findings.append({
+                            "vuln_type": "Certificate Valid",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Informational",
+                            "description": (
+                                f"TLS certificate is valid and expires in {delta.days} days."
+                            ),
+                            "evidence": {
+                                "not_after": not_after_str,
+                                "days_remaining": delta.days,
+                                "host": host,
+                            },
+                        })
+                except (ValueError, OSError) as exc:
+                    _deep_logger.debug("[Cert] Date parse error: %s", exc)
+
+            # Self-signed check: subject == issuer
+            subject = dict(x[0] for x in cert.get("subject", []))
+            issuer  = dict(x[0] for x in cert.get("issuer", []))
+            if subject and issuer and subject == issuer:
+                findings.append({
+                    "vuln_type": "Self-Signed Certificate",
+                    "url": f"https://{host}:{port}",
+                    "severity": "High",
+                    "description": (
+                        "TLS certificate is self-signed (issuer == subject). "
+                        "Browsers will show security warnings; MITM attacks are trivial."
+                    ),
+                    "evidence": {
+                        "subject": subject,
+                        "issuer": issuer,
+                        "host": host,
+                    },
+                })
+
+            # Hostname match check
+            common_name = subject.get("commonName", "")
+            san_list = [
+                name for _, name in cert.get("subjectAltName", [])
+                if _ == "DNS"
+            ]
+            all_names = san_list or ([common_name] if common_name else [])
+            hostname_ok = any(
+                self._hostname_matches(host, n) for n in all_names
+            )
+            if not hostname_ok and all_names:
+                findings.append({
+                    "vuln_type": "Certificate Hostname Mismatch",
+                    "url": f"https://{host}:{port}",
+                    "severity": "High",
+                    "description": (
+                        f"TLS certificate CN/SAN does not match hostname '{host}'. "
+                        f"Certificate covers: {all_names[:5]}. "
+                        "Vulnerable to MITM — browsers will warn users."
+                    ),
+                    "evidence": {
+                        "host": host,
+                        "cert_names": all_names[:5],
+                        "common_name": common_name,
+                    },
+                })
+
+        except ssl.SSLError as exc:
+            if "certificate has expired" in str(exc).lower():
+                findings.append({
+                    "vuln_type": "Certificate Expired",
+                    "url": f"https://{host}:{port}",
+                    "severity": "High",
+                    "description": f"TLS handshake failed due to expired certificate: {exc}",
+                    "evidence": {"ssl_error": str(exc), "host": host},
+                })
+        except (socket.error, OSError) as exc:
+            _deep_logger.debug("[Cert] Connection error: %s", exc)
+        except Exception as exc:
+            _deep_logger.debug("[Cert] Unexpected error: %s", exc)
+
+        return findings
+
+    @staticmethod
+    def _hostname_matches(hostname: str, pattern: str) -> bool:
+        """Simple wildcard hostname matching."""
+        if pattern.startswith("*."):
+            suffix = pattern[2:]
+            parts  = hostname.split(".", 1)
+            return len(parts) == 2 and parts[1].lower() == suffix.lower()
+        return hostname.lower() == pattern.lower()
+
+
+# ===========================================================================
+# TLSCompressionProber — CRIME attack via TLS compression detection
+# ===========================================================================
+class TLSCompressionProber(BaseScanner):
+    """
+    Detect CRIME vulnerability: TLS compression enabled on server.
+    Primary method: ssl.SSLSocket.compression() after handshake.
+    Fallback: openssl s_client -comp subprocess.
+    """
+    name = "tls_compression"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(target)
+        host   = parsed.hostname or target
+        port   = parsed.port or 443
+
+        finding = self._probe_compression(host, port)
+        if finding:
+            results.append(finding)
+            self.report_finding(**finding)
+
+        return results
+
+    def _probe_compression(self, host: str, port: int) -> Optional[Dict]:
+        # Primary: ssl module check
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            with socket.create_connection((host, port), timeout=8) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    comp = s.compression()
+                    if comp:
+                        return {
+                            "vuln_type": "TLS Compression Enabled (CRIME)",
+                            "url": f"https://{host}:{port}",
+                            "severity": "High",
+                            "description": (
+                                f"TLS compression is enabled (algorithm: {comp}). "
+                                "Vulnerable to CRIME attack: an attacker with network access "
+                                "can decrypt HTTPS cookies and session tokens via adaptive "
+                                "chosen-plaintext attack."
+                            ),
+                            "evidence": {"compression_algorithm": comp, "host": host},
+                        }
+                    # comp is None → no compression → not vulnerable (check subprocess too)
+        except (ssl.SSLError, socket.error, OSError) as exc:
+            _deep_logger.debug("[Compression] SSL connect error: %s", exc)
+        except Exception as exc:
+            _deep_logger.debug("[Compression] Unexpected error: %s", exc)
+
+        # Fallback: openssl s_client -comp
+        return self._probe_compression_subprocess(host, port)
+
+    def _probe_compression_subprocess(self, host: str, port: int) -> Optional[Dict]:
+        """Use openssl s_client -comp to check for TLS compression."""
+        try:
+            result = subprocess.run(
+                ["openssl", "s_client", "-comp", "-connect", f"{host}:{port}"],
+                input=b"",
+                capture_output=True,
+                timeout=10,
+            )
+            output = result.stdout.decode("utf-8", errors="replace") + \
+                     result.stderr.decode("utf-8", errors="replace")
+
+            # openssl reports "Compression: zlib compression" when enabled
+            if "Compression: zlib compression" in output:
+                return {
+                    "vuln_type": "TLS Compression Enabled (CRIME)",
+                    "url": f"https://{host}:{port}",
+                    "severity": "High",
+                    "description": (
+                        "TLS compression (zlib) detected via openssl s_client -comp. "
+                        "Vulnerable to CRIME attack — disable TLS compression on the server."
+                    ),
+                    "evidence": {
+                        "detection_method": "openssl_subprocess",
+                        "compression_algorithm": "zlib",
+                        "host": host,
+                    },
+                }
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        except Exception as exc:
+            _deep_logger.debug("[Compression] subprocess error: %s", exc)
+
+        return None
+
+
+# ===========================================================================
+# TLSDeepScanner — Orchestrator for all 5 deep cipher/protocol probers
+# ===========================================================================
+class TLSDeepScanner(BaseScanner):
+    """
+    Deep TLS attack orchestrator:
+    WeakCipherSuiteProber + HSTSMissingProber + TLSProtocolDowngradeProber +
+    CertificateValidationProber + TLSCompressionProber
+    """
+    name = "tls_deep"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        all_results: List[Dict] = []
+        probers = [
+            WeakCipherSuiteProber(session=self.session, results=self.results),
+            HSTSMissingProber(session=self.session, results=self.results),
+            TLSProtocolDowngradeProber(session=self.session, results=self.results),
+            CertificateValidationProber(session=self.session, results=self.results),
+            TLSCompressionProber(session=self.session, results=self.results),
+        ]
+        for prober in probers:
+            try:
+                prober.target = target
+                all_results.extend(prober.run(target, **kwargs))
+            except Exception as exc:
+                _deep_logger.warning("[TLSDeep] %s failed: %s", prober.name, exc)
+        return all_results
