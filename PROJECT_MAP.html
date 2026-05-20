@@ -613,6 +613,48 @@ const FILES = [
    desc:"sqlmap entegrasyonu. WebSecure SQLi bulgularını sqlmap ile otomatik exploit eder. CSV çıktı parse, risk/level parametresi, proxy desteği.",
    deps:["websecure/integrations/base.py","websecure/scanners/sqli.py","websecure/wordlists/sqli.txt"]},
 
+  // ---- TOOLS ----
+  {id:"scan_integrity", path:"tools/scan_integrity.py", type:"tool", icon:"🔍",
+   desc:"Kod bütünlük kontrol aracı. AST parse ile WebSecure Python dosyalarını syntax, undefined global (args/cfg modül düzeyinde), ve yapısal bütünlük açısından tarar. CI/CD'de kod kalitesi güvencesi sağlar.",
+   deps:["websecure/"]},
+  {id:"tools_sqlmap", path:"tools/sqlmap/", type:"integration", icon:"💉",
+   desc:"Sqlmap kaynak kodu (tam, 400+ dosya). sqlmap.py ana giriş noktası, tamper scriptleri, DBMS plugin'leri (MySQL/PostgreSQL/MSSQL/Oracle/SQLite vb.), thirdparty kütüphaneler. websecure/integrations/sqlmap.py bu dizindeki binary'yi kullanır.",
+   deps:["websecure/integrations/sqlmap.py","websecure/scanners/sqli.py"]},
+  {id:"tools_nmap_bin", path:"tools/Nmap/", type:"driver", icon:"🗺️",
+   desc:"Nmap binary ve kütüphaneleri. websecure/integrations/nmap.py bu dizindeki Nmap'i çalıştırır. Port tarama ve servis tespiti için.",
+   deps:["websecure/integrations/nmap.py"]},
+  {id:"tools_amass_bin", path:"tools/amass/", type:"driver", icon:"🌍",
+   desc:"Amass binary. websecure/integrations/amass.py tarafından subdomain enumeration için kullanılır.",
+   deps:["websecure/integrations/amass.py"]},
+  {id:"tools_dalfox_bin", path:"tools/dalfox/", type:"driver", icon:"🦊",
+   desc:"dalfox binary. websecure/integrations/dalfox.py tarafından XSS doğrulama için kullanılır.",
+   deps:["websecure/integrations/dalfox.py"]},
+  {id:"tools_ffuf_bin", path:"tools/ffuf/", type:"driver", icon:"🔨",
+   desc:"ffuf binary. websecure/integrations/ffuf.py tarafından dizin/parametre fuzzing için kullanılır.",
+   deps:["websecure/integrations/ffuf.py"]},
+  {id:"tools_nuclei_bin", path:"tools/nuclei/", type:"driver", icon:"☢️",
+   desc:"Nuclei binary ve template'ler. websecure/integrations/nuclei.py tarafından zafiyet taraması için kullanılır.",
+   deps:["websecure/integrations/nuclei.py"]},
+  {id:"tools_httpx_bin", path:"tools/httpx/", type:"driver", icon:"🌐",
+   desc:"httpx binary. websecure/integrations/httpx_runner.py tarafından HTTP prob ve tech stack tespiti için kullanılır.",
+   deps:["websecure/integrations/httpx_runner.py"]},
+  {id:"tools_katana_bin", path:"tools/katana/", type:"driver", icon:"🗡️",
+   desc:"katana binary. websecure/integrations/katana.py tarafından JS-aware web crawling için kullanılır.",
+   deps:["websecure/integrations/katana.py"]},
+  {id:"tools_subfinder_bin", path:"tools/subfinder/", type:"driver", icon:"🌍",
+   desc:"subfinder binary. subdomain tarayıcısının keşif fazında amass'a ek olarak kullanılır.",
+   deps:["websecure/scanners/subdomain.py"]},
+
+  // ---- TOP-LEVEL CRAWLER ----
+  {id:"ws_crawler", path:"websecure/crawler.py", type:"core", icon:"🕷️",
+   desc:"Üst seviye WebCrawler modülü (1123 satır). core/crawler.py'den FARKLI ve daha kapsamlı. Sınıflar: _LRUCache, CrawlerConfig, WebCrawler (ana orkestratör), _BrowserDiscoveryStrategy, _PlaywrightStrategy (JS-heavy SPA için Playwright), _UCStrategy (undetected-chrome). Crawler pipeline'ının giriş noktası.",
+   deps:["websecure/core/crawler.py","websecure/core/http.py","drivers/chromedriver.exe","websecure/core/analysis.py","websecure/core/form_parser.py","websecure/records/crawl_state/"]},
+
+  // ---- RECORDS ----
+  {id:"records_dir", path:"websecure/records/crawl_state/", type:"config", icon:"💾",
+   desc:"Crawl durum kayıtları dizini. Her tarama hedefi için {domain}_{hash}.json dosyası oluşturulur. Keşfedilen endpoint'ler, ziyaret edilen URL'ler ve tarama ilerleme durumu burada saklanır. Checkpoint/resume mekanizmasının parçası.",
+   deps:["websecure/crawler.py","websecure/core/checkpoint.py"]},
+
   // ---- MAIN ----
   {id:"ws_main_py", path:"websecure/main.py", type:"core", icon:"🚀",
    desc:"Gerçek ana giriş noktası (main.py). sys.path patching, tüm tarama fazlarını sıralı çalıştıran run_scan() orkestratörü, CLI argüman parsing. PyCharm ve CLI'dan doğrudan çalıştırılabilir.",
@@ -738,13 +780,34 @@ const TREE = {
       {label:"🌐 chromedriver.exe", id:"chromedriver", badge:"driver"},
       {label:"📡 interactsh-client.exe", id:"interactsh", badge:"driver"},
     ]},
+    {label:"📁 tools/", badge:"tool", children:[
+      {label:"🔍 scan_integrity.py", id:"scan_integrity", badge:"tool"},
+      {label:"📁 sqlmap/ (3. taraf, 400+ dosya)", id:"tools_sqlmap", badge:"integration"},
+      {label:"📁 Nmap/ (binary)", id:"tools_nmap_bin", badge:"driver"},
+      {label:"📁 amass/ (binary)", id:"tools_amass_bin", badge:"driver"},
+      {label:"📁 dalfox/ (binary)", id:"tools_dalfox_bin", badge:"driver"},
+      {label:"📁 ffuf/ (binary)", id:"tools_ffuf_bin", badge:"driver"},
+      {label:"📁 feroxbuster/ (binary)", id:"tools_ferox_bin", badge:"driver"},
+      {label:"📁 httpx/ (binary)", id:"tools_httpx_bin", badge:"driver"},
+      {label:"📁 interactsh/ (binary)", id:"tools_interact_bin", badge:"driver"},
+      {label:"📁 katana/ (binary)", id:"tools_katana_bin", badge:"driver"},
+      {label:"📁 nuclei/ (binary)", id:"tools_nuclei_bin", badge:"driver"},
+      {label:"📁 subfinder/ (binary)", id:"tools_subfinder_bin", badge:"driver"},
+      {label:"📁 curl/ (binary)", id:"tools_curl_bin", badge:"driver"},
+    ]},
     {label:"📦 websecure/", badge:"core", children:[
       {label:"📦 __init__.py", id:"ws_init", badge:"core"},
       {label:"🚀 __main__.py", id:"ws_main", badge:"core"},
       {label:"🚀 main.py", id:"ws_main_py", badge:"core"},
       {label:"📦 setup.py", id:"setup_py", badge:"core"},
+      {label:"🕷️ crawler.py", id:"ws_crawler", badge:"core"},
       {label:"📁 api/", badge:"api", children:[
         {label:"🌐 server.py", id:"api_server", badge:"api"},
+      ]},
+      {label:"📁 records/", badge:"config", children:[
+        {label:"📁 crawl_state/", badge:"config", children:[
+          {label:"💾 {domain}_{hash}.json", id:"records_dir", badge:"config"},
+        ]},
       ]},
       {label:"📁 reporters/", badge:"core", children:[
         {label:"📊 html_dashboard.py", id:"rep_html", badge:"core"},
