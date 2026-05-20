@@ -3,13 +3,19 @@ websecure.scanners.dom_xss
 --------------------------
 DOM-based XSS scanner using Playwright.
 Detects XSS that only fires in browser context (not visible in raw HTTP response).
+
+Includes:
+  - DOMXSSScanner        — payload injection into URL params / fragment / storage / postMessage
+  - DOMXSSMonkeyPatchProber — JS sink override via add_init_script + canary tracking
+  - PostMessageInterceptionProber — postMessage origin-check bypass detection
+  - StoredXSSCorrelator  — multi-endpoint stored XSS correlation
 """
 from __future__ import annotations
 import asyncio
 import logging
 import random
 import string
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
 from websecure.core.reporting import add_result
@@ -123,6 +129,32 @@ class DOMXSSScanner(BaseScanner):
             loop.close()
         except Exception as exc:
             _logger.warning(f"[DOMXSSScanner] Event loop error: {exc!r}")
+
+        # --- MonkeyPatch prober: JS sink override + canary injection ------
+        try:
+            monkey_prober = DOMXSSMonkeyPatchProber(
+                session=self.session,
+                results=self.results,
+                debug=self.debug,
+                headless=self.headless,
+                timeout_ms=self.timeout_ms,
+            )
+            monkey_prober.run(target, endpoints=endpoints)
+        except Exception as exc:
+            _logger.warning(f"[DOMXSSScanner] MonkeyPatchProber error: {exc!r}")
+
+        # --- PostMessage interception prober ------------------------------
+        try:
+            pm_prober = PostMessageInterceptionProber(
+                session=self.session,
+                results=self.results,
+                debug=self.debug,
+                headless=self.headless,
+                timeout_ms=self.timeout_ms,
+            )
+            pm_prober.run(target, endpoints=endpoints)
+        except Exception as exc:
+            _logger.warning(f"[DOMXSSScanner] PostMessageInterceptionProber error: {exc!r}")
 
         # --- Adım 4: Stored XSS multi-endpoint correlation ----------------
         write_eps: List[Dict] = kwargs.get("write_endpoints") or []
@@ -359,6 +391,480 @@ class DOMXSSScanner(BaseScanner):
 def run(target: str, session=None, results=None, debug=False, **kwargs):
     scanner = DOMXSSScanner(session=session, results=results, debug=debug)
     scanner.run(target, **kwargs)
+
+
+# ===========================================================================
+# DOMXSSMonkeyPatchProber — JS sink override via add_init_script
+# ===========================================================================
+
+# Canary constant — unique enough to avoid false positives
+_MONKEY_CANARY = "__WEBSECURE_DOMXSS_789__"
+
+# Common parameter names used for canary injection
+_CANARY_PARAM_NAMES = [
+    "q", "s", "id", "url", "redirect", "next", "return",
+    "ref", "path", "data", "input", "term", "search",
+]
+
+# URL-encoded and alternate encoding variants of the canary
+_CANARY_ENCODED_VARIANTS = [
+    _MONKEY_CANARY,                                     # raw
+    "%5F%5FWEBSECURE%5FDOMXSS%5F789%5F%5F",            # URL-encoded
+    "&#95;&#95;WEBSECURE&#95;DOMXSS&#95;789&#95;&#95;",  # HTML entities
+    r"__WEBSECURE_DOMXSS_789__",  # JS unicode
+]
+
+# JavaScript injected as init script to override dangerous sinks
+_MONKEY_PATCH_JS = r"""
+(function () {
+    window.__domxss_hits__ = [];
+
+    function _record(sink, val) {
+        window.__domxss_hits__.push({sink: sink, val: String(val).slice(0, 200)});
+    }
+
+    // --- Element.prototype.innerHTML ---
+    var _descInner = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    if (_descInner && _descInner.set) {
+        Object.defineProperty(Element.prototype, 'innerHTML', {
+            get: _descInner.get,
+            set: function(v) {
+                if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                    _record('innerHTML', v);
+                return _descInner.set.call(this, v);
+            },
+            configurable: true
+        });
+    }
+
+    // --- Element.prototype.outerHTML ---
+    var _descOuter = Object.getOwnPropertyDescriptor(Element.prototype, 'outerHTML');
+    if (_descOuter && _descOuter.set) {
+        Object.defineProperty(Element.prototype, 'outerHTML', {
+            get: _descOuter.get,
+            set: function(v) {
+                if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                    _record('outerHTML', v);
+                return _descOuter.set.call(this, v);
+            },
+            configurable: true
+        });
+    }
+
+    // --- document.write ---
+    var _origWrite = document.write.bind(document);
+    document.write = function(v) {
+        if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+            _record('document.write', v);
+        return _origWrite(v);
+    };
+
+    // --- eval ---
+    var _origEval = window.eval;
+    window.eval = function(v) {
+        if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+            _record('eval', v);
+        return _origEval(v);
+    };
+
+    // --- Function constructor ---
+    var _origFunction = window.Function;
+    window.Function = function() {
+        var args = Array.prototype.slice.call(arguments);
+        for (var i = 0; i < args.length; i++) {
+            if (String(args[i]).indexOf('__WEBSECURE_DOMXSS_789__') !== -1) {
+                _record('Function', args[i]);
+                break;
+            }
+        }
+        return _origFunction.apply(this, args);
+    };
+    window.Function.prototype = _origFunction.prototype;
+
+    // --- setTimeout ---
+    var _origSetTimeout = window.setTimeout;
+    window.setTimeout = function(fn) {
+        if (typeof fn === 'string' && fn.indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+            _record('setTimeout', fn);
+        return _origSetTimeout.apply(this, arguments);
+    };
+
+    // --- setInterval ---
+    var _origSetInterval = window.setInterval;
+    window.setInterval = function(fn) {
+        if (typeof fn === 'string' && fn.indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+            _record('setInterval', fn);
+        return _origSetInterval.apply(this, arguments);
+    };
+
+    // --- location.href ---
+    var _descHref = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+    if (_descHref && _descHref.set) {
+        Object.defineProperty(Location.prototype, 'href', {
+            get: _descHref.get,
+            set: function(v) {
+                if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                    _record('location.href', v);
+                return _descHref.set.call(this, v);
+            },
+            configurable: true
+        });
+    }
+
+    // --- location.assign ---
+    var _origAssign = location.assign.bind(location);
+    try {
+        location.assign = function(v) {
+            if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                _record('location.assign', v);
+            return _origAssign(v);
+        };
+    } catch(e) {}
+
+    // --- localStorage.setItem ---
+    var _origLSSet = localStorage.setItem.bind(localStorage);
+    try {
+        localStorage.setItem = function(k, v) {
+            if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                _record('localStorage.setItem', v);
+            return _origLSSet(k, v);
+        };
+    } catch(e) {}
+
+    // --- sessionStorage.setItem ---
+    var _origSSSet = sessionStorage.setItem.bind(sessionStorage);
+    try {
+        sessionStorage.setItem = function(k, v) {
+            if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+                _record('sessionStorage.setItem', v);
+            return _origSSSet(k, v);
+        };
+    } catch(e) {}
+
+    // --- postMessage source tracking ---
+    window.addEventListener('message', function(e) {
+        var d = String(typeof e.data === 'object' ? JSON.stringify(e.data) : e.data);
+        if (d.indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
+            _record('postMessage_received', d);
+    });
+})();
+"""
+
+# JavaScript for postMessage interception prober
+_POSTMESSAGE_INTERCEPT_JS = r"""
+(function() {
+    window.__pm_intercept_hits__ = [];
+    window.__pm_listeners__ = [];
+    var _origAEL = window.addEventListener;
+    window.addEventListener = function(type, handler, opts) {
+        if (type === 'message') {
+            window.__pm_listeners__.push({
+                handler: handler.toString().slice(0, 300),
+                hasOriginCheck: handler.toString().indexOf('origin') !== -1
+            });
+            var wrapped = function(e) {
+                var d = String(typeof e.data === 'object' ? JSON.stringify(e.data) : e.data);
+                if (d.indexOf('__WEBSECURE_DOMXSS_789__') !== -1) {
+                    window.__pm_intercept_hits__.push({
+                        listener: handler.toString().slice(0, 200),
+                        hasOriginCheck: handler.toString().indexOf('origin') !== -1,
+                        data: d.slice(0, 200)
+                    });
+                }
+                return handler.apply(this, arguments);
+            };
+            return _origAEL.call(this, type, wrapped, opts);
+        }
+        return _origAEL.apply(this, arguments);
+    };
+})();
+"""
+
+
+class DOMXSSMonkeyPatchProber(BaseScanner):
+    """
+    JS sink override via Playwright add_init_script + canary injection.
+
+    Strategy:
+    1. Inject a monkey-patch init script that overrides dangerous JS sinks
+       (innerHTML, outerHTML, document.write, eval, Function, setTimeout,
+        setInterval, location.href, location.assign, localStorage.setItem,
+        sessionStorage.setItem) to record canary hits in window.__domxss_hits__.
+    2. Navigate to URL with canary injected into all common query params,
+       hash fragment, and storage.
+    3. After load, inspect window.__domxss_hits__ — any hit → Critical finding.
+
+    Single Responsibility: only monkey-patch + canary probe logic.
+    """
+
+    name = "dom_xss_monkey"
+    phase = "browser"
+
+    def __init__(self, session=None, results: Dict = None, debug: bool = False,
+                 headless: bool = True, timeout_ms: int = 8000):
+        super().__init__(session, results, debug)
+        self.headless = headless
+        self.timeout_ms = timeout_ms
+
+    def run(self, target: str, **kwargs) -> None:
+        """Sync entry point."""
+        if not _PLAYWRIGHT_AVAILABLE:
+            _logger.warning("[DOMXSSMonkeyPatchProber] Playwright not available, skipping")
+            return
+        endpoints = kwargs.get("endpoints") or [target]
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(self._async_run(endpoints))
+            loop.close()
+        except Exception as exc:
+            _logger.warning(f"[DOMXSSMonkeyPatchProber] Event loop error: {exc!r}")
+
+    async def _async_run(self, endpoints: List[str]) -> None:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=self.headless)
+            context = await browser.new_context()
+            # Inject the monkey-patch on every page before any scripts run
+            await context.add_init_script(script=_MONKEY_PATCH_JS)
+            page = await context.new_page()
+            for url in endpoints[:20]:
+                await self._probe_url(page, url)
+            await browser.close()
+
+    async def _probe_url(self, page, url: str) -> None:
+        """Probe a single URL with all canary encoding variants."""
+        parsed = urlparse(url)
+        existing_params = dict(parse_qsl(parsed.query))
+
+        # Build all param name candidates: existing + common param names
+        param_names = list(existing_params.keys()) or _CANARY_PARAM_NAMES
+
+        for variant in _CANARY_ENCODED_VARIANTS:
+            # 1. Inject canary into all param names simultaneously
+            injected_params = {p: variant for p in param_names}
+            new_query = urlencode(injected_params)
+            test_url_query = urlunparse(parsed._replace(query=new_query, fragment=""))
+
+            # 2. Also test with hash fragment injection
+            test_url_hash = urlunparse(parsed._replace(
+                query=new_query, fragment=variant
+            ))
+
+            for test_url in (test_url_query, test_url_hash):
+                hits = await self._navigate_and_collect(page, test_url)
+                if hits:
+                    for hit in hits:
+                        self.report_finding(
+                            vuln_type="DOM XSS (MonkeyPatch Sink Hit)",
+                            url=test_url,
+                            param=hit.get("sink", "unknown"),
+                            payload=variant,
+                            severity="Critical",
+                            evidence=f"Sink={hit.get('sink','?')} value={hit.get('val','?')}",
+                            verified=True,
+                            confidence="high",
+                        )
+                    return  # One confirmed hit per URL is sufficient
+
+        # 3. Storage-based canary: store canary, then reload
+        await self._probe_storage(page, url, parsed)
+
+    async def _navigate_and_collect(self, page, url: str) -> List[Dict]:
+        """Navigate to URL and collect __domxss_hits__."""
+        try:
+            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            await page.wait_for_timeout(800)
+            hits = await page.evaluate("window.__domxss_hits__ || []")
+            # Reset for next probe
+            await page.evaluate("window.__domxss_hits__ = []")
+            return hits if isinstance(hits, list) else []
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSMonkeyPatchProber] Navigate error on {url}: {exc!r}")
+            return []
+
+    async def _probe_storage(self, page, url: str, parsed) -> None:
+        """Inject canary into localStorage/sessionStorage, reload and check hits."""
+        base_url = urlunparse(parsed._replace(query="", fragment=""))
+        try:
+            await page.goto(base_url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            canary = _MONKEY_CANARY
+            await page.evaluate(f"""
+                () => {{
+                    try {{
+                        var keys = ['xss','data','token','user','payload','q','search','redirect'];
+                        for (var i = 0; i < keys.length; i++) {{
+                            localStorage.setItem(keys[i], {repr(canary)});
+                            sessionStorage.setItem(keys[i], {repr(canary)});
+                        }}
+                    }} catch(e) {{}}
+                }}
+            """)
+            # Reload to trigger code that reads storage on load
+            await page.reload(timeout=self.timeout_ms, wait_until="domcontentloaded")
+            await page.wait_for_timeout(800)
+            hits = await page.evaluate("window.__domxss_hits__ || []")
+            await page.evaluate(
+                "() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e) {} }"
+            )
+            if hits:
+                for hit in hits:
+                    self.report_finding(
+                        vuln_type="DOM XSS (MonkeyPatch Sink Hit via Storage)",
+                        url=base_url,
+                        param=hit.get("sink", "localStorage/sessionStorage"),
+                        payload=canary,
+                        severity="Critical",
+                        evidence=f"Sink={hit.get('sink','?')} value={hit.get('val','?')}",
+                        verified=True,
+                        confidence="high",
+                    )
+        except Exception as exc:
+            _logger.debug(f"[DOMXSSMonkeyPatchProber] Storage probe error on {url}: {exc!r}")
+
+
+# ===========================================================================
+# PostMessageInterceptionProber — postMessage origin check bypass
+# ===========================================================================
+
+
+class PostMessageInterceptionProber(BaseScanner):
+    """
+    Detects postMessage handlers that lack origin validation.
+
+    Strategy:
+    1. Inject an init script that wraps window.addEventListener to capture
+       all 'message' event listeners and record whether they check event.origin.
+    2. Navigate to the target page.
+    3. Send a canary postMessage from within the page context.
+    4. Check window.__pm_intercept_hits__ and window.__pm_listeners__:
+       - If a listener received the canary and lacks an origin check → High
+       - If the canary also reached a DOM sink (via monkey-patch) → Critical
+
+    Single Responsibility: postMessage origin-check detection only.
+    """
+
+    name = "dom_xss_postmessage"
+    phase = "browser"
+
+    def __init__(self, session=None, results: Dict = None, debug: bool = False,
+                 headless: bool = True, timeout_ms: int = 8000):
+        super().__init__(session, results, debug)
+        self.headless = headless
+        self.timeout_ms = timeout_ms
+
+    def run(self, target: str, **kwargs) -> None:
+        """Sync entry point."""
+        if not _PLAYWRIGHT_AVAILABLE:
+            _logger.warning("[PostMessageInterceptionProber] Playwright not available, skipping")
+            return
+        endpoints = kwargs.get("endpoints") or [target]
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(self._async_run(endpoints))
+            loop.close()
+        except Exception as exc:
+            _logger.warning(f"[PostMessageInterceptionProber] Event loop error: {exc!r}")
+
+    async def _async_run(self, endpoints: List[str]) -> None:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=self.headless)
+            context = await browser.new_context()
+            # Both scripts: monkey-patch sinks + postMessage interception
+            await context.add_init_script(script=_MONKEY_PATCH_JS)
+            await context.add_init_script(script=_POSTMESSAGE_INTERCEPT_JS)
+            page = await context.new_page()
+            for url in endpoints[:20]:
+                await self._probe_url(page, url)
+            await browser.close()
+
+    async def _probe_url(self, page, url: str) -> None:
+        """Navigate and send canary postMessages; inspect listener hits."""
+        try:
+            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            await page.wait_for_timeout(600)
+
+            canary = _MONKEY_CANARY
+            # Send canary as plain string and as common object structures
+            await page.evaluate(f"""
+                () => {{
+                    var c = {repr(canary)};
+                    window.postMessage(c, '*');
+                    try {{ window.postMessage({{type: 'data', data: c}}, '*'); }} catch(e) {{}}
+                    try {{ window.postMessage({{message: c}}, '*'); }} catch(e) {{}}
+                    try {{ window.postMessage({{payload: c}}, '*'); }} catch(e) {{}}
+                    try {{ window.postMessage({{html: c}}, '*'); }} catch(e) {{}}
+                    try {{ window.postMessage({{content: c}}, '*'); }} catch(e) {{}}
+                }}
+            """)
+            await page.wait_for_timeout(800)
+
+            # Collect interception hits and sink hits
+            pm_hits = await page.evaluate("window.__pm_intercept_hits__ || []")
+            pm_listeners = await page.evaluate("window.__pm_listeners__ || []")
+            sink_hits = await page.evaluate("window.__domxss_hits__ || []")
+
+            # Reset for next probe
+            await page.evaluate(
+                "window.__pm_intercept_hits__ = []; "
+                "window.__pm_listeners__ = []; "
+                "window.__domxss_hits__ = []"
+            )
+
+            if sink_hits:
+                # Canary flowed through postMessage into a DOM sink → Critical
+                for hit in sink_hits:
+                    self.report_finding(
+                        vuln_type="DOM XSS via postMessage (Sink Reached)",
+                        url=url,
+                        param="postMessage → " + hit.get("sink", "unknown"),
+                        payload=canary,
+                        severity="Critical",
+                        evidence=(
+                            f"postMessage canary reached sink={hit.get('sink','?')} "
+                            f"value={hit.get('val','?')}"
+                        ),
+                        verified=True,
+                        confidence="high",
+                    )
+                return
+
+            if pm_hits:
+                for hit in pm_hits:
+                    has_origin = hit.get("hasOriginCheck", False)
+                    severity = "High" if not has_origin else "Medium"
+                    self.report_finding(
+                        vuln_type="postMessage Handler Without Origin Check",
+                        url=url,
+                        param="postMessage",
+                        payload=canary,
+                        severity=severity,
+                        evidence=(
+                            f"Listener received canary; origin_check={has_origin}; "
+                            f"handler={hit.get('listener','?')[:120]}"
+                        ),
+                        verified=True,
+                        confidence="high" if not has_origin else "medium",
+                    )
+                return
+
+            # No hits — report discovered listeners as informational if they lack origin check
+            for listener in pm_listeners:
+                if not listener.get("hasOriginCheck", True):
+                    self.report_finding(
+                        vuln_type="postMessage Handler Without Origin Check (Passive)",
+                        url=url,
+                        param="postMessage",
+                        payload="",
+                        severity="High",
+                        evidence=(
+                            f"Listener found without origin check: "
+                            f"{listener.get('handler','?')[:120]}"
+                        ),
+                        verified=False,
+                        confidence="medium",
+                    )
+
+        except Exception as exc:
+            _logger.debug(f"[PostMessageInterceptionProber] Error on {url}: {exc!r}")
 
 
 # ===========================================================================

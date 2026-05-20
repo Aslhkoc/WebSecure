@@ -138,6 +138,8 @@ class PluginRegistry:
             ("websecure.scanners.cors",             "CORSScanner",          "offensive"),
             ("websecure.scanners.subdomain_takeover","SubdomainTakeoverScanner","offensive"),
             ("websecure.scanners.headers",          None,                   "sec_headers"),
+            # WAF detection + bypass engine (Faz D):
+            ("websecure.core.waf_bypass",           "WAFBypassScanner",     "offensive"),
         ]
 
         for module_path, class_name, phase in _BUILTIN_SCANNERS:
