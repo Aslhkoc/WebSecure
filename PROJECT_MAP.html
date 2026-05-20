@@ -613,6 +613,46 @@ const FILES = [
    desc:"sqlmap entegrasyonu. WebSecure SQLi bulgularını sqlmap ile otomatik exploit eder. CSV çıktı parse, risk/level parametresi, proxy desteği.",
    deps:["websecure/integrations/base.py","websecure/scanners/sqli.py","websecure/wordlists/sqli.txt"]},
 
+  // ---- MAIN ----
+  {id:"ws_main_py", path:"websecure/main.py", type:"core", icon:"🚀",
+   desc:"Gerçek ana giriş noktası (main.py). sys.path patching, tüm tarama fazlarını sıralı çalıştıran run_scan() orkestratörü, CLI argüman parsing. PyCharm ve CLI'dan doğrudan çalıştırılabilir.",
+   deps:["websecure/core/http.py","websecure/core/scan_runner.py","websecure/core/startup.py","websecure/core/session_factory.py","websecure/core/auth_manager.py","websecure/core/crawler.py","websecure/core/reporting.py"]},
+
+  // ---- REPORTERS ----
+  {id:"rep_html", path:"websecure/reporters/html_dashboard.py", type:"core", icon:"📊",
+   desc:"HTML dashboard renderer. Tarama sonuçlarını modern dark-mode, tek dosya HTML raporu olarak üretir. Bulgu tablosu, severity dağılımı, CVSS skorları ve exploit zincir görselleştirmesi içerir.",
+   deps:["websecure/reporters/templates/report.html.j2","websecure/core/reporting.py","websecure/core/report_generator.py"]},
+  {id:"rep_md", path:"websecure/reporters/markdown.py", type:"core", icon:"📝",
+   desc:"Markdown rapor üreticisi. Tarama bulgularını GitHub/GitLab uyumlu Markdown formatında çıkarır. CI/CD pipeline'larında README veya wiki sayfası olarak kullanılır.",
+   deps:["websecure/core/reporting.py","websecure/core/report_generator.py"]},
+  {id:"rep_pdf", path:"websecure/reporters/pdf.py", type:"core", icon:"📄",
+   desc:"Profesyonel PDF rapor üreticisi. Jinja2 HTML şablonu + WeasyPrint ile HTML→PDF dönüşümü. Pentest müşterileri için resmi rapor formatı.",
+   deps:["websecure/reporters/templates/report.html.j2","websecure/core/reporting.py"]},
+  {id:"rep_template", path:"websecure/reporters/templates/report.html.j2", type:"core", icon:"🎨",
+   desc:"Jinja2 HTML rapor şablonu. HTML dashboard ve PDF raporlarının temel şablonu. Dark-mode, responsive tasarım, bulgu tablosu ve özet bölümleri içerir.",
+   deps:["websecure/reporters/html_dashboard.py","websecure/reporters/pdf.py"]},
+
+  // ---- SCRIPTS ----
+  {id:"sc_preflight", path:"websecure/scripts/preflight_check.py", type:"tool", icon:"✅",
+   desc:"Tarama öncesi ön kontrol scripti. nmap, nuclei, amass, dalfox, ffuf, chromedriver gibi tüm harici binary'lerin kurulu ve erişilebilir olduğunu kontrol eder.",
+   deps:["websecure/core/startup.py","drivers/chromedriver.exe"]},
+  {id:"sc_validate", path:"websecure/scripts/validate_config.py", type:"tool", icon:"🔍",
+   desc:"config.json doğrulama scripti. -c <dosya> ile config'i JSON Schema'ya göre validate eder, CI/CD'de hatalı config kullanımını engeller. Exit code ile CI gate desteği.",
+   deps:["config.json","config.schema.json","websecure/core/utils/config.py"]},
+
+  // ---- SETUP ----
+  {id:"setup_py", path:"websecure/setup.py", type:"tool", icon:"📦",
+   desc:"Python paketi kurulum scripti (setuptools). websecure-scanner paketi olarak pip install edilmesini sağlar. Bağımlılık listesi ve entry_point tanımları içerir.",
+   deps:[]},
+
+  // ---- WEBSECURE/TESTS ----
+  {id:"ws_test_schema", path:"websecure/tests/test_schema.py", type:"test", icon:"🧪",
+   desc:"config.json schema doğrulama testi. load_config() ile config.json'u yükler, 'offensive' anahtarı ve alt alanların varlığını doğrular. Schema validasyonunun regresyon testi.",
+   deps:["config.json","websecure/core/utils/config.py"]},
+  {id:"ws_test_smoke", path:"websecure/tests/test_smoke_imports.py", type:"test", icon:"🧪",
+   desc:"Smoke import testi. websecure.core.http, phases, reporting modüllerinin import edildiğini ve kritik attribute'ların (HttpClient, phase_offensive, finalize_reports) mevcut olduğunu doğrular.",
+   deps:["websecure/core/http.py","websecure/core/reporting.py"]},
+
   // ---- DB ----
   {id:"db_database", path:"websecure/db/database.py", type:"db", icon:"🗄️",
    desc:"SQLite tabanlı merkezi bulgu veritabanı. Bağlantı havuzu, migration. Tablolar: tenants, projects, scans, findings, fp_rules, score_history. Bağımlılık yok (stdlib sqlite3).",
@@ -701,8 +741,26 @@ const TREE = {
     {label:"📦 websecure/", badge:"core", children:[
       {label:"📦 __init__.py", id:"ws_init", badge:"core"},
       {label:"🚀 __main__.py", id:"ws_main", badge:"core"},
+      {label:"🚀 main.py", id:"ws_main_py", badge:"core"},
+      {label:"📦 setup.py", id:"setup_py", badge:"core"},
       {label:"📁 api/", badge:"api", children:[
         {label:"🌐 server.py", id:"api_server", badge:"api"},
+      ]},
+      {label:"📁 reporters/", badge:"core", children:[
+        {label:"📊 html_dashboard.py", id:"rep_html", badge:"core"},
+        {label:"📝 markdown.py", id:"rep_md", badge:"core"},
+        {label:"📄 pdf.py", id:"rep_pdf", badge:"core"},
+        {label:"📁 templates/", badge:"core", children:[
+          {label:"🎨 report.html.j2", id:"rep_template", badge:"core"},
+        ]},
+      ]},
+      {label:"📁 scripts/", badge:"tool", children:[
+        {label:"✅ preflight_check.py", id:"sc_preflight", badge:"core"},
+        {label:"🔍 validate_config.py", id:"sc_validate", badge:"core"},
+      ]},
+      {label:"📁 tests/ (websecure/)", badge:"test", children:[
+        {label:"🧪 test_schema.py", id:"ws_test_schema", badge:"test"},
+        {label:"🧪 test_smoke_imports.py", id:"ws_test_smoke", badge:"test"},
       ]},
       {label:"📁 cli/", badge:"cli", children:[
         {label:"⌨️ commands.py", id:"cli_commands", badge:"cli"},
