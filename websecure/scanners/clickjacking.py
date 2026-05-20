@@ -7,10 +7,14 @@ Classes:
   FrameOptionsAnalyzer      — X-Frame-Options missing/misconfigured
   CSPFrameAncestorsAnalyzer — CSP frame-ancestors missing/weak
   ClickjackingExplorer      — Interactive clickjacking surface (drag-drop, double-click, forms)
+  ClickjackingPoCGenerator  — Generate HTML PoC for frameable pages
+  FrameBustingBypassProber  — Detect frame-busting JS and sandbox bypass
+  DoubleClickJackingProber  — Detect ondblclick on sensitive actions
   ClickjackingScanner       — Orchestrator
 """
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -69,6 +73,30 @@ _DBLCLICK_RE = re.compile(
     r"on(dblclick)\s*=",
     re.IGNORECASE,
 )
+
+_SENSITIVE_DBLCLICK_RE = re.compile(
+    r"ondblclick\s*=\s*[\"'][^\"']*(?:payment|pay|delete|remove|transfer|send|admin|confirm|submit|purchase|checkout)[^\"']*[\"']",
+    re.IGNORECASE,
+)
+
+_FRAME_BUST_JS_RE = re.compile(
+    r"(top\s*[!=]=\s*self|self\s*[!=]=\s*top|top\.location|parent\.location|"
+    r"window\.top\s*[!=]=\s*window\.self|frameElement)",
+    re.IGNORECASE,
+)
+
+_POC_TEMPLATE = """\
+<!DOCTYPE html>
+<html>
+<head><style>
+iframe {{ opacity: 0.0; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }}
+.decoy {{ position: absolute; top: 200px; left: 300px; z-index: 1; font-size: 20px; }}
+</style></head>
+<body>
+<div class="decoy">Click here to win a prize!</div>
+<iframe src="{target_url}"></iframe>
+</body></html>
+"""
 
 _META_XFO_RE = re.compile(
     r'<meta[^>]+http-equiv\s*=\s*["\']?x-frame-options["\']?',
@@ -676,15 +704,336 @@ class ClickjackingExplorer(BaseScanner):
 
 
 # ===========================================================================
-# 4. ClickjackingScanner — Orchestrator
+# 4. ClickjackingPoCGenerator
+# ===========================================================================
+
+class ClickjackingPoCGenerator(BaseScanner):
+    """
+    Generate a working HTML Proof-of-Concept for pages that are frameable
+    (X-Frame-Options missing or weak).
+
+    The PoC uses a transparent iframe overlay technique. The generated HTML
+    is base64-encoded and attached to the finding evidence as ``poc_html``
+    so the user can decode and open it in a browser.
+    """
+
+    name = "clickjacking_poc"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        """Generate PoC for vulnerable (frameable) paths."""
+        findings: List[Dict] = []
+
+        for path, label in _SENSITIVE_PATHS:
+            url = _build_url(target, path)
+            try:
+                resp = self.session.get(
+                    url, timeout=7, verify=False, allow_redirects=True
+                )
+            except Exception as exc:
+                logger.debug("[PoCGenerator] %s fetch failed: %r", url, exc)
+                continue
+
+            if resp.status_code in (404, 410):
+                continue
+
+            xfo = _get_xfo(resp)
+            csp = _get_csp(resp)
+            fa = _parse_frame_ancestors(csp)
+
+            # Only generate PoC when the page is actually frameable
+            is_frameable = self._is_frameable(xfo, fa)
+            if not is_frameable:
+                continue
+
+            poc_html = _POC_TEMPLATE.format(target_url=url)
+            poc_b64 = base64.b64encode(poc_html.encode("utf-8")).decode("ascii")
+
+            severity = "High" if _is_high_risk(path) else "Medium"
+            finding = {
+                "vuln_type": "Clickjacking PoC Generated",
+                "url": url,
+                "severity": severity,
+                "description": (
+                    f"Page '{label}' is iframeable (XFO: {xfo or 'missing'}, "
+                    f"CSP frame-ancestors: {fa or 'missing'}). "
+                    "A Proof-of-Concept HTML file has been generated. "
+                    "Decode the base64 'poc_html' field and open it in a browser to verify."
+                ),
+                "evidence": {
+                    "xfo_header": xfo,
+                    "csp_frame_ancestors": fa,
+                    "path_label": label,
+                    "poc_html": poc_b64,
+                },
+                "remediation": (
+                    "Add 'X-Frame-Options: DENY' and CSP 'frame-ancestors: none' "
+                    "to prevent this page from being embedded in an iframe."
+                ),
+            }
+            findings.append(finding)
+            self.report_finding(**finding)
+
+        return findings
+
+    @staticmethod
+    def _is_frameable(xfo: Optional[str], fa: Optional[str]) -> bool:
+        """Return True if neither XFO nor CSP frame-ancestors properly protects the page."""
+        if xfo == "DENY":
+            return False
+        if fa is not None:
+            fa_lower = fa.lower().strip()
+            if fa_lower == "'none'":
+                return False
+            # wildcard / scheme-only → still frameable
+            if fa_lower in ("*", "http:", "https:"):
+                return True
+            return False
+        # No frame-ancestors directive
+        if xfo in ("SAMEORIGIN",):
+            # Partially protected — still frameable by same-origin, flag as frameable
+            return True
+        return True
+
+
+# ===========================================================================
+# 5. FrameBustingBypassProber
+# ===========================================================================
+
+class FrameBustingBypassProber(BaseScanner):
+    """
+    Detect frame-busting JavaScript and test whether it can be bypassed.
+
+    Frame-busting JS (e.g. ``if (top !== self) { top.location = self.location; }``)
+    can be defeated by framing the page with a sandboxed iframe that lacks the
+    ``allow-top-navigation`` permission:
+
+        <iframe sandbox="allow-forms allow-scripts" src="target">
+
+    This prober:
+      1. Fetches the page body and searches for frame-busting JS patterns.
+      2. If found, verifies the page is actually frameable (XFO/CSP).
+      3. Reports High if sandbox bypass is viable (frameable + frame-bust JS present).
+    """
+
+    name = "frame_busting_bypass"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        """Probe for frame-busting bypass opportunities."""
+        findings: List[Dict] = []
+
+        for path, label in _SENSITIVE_PATHS:
+            url = _build_url(target, path)
+            try:
+                resp = self.session.get(
+                    url, timeout=7, verify=False, allow_redirects=True
+                )
+            except Exception as exc:
+                logger.debug("[FrameBustBypass] %s fetch failed: %r", url, exc)
+                continue
+
+            if resp.status_code in (404, 410):
+                continue
+
+            body = resp.text
+            xfo = _get_xfo(resp)
+            csp = _get_csp(resp)
+            fa = _parse_frame_ancestors(csp)
+
+            has_frame_bust = bool(_FRAME_BUST_JS_RE.search(body))
+            if not has_frame_bust:
+                continue
+
+            # Even with frame-busting JS, check if framing is blocked at header level
+            # If headers allow framing, sandbox bypass is viable
+            framing_allowed_by_headers = ClickjackingPoCGenerator._is_frameable(xfo, fa)
+
+            if framing_allowed_by_headers:
+                # sandbox="allow-forms allow-scripts" blocks top.location reassignment
+                # because allow-top-navigation is absent
+                finding = {
+                    "vuln_type": "Frame-Busting Bypass via Sandboxed iframe",
+                    "url": url,
+                    "severity": "High",
+                    "description": (
+                        f"Page '{label}' uses frame-busting JavaScript "
+                        "(top !== self / top.location guard) but is still frameable "
+                        "via HTTP headers (XFO: {xfo}, CSP frame-ancestors: {fa}). "
+                        "An attacker can use:\n"
+                        '  <iframe sandbox="allow-forms allow-scripts" src="{url}">\n'
+                        "The 'sandbox' attribute without 'allow-top-navigation' prevents "
+                        "the frame-busting script from navigating top.location, "
+                        "nullifying the protection."
+                    ).format(xfo=xfo or "missing", fa=fa or "missing", url=url),
+                    "evidence": {
+                        "frame_bust_js_detected": True,
+                        "xfo_header": xfo,
+                        "csp_frame_ancestors": fa,
+                        "path_label": label,
+                        "bypass_technique": (
+                            'sandbox="allow-forms allow-scripts" (no allow-top-navigation)'
+                        ),
+                    },
+                    "remediation": (
+                        "Replace JavaScript frame-busting with server-side headers: "
+                        "'X-Frame-Options: DENY' and CSP 'frame-ancestors: none'. "
+                        "JS-based frame-busting is unreliable and bypassable."
+                    ),
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+            else:
+                # Headers protect framing but JS redundancy is noted
+                finding = {
+                    "vuln_type": "Frame-Busting JS Present (Headers Already Protect)",
+                    "url": url,
+                    "severity": "Informational",
+                    "description": (
+                        f"Page '{label}' uses frame-busting JS and is also protected "
+                        "by HTTP headers (defense-in-depth). No bypass is viable."
+                    ),
+                    "evidence": {
+                        "frame_bust_js_detected": True,
+                        "xfo_header": xfo,
+                        "csp_frame_ancestors": fa,
+                        "path_label": label,
+                    },
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+
+        return findings
+
+
+# ===========================================================================
+# 6. DoubleClickJackingProber
+# ===========================================================================
+
+class DoubleClickJackingProber(BaseScanner):
+    """
+    Detect double-click jacking attack surfaces.
+
+    Pages with ``ondblclick`` event handlers on or near sensitive actions
+    (payment, delete, admin, confirm) are vulnerable to double-click jacking:
+    an attacker overlays a game/CAPTCHA so the first click positions the cursor
+    and the second click triggers the hidden sensitive action.
+    """
+
+    name = "double_click_jacking"
+
+    # Sensitive action keywords in ondblclick handler values
+    _SENSITIVE_ACTION_RE = re.compile(
+        r"ondblclick\s*=\s*[\"'][^\"']*"
+        r"(?:pay|payment|delete|remove|transfer|send|admin|confirm|"
+        r"submit|purchase|checkout|withdraw|approve|ban|reset)[^\"']*[\"']",
+        re.IGNORECASE,
+    )
+
+    # Generic ondblclick on form/button/input elements
+    _DBLCLICK_ELEMENT_RE = re.compile(
+        r"<(?:button|input|a|form)[^>]*ondblclick\s*=",
+        re.IGNORECASE,
+    )
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        """Probe all sensitive paths for double-click jacking surfaces."""
+        findings: List[Dict] = []
+
+        for path, label in _SENSITIVE_PATHS:
+            url = _build_url(target, path)
+            try:
+                resp = self.session.get(
+                    url, timeout=7, verify=False, allow_redirects=True
+                )
+            except Exception as exc:
+                logger.debug("[DblClickJacking] %s fetch failed: %r", url, exc)
+                continue
+
+            if resp.status_code in (404, 410):
+                continue
+
+            body = resp.text
+            xfo = _get_xfo(resp)
+            csp = _get_csp(resp)
+            fa = _parse_frame_ancestors(csp)
+            iframeable = ClickjackingPoCGenerator._is_frameable(xfo, fa)
+
+            # Check for sensitive ondblclick handlers
+            sensitive_match = self._SENSITIVE_ACTION_RE.search(body)
+            generic_match = self._DBLCLICK_ELEMENT_RE.search(body)
+
+            if sensitive_match:
+                severity = "Critical" if iframeable else "High"
+                finding = {
+                    "vuln_type": "Double-Click Jacking — Sensitive Action via ondblclick",
+                    "url": url,
+                    "severity": severity,
+                    "description": (
+                        f"Page '{label}' has an ondblclick handler tied to a sensitive action "
+                        f"(payment, delete, admin, confirm, etc.). "
+                        + ("The page is also iframeable, enabling a complete double-click jacking attack. "
+                           if iframeable else
+                           "The page is framing-protected but the ondblclick handler is still a risk "
+                           "if protection is ever weakened.")
+                        + " An attacker overlays the iframe and tricks the user into double-clicking, "
+                        "triggering the sensitive action."
+                    ),
+                    "evidence": {
+                        "iframeable": iframeable,
+                        "xfo_header": xfo,
+                        "csp_frame_ancestors": fa,
+                        "path_label": label,
+                        "dblclick_snippet": sensitive_match.group(0)[:200],
+                    },
+                    "remediation": (
+                        "Avoid ondblclick for sensitive actions. "
+                        "Require explicit single-click confirmation dialogs. "
+                        "Add X-Frame-Options: DENY and CSP frame-ancestors: none."
+                    ),
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+
+            elif generic_match and iframeable:
+                finding = {
+                    "vuln_type": "Double-Click Jacking Surface — ondblclick on Interactive Element",
+                    "url": url,
+                    "severity": "Medium",
+                    "description": (
+                        f"Page '{label}' is iframeable and has ondblclick handlers on "
+                        "interactive elements (button/input/a/form). "
+                        "Verify whether these actions are sensitive; if so, this is exploitable."
+                    ),
+                    "evidence": {
+                        "iframeable": iframeable,
+                        "xfo_header": xfo,
+                        "csp_frame_ancestors": fa,
+                        "path_label": label,
+                        "dblclick_snippet": generic_match.group(0)[:200],
+                    },
+                    "remediation": (
+                        "Review all ondblclick-triggered actions for sensitivity. "
+                        "Add framing protection headers."
+                    ),
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+
+        return findings
+
+
+# ===========================================================================
+# 7. ClickjackingScanner — Orchestrator
 # ===========================================================================
 
 class ClickjackingScanner(BaseScanner):
     """
-    Orchestrates all three clickjacking sub-scanners:
-      1. FrameOptionsAnalyzer      — XFO header checks
-      2. CSPFrameAncestorsAnalyzer — CSP frame-ancestors checks
-      3. ClickjackingExplorer      — surface/attack vector probing
+    Orchestrates all clickjacking sub-scanners:
+      1. FrameOptionsAnalyzer       — XFO header checks
+      2. CSPFrameAncestorsAnalyzer  — CSP frame-ancestors checks
+      3. ClickjackingExplorer       — surface/attack vector probing
+      4. ClickjackingPoCGenerator   — HTML PoC for frameable pages
+      5. FrameBustingBypassProber   — JS frame-busting bypass detection
+      6. DoubleClickJackingProber   — ondblclick sensitive action detection
 
     Deduplication: pages that are fully hardened (DENY + frame-ancestors 'none')
     are excluded from the surface scan to reduce noise.
@@ -734,6 +1083,36 @@ class ClickjackingScanner(BaseScanner):
             all_findings.extend(surface_findings)
         except Exception as exc:
             logger.warning("[ClickjackingScanner] ClickjackingExplorer failed: %r", exc)
+
+        # Step 4: PoC generation for frameable pages
+        poc_generator = ClickjackingPoCGenerator(
+            session=self.session, results=self.results, debug=self.debug
+        )
+        try:
+            poc_findings = poc_generator.run(target, **kwargs)
+            all_findings.extend(poc_findings)
+        except Exception as exc:
+            logger.warning("[ClickjackingScanner] ClickjackingPoCGenerator failed: %r", exc)
+
+        # Step 5: Frame-busting bypass detection
+        fb_prober = FrameBustingBypassProber(
+            session=self.session, results=self.results, debug=self.debug
+        )
+        try:
+            fb_findings = fb_prober.run(target, **kwargs)
+            all_findings.extend(fb_findings)
+        except Exception as exc:
+            logger.warning("[ClickjackingScanner] FrameBustingBypassProber failed: %r", exc)
+
+        # Step 6: Double-click jacking detection
+        dblclick_prober = DoubleClickJackingProber(
+            session=self.session, results=self.results, debug=self.debug
+        )
+        try:
+            dblclick_findings = dblclick_prober.run(target, **kwargs)
+            all_findings.extend(dblclick_findings)
+        except Exception as exc:
+            logger.warning("[ClickjackingScanner] DoubleClickJackingProber failed: %r", exc)
 
         # Summary
         frameable_sensitive = sum(

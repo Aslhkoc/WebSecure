@@ -8,6 +8,9 @@ Classes:
   HeaderInjectionBypass    — Custom headers to spoof trusted origins
   VerbTamperingBypass      — HTTP method tampering
   EncodingBypass           — URL encoding / double-encoding tricks
+  APIVersionBypass         — API version / path variant bypass
+  ContentTypeBypass        — Content-Type header switching bypass
+  AcceptHeaderBypass       — Accept / Accept-Language / Accept-Encoding bypass
   FourOhThreeScanner       — Orchestrator
 """
 from __future__ import annotations
@@ -540,6 +543,271 @@ class EncodingBypass(BaseScanner):
 
 
 # ===========================================================================
+# 5. APIVersionBypass
+# ===========================================================================
+class APIVersionBypass(BaseScanner):
+    """
+    Attempt to bypass 403 on a path by trying API version prefixes,
+    REST alternatives, trailing slashes, extensions, and case variants.
+
+    For each blocked path, generates:
+      - Version variants: /v1/PATH, /v2/PATH, /v3/PATH, /api/PATH, /api/v1/PATH, /api/v2/PATH, /rest/PATH, /graphql
+      - Trailing slash:   /admin → /admin/
+      - Extensions:       /admin → /admin.json, /admin.xml, /admin.html, /admin.php
+      - Case variants:    /Admin, /ADMIN, /aDmIn
+    """
+
+    name = "bypass_api_version"
+
+    def run(self, target: str, blocked_paths: Optional[List[Tuple[str, int]]] = None, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        if blocked_paths is None:
+            blocked_paths = self._discover_blocked(target)
+
+        for path, baseline_status in blocked_paths:
+            for variant in self._api_variants(path):
+                url = _join_url(target, variant.lstrip("/"))
+                try:
+                    resp = self.session.get(url, timeout=7, verify=False, allow_redirects=False)
+                    status = resp.status_code
+                    if status in (200, 301, 302):
+                        finding = {
+                            "vuln_type": "403 Bypass — API Version / Path Variant (Confirmed)",
+                            "url": url,
+                            "severity": "Critical",
+                            "description": (
+                                f"API/path variant '{variant}' bypassed {baseline_status} on "
+                                f"'{path}'. Returned HTTP {status}."
+                            ),
+                            "evidence": {
+                                "original_path": path,
+                                "bypass_variant": variant,
+                                "baseline_status": baseline_status,
+                                "bypass_status": status,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                except Exception as exc:
+                    logger.debug("[bypass_api_version] %s variant=%s: %s", path, variant, exc)
+        return results
+
+    @staticmethod
+    def _api_variants(path: str) -> List[str]:
+        """Generate API version/path variants for *path*."""
+        p = path.rstrip("/")
+        seg = p.lstrip("/")
+
+        variants: List[str] = []
+
+        # Version prefix variants
+        for prefix in ("/v1", "/v2", "/v3", "/api", "/api/v1", "/api/v2", "/rest"):
+            variants.append(f"{prefix}/{seg}")
+
+        # GraphQL as alternative API surface
+        variants.append("/graphql")
+
+        # Trailing slash
+        if not p.endswith("/"):
+            variants.append(f"/{seg}/")
+
+        # Extension variants
+        for ext in (".json", ".xml", ".html", ".php"):
+            if not seg.endswith(ext):
+                variants.append(f"/{seg}{ext}")
+
+        # Case variants
+        variants.append(f"/{seg.upper()}/")
+        variants.append(f"/{seg.capitalize()}/")
+        if len(seg) >= 3:
+            variants.append(f"/{seg[:1].upper()}{seg[1:3].lower()}{seg[3:].upper()}/")
+
+        # Deduplicate
+        seen: set = set()
+        unique: List[str] = []
+        for v in variants:
+            if v not in seen and v != path:
+                seen.add(v)
+                unique.append(v)
+        return unique
+
+    def _discover_blocked(self, target: str) -> List[Tuple[str, int]]:
+        blocked: List[Tuple[str, int]] = []
+        for path in _SENSITIVE_PATHS:
+            url = _join_url(target, path.lstrip("/"))
+            try:
+                resp = self.session.get(url, timeout=6, verify=False, allow_redirects=False)
+                if resp.status_code in _BLOCKED_STATUSES:
+                    blocked.append((path, resp.status_code))
+            except Exception as exc:
+                logger.debug("[bypass_api_version] discover %s: %s", url, exc)
+        return blocked
+
+
+# ===========================================================================
+# 6. ContentTypeBypass
+# ===========================================================================
+class ContentTypeBypass(BaseScanner):
+    """
+    Attempt to bypass 403 by sending different Content-Type headers.
+
+    Some WAF/middleware rules are Content-Type specific. Sending an unexpected
+    Content-Type may bypass the rule matching and allow access.
+    """
+
+    name = "bypass_content_type"
+
+    _CONTENT_TYPES: List[str] = [
+        "application/json",
+        "application/xml",
+        "text/plain",
+        "application/x-www-form-urlencoded",
+        "multipart/form-data",
+        "text/xml",
+        "application/javascript",
+    ]
+
+    def run(self, target: str, blocked_paths: Optional[List[Tuple[str, int]]] = None, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        if blocked_paths is None:
+            blocked_paths = self._discover_blocked(target)
+
+        for path, baseline_status in blocked_paths:
+            url = _join_url(target, path.lstrip("/"))
+            for content_type in self._CONTENT_TYPES:
+                try:
+                    resp = self.session.get(
+                        url,
+                        headers={"Content-Type": content_type},
+                        timeout=7,
+                        verify=False,
+                        allow_redirects=False,
+                    )
+                    status = resp.status_code
+                    if status in (200, 301, 302):
+                        finding = {
+                            "vuln_type": "403 Bypass — Content-Type Switching (Confirmed)",
+                            "url": url,
+                            "severity": "Critical",
+                            "description": (
+                                f"Content-Type '{content_type}' bypassed {baseline_status} on "
+                                f"'{path}'. Returned HTTP {status}. "
+                                "The access control rule appears to be Content-Type specific."
+                            ),
+                            "evidence": {
+                                "original_path": path,
+                                "content_type": content_type,
+                                "baseline_status": baseline_status,
+                                "bypass_status": status,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                except Exception as exc:
+                    logger.debug("[bypass_content_type] %s ct=%s: %s", path, content_type, exc)
+        return results
+
+    def _discover_blocked(self, target: str) -> List[Tuple[str, int]]:
+        blocked: List[Tuple[str, int]] = []
+        for path in _SENSITIVE_PATHS:
+            url = _join_url(target, path.lstrip("/"))
+            try:
+                resp = self.session.get(url, timeout=6, verify=False, allow_redirects=False)
+                if resp.status_code in _BLOCKED_STATUSES:
+                    blocked.append((path, resp.status_code))
+            except Exception as exc:
+                logger.debug("[bypass_content_type] discover %s: %s", url, exc)
+        return blocked
+
+
+# ===========================================================================
+# 7. AcceptHeaderBypass
+# ===========================================================================
+class AcceptHeaderBypass(BaseScanner):
+    """
+    Attempt to bypass 403 by varying Accept, Accept-Language, and Accept-Encoding headers.
+
+    Some access control implementations check Accept headers for API vs browser
+    traffic and apply different rules. Varying these headers may circumvent WAF rules.
+    """
+
+    name = "bypass_accept"
+
+    _ACCEPT_SETS: List[Dict[str, str]] = [
+        {"Accept": "*/*"},
+        {"Accept": "application/json"},
+        {"Accept": "text/html"},
+        {"Accept": "application/xml"},
+        {
+            "Accept": "text/html",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        {
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+        },
+        {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+        },
+    ]
+
+    def run(self, target: str, blocked_paths: Optional[List[Tuple[str, int]]] = None, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        if blocked_paths is None:
+            blocked_paths = self._discover_blocked(target)
+
+        for path, baseline_status in blocked_paths:
+            url = _join_url(target, path.lstrip("/"))
+            for accept_headers in self._ACCEPT_SETS:
+                try:
+                    resp = self.session.get(
+                        url,
+                        headers=accept_headers,
+                        timeout=7,
+                        verify=False,
+                        allow_redirects=False,
+                    )
+                    status = resp.status_code
+                    if status in (200, 301, 302):
+                        finding = {
+                            "vuln_type": "403 Bypass — Accept Header Variation (Confirmed)",
+                            "url": url,
+                            "severity": "High",
+                            "description": (
+                                f"Accept header set {list(accept_headers.keys())} bypassed "
+                                f"{baseline_status} on '{path}'. Returned HTTP {status}. "
+                                "The server responds differently based on Accept headers."
+                            ),
+                            "evidence": {
+                                "original_path": path,
+                                "accept_headers": accept_headers,
+                                "baseline_status": baseline_status,
+                                "bypass_status": status,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                except Exception as exc:
+                    logger.debug("[bypass_accept] %s headers=%s: %s", path, list(accept_headers.keys()), exc)
+        return results
+
+    def _discover_blocked(self, target: str) -> List[Tuple[str, int]]:
+        blocked: List[Tuple[str, int]] = []
+        for path in _SENSITIVE_PATHS:
+            url = _join_url(target, path.lstrip("/"))
+            try:
+                resp = self.session.get(url, timeout=6, verify=False, allow_redirects=False)
+                if resp.status_code in _BLOCKED_STATUSES:
+                    blocked.append((path, resp.status_code))
+            except Exception as exc:
+                logger.debug("[bypass_accept] discover %s: %s", url, exc)
+        return blocked
+
+
+# ===========================================================================
 # FourOhThreeScanner — Orchestrator
 # ===========================================================================
 class FourOhThreeScanner(BaseScanner):
@@ -547,8 +815,9 @@ class FourOhThreeScanner(BaseScanner):
     Orchestrator for all 403/Forbidden bypass techniques.
 
     Step 1: Discover 403/401 pages by probing common sensitive paths.
-    Step 2: Run PathNormalizationBypass, HeaderInjectionBypass,
-            VerbTamperingBypass, and EncodingBypass against each blocked path.
+    Step 2: Run all bypass sub-scanners against each blocked path:
+            PathNormalizationBypass, HeaderInjectionBypass, VerbTamperingBypass,
+            EncodingBypass, APIVersionBypass, ContentTypeBypass, AcceptHeaderBypass.
     Step 3: Report confirmed bypasses as Critical, potential bypasses as High.
     """
 
@@ -582,6 +851,9 @@ class FourOhThreeScanner(BaseScanner):
             HeaderInjectionBypass(session=self.session, results=self.results, debug=self.debug),
             VerbTamperingBypass(session=self.session, results=self.results, debug=self.debug),
             EncodingBypass(session=self.session, results=self.results, debug=self.debug),
+            APIVersionBypass(session=self.session, results=self.results, debug=self.debug),
+            ContentTypeBypass(session=self.session, results=self.results, debug=self.debug),
+            AcceptHeaderBypass(session=self.session, results=self.results, debug=self.debug),
         ]
 
         for scanner in sub_scanners:

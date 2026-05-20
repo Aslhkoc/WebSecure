@@ -4,11 +4,12 @@ websecure.scanners.param_pollution
 HTTP Parameter Pollution (HPP) full scanner.
 
 Classes:
-  QueryStringHPPProber     — Duplicate params in URL query string
-  PostBodyHPPProber        — Duplicate params in POST body
-  ServerParseProfiler      — Detect server-side param parsing behavior
-  HPPWAFBypassProber       — Use HPP to bypass WAF rules
-  ParamPollutionScanner    — Orchestrator
+  QueryStringHPPProber       — Duplicate params in URL query string
+  PostBodyHPPProber          — Duplicate params in POST body (URL-enc, JSON, multipart, GET+POST)
+  ServerParseProfiler        — Detect server-side param parsing behavior
+  HPPWAFBypassProber         — Use HPP to bypass WAF rules (split payload technique)
+  ContentTypeSwitchingProber — Same param via form vs JSON to detect parsing differences
+  ParamPollutionScanner      — Orchestrator
 """
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ from urllib.parse import (
     urlunparse,
     quote,
 )
+
+# For multipart body construction
+import io
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.reporting import add_result
@@ -333,7 +337,7 @@ class PostBodyHPPProber(BaseScanner):
         for name, orig_value in post_params:
             canary = _canary()
 
-            # 1. Duplicate URL-encoded form fields
+            # 1. Duplicate URL-encoded form fields: param=val1&param=val2&param=val3
             f = self._probe_urlencoded(target, name, orig_value, canary)
             if f:
                 findings.append(f)
@@ -347,11 +351,25 @@ class PostBodyHPPProber(BaseScanner):
                 self.report_finding(**f2)
 
             canary3 = _canary()
-            # 3. Cross-contamination: inject POST param into URL query context
-            f3 = self._probe_cross_contamination(target, name, orig_value, canary3)
+            # 3. Multipart/form-data with duplicate fields
+            f3 = self._probe_multipart(target, name, orig_value, canary3)
             if f3:
                 findings.append(f3)
                 self.report_finding(**f3)
+
+            canary4 = _canary()
+            # 4. GET+POST same param: GET ?param=A, POST body param=B
+            f4 = self._probe_get_post_same_param(target, name, orig_value, canary4)
+            if f4:
+                findings.append(f4)
+                self.report_finding(**f4)
+
+            canary5 = _canary()
+            # 5. Cross-contamination: inject POST param into URL query context
+            f5 = self._probe_cross_contamination(target, name, orig_value, canary5)
+            if f5:
+                findings.append(f5)
+                self.report_finding(**f5)
 
         return findings
 
@@ -449,6 +467,133 @@ class PostBodyHPPProber(BaseScanner):
                 "remediation": (
                     "Use a strict JSON parser that rejects duplicate keys "
                     "(e.g., Python json with object_pairs_hook)."
+                ),
+            }
+        return None
+
+    def _probe_multipart(
+        self,
+        url: str,
+        name: str,
+        orig_value: str,
+        canary: str,
+    ) -> Optional[Dict]:
+        """POST multipart/form-data with the same field name twice."""
+        boundary = "wsp_boundary_" + uuid.uuid4().hex[:8]
+        # Build raw multipart body with duplicate field
+        body_parts = [
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{orig_value}\r\n",
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{canary}\r\n",
+            f"--{boundary}--\r\n",
+        ]
+        raw_body = "".join(body_parts).encode("utf-8")
+        content_type = f"multipart/form-data; boundary={boundary}"
+        try:
+            resp = self.session.post(
+                url,
+                data=raw_body,
+                headers={"Content-Type": content_type},
+                timeout=7,
+                verify=False,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.debug("[PostHPP/multipart] %s error: %r", name, exc)
+            return None
+
+        body = _safe_text(resp)
+        if _has_canary(body, canary):
+            return {
+                "vuln_type": "HTTP Parameter Pollution — Multipart Body (Duplicate Field)",
+                "url": url,
+                "param": name,
+                "payload": f"multipart duplicate field: {name}={orig_value} + {name}={canary}",
+                "severity": "High",
+                "description": (
+                    f"Multipart/form-data request with duplicate field '{name}' — canary reflected. "
+                    "The server accepted the second (injected) field value."
+                ),
+                "evidence": {
+                    "technique": "post_multipart_duplicate",
+                    "param": name,
+                    "canary": canary,
+                    "status_code": resp.status_code,
+                    "body_snippet": body[:300],
+                },
+                "remediation": (
+                    "Reject multipart requests containing duplicate field names. "
+                    "Validate each field name appears at most once."
+                ),
+            }
+        return None
+
+    def _probe_get_post_same_param(
+        self,
+        url: str,
+        name: str,
+        get_value: str,
+        post_canary: str,
+    ) -> Optional[Dict]:
+        """
+        Send GET ?param=A while POST body has param=B (canary).
+        Frameworks that merge GET+POST params may use the POST value,
+        or the GET value may override the POST value.
+        """
+        parsed = urlparse(url)
+        existing = parse_qsl(parsed.query, keep_blank_values=True)
+        # Ensure the param is in the query string
+        existing_dict = dict(existing)
+        if name not in existing_dict:
+            new_query = urlencode(list(existing) + [(name, get_value)])
+        else:
+            new_query = urlencode(
+                [(k, v if k != name else get_value) for k, v in existing]
+            )
+        test_url = urlunparse(parsed._replace(query=new_query))
+
+        post_body = urlencode([(name, post_canary)])
+        try:
+            resp = self.session.post(
+                test_url,
+                data=post_body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=7,
+                verify=False,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.debug("[PostHPP/get_post] %s error: %r", name, exc)
+            return None
+
+        resp_body = _safe_text(resp)
+        if _has_canary(resp_body, post_canary):
+            return {
+                "vuln_type": "HTTP Parameter Pollution — GET+POST Same Parameter (POST Wins)",
+                "url": url,
+                "param": name,
+                "payload": f"GET: ?{name}={get_value} + POST body: {name}={post_canary}",
+                "severity": "High",
+                "description": (
+                    f"Parameter '{name}' sent in both URL query string (GET={get_value!r}) "
+                    f"and POST body (POST={post_canary!r}). "
+                    "Server reflected the POST body value, indicating GET+POST parameter merging. "
+                    "Attackers can override URL-level parameters via POST body injection."
+                ),
+                "evidence": {
+                    "technique": "get_post_same_param_post_wins",
+                    "param": name,
+                    "get_value": get_value,
+                    "canary": post_canary,
+                    "status_code": resp.status_code,
+                    "body_snippet": resp_body[:300],
+                },
+                "remediation": (
+                    "Process GET and POST parameters from separate namespaces. "
+                    "Never silently merge them; prefer explicit source selection."
                 ),
             }
         return None
@@ -723,7 +868,7 @@ class HPPWAFBypassProber(BaseScanner):
         ]
 
         for name, safe_value in params:
-            # --- XSS bypass ---
+            # --- XSS bypass (full payload) ---
             xss_canary = _canary()
             xss_payload = _XSS_PAYLOAD.replace("1", xss_canary)
             f = self._probe_bypass(
@@ -739,6 +884,23 @@ class HPPWAFBypassProber(BaseScanner):
                 findings.append(f)
                 self.report_finding(**f)
 
+            # --- XSS split payload bypass ---
+            # Split <script>alert(1)</script> across two HPP params so WAF sees each half as benign
+            xss_split_canary = _canary()
+            f = self._probe_split_payload(
+                parsed,
+                base_params,
+                name,
+                part1=f"<script&{name}=>alert({xss_split_canary})</script>",
+                part2_label="xss_split",
+                attack_type="XSS-Split",
+                expected_canary=xss_split_canary,
+                waf_present=waf_present,
+            )
+            if f:
+                findings.append(f)
+                self.report_finding(**f)
+
             # --- SQLi bypass ---
             sqli_canary = _canary()
             sqli_payload = f"1 OR {sqli_canary}=1"
@@ -749,6 +911,20 @@ class HPPWAFBypassProber(BaseScanner):
                 safe_value,
                 sqli_payload,
                 "SQLi",
+                waf_present,
+            )
+            if f:
+                findings.append(f)
+                self.report_finding(**f)
+
+            # --- SQLi split payload bypass ---
+            # id=1 UN&id=ION SE&id=LECT 1,2,3 → backend joins as "1 UNION SELECT 1,2,3"
+            sqli_split_canary = _canary()
+            f = self._probe_split_sqli(
+                parsed,
+                base_params,
+                name,
+                sqli_split_canary,
                 waf_present,
             )
             if f:
@@ -772,6 +948,126 @@ class HPPWAFBypassProber(BaseScanner):
                 self.report_finding(**f)
 
         return findings
+
+    def _probe_split_payload(
+        self,
+        parsed,
+        base_params: List[Tuple[str, str]],
+        name: str,
+        part1: str,
+        part2_label: str,
+        attack_type: str,
+        expected_canary: str,
+        waf_present: bool,
+    ) -> Optional[Dict]:
+        """
+        XSS split-payload HPP: send the XSS in two halves split across repeated params.
+        e.g. q=<script&q=>alert(1)</script>
+        When the backend concatenates them, the XSS fires; WAF only sees split tokens.
+        """
+        target_url = urlunparse(parsed)
+        # Build query string manually — requests urlencode would not produce the raw split
+        raw_qs = urlencode(base_params + [(name, part1)])
+        probe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{raw_qs}"
+        try:
+            resp = self.session.get(probe_url, timeout=7, verify=False, allow_redirects=True)
+        except Exception as exc:
+            logger.debug("[HPPWAFBypass] split %s error: %r", attack_type, exc)
+            return None
+
+        body = _safe_text(resp)
+        if expected_canary.lower() in body.lower() or "<script>" in body.lower():
+            waf_note = "WAF fingerprinted — bypass confirmed." if waf_present else "No WAF detected."
+            return {
+                "vuln_type": f"WAF Bypass via HPP Split Payload ({attack_type})",
+                "url": target_url,
+                "param": name,
+                "payload": probe_url,
+                "severity": "Critical" if waf_present else "High",
+                "description": (
+                    f"Split-payload HPP bypass: XSS payload split across repeated '{name}' params. "
+                    f"Backend concatenation may reassemble the payload, bypassing WAF token inspection. "
+                    f"{waf_note}"
+                ),
+                "evidence": {
+                    "attack_type": attack_type,
+                    "param": name,
+                    "part1": part1,
+                    "probe_url": probe_url,
+                    "waf_present": waf_present,
+                    "status_code": resp.status_code,
+                    "body_snippet": body[:300],
+                },
+                "remediation": (
+                    "Configure WAF to inspect ALL repeated parameter occurrences. "
+                    "Never concatenate repeated params without sanitization."
+                ),
+            }
+        return None
+
+    def _probe_split_sqli(
+        self,
+        parsed,
+        base_params: List[Tuple[str, str]],
+        name: str,
+        canary: str,
+        waf_present: bool,
+    ) -> Optional[Dict]:
+        """
+        SQLi split-payload: id=1 UN&id=ION SE&id=LECT 1,2,3
+        If backend joins param values, the result is '1 UNION SELECT 1,2,3'.
+        """
+        target_url = urlunparse(parsed)
+        # Build three-way split: WAF sees each fragment as safe
+        split_params = base_params + [
+            (name, "1 UN"),
+            (name, "ION SE"),
+            (name, f"LECT 1,2,{canary}"),
+        ]
+        probe_url = urlunparse(parsed._replace(query=urlencode(split_params)))
+        try:
+            resp = self.session.get(probe_url, timeout=7, verify=False, allow_redirects=True)
+        except Exception as exc:
+            logger.debug("[HPPWAFBypass] sqli_split error: %r", exc)
+            return None
+
+        body = _safe_text(resp)
+        # Check for canary or SQL error indicators
+        reflected = (
+            canary.lower() in body.lower()
+            or "syntax error" in body.lower()
+            or "you have an error in your sql" in body.lower()
+            or "union" in body.lower()
+        )
+        if reflected:
+            waf_note = "WAF fingerprinted — bypass confirmed." if waf_present else "No WAF detected."
+            return {
+                "vuln_type": "WAF Bypass via HPP Split SQLi Payload",
+                "url": target_url,
+                "param": name,
+                "payload": probe_url,
+                "severity": "Critical" if waf_present else "High",
+                "description": (
+                    f"SQLi payload split across three repeated '{name}' params "
+                    f"(1 UN / ION SE / LECT 1,2,...). "
+                    "If backend concatenates all values, the UNION SELECT is reassembled. "
+                    f"{waf_note}"
+                ),
+                "evidence": {
+                    "attack_type": "SQLi-Split",
+                    "param": name,
+                    "canary": canary,
+                    "probe_url": probe_url,
+                    "waf_present": waf_present,
+                    "status_code": resp.status_code,
+                    "body_snippet": body[:300],
+                },
+                "remediation": (
+                    "Validate and reject duplicate parameters. "
+                    "Use parameterized queries and WAF rules that inspect all param copies."
+                ),
+            }
+        return None
 
     def _probe_bypass(
         self,
@@ -876,16 +1172,141 @@ class HPPWAFBypassProber(BaseScanner):
 
 
 # ===========================================================================
-# 5. ParamPollutionScanner — Orchestrator
+# 5. ContentTypeSwitchingProber
+# ===========================================================================
+
+class ContentTypeSwitchingProber(BaseScanner):
+    """
+    Detect parameter parsing differences when the same param is sent as
+    application/x-www-form-urlencoded vs. application/json.
+
+    Some backends route form vs JSON requests through different code paths,
+    resulting in different validation, different values being used, or different
+    access control decisions. If the canary is reflected in one content type
+    but not the other, it indicates a content-type-based parsing discrepancy.
+    """
+
+    name = "hpp_content_switch"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        """Probe for content-type switching parameter parsing differences."""
+        findings: List[Dict] = []
+
+        url_params = _extract_params(target)
+        post_params = list(kwargs.get("post_params", url_params or [("id", "1"), ("q", "test")]))
+
+        for name, orig_value in post_params:
+            canary = _canary()
+            form_result = self._send_form(target, name, orig_value, canary)
+            json_result = self._send_json(target, name, orig_value, canary)
+
+            form_reflected = form_result is not None and _has_canary(_safe_text(form_result), canary)
+            json_reflected = json_result is not None and _has_canary(_safe_text(json_result), canary)
+
+            if form_reflected != json_reflected:
+                # Discrepancy: one format reflects canary, the other doesn't
+                winning_type = "form (application/x-www-form-urlencoded)" if form_reflected else "JSON (application/json)"
+                losing_type = "JSON (application/json)" if form_reflected else "form (application/x-www-form-urlencoded)"
+                finding = {
+                    "vuln_type": "Content-Type Switching — Parameter Parsing Discrepancy",
+                    "url": target,
+                    "param": name,
+                    "payload": f"{name}={canary} via {winning_type}",
+                    "severity": "High",
+                    "description": (
+                        f"Parameter '{name}' is reflected when sent as {winning_type} "
+                        f"but not as {losing_type}. "
+                        "This indicates different code paths handle each content type differently, "
+                        "which may allow bypassing validation or access control by switching format."
+                    ),
+                    "evidence": {
+                        "technique": "content_type_switching",
+                        "param": name,
+                        "canary": canary,
+                        "form_status": form_result.status_code if form_result else None,
+                        "json_status": json_result.status_code if json_result else None,
+                        "form_reflected": form_reflected,
+                        "json_reflected": json_reflected,
+                        "winning_content_type": winning_type,
+                    },
+                    "remediation": (
+                        "Apply identical input validation and access control regardless of Content-Type. "
+                        "Do not rely on Content-Type to gate security checks."
+                    ),
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+
+            elif form_reflected and json_reflected:
+                # Both reflected — both endpoints accept canary, informational
+                finding = {
+                    "vuln_type": "Content-Type Switching — Canary Reflected in Both Formats",
+                    "url": target,
+                    "param": name,
+                    "payload": f"{name}={canary}",
+                    "severity": "Informational",
+                    "description": (
+                        f"Parameter '{name}' canary is reflected in both form and JSON responses. "
+                        "Both content-type paths process the parameter similarly."
+                    ),
+                    "evidence": {
+                        "technique": "content_type_switching",
+                        "param": name,
+                        "canary": canary,
+                        "form_reflected": True,
+                        "json_reflected": True,
+                    },
+                }
+                findings.append(finding)
+                self.report_finding(**finding)
+
+        return findings
+
+    def _send_form(self, url: str, name: str, orig_value: str, canary: str):
+        """Send POST with application/x-www-form-urlencoded and return response or None."""
+        body = urlencode([(name, canary)])
+        try:
+            return self.session.post(
+                url,
+                data=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=7,
+                verify=False,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.debug("[ContentTypeSwitch] form send error: %r", exc)
+            return None
+
+    def _send_json(self, url: str, name: str, orig_value: str, canary: str):
+        """Send POST with application/json and return response or None."""
+        payload = json.dumps({name: canary})
+        try:
+            return self.session.post(
+                url,
+                data=payload.encode(),
+                headers={"Content-Type": "application/json"},
+                timeout=7,
+                verify=False,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.debug("[ContentTypeSwitch] json send error: %r", exc)
+            return None
+
+
+# ===========================================================================
+# 7. ParamPollutionScanner — Orchestrator
 # ===========================================================================
 
 class ParamPollutionScanner(BaseScanner):
     """
     Orchestrates all HPP sub-scanners:
-      1. ServerParseProfiler     — fingerprint server parse behavior first
-      2. QueryStringHPPProber    — URL query string HPP
-      3. PostBodyHPPProber       — POST body HPP
-      4. HPPWAFBypassProber      — WAF bypass via HPP
+      1. ServerParseProfiler       — fingerprint server parse behavior first
+      2. QueryStringHPPProber      — URL query string HPP
+      3. PostBodyHPPProber         — POST body HPP (URL-enc, JSON, multipart, GET+POST)
+      4. HPPWAFBypassProber        — WAF bypass via HPP (full + split payloads)
+      5. ContentTypeSwitchingProber — Form vs JSON content-type parsing discrepancy
     """
 
     name = "param_pollution"
@@ -914,7 +1335,7 @@ class ParamPollutionScanner(BaseScanner):
         except Exception as exc:
             logger.warning("[ParamPollution] QueryStringHPPProber failed: %r", exc)
 
-        # Step 3: POST body HPP
+        # Step 3: POST body HPP (URL-encoded, JSON, multipart, GET+POST)
         post_prober = PostBodyHPPProber(
             session=self.session, results=self.results, debug=self.debug
         )
@@ -924,7 +1345,7 @@ class ParamPollutionScanner(BaseScanner):
         except Exception as exc:
             logger.warning("[ParamPollution] PostBodyHPPProber failed: %r", exc)
 
-        # Step 4: WAF bypass
+        # Step 4: WAF bypass via HPP (full payloads + split payload technique)
         waf_prober = HPPWAFBypassProber(
             session=self.session, results=self.results, debug=self.debug
         )
@@ -933,6 +1354,16 @@ class ParamPollutionScanner(BaseScanner):
             all_findings.extend(waf_findings)
         except Exception as exc:
             logger.warning("[ParamPollution] HPPWAFBypassProber failed: %r", exc)
+
+        # Step 5: Content-Type switching discrepancy
+        ct_prober = ContentTypeSwitchingProber(
+            session=self.session, results=self.results, debug=self.debug
+        )
+        try:
+            ct_findings = ct_prober.run(target, **kwargs)
+            all_findings.extend(ct_findings)
+        except Exception as exc:
+            logger.warning("[ParamPollution] ContentTypeSwitchingProber failed: %r", exc)
 
         self.set_summary("param_pollution", len(all_findings))
         logger.info(
