@@ -4670,9 +4670,15 @@ def run_feroxbuster_scan(ctx) -> None:
 
 def run_nuclei_scan(ctx) -> None:
     """
-    Runs Nuclei vulnerability scanner against the target.
-    Uses tech-aware template selection: detected technologies determine
-    which Nuclei template tags are activated.
+    Nuclei vulnerability scanner — tam entegrasyon.
+
+    Özellikler:
+      - Tech-aware template seçimi (ctx.technologies)
+      - Stealth / Agresif profil (rate-limit + concurrency)
+      - OAST/interactsh entegrasyonu (ctx.oast_domain → -iserver/-interactsh-url)
+      - Mevcut WebSecure bulgularıyla deduplication (fingerprint bazlı)
+      - Tespit edilen yeni teknolojileri ctx.technologies'e ekler
+      - Şablon güncelleme (stealth'te atlanır)
     """
     if NucleiWrapper is None:
         add_result("nuclei", {"status": "skipped", "reason": "NucleiWrapper not importable"})
@@ -4689,51 +4695,146 @@ def run_nuclei_scan(ctx) -> None:
     wrapper = NucleiWrapper()
     if not wrapper.is_available():
         add_result("nuclei", {"status": "skipped", "reason": "nuclei binary not found"})
+        _logger.warning(
+            "[Nuclei] Binary bulunamadı. "
+            "tools/nuclei/nuclei.exe yoluna koyun veya PATH'e ekleyin."
+        )
         return
 
-    tech_stack = list(getattr(ctx, "technologies", []) or [])
-    proxy = _resolve_proxy(ctx)
-    rate_limit = int(_get_config(ctx, "offensive.nuclei.rate_limit", 150))
-    severity = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
-    extra_tags = _get_config(ctx, "offensive.nuclei.extra_tags", "")
-    auto_update = bool(_get_config(ctx, "offensive.nuclei.auto_update_templates", True))
-    tags = None
-    if extra_tags:
-        tags = extra_tags
+    # ------------------------------------------------------------------
+    # Profil tespiti: stealth / aggressive / normal
+    # ------------------------------------------------------------------
+    cfg = getattr(ctx, "config", {}) or {}
+    _scan_profile = str(
+        (cfg.get("settings") or {}).get("scan_profile", "normal")
+    ).lower()
+    if _scan_profile not in ("stealth", "aggressive", "normal"):
+        _scan_profile = "normal"
 
-    # Auto-update templates if stale (controlled via config)
-    if auto_update:
-        _logger.info("[Nuclei] Checking template freshness...")
+    # ------------------------------------------------------------------
+    # Parametre toplama
+    # ------------------------------------------------------------------
+    tech_stack   = list(getattr(ctx, "technologies", []) or [])
+    proxy        = _resolve_proxy(ctx)
+    severity     = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
+    extra_tags   = _get_config(ctx, "offensive.nuclei.extra_tags", "") or ""
+    auto_update  = bool(_get_config(ctx, "offensive.nuclei.auto_update_templates", True))
+    tags         = extra_tags.strip() if extra_tags.strip() else None
+    nuclei_cfg   = cfg.get("_nuclei", {}) or {}
+
+    # OAST domain (interactsh subdomain — kör SSRF/RCE tespiti)
+    interactsh_url: Optional[str] = None
+    oast_domain = getattr(ctx, "oast_domain", None)
+    if oast_domain:
+        # Tam URL formatı: https://xyz.oast.pro veya dns://xyz.oast.pro
+        interactsh_url = oast_domain if "://" in oast_domain else f"https://{oast_domain}"
+        _logger.info(f"[Nuclei] OAST callback URL: {interactsh_url}")
+
+    # ------------------------------------------------------------------
+    # Deduplication: mevcut WebSecure fingerprint'leri topla
+    # ------------------------------------------------------------------
+    existing_fps: set = set()
+    try:
+        results_dict = getattr(ctx, "results", {}) or {}
+        for bucket in ("offensive", "xss", "sqli", "ssrf", "nuclei"):
+            for item in (results_dict.get(bucket) or []):
+                if isinstance(item, dict):
+                    key = f"{item.get('template_id','')}{item.get('url','')}"
+                    if key:
+                        import hashlib as _h
+                        existing_fps.add(
+                            _h.md5(key.encode(), usedforsecurity=False).hexdigest()
+                        )
+    except Exception as _dedup_exc:
+        _logger.debug(f"[Nuclei] Dedup fingerprint toplama hatası: {_dedup_exc!r}")
+
+    # ------------------------------------------------------------------
+    # Şablon güncelleme (stealth'te atla)
+    # ------------------------------------------------------------------
+    if auto_update and _scan_profile != "stealth":
+        _logger.info("[Nuclei] Şablon güncelliği kontrol ediliyor...")
         try:
-            updated = wrapper.update_templates(force=False, timeout=60)
-            if updated:
-                ver = wrapper.get_template_version()
-                _logger.info(f"[Nuclei] Templates ready: {ver or 'unknown version'}")
+            wrapper.update_templates(force=False, timeout=60)
+            ver = wrapper.get_template_version()
+            if ver:
+                _logger.info(f"[Nuclei] Şablonlar hazır: {ver}")
         except Exception as _nu_exc:
-            _logger.debug(f"[Nuclei] Template update check failed: {_nu_exc!r}")
+            _logger.debug(f"[Nuclei] Şablon güncelleme kontrolü başarısız: {_nu_exc!r}")
 
-    _logger.info(f"[Nuclei] Starting scan on {url} (tech: {tech_stack or 'auto'})")
+    # ------------------------------------------------------------------
+    # Tarama
+    # ------------------------------------------------------------------
+    _logger.info(
+        f"[Nuclei] Tarama başlıyor → {url} "
+        f"(profil={_scan_profile}, tech={tech_stack or 'auto'}, "
+        f"oast={'evet' if interactsh_url else 'hayır'})"
+    )
 
-    _nuclei_profile = (getattr(ctx, "config", {}) or {}).get("_nuclei", {})
     findings = wrapper.scan(
         target=url,
         tags=tags,
         severity=severity,
-        rate_limit=rate_limit,
         proxy=proxy,
         tech_stack=tech_stack,
-        profile_cfg=_nuclei_profile,
-        auto_update=False,  # Already handled above
+        profile_cfg=nuclei_cfg,
+        profile=_scan_profile,
+        interactsh_url=interactsh_url,
+        auto_update=False,           # Yukarıda zaten ele alındı
+        deduplicate_fps=existing_fps,
     )
+
+    # ------------------------------------------------------------------
+    # Sonuçları dağıt
+    # ------------------------------------------------------------------
+    crit_high_count = 0
+    new_techs: list = []
 
     for finding in findings:
         sev = finding.get("severity", "Info")
         add_result("nuclei", finding)
+
+        # Critical / High / Medium → offensive bucket'a da ekle
         if sev in ("Critical", "High", "Medium"):
             add_result("offensive", finding)
+            crit_high_count += 1
 
-    add_result("meta", {"stage": "nuclei", "findings": len(findings)})
-    _logger.info(f"[Nuclei] Scan complete: {len(findings)} finding(s)")
+        # Tech detection bulguları CVE değil — technologies listesine ekle
+        if finding.get("is_tech_detection"):
+            new_techs.append(finding.get("vuln_type", "").lower())
+
+    # Yeni teknolojileri ctx.technologies'e ekle
+    if new_techs:
+        existing_techs = list(getattr(ctx, "technologies", []) or [])
+        merged = list(set(existing_techs + new_techs))
+        try:
+            ctx.technologies = merged
+        except AttributeError:
+            pass
+        _logger.info(f"[Nuclei] Yeni teknoloji tespiti: {new_techs}")
+
+    # CVE özeti meta'ya
+    cve_list = [
+        cve
+        for f in findings
+        for cve in (f.get("cve_ids") or [])
+        if cve
+    ]
+
+    add_result("meta", {
+        "stage":        "nuclei",
+        "findings":     len(findings),
+        "crit_high":    crit_high_count,
+        "cve_count":    len(cve_list),
+        "cve_ids":      sorted(set(cve_list))[:20],  # ilk 20 CVE
+        "profile":      _scan_profile,
+        "oast_enabled": bool(interactsh_url),
+        "template_ver": wrapper.get_template_version() or "unknown",
+    })
+
+    _logger.info(
+        f"[Nuclei] Tamamlandı: {len(findings)} bulgu "
+        f"({crit_high_count} Kritik/Yüksek, {len(cve_list)} CVE)"
+    )
 
 
 def run_js_analysis(ctx) -> None:
