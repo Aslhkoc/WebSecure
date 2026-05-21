@@ -30,29 +30,69 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 /* TREE */
 .tree-root { font-family: 'Consolas', monospace; font-size: 13px; }
 .tree-node { }
-.tree-item { display: flex; align-items: flex-start; gap: 6px; padding: 3px 4px; cursor: pointer; border-radius: 4px; transition: background .15s; user-select: none; }
-.tree-item:hover { background: var(--bg3); }
-.tree-children { margin-left: 22px; border-left: 1px solid var(--border); padding-left: 10px; display: none; }
+.tree-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 8px 4px 6px; cursor: pointer; border-radius: 6px;
+  transition: background .15s, border-left-color .15s, transform .15s;
+  user-select: none; border-left: 2px solid transparent;
+}
+.tree-item:hover                { background: rgba(88,166,255,.07);   border-left-color: var(--blue);   transform: translateX(2px); }
+.t-entry.tree-item:hover        { background: rgba(248,81,73,.07);    border-left-color: var(--red); }
+.t-scanner.tree-item:hover      { background: rgba(63,185,80,.07);    border-left-color: var(--green); }
+.t-integration.tree-item:hover  { background: rgba(255,166,87,.07);   border-left-color: var(--orange); }
+.t-reporter.tree-item:hover     { background: rgba(188,140,255,.07);  border-left-color: var(--purple); }
+.t-config.tree-item:hover       { background: rgba(210,153,34,.07);   border-left-color: var(--yellow); }
+.t-test.tree-item:hover         { background: rgba(255,123,114,.07);  border-left-color: var(--pink); }
+.t-tool.tree-item:hover         { background: rgba(255,215,0,.05);    border-left-color: #ffd700; }
+.tree-children { margin-left: 20px; border-left: 1px dashed rgba(88,166,255,.22); padding-left: 12px; display: none; }
 .tree-children.open { display: block; }
-.arrow { width: 14px; min-width:14px; color: var(--muted); font-size: 10px; transition: transform .2s; margin-top:2px; }
-.arrow.open { transform: rotate(90deg); }
-.icon { flex-shrink: 0; margin-top:1px; }
-.node-label { flex: 1; line-height:1.4; }
-.fname { font-weight: 600; }
-.fdesc { color: var(--muted); font-size: 11px; margin-left: 6px; }
-.fsize { color: var(--orange); font-size: 11px; margin-left: 6px; }
+.arrow { width: 14px; min-width: 14px; color: var(--muted); font-size: 11px; transition: transform .25s cubic-bezier(.4,0,.2,1), color .15s; flex-shrink: 0; }
+.arrow.open { transform: rotate(90deg); color: var(--blue); }
+.icon { flex-shrink: 0; }
+.node-label { flex: 1; line-height: 1.4; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.fname { font-weight: 600; white-space: nowrap; }
+.fdesc { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 
-.t-entry .fname { color: var(--red); }
-.t-core .fname { color: var(--blue); }
-.t-scanner .fname { color: var(--green); }
+/* Type pills */
+.type-pill { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; letter-spacing: .06em; flex-shrink: 0; text-transform: uppercase; white-space: nowrap; }
+.tp-entry       { background: rgba(248,81,73,.2);   color: var(--red); }
+.tp-core        { background: rgba(88,166,255,.18); color: var(--blue); }
+.tp-scanner     { background: rgba(63,185,80,.18);  color: var(--green); }
+.tp-integration { background: rgba(255,166,87,.18); color: var(--orange); }
+.tp-reporter    { background: rgba(188,140,255,.18);color: var(--purple); }
+.tp-cli         { background: rgba(57,211,83,.12);  color: var(--cyan); }
+.tp-config      { background: rgba(210,153,34,.18); color: var(--yellow); }
+.tp-test        { background: rgba(255,123,114,.18);color: var(--pink); }
+.tp-wordlist    { background: rgba(158,203,255,.14);color: #9ecbff; }
+.tp-tool        { background: rgba(255,215,0,.1);   color: #ffd700; }
+
+/* Directory header */
+.tree-dir-header {
+  display: flex; align-items: center; gap: 7px; padding: 5px 8px;
+  cursor: pointer; border-radius: 6px; transition: background .15s, border-left-color .15s, transform .15s;
+  user-select: none; border-left: 2px solid transparent;
+  background: rgba(88,166,255,.03);
+}
+.tree-dir-header:hover { background: rgba(88,166,255,.11); border-left-color: var(--blue); transform: translateX(2px); }
+.dir-name  { font-weight: 700; color: #79c0ff; }
+.dir-count { font-size: 10px; color: var(--muted); background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 0 7px; line-height: 1.9; }
+
+/* Tree stats bar */
+.tree-stats { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.ts-item { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 12px; cursor: default; }
+.ts-count { font-size: 13px; font-weight: 700; }
+
+.t-entry .fname       { color: var(--red); }
+.t-core .fname        { color: var(--blue); }
+.t-scanner .fname     { color: var(--green); }
 .t-integration .fname { color: var(--orange); }
-.t-reporter .fname { color: var(--purple); }
-.t-cli .fname { color: var(--cyan); }
-.t-config .fname { color: var(--yellow); }
-.t-test .fname { color: var(--pink); }
-.t-wordlist .fname { color: #9ecbff; }
-.t-tool .fname { color: #ffd700; }
-.t-dir .fname { color: var(--blue); font-weight: 700; }
+.t-reporter .fname    { color: var(--purple); }
+.t-cli .fname         { color: var(--cyan); }
+.t-config .fname      { color: var(--yellow); }
+.t-test .fname        { color: var(--pink); }
+.t-wordlist .fname    { color: #9ecbff; }
+.t-tool .fname        { color: #ffd700; }
+.t-dir .fname         { color: #79c0ff; font-weight: 700; }
 
 /* REPORT */
 .report-grid { display: flex; flex-direction: column; gap: 6px; }
@@ -721,11 +761,12 @@ function countDeep(node){
 function renderLeaf(f){
   const fname=f.path.split('/').pop();
   const icon=TYPE_ICONS[f.type]||'📄';
-  const shortDesc=f.desc.length>70?f.desc.substring(0,70)+'...':f.desc;
+  const shortDesc=f.desc.length>68?f.desc.substring(0,68)+'…':f.desc;
   return `<div class="tree-item t-${f.type}" data-path="${f.path.toLowerCase()}" onclick="showDetail('${f.path.replace(/'/g,"\\'")}')">
     <span class="arrow" style="opacity:0">&#9658;</span>
     <span class="icon">${icon}</span>
-    <span class="node-label"><span class="fname">${fname}</span><span class="fsize">${f.size}</span><span class="fdesc">${shortDesc}</span></span>
+    <span class="type-pill tp-${f.type}">${f.type.substring(0,3).toUpperCase()}</span>
+    <span class="node-label"><span class="fname">${fname}</span><span class="fdesc">${shortDesc}</span></span>
   </div>`;
 }
 
@@ -734,10 +775,11 @@ function renderDir(name,node,path){
   const total=countDeep(node);
   const childDirs=Object.keys(node._d||{}).sort();
   let html=`<div class="tree-node">
-    <div class="tree-item t-dir" onclick="toggleNode('${id}')">
+    <div class="tree-dir-header" onclick="toggleNode('${id}')">
       <span class="arrow" id="arr_${id}">&#9658;</span>
       <span class="icon">📁</span>
-      <span class="node-label"><span class="fname">${name}/</span><span class="fdesc">${total} dosya</span></span>
+      <span class="dir-name">${name}/</span>
+      <span class="dir-count">${total} dosya</span>
     </div>
     <div class="tree-children" id="ch_${id}">`;
   childDirs.forEach(c=>{
@@ -765,7 +807,6 @@ function buildReport(files){
       html+=`<div class="rcard" data-path="${f.path.toLowerCase()}">
         <div class="rcard-header" onclick="toggleCard(this)">
           <span class="rcard-path">${f.path}</span>
-          <span class="rcard-size">${f.size}</span>
           <span class="rcard-badge b-${f.type}">${t.toUpperCase()}</span>
         </div>
         <div class="rcard-body">
@@ -784,12 +825,27 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Tree
   const root=buildNodes(FILES);
   let treeHtml='';
-  // Top-level items: files first then dirs (but really we have dirs like CLAUDE.md at top)
   (root._f||[]).forEach(f=>treeHtml+=renderLeaf(f));
   Object.keys(root._d||{}).sort().forEach(name=>{
     treeHtml+=renderDir(name,root._d[name],name);
   });
   document.getElementById('treeRoot').innerHTML=treeHtml;
+
+  // Stats bar
+  const typeCounts={};
+  FILES.forEach(f=>{typeCounts[f.type]=(typeCounts[f.type]||0)+1;});
+  const pillBg  ={entry:'rgba(248,81,73,.18)',core:'rgba(88,166,255,.15)',scanner:'rgba(63,185,80,.15)',integration:'rgba(255,166,87,.15)',reporter:'rgba(188,140,255,.15)',cli:'rgba(57,211,83,.1)',config:'rgba(210,153,34,.15)',test:'rgba(255,123,114,.15)',wordlist:'rgba(158,203,255,.12)',tool:'rgba(255,215,0,.08)'};
+  const pillCol ={entry:'#f85149',core:'#58a6ff',scanner:'#3fb950',integration:'#ffa657',reporter:'#bc8cff',cli:'#39d353',config:'#d29922',test:'#ff7b72',wordlist:'#9ecbff',tool:'#ffd700'};
+  let statsHtml='<div class="tree-stats">';
+  TYPE_ORDER.forEach(t=>{
+    if(!typeCounts[t])return;
+    const bg=pillBg[t]||'rgba(139,148,158,.1)';
+    const col=pillCol[t]||'#8b949e';
+    statsHtml+=`<div class="ts-item" style="background:${bg};color:${col};border:1px solid ${col}33">${TYPE_ICONS[t]||'📄'}&nbsp;<span class="ts-count">${typeCounts[t]}</span>&nbsp;${t}</div>`;
+  });
+  statsHtml+=`<div class="ts-item" style="background:rgba(139,148,158,.1);color:#8b949e;border:1px solid #30363d">📊&nbsp;<span class="ts-count">${FILES.length}</span>&nbsp;toplam</div>`;
+  statsHtml+='</div>';
+  document.getElementById('treeRoot').insertAdjacentHTML('beforebegin',statsHtml);
 
   // Report
   document.getElementById('reportGrid').innerHTML=buildReport(FILES);
