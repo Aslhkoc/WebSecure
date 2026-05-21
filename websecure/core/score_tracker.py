@@ -226,7 +226,7 @@ class ScoreCalculator:
             medium=counts["medium"],
             low=counts["low"],
             info=counts["info"],
-            recorded_at=_dt.datetime.utcnow().isoformat(),
+            recorded_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             project_id=project_id,
             tenant_id=tenant_id,
         )

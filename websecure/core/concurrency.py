@@ -122,7 +122,7 @@ class ScanTask:
         param: str = "",
         *,
         args: Tuple = (),
-        kwargs: Dict = {},
+        kwargs: Optional[Dict] = None,
         description: str = "",
     ) -> "ScanTask":
         prio = _MODULE_PRIORITY.get(module, TaskPriority.MEDIUM)
@@ -131,7 +131,7 @@ class ScanTask:
             created_at=time.monotonic(),
             fn=fn,
             args=args,
-            kwargs=dict(kwargs),
+            kwargs=dict(kwargs) if kwargs else {},
             task_id=_make_task_id(module, url, param),
             module=module,
             url=url,
@@ -653,7 +653,7 @@ class AdaptiveThreadPool:
                 # Python TPE dinamik resize desteklemez; yeni executor aç
                 old = self._executor
                 self._executor = ThreadPoolExecutor(max_workers=target)
-                old.shutdown(wait=False)
+                old.shutdown(wait=True)
                 _logger.debug(f"[AdaptivePool] Workers {current_max} -> {target}")
         finally:
             self._resize_lock.release()

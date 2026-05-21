@@ -168,6 +168,10 @@ def ensure_interactsh(cfg: dict) -> bool:
         else:
             print("[!] interactsh token alinamadi. Config'deki token kullanilacak.")
             proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                pass
             return False
     except Exception as exc:
         print(f"[!] interactsh baslatilamadi: {exc}")

@@ -269,8 +269,6 @@ class BaseScanner:
         max_workers: int = 0,
         stop_on_first: bool = True,
     ) -> List[Any]:
-        if max_workers <= 0:
-            max_workers = self._max_workers
         """
         Execute *probe_fn(payload)* for each payload in a thread pool.
         Returns a list of truthy results from probe_fn.
@@ -281,6 +279,8 @@ class BaseScanner:
         Any exception raised by probe_fn is logged at DEBUG and skipped (not swallowed
         silently — the log entry is always emitted).
         """
+        if max_workers <= 0:
+            max_workers = self._max_workers
         hits: List[Any] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as exe:

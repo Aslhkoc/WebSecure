@@ -297,7 +297,7 @@ class ScanSession:
                 target=target,
                 profile=profile,
                 status="running",
-                started_at=_dt.datetime.utcnow().isoformat(),
+                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
                 tenant_id=tenant_id,
                 project_id=project_id,
             )
@@ -588,7 +588,7 @@ def post_scan_persist(
             target=target,
             profile=profile,
             status="completed",
-            completed_at=_dt.datetime.utcnow().isoformat(),
+            completed_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             duration_s=duration_s,
             finding_count=len(clean_findings),
             score=result.get("score"),

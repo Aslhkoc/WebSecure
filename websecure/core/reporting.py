@@ -2297,7 +2297,7 @@ _plan_logs = []
 
 
 def add_plan_log(phase_id: str, step: str, data: dict):
-    _plan_logs.append({"phase": phase_id, "step": step, "data": data, "ts": datetime.utcnow().isoformat() + "Z"})
+    _plan_logs.append({"phase": phase_id, "step": step, "data": data, "ts": datetime.now(timezone.utc).isoformat() + "Z"})
 
 
 def get_plan_logs():

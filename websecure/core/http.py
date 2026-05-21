@@ -591,7 +591,7 @@ def get_trace_id() -> str | None:
 
 def _now_iso() -> str:
     import datetime as _dt
-    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat() + "Z"
 
 
 def _should_sample(p: float) -> bool:

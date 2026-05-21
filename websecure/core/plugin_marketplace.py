@@ -318,7 +318,7 @@ class PluginMarketplace:
                 path=str(dest),
                 source="git",
                 source_url=repo_url,
-                installed_at=_dt.datetime.utcnow().isoformat(),
+                installed_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             )
             (dest / "plugin.json").write_text(
                 json.dumps(meta.to_dict(), indent=2), encoding="utf-8"

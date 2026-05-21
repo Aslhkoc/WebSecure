@@ -66,7 +66,7 @@ def parse_retry_after(headers: Dict[str, Any]) -> Optional[int]:
     if dt is None:
         return None
     import datetime as _dt
-    now = _dt.datetime.datetime.utcnow().replace(tzinfo=dt.tzinfo)
+    now = _dt.datetime.now(_dt.timezone.utc)
     delta = (dt - now).total_seconds()
     return int(delta) if delta > 0 else 0
 

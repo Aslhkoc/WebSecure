@@ -198,7 +198,7 @@ class FPLearner:
             severity=sev,
             tool=tool,
             tenant_id=tenant_id,
-            created_at=_dt.datetime.utcnow().isoformat(),
+            created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
         )
 
         with self._lock:
