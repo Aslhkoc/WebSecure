@@ -245,26 +245,65 @@ class NmapWrapper(ToolIntegration):
         return "nmap"
 
     def _find_binary(self):
+        # 1. PATH üzerinden ara
         found = shutil.which(self.binary)
         if found:
             self._binary_path = found
             return
+
+        # 2. Yaygın kurulum konumları (Windows + Linux + macOS)
         from pathlib import Path
         candidates = [
             r"C:\Program Files (x86)\Nmap\nmap.exe",
             r"C:\Program Files\Nmap\nmap.exe",
+            r"C:\Nmap\nmap.exe",
+            r"C:\tools\nmap\nmap.exe",
+            "/usr/bin/nmap",
+            "/usr/local/bin/nmap",
+            "/opt/homebrew/bin/nmap",
             str(Path(__file__).resolve().parent.parent.parent / "tools" / "Nmap" / "nmap.exe"),
         ]
+
+        # 3. Windows PATH kayıt defterinden de dene
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Nmap")
+            install_dir, _ = winreg.QueryValueEx(key, "")
+            winreg.CloseKey(key)
+            candidates.insert(0, os.path.join(install_dir, "nmap.exe"))
+        except Exception:
+            pass
+
+        # 4. Sistem PATH'i doğrudan os.environ'dan yeniden oku (process başlatıldıktan sonra güncellenmiş olabilir)
+        try:
+            import subprocess as _sp
+            if platform.system() == "Windows":
+                result = _sp.run(["where", "nmap"], capture_output=True, text=True, timeout=5)
+            else:
+                result = _sp.run(["which", "nmap"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                found = result.stdout.strip().splitlines()[0]
+                if found and os.path.exists(found):
+                    self._binary_path = found
+                    logger.info(f"[Nmap] Binary (shell lookup): {found}")
+                    return
+        except Exception:
+            pass
+
         for c in candidates:
             if os.path.exists(c):
                 self._binary_path = c
-                logger.info(f"[Nmap] Binary: {c}")
+                logger.info(f"[Nmap] Binary (fallback): {c}")
                 return
-        logger.warning("[Nmap] Nmap bulunamadı. Kali: sudo apt install nmap")
-        print("\033[31m[Nmap] Binary bulunamadı! Kali Linux: sudo apt install nmap\033[0m")
+
+        logger.warning("[Nmap] Nmap bulunamadı — nmap.org'dan indir veya PATH'e ekle.")
 
     def is_available(self) -> bool:
-        return bool(shutil.which(self.binary)) or os.path.exists(self.binary)
+        if hasattr(self, "_binary_path") and self._binary_path and os.path.exists(self._binary_path):
+            return True
+        self._find_binary()
+        return hasattr(self, "_binary_path") and bool(self._binary_path) and os.path.exists(self._binary_path)
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — scan target and return ToolResult."""
