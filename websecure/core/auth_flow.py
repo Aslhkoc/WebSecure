@@ -56,6 +56,12 @@ EC = _import_attr("selenium.webdriver.support.expected_conditions", "presence_of
 # Not: EC içinden fonksiyonlar çok; burada presence_of_element_located’a erişim teyidi yeter.
 _has_selenium = all(v is not None for v in (By, WebDriverWait, EC))
 
+def _safe_get_cookies(driver) -> list:
+    try:
+        return driver.get_cookies() if hasattr(driver, "get_cookies") else []
+    except Exception:
+        return []
+
 # -----------------------------------------------------------------------------
 # İç import yardımcıları (opsiyonel modüller)
 # -----------------------------------------------------------------------------
@@ -649,7 +655,7 @@ def run_auth_flow(
             "authenticated": bool(authenticated),
             "cookies": session.cookies.get_dict(),
             "headers": dict(session.headers),
-            "driver_cookies": driver.get_cookies() if (driver and _has_selenium and hasattr(driver, "get_cookies")) else []
+            "driver_cookies": _safe_get_cookies(driver) if (driver and _has_selenium) else []
         }
         add_result("sessions", session_data)
 
@@ -739,7 +745,11 @@ def smart_login(session: requests.Session,
                 base_url: Optional[str] = None,
                 debug: bool = False,
                 event_cb: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> bool:
-    ok = run_auth_flow(session, cfg, driver=driver, base_url=base_url, debug=debug, event_cb=event_cb)
+    try:
+        ok = run_auth_flow(session, cfg, driver=driver, base_url=base_url, debug=debug, event_cb=event_cb)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[Auth] smart_login hata yakalandı: %s", exc)
+        ok = False
     roles = ((cfg.get("auth") or {}).get("roles") or [])
     if roles:
         _ = build_role_sessions(session, cfg, debug=debug)
