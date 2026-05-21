@@ -52,10 +52,20 @@ _MAX_PENALTY = 100.0  # skor hiçbir zaman negatif olamaz
 
 @dataclass
 class ScoreWeights:
-    """Severity başına ceza ağırlıkları."""
-    critical: float = 25.0   # bulgu başına skor düşüşü
-    high: float = 10.0
-    medium: float = 4.0
+    """
+    Severity başına ceza ağırlıkları (CVSS 3.1 uyumlu kalibre edilmiş).
+
+    Kalibrasyon hedefleri (logaritmik sıkıştırma sonrası):
+      1 Critical → ~62/100 (Medium risk)
+      2 Critical → ~30/100 (High risk)
+      1 High     → ~83/100 (Low risk)
+      3 High     → ~65/100 (Medium risk)
+      1 Medium   → ~93/100 (Minimal risk)
+     10 Medium   → ~55/100 (Medium risk)
+    """
+    critical: float = 50.0   # CVSS 9.0-10.0 bandıyla orantılı
+    high: float = 20.0       # CVSS 7.0-8.9 bandıyla orantılı
+    medium: float = 6.0      # CVSS 4.0-6.9 bandıyla orantılı
     low: float = 1.0
     info: float = 0.0
 

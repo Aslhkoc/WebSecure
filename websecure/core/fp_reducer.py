@@ -158,14 +158,16 @@ class ReproducibilityVerifier:
         key = self._make_key(vuln_type, url, param, payload)
 
         if not self.enable:
-            # Verification disabled — pass through with medium confidence
+            # Verification disabled — pass through but mark as unverified.
+            # confidence=0.50 signals single-shot finding (no reproducibility check).
+            # Callers should treat this as tentative, not confirmed.
             return FindingVerification(
                 finding_key=key,
-                attempts=1,
-                successes=1,
-                confidence=0.65,
+                attempts=0,
+                successes=0,
+                confidence=0.50,
                 is_confirmed=True,
-                evidence_chain=["verification_disabled"],
+                evidence_chain=["verification_disabled:unverified"],
             )
 
         required, total = self._CONFIRMATION_THRESHOLDS.get(

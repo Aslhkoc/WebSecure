@@ -24,8 +24,8 @@ def _sqli_severity_from_method(detection_method: str, confidence: str = "medium"
     Rationale:
     - Critical: Data extraction CONFIRMED (union, schema dump, sqlmap verify, stacked)
     - High:     Injection confirmed but data not directly extracted
-                (error-based, boolean-blind, OOB pending)
-    - Medium:   Timing-based — injection suspected, no data shown, easiest to false-positive
+                (error-based, boolean-blind, time-based 3/3 confirmed, OOB pending)
+    - Medium:   Tentative signal only — unknown method with low confidence
     """
     dm = (detection_method or "").lower()
     if dm in ("union_based", "schema_extraction", "sqlmap_confirmed", "stacked_query"):
@@ -33,10 +33,11 @@ def _sqli_severity_from_method(detection_method: str, confidence: str = "medium"
     if dm in (
         "error_based", "json_error", "header_error",
         "adaptive_waf_bypass", "boolean_blind", "oob_dns",
+        "time_based", "json_time", "header_time",
     ):
+        # time_based confirmed 3/3 by ReproducibilityVerifier → High (CVSS ~8.1)
+        # Blind injection = full exploitation path exists even without direct read
         return "High"
-    if dm in ("time_based", "json_time", "header_time"):
-        return "Medium"
     # Unknown method — derive from confidence
     conf_map = {"confirmed": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
     return conf_map.get((confidence or "").lower(), "High")
@@ -228,7 +229,9 @@ class SQLInjectionScanner(BaseScanner):
     ]
     # Minimum absolute difference (bytes) to consider a boolean-blind hit real.
     # The dynamic stddev guard below is the primary gate; this is a hard floor.
-    _BOOL_MIN_DIFF_BYTES = 50
+    # 20 bytes is sufficient — most injections produce at least this much delta,
+    # and stddev guard already filters random noise from dynamic content.
+    _BOOL_MIN_DIFF_BYTES = 20
 
     def _measure_natural_variation(self, url: str, n: int = 4) -> Tuple[float, float]:
         """

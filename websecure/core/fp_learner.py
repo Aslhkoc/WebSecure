@@ -38,9 +38,12 @@ logger = logging.getLogger(__name__)
 _FP_DB_PATH = Path.home() / ".websecure" / "fp_rules.json"
 
 # Minimum onay sayısı -> kural aktifleşir
-_MIN_CONFIRMATIONS = 2
+# 3 bağımsız onay gerekiyor: 2 çok düşük, 1 hata + 1 onay aktif kural üretir
+_MIN_CONFIRMATIONS = 3
 # Maksimum FP kuralı sayısı (bellek koruması)
 _MAX_RULES = 5000
+# Kural TTL: hiç hit almadan bu kadar gün geçen kurallar otomatik deaktif olur
+_RULE_TTL_DAYS = 90
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +69,16 @@ class FPRule:
         """Bulgu bu kuralı tetikliyor mu?"""
         if not self.active or self.confirm_count < _MIN_CONFIRMATIONS:
             return False
+        # TTL kontrolü: hiç hit almamış ve belirtilen günden eski kuralları geç
+        if self.hit_count == 0 and self.created_at:
+            try:
+                import datetime as _dt
+                created = _dt.datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
+                age_days = (_dt.datetime.now(_dt.timezone.utc) - created).days
+                if age_days > _RULE_TTL_DAYS:
+                    return False
+            except Exception:
+                pass
 
         title = finding.get("title", "")
         url = finding.get("url", "")

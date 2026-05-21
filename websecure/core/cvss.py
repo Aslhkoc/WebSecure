@@ -30,6 +30,9 @@ _BASE_VECTORS: Dict[str, Tuple[str, float]] = {
     "sql injection":        ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8),
     "sqli":                 ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8),
     "blind sqli":           ("CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H", 8.1),
+    "sql injection (time-based blind)":  ("CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H", 8.1),
+    "sql injection (boolean-based blind)": ("CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H", 8.1),
+    "sql injection (error-based)":       ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8),
     "nosql injection":      ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N", 9.1),
     "ssti":                 ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", 10.0),
     "server-side template injection": ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", 10.0),
@@ -309,16 +312,30 @@ class CVSSScorer:
     def _adjust_vector(self, vector: str, finding: Dict) -> str:
         """Adjust CVSS vector based on scan context."""
         try:
+            finding_type = _normalize_type(finding.get("type", ""))
+
+            # DOM-confirmed XSS (Playwright verified execution) → treat as account takeover path
+            # CVSS: reflected xss base = 6.1 (Medium); confirmed execution = 8.8 (High)
+            if finding.get("verified") and "xss" in finding_type and "/UI:R/" in vector:
+                # Upgrade: scope changes to C (confidentiality high, integrity high)
+                if "/S:U/" in vector:
+                    vector = vector.replace("/S:U/", "/S:C/")
+                if "/C:L/" in vector:
+                    vector = vector.replace("/C:L/", "/C:H/")
+                if "/I:L/" in vector:
+                    vector = vector.replace("/I:L/", "/I:H/")
+
             # If finding was found while authenticated, set PR:L (privileges required: low)
             if self.auth_required and "/PR:N/" in vector:
                 vector = vector.replace("/PR:N/", "/PR:L/")
 
-            # If WAF is present and attack complexity isn't already High, raise it
-            if self.waf_detected and "/AC:L/" in vector:
+            # WAF AC adjustment: ONLY apply when WAF blocked other probes but this
+            # finding was NOT confirmed via bypass. If waf_bypassed=True the exploit
+            # already worked through the WAF → complexity is Low (attacker succeeded).
+            waf_bypassed = bool(finding.get("waf_bypassed") or finding.get("adaptive_waf_bypass"))
+            if self.waf_detected and not waf_bypassed and "/AC:L/" in vector:
                 vector = vector.replace("/AC:L/", "/AC:H/")
 
-            # OAST-verified findings are more credible - keep as-is
-            # Unverified findings: slightly reduce score by noting uncertainty
         except (ValueError, TypeError, AttributeError) as exc:
             _logger.debug(f"[reporting] CVSS vector adjustment failed for {vector!r}: {exc!r}")
         return vector
