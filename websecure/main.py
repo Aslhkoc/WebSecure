@@ -2324,7 +2324,7 @@ def _run_scan_phases(
 
         # --- Exploit Orchestrator (exploitation.enabled=true ise) ---
         _exploit_cfg = (cfg.get("exploitation") or {}) if isinstance(cfg, dict) else {}
-        if _exploit_cfg.get("enabled", False):
+        if _exploit_cfg.get("enabled", True) is not False:
             print("[•] Exploit Orchestrator: bulgular zincire alınıyor…")
             try:
                 from websecure.core.exploit_orchestrator import exploit_from_results as _exploit_fr  # noqa: PLC0415

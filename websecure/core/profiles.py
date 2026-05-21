@@ -47,6 +47,7 @@ _ALL_MODULES = [
     "waf_fingerprint", "oast", "nmap", "subdomain", "passive_recon",
     "infrastructure", "owasp",
     "clickjacking", "bypass_403", "param_pollution", "business_logic",
+    "exploit_orchestrator",
 ]
 
 _OWASP_TOP10_MODULES = [
@@ -254,6 +255,13 @@ class AggressiveProfile(ScanProfile):
         })
         cfg.setdefault("wordlists", {})["use_all"] = True
         cfg.setdefault("oast", {})["enabled"] = True
+        cfg.setdefault("exploitation", {}).update({
+            "enabled": True,
+            "auto_exploit": True,
+            "dump_credentials": True,
+            "attempt_shell": True,
+            "file_read": True,
+        })
         return cfg
 
 
@@ -315,6 +323,13 @@ class StealthProfile(ScanProfile):
         })
         cfg.setdefault("wordlists", {})["use_all"] = True
         cfg.setdefault("oast", {})["enabled"] = True
+        cfg.setdefault("exploitation", {}).update({
+            "enabled": True,
+            "auto_exploit": True,
+            "dump_credentials": True,
+            "attempt_shell": True,
+            "file_read": True,
+        })
         return cfg
 
 

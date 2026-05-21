@@ -2228,7 +2228,7 @@ def _runner_exploit_orchestrator(ctx) -> None:
         results = _ensure_results_bucket(ctx)
         cfg = getattr(ctx, "config", {}) or {}
         exploit_cfg = (cfg.get("exploitation") or {})
-        if not exploit_cfg.get("enabled", False):
+        if exploit_cfg.get("enabled", True) is False:
             add_result("meta", {"stage": "exploit_orchestrator", "status": "skipped:disabled"})
             return
         url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
@@ -2914,7 +2914,7 @@ def _offensive_phases(ctx) -> List[Phase]:
         Phase(
             id="exploit_orchestrator",
             title="Exploit Orchestrator (Zincir Saldırı)",
-            enabled=_flag("exploit_orchestrator", default=False),
+            enabled=_flag("exploit_orchestrator", default=True),
             runner=lambda c: _safe(c, lambda: _runner_exploit_orchestrator(c), "exploit_orchestrator"),
             tags=["exploitation", "rce", "post_exploit", "chain"],
         ),

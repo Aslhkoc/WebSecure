@@ -27,7 +27,7 @@ _ALL_OFFENSIVE_MODULES = [
     "auth_scanners", "owasp", "infrastructure", "passive_recon",
     "js_analyzer", "session_scanner", "cors", "clickjacking",
     "param_pollution", "bypass_403", "business_logic",
-    "lfi", "subdomain_takeover", "waf_fingerprint",
+    "lfi", "subdomain_takeover", "waf_fingerprint", "exploit_orchestrator",
 ]
 
 def _enable_all_modules(cfg: dict) -> None:
@@ -186,6 +186,15 @@ def _apply_aggressive_profile(cfg: dict) -> dict:
         "max_variants_per_payload": 10,
     })
 
+    # --- Exploit pipeline: tam güç ---
+    cfg.setdefault("exploitation", {}).update({
+        "enabled": True,
+        "auto_exploit": True,
+        "dump_credentials": True,
+        "attempt_shell": True,
+        "file_read": True,
+    })
+
     # --- Proxy: isteğe bağlı (agresif modda zorunlu değil) ---
     cfg.setdefault("privacy", {}).setdefault("mode", "none")
 
@@ -286,6 +295,15 @@ def _apply_stealth_profile(cfg: dict) -> dict:
         privacy.setdefault("rotate_identity", True)
         privacy.setdefault("rotate_every", 50)
     _logger.info("[stealth] Privacy proxy zorunlu — mode: %s", privacy["mode"])
+
+    # --- Exploit pipeline: tam güç (stealth = yavaş ama tam) ---
+    cfg.setdefault("exploitation", {}).update({
+        "enabled": True,
+        "auto_exploit": True,
+        "dump_credentials": True,
+        "attempt_shell": True,
+        "file_read": True,
+    })
 
     # --- Brute force: agresif brute force yok ---
     cfg.setdefault("brute_force", {})["enabled"] = False

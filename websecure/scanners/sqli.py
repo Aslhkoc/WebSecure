@@ -1250,7 +1250,7 @@ class SQLInjectionScanner(BaseScanner):
             )
 
         # Full exploitation pipeline after SQLMap confirmation
-        if result.get("success") and self.results.get("cfg", {}).get("exploitation", {}).get("enabled"):
+        if result.get("success") and self.results.get("cfg", {}).get("exploitation", {}).get("enabled", True) is not False:
             exploiter = SQLiExploiter(session=self.session)
             exploit_report = exploiter.full_exploitation_pipeline(url, param)
             if exploit_report.get("credentials"):
