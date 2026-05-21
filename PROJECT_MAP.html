@@ -88,6 +88,60 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 .stat .lbl { font-size: 11px; color: var(--muted); }
 .hidden { display: none !important; }
 .highlight-card { border-color: var(--blue) !important; box-shadow: 0 0 0 2px rgba(88,166,255,.3); }
+
+/* OVERVIEW */
+.ov-wrap { max-width: 1400px; }
+.ov-hero { background: linear-gradient(135deg, rgba(88,166,255,.1), rgba(188,140,255,.1)); border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; margin-bottom: 24px; }
+.ov-title { font-size: 28px; font-weight: 800; color: var(--blue); margin-bottom: 6px; }
+.ov-subtitle { color: var(--muted); font-size: 15px; margin-bottom: 16px; }
+.ov-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+.pill-red { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.3); }
+.pill-blue { background: rgba(88,166,255,.15); color: var(--blue); border: 1px solid rgba(88,166,255,.3); }
+.pill-green { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+.pill-orange { background: rgba(255,166,87,.15); color: var(--orange); border: 1px solid rgba(255,166,87,.3); }
+.pill-purple { background: rgba(188,140,255,.15); color: var(--purple); border: 1px solid rgba(188,140,255,.3); }
+.pill-cyan { background: rgba(57,211,83,.1); color: var(--cyan); border: 1px solid rgba(57,211,83,.3); }
+.ov-section-title { font-size: 17px; font-weight: 700; color: var(--orange); margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.ov-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 8px; }
+.ov-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 8px; }
+@media (max-width: 1100px) { .ov-grid3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .ov-grid2, .ov-grid3 { grid-template-columns: 1fr; } }
+.ov-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.ov-card-title { font-size: 14px; font-weight: 700; color: var(--blue); margin-bottom: 12px; }
+.ov-card-body p { color: var(--muted); line-height: 1.65; margin-bottom: 10px; }
+.ov-card-body ul { color: var(--muted); padding-left: 18px; line-height: 1.8; }
+.ov-card-body li { margin-bottom: 2px; }
+.ov-vuln-group { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.ov-vg-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+.ov-vg-items { display: flex; flex-direction: column; gap: 8px; }
+.ov-vuln { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.5; }
+.ov-vuln strong { color: var(--text); font-size: 13px; }
+.ov-vuln small { color: var(--muted); }
+.vbadge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 6px; }
+.vb-crit { background: rgba(248,81,73,.2); color: var(--red); }
+.vb-high { background: rgba(255,166,87,.2); color: var(--orange); }
+.vb-med { background: rgba(210,153,34,.2); color: var(--yellow); }
+.vb-low { background: rgba(63,185,80,.15); color: var(--green); }
+.ov-tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 10px; margin-bottom: 8px; }
+.ov-tool { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.ov-tool-name { font-size: 16px; font-weight: 700; color: var(--orange); margin-bottom: 2px; }
+.ov-tool-file { font-family: monospace; font-size: 11px; color: var(--blue); margin-bottom: 6px; }
+.ov-tool-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.ov-bypass-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.ov-bypass { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: 12px; color: var(--text); }
+.ov-chain-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+@media (max-width: 700px) { .ov-chain-grid { grid-template-columns: 1fr; } }
+.ov-chain { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.ov-chain strong { color: var(--text); }
+.chain-arrow { color: var(--orange); font-weight: 700; margin-right: 6px; }
+.ov-arch { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin-bottom: 8px; }
+.ov-pre { font-family: 'Consolas', monospace; font-size: 12px; color: var(--muted); white-space: pre; line-height: 1.6; }
+.ov-pre strong { color: var(--blue); }
+.ov-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ov-table th { color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
+.ov-table td { padding: 6px 8px; border-bottom: 1px solid rgba(48,54,61,.5); color: var(--muted); vertical-align: top; }
+.ov-table td:first-child { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -100,6 +154,7 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
   <div class="tabs">
     <div class="tab active" onclick="switchTab('tree')">&#127794; Agac</div>
     <div class="tab" onclick="switchTab('report')">&#128203; Rapor</div>
+    <div class="tab" onclick="switchTab('overview')">&#128269; Proje Ozeti</div>
   </div>
   <input id="searchBox" type="text" placeholder="Dosya ara..." oninput="filterAll(this.value)">
 </header>
@@ -121,6 +176,250 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
   </div>
   <div class="report-grid" id="reportGrid"></div>
 </div>
+
+<!-- OVERVIEW PANEL -->
+<div id="overviewPanel" class="panel">
+<div class="ov-wrap">
+
+<div class="ov-hero">
+  <div class="ov-title">WebSecure v20.0.0</div>
+  <div class="ov-subtitle">Python ile yazilmis, sektör seviyesi, tam otomatik web güvenlik tarama çercevesi</div>
+  <div class="ov-pills">
+    <span class="pill pill-red">36 Scanner Modülü</span>
+    <span class="pill pill-blue">9 Dis Arac Entegrasyonu</span>
+    <span class="pill pill-green">212 Dosya</span>
+    <span class="pill pill-orange">SOLID + OOP Mimari</span>
+    <span class="pill pill-purple">CI/CD Gate</span>
+    <span class="pill pill-cyan">OAST/OOB Destegi</span>
+  </div>
+</div>
+
+<div class="ov-grid2">
+
+<div class="ov-card">
+<div class="ov-card-title">&#127919; Projenin Amaci</div>
+<div class="ov-card-body">
+<p>WebSecure, hedef web uygulamalarini ve altyapiyi otomatik olarak tararken insan penetrasyon testçisinin yaptigi tüm teknikleri uygular. Tek bir komutla:</p>
+<ul>
+  <li>Subdomain tespiti ve port tarama yapar</li>
+  <li>Tüm endpointleri crawl eder (HTTP + JS-render)</li>
+  <li>36 farkli güvenlik acigi kategorisini test eder</li>
+  <li>Bulunan aciklari otomatik exploit eder</li>
+  <li>Exploit zinciri olusturur (ör: SQLi → CredDump → ATO)</li>
+  <li>Post-exploitation (veri calma, pivot, kalicilik) saglar</li>
+  <li>HTML/SARIF/JUnit/PDF/Markdown rapor üretir</li>
+  <li>CI/CD pipeline'ini critical bulgu oldugunda durdurur</li>
+</ul>
+</div>
+</div>
+
+<div class="ov-card">
+<div class="ov-card-title">&#127757; Hedef Kullanici Kitlesi</div>
+<div class="ov-card-body">
+<ul>
+  <li><strong>Bug Bounty Avcilari</strong> — bug_bounty.yml profili, OAST, agresif WAF bypass</li>
+  <li><strong>Penetrasyon Testçileri</strong> — tam exploit zinciri, post-exploit, playbook destegi</li>
+  <li><strong>DevSecOps Ekipleri</strong> — CI/CD entegrasyonu, SARIF çiktisi, otomatik bildirim</li>
+  <li><strong>Güvenlik Denetçileri</strong> — OWASP/PCI-DSS/GDPR uyumluluk profilleri</li>
+  <li><strong>Red Team</strong> — WAF bypass, insan davranis simulasyonu, Tor destegi</li>
+</ul>
+</div>
+</div>
+
+</div><!-- /ov-grid2 -->
+
+<div class="ov-section-title">&#128269; Taranan Güvenlik Acigi Kategorileri (36 Scanner)</div>
+
+<div class="ov-grid3">
+
+<div class="ov-vuln-group">
+<div class="ov-vg-title" style="color:var(--red)">&#9888; Enjeksiyon Saldirilari</div>
+<div class="ov-vg-items">
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>SQL Injection</strong><br><small>Error-based, Union, Boolean Blind, Time Blind, OOB DNS, Second Order, Stacked Query. sqlmap ile otomatik exploit.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>SSTI — Template Injection</strong><br><small>Jinja2, Twig, Pebble, Freemarker, Smarty fingerprint + RCE. SSTIAutoExploiter ile aninda shell.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>Command Injection</strong><br><small>OS CMDi: OOB DNS, Time-Based, Filter Bypass, Komut Separator Fuzzing. OAST ile kör tespit.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>LFI — Local File Inclusion</strong><br><small>Path Traversal, Log Poisoning, PHP Filter Chain RCE, /proc/environ, SSH Key Okuma, PHPWrapper.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>SSRF — Server-Side Request Forgery</strong><br><small>Cloud metadata, IP rebinding, internal network. OOB DNS callback ile kör SSRF tespiti.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>XXE — XML External Entity</strong><br><small>DTD Injection, SVG XXE, CDATA Bypass, OOB XXE, BlindXXEErrorProber.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>NoSQL Injection</strong><br><small>MongoDB operator injection, $where JS injection, MongoDBDataExtractor ile veri çikarma.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>CRLF Injection</strong><br><small>Header Injection, HTTP Response Splitting, Cache Poisoning, Log Poisoning, Cookie Injection, XSS zinciri.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Prototype Pollution</strong><br><small>Server-side PP, PPGadgetScanner, zincir saldirisi (PP → RCE).</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>HTTP Parameter Pollution</strong><br><small>QueryString+PostBody HPP, ServerParseProfiler, WAF bypass icin HPP.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>HTTP Request Smuggling</strong><br><small>CL.TE, TE.CL, TE.TE, HTTP/2 Downgrade, H2CUpgrade, Differential Timing.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>WebSocket Fuzzing</strong><br><small>Raw WebSocket handshake, frame injection, origin bypass, XSS/SQLi via WS.</small></div>
+</div>
+</div>
+
+<div class="ov-vuln-group">
+<div class="ov-vg-title" style="color:var(--orange)">&#128274; XSS Saldirilari</div>
+<div class="ov-vg-items">
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Reflected XSS</strong><br><small>MutationXSSProber, ReflectionQualityScorer, CSP bypass, WAF bypass. dalfox ile dogrulama.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>Stored XSS</strong><br><small>StoredXSSCorrelator ile persist XSS tespiti. XSSToATOChain ile Account Takeover zinciri.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>DOM XSS</strong><br><small>Playwright ile gercek DOM execution. DOMXSSMonkeyPatchProber source/sink takibi. postMessage interception.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Blind XSS</strong><br><small>BlindXSSProber + XSSCallbackServer. OOB DNS/HTTP callback ile kör tespit.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>DOM Clobbering</strong><br><small>DOMClobberingProber — HTML attribute ile JS degisken üzerine yazma.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>Trusted Types Bypass</strong><br><small>TrustedTypesBypassProber — Trusted Types politikasi atlatma teknikleri.</small></div>
+</div>
+
+<div class="ov-vg-title" style="color:var(--purple); margin-top:16px">&#128275; Auth / Session Saldirilari</div>
+<div class="ov-vg-items">
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>JWT Attacks</strong><br><small>Algorithm Confusion (RS256→HS256), alg:none Bypass, kid SQLi, JKU SSRF, Zayif Secret Brute-Force.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-crit">CRITICAL</span><strong>Auth Matrix / BOLA</strong><br><small>Rol bazli erisim matrisi, BOLA/IDOR zinciri, OAuth2 AttackSurface, SAML Injection.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>2FA Bypass</strong><br><small>TwoFABypassProber — OTP bruteforce, bypass teknikleri, TOTP manipülasyonu.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Session Security</strong><br><small>Cookie flags (HttpOnly/Secure/SameSite), Session Fixation, Token Entropy (Shannon), Concurrent bypass.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>CSRF</strong><br><small>Token eksikligi, SameSite analizi, Login CSRF, CORS-CSRF zinciri.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>IDOR</strong><br><small>Numerik/UUID/hash ID manipülasyonu, yanit farklilik analizi, privilege escalation.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Mass Assignment</strong><br><small>isAdmin/role/price/is_verified inject, JSON/form body ekstra field ekleme.</small></div>
+</div>
+</div>
+
+<div class="ov-vuln-group">
+<div class="ov-vg-title" style="color:var(--green)">&#127758; Altyapi & Uygulama Mantigi</div>
+<div class="ov-vg-items">
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>TLS/SSL Açiklari</strong><br><small>BEAST, POODLE, CRIME, BREACH, ROBOT, Zayif Cipher Suite, HSTS Eksikligi, Sertifika Dogrulama, Downgrade.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>Security Headers</strong><br><small>CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Permissions-Policy, Referrer-Policy eksikligi.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>CORS Misconfiguration</strong><br><small>Wildcard, Origin Reflection, Null Origin, Subdomain Wildcard, Credentialed CORS, Preflight Bypass, XSS zinciri.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>Clickjacking</strong><br><small>X-Frame-Options analizi, CSP frame-ancestors, PoC HTML uretimi, Frame-Busting bypass, Double-Click Jacking.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Open Redirect</strong><br><small>800+ payload, OAuth token hirsizligi zinciri, SSRF zinciri, Location + JS redirect.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>403 Bypass</strong><br><small>Path Normalization, Header Injection (X-Rewrite-URL), Verb Tampering, Encoding, API Versiyon degistirme.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>Race Condition / TOCTOU</strong><br><small>HTTP/2 Concurrent Streams, TOCTOU, Double-Spend, Session Fixation Race, Inventory Race. Gate Technique.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>File Upload Bypass</strong><br><small>MIME Type + Extension bypass, Polyglot (GIFAR), ImageTragick, Zip Slip, Web Shell yükleme.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>Business Logic</strong><br><small>Negatif deger, workflow atlama, limit bypass, is mantigi manipülasyonu.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-high">HIGH</span><strong>GraphQL Açiklari</strong><br><small>Introspection, Batch DoS, Depth Limit Abuse, IDOR, CSRF, Auth Bypass, Persisted Query Bypass.</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-med">MED</span><strong>Subdomain Takeover</strong><br><small>Dangling CNAME tespiti, 25+ cloud servis imzasi (GitHub Pages, Heroku, S3, Fastly vb.).</small></div>
+  <div class="ov-vuln"><span class="vbadge vb-low">LOW</span><strong>Pasif Kesif</strong><br><small>JS analizi (API key/secret), Shodan, GitHub Dork, Wayback Machine, S3 Bucket, Email Harvester.</small></div>
+</div>
+</div>
+
+</div><!-- /ov-grid3 -->
+
+<div class="ov-section-title">&#128279; Dis Araç Entegrasyonlari</div>
+<div class="ov-tools-grid">
+  <div class="ov-tool"><div class="ov-tool-name">sqlmap</div><div class="ov-tool-file">integrations/sqlmap.py</div><div class="ov-tool-desc">SQLi otomatik exploit: veritabani dump, tablo listeleme, dosya okuma/yazma</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">nuclei</div><div class="ov-tool-file">integrations/nuclei.py</div><div class="ov-tool-desc">9000+ CVE sablonu, teknoloji tespiti, OAST entegrasyonu, SARIF çikti</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">nmap</div><div class="ov-tool-file">integrations/nmap.py</div><div class="ov-tool-desc">Port tarama (-p- T4), servis surumu (-sV), NSE script, OS fingerprinting, SSL sertifika</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">dalfox</div><div class="ov-tool-file">integrations/dalfox.py</div><div class="ov-tool-desc">XSS dogrulama ve exploit konfirmasyonu</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">ffuf</div><div class="ov-tool-file">integrations/ffuf.py</div><div class="ov-tool-desc">Dizin/dosya/parametre/vhost fuzzing, feroxbuster fallback</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">katana</div><div class="ov-tool-file">integrations/katana.py</div><div class="ov-tool-desc">Headless + HTTP crawler, JS bundle endpoint çikarimi</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">amass</div><div class="ov-tool-file">integrations/amass.py</div><div class="ov-tool-desc">Pasif subdomain kesffi, ASN/CIDR enumerasyonu, Shodan/Censys/VirusTotal</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">httpx</div><div class="ov-tool-file">integrations/httpx_runner.py</div><div class="ov-tool-desc">HTTP/1.1-2-3 probe, teknoloji stack tespiti, çoklu host tarama</div></div>
+  <div class="ov-tool"><div class="ov-tool-name">interactsh</div><div class="ov-tool-file">core/oast.py</div><div class="ov-tool-desc">OAST/OOB callback: DNS+HTTP. Kör SSRF/XXE/CMDi/SQLi tespiti icin</div></div>
+</div>
+
+<div class="ov-section-title">&#128737; WAF Bypass Teknikleri (waf_bypass.py — 116KB)</div>
+<div class="ov-bypass-grid">
+  <div class="ov-bypass">Random User-Agent Rotasyonu</div>
+  <div class="ov-bypass">IP Spoofing (X-Forwarded-For / CF-Connecting-IP)</div>
+  <div class="ov-bypass">Header Case Randomization</div>
+  <div class="ov-bypass">Junk Header Ekleme</div>
+  <div class="ov-bypass">Double URL Encoding</div>
+  <div class="ov-bypass">Unicode Encoding</div>
+  <div class="ov-bypass">Chunked Transfer Encoding</div>
+  <div class="ov-bypass">Content-Type Mismatch</div>
+  <div class="ov-bypass">HTTP Parameter Pollution</div>
+  <div class="ov-bypass">JSON Unicode Escape</div>
+  <div class="ov-bypass">Accept Header Manipülasyonu</div>
+  <div class="ov-bypass">Referer Header Bypass</div>
+  <div class="ov-bypass">TLS Fingerprint Bypass (CurlCffi/uTLS)</div>
+  <div class="ov-bypass">HTTP/2 Multiplexing Evasion</div>
+  <div class="ov-bypass">ML-Tabanli Adaptif Mutasyon</div>
+  <div class="ov-bypass">Residential Proxy Pool Rotasyonu</div>
+  <div class="ov-bypass">Tor Entegrasyonu (TorController)</div>
+  <div class="ov-bypass">Path Case Randomization</div>
+  <div class="ov-bypass">Overlong UTF-8 Encoding</div>
+  <div class="ov-bypass">CRLF Injection via Path</div>
+</div>
+
+<div class="ov-section-title">&#9889; Exploit Zinciri Siniflari (chain_reactor.py — 116KB)</div>
+<div class="ov-chain-grid">
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>XSS + CSRF → ATO</strong> — XSS ile CSRF token çalma, Account Takeover</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>Info Disclosure + IDOR</strong> — Bilgi ifshasi ile IDOR arasindaki korelasyon</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>SSRF → Cloud Compromise</strong> — SSRF ile cloud metadata, IAM token, instance takeover</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>Open Redirect + XSS → Phishing</strong> — Redirect ile XSS zinciri, kimlik avlama</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>File Upload + LFI → RCE</strong> — Dosya yukleme + LFI kombinasyonu ile uzaktan kod çalistirma</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>LFI + Log Poisoning → RCE</strong> — Log zehirleme ile LFI'den RCE'ye yükseltme</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>XSS + CSRF → PrivEsc</strong> — XSS ile admin paneli CSRF, yetki yükseltme</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>SSRF → Lateral Movement</strong> — SSRF ile ic ag pivotlama</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>SQLi → CredDump → ATO</strong> — SQLi ile sifre dump, Account Takeover</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>SQLi + Admin File Write → RCE</strong> — SQLi ile web shell yazma, RCE</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>CORS + JWT → ATO</strong> — CORS misconfiguration ile JWT çalma (playbook)</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>SSTI → RCE → Data Exfil</strong> — Template injection'dan veri sizdirma (playbook)</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>XXE → SSRF → Internal Net</strong> — XXE ile ic ag erisimi (playbook)</div>
+  <div class="ov-chain"><span class="chain-arrow">&#8594;</span> <strong>CMDi → Persistence</strong> — Command injection ile backdoor (playbook)</div>
+</div>
+
+<div class="ov-section-title">&#127959; Mimari & Bagli Dosya Akisi</div>
+<div class="ov-arch">
+<pre class="ov-pre">
+websecure/main.py (122KB — CLI Giris Noktasi)
+  └─► websecure/core/phases/__init__.py (246KB — ORKESTRASYON MOTORU)
+        ├─ phase_waf_detect()   → core/waf_fingerprint.py → core/waf_bypass.py (116KB)
+        ├─ phase_discovery()    → websecure/crawler.py (47KB Playwright/UC)
+        │                       → integrations/katana.py → integrations/ffuf.py
+        │                       → integrations/amass.py  → integrations/httpx_runner.py
+        ├─ phase_portscan()     → integrations/nmap.py (48KB)
+        ├─ phase_tls()          → scanners/tls.py (60KB)
+        ├─ phase_sec_headers()  → scanners/infrastructure.py (47KB)
+        └─ phase_offensive()    → [36 Scanner Modülü]
+              │
+              ├─ core/http.py (83KB — HTTP Motor)
+              │    └─► core/waf_bypass.py → core/evasion.py → core/egress.py (Tor)
+              ├─ core/payload_engine.py (61KB) → wordlists/ (17 dosya)
+              ├─ core/oast.py (58KB — OOB/DNS Callback)
+              ├─ core/analysis.py (58KB — Analiz + CAPTCHA bypass)
+              ├─ core/human_adapter.py (44KB — Bot tespitinden kacis)
+              └─ core/reporting.py (159KB — MERKEZ HUB)
+                    ├─► core/cvss.py (CVSS v3.1)
+                    ├─► db/repository.py (SQLite/PostgreSQL)
+                    └─► reporters/ (html_dashboard 94KB, markdown 17KB, pdf 13KB)
+
+core/chain_reactor.py (116KB) — Exploit Zinciri
+  └─► config/playbooks/*.yml → core/exploit_orchestrator.py (57KB)
+                                    └─► core/post_exploit.py (102KB)
+                                          ├─ DataLooter (veri calma)
+                                          ├─ WebShellDropper (shell yukleme)
+                                          ├─ PivotMapper (ag pivot)
+                                          ├─ PrivEscScanner (yetki yükseltme)
+                                          ├─ ReverseShellGenerator
+                                          ├─ LateralMover
+                                          ├─ PersistenceDropper
+                                          └─ DataExfiltrator
+</pre>
+</div>
+
+<div class="ov-section-title">&#128270; Tarama Profilleri</div>
+<div class="ov-grid2">
+<div class="ov-card">
+<div class="ov-card-title">Mevcut Profiller</div>
+<div class="ov-card-body">
+<table class="ov-table">
+<tr><th>Profil</th><th>Kullanim</th><th>Ozellik</th></tr>
+<tr><td><span class="tag" style="color:var(--red)">bug_bounty</span></td><td>Bug Bounty</td><td>Agresif, max kapsam, min FP, OOB aktif</td></tr>
+<tr><td><span class="tag" style="color:var(--orange)">authenticated</span></td><td>Pen Test</td><td>Login sonrasi, rol bazli tarama</td></tr>
+<tr><td><span class="tag" style="color:var(--blue)">api_only</span></td><td>API Test</td><td>Sadece REST/GraphQL/gRPC</td></tr>
+<tr><td><span class="tag" style="color:var(--cyan)">cicd</span></td><td>CI/CD</td><td>Hizli, critical/high → pipeline dur</td></tr>
+<tr><td><span class="tag" style="color:var(--purple)">compliance</span></td><td>Denetim</td><td>OWASP/PCI-DSS/GDPR sistematik</td></tr>
+</table>
+</div>
+</div>
+<div class="ov-card">
+<div class="ov-card-title">Çikti Formatlari</div>
+<div class="ov-card-body">
+<table class="ov-table">
+<tr><th>Format</th><th>Dosya</th><th>Kullanim</th></tr>
+<tr><td>HTML Dashboard</td><td>html_dashboard.py (94KB)</td><td>Interaktif güvenlik raporu</td></tr>
+<tr><td>SARIF 2.1.0</td><td>integrations/sarif.py</td><td>GitHub Code Scanning, Azure DevOps</td></tr>
+<tr><td>JUnit XML</td><td>report_generator.py</td><td>CI/CD test pipeline entegrasyonu</td></tr>
+<tr><td>Markdown</td><td>reporters/markdown.py</td><td>GitHub/GitLab PR yorumlari</td></tr>
+<tr><td>PDF</td><td>reporters/pdf.py</td><td>Müsteri raporu, yonetici özeti</td></tr>
+<tr><td>JSON</td><td>reporting.py</td><td>API, otomasyonu, programatik erisim</td></tr>
+</table>
+</div>
+</div>
+</div>
+
+</div><!-- /ov-wrap -->
+</div><!-- /overviewPanel -->
 
 <script>
 const FILES = [
@@ -334,8 +633,9 @@ const TYPE_ICONS={entry:'🚀',core:'⚙️',scanner:'🔍',integration:'🔗',r
 function switchTab(name){
   document.getElementById('treePanel').classList.toggle('active',name==='tree');
   document.getElementById('reportPanel').classList.toggle('active',name==='report');
+  document.getElementById('overviewPanel').classList.toggle('active',name==='overview');
   document.querySelectorAll('.tab').forEach((t,i)=>{
-    t.classList.toggle('active',(i===0&&name==='tree')||(i===1&&name==='report'));
+    t.classList.toggle('active',(i===0&&name==='tree')||(i===1&&name==='report')||(i===2&&name==='overview'));
   });
 }
 
