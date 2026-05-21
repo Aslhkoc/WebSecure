@@ -8,6 +8,14 @@
 4. **Bug-free, robust sistem** — Hata yönetimi eksiksiz olmalı, edge case'ler düşünülmeli
 5. **Yeni dosya açma** — Mevcut dosyalar üzerinde çalış, gereksiz yere yeni dosya oluşturma
 
+## PROJECT_MAP Güncelleme Kuralları
+
+- **Yeni dosya eklendi** → PROJECT_MAP.html'deki FILES dizisine entry ekle; `websecure/` altındaysa memory/project_map.md'ye de ekle
+- **Dosya silindi** → PROJECT_MAP.html'den ve memory/project_map.md'den entry'yi çıkar
+- **Dosyanın görevi/yapısı değişti** (yeni class, fonksiyon, bağımlılık, yeni amaç) → ilgili entry'yi güncelle (classes, funcs, deps alanları)
+- **Güncelleme anı:** değişikliği yapan aynı commit'e dahil et — ayrı commit açma
+- **Kontrol:** her geliştirme fazı sonunda `FILES` array'indeki path'lerin gerçek dosyalarla eşleşip eşleşmediğini doğrula
+
 ## Git / Push Kuralları
 
 - **Her değişiklikten sonra otomatik olarak commit et ve push yap** — kullanıcının hatırlatmasına gerek yok
