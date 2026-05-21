@@ -94,6 +94,19 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 .t-tool .fname        { color: #ffd700; }
 .t-dir .fname         { color: #79c0ff; font-weight: 700; }
 
+/* D3 TREE */
+#d3-container { width:100%; height:calc(100vh - 178px); overflow:hidden; background:var(--bg); border-radius:8px; border:1px solid var(--border); cursor:grab; }
+#d3-container:active { cursor:grabbing; }
+#d3-svg { width:100%; height:100%; }
+#d3-hint { text-align:center; color:var(--muted); font-size:11px; padding:4px 0 10px; letter-spacing:.03em; }
+.d3-link { fill:none; stroke:rgba(88,166,255,.2); stroke-width:1.5px; }
+.d3-node circle { cursor:pointer; }
+.d3-node text { font-family:'Consolas',monospace; font-size:11.5px; fill:var(--text); cursor:pointer; dominant-baseline:central; pointer-events:none; }
+.d3-node.leaf text { fill:var(--muted); }
+.d3-node.dimmed { opacity:.12; }
+.d3-node.matched circle { filter:brightness(1.6) drop-shadow(0 0 4px currentColor); }
+.d3-node.matched text { font-weight:700; }
+
 /* REPORT */
 .report-grid { display: flex; flex-direction: column; gap: 6px; }
 .rcard { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -200,7 +213,9 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 </header>
 
 <div id="treePanel" class="panel active">
-  <div class="tree-root" id="treeRoot"></div>
+  <div id="d3-stats"></div>
+  <div id="d3-hint">&#128270; node&#39;a t&#305;kla: geni&#351;let/daralt &nbsp;&#124;&nbsp; &#128433; scroll: zoom &nbsp;&#124;&nbsp; s&#252;r&#252;kle: kaydir &nbsp;&#124;&nbsp; yaprak node: rapor detay&#305;</div>
+  <div id="d3-container"><svg id="d3-svg"></svg></div>
 </div>
 
 <div id="reportPanel" class="panel">
@@ -684,6 +699,7 @@ const FILES = [
 {path:"websecure/output/crapi.apisec.ai_report.md",size:"runtime",type:"tool",desc:"crAPI API güvenlik test platformu Markdown raporu. api_only.yml profili ile tarama çiktisi.",classes:[],funcs:[],deps:["websecure/reporters/markdown.py"]},
 ];
 
+const TYPE_COLORS={entry:'#f85149',core:'#58a6ff',scanner:'#3fb950',integration:'#ffa657',reporter:'#bc8cff',cli:'#39d353',config:'#d29922',test:'#ff7b72',wordlist:'#9ecbff',tool:'#ffd700'};
 const TYPE_ORDER=['entry','core','scanner','integration','reporter','cli','config','test','wordlist','tool'];
 const TYPE_LABEL={entry:'GIRIS NOKTALARI',core:'CEKIRDEK MODULLER',scanner:'SCANNER MODULLER',integration:'ENTEGRASYONLAR',reporter:'RAPORLAYICILAR',cli:'CLI / API',config:'KONFIGURASYON',test:'TESTLER',wordlist:'WORDLISTLER',tool:'ARACLAR'};
 const TYPE_ICONS={entry:'🚀',core:'⚙️',scanner:'🔍',integration:'🔗',reporter:'📊',cli:'💻',config:'📋',test:'🧪',wordlist:'📝',tool:'🛠️'};
@@ -695,14 +711,6 @@ function switchTab(name){
   document.querySelectorAll('.tab').forEach((t,i)=>{
     t.classList.toggle('active',(i===0&&name==='tree')||(i===1&&name==='report')||(i===2&&name==='overview'));
   });
-}
-
-function toggleNode(id){
-  const ch=document.getElementById('ch_'+id);
-  const arr=document.getElementById('arr_'+id);
-  if(!ch)return;
-  const open=ch.classList.toggle('open');
-  if(arr)arr.classList.toggle('open',open);
 }
 
 function toggleCard(header){
@@ -730,65 +738,162 @@ function filterAll(q){
   document.querySelectorAll('.rcard').forEach(c=>{
     c.classList.toggle('hidden',!(!q||c.dataset.path.includes(q)||c.querySelector('.rcard-path').textContent.toLowerCase().includes(q)||c.querySelector('.rcard-body').textContent.toLowerCase().includes(q)));
   });
-  document.querySelectorAll('.tree-item[data-path]').forEach(item=>{
-    const match=!q||item.dataset.path.includes(q)||item.textContent.toLowerCase().includes(q);
-    item.classList.toggle('hidden',!match);
-  });
-}
-
-// Build nested tree from flat list
-function buildNodes(files){
-  const root={_f:[],_d:{}};
-  files.forEach(f=>{
-    const parts=f.path.replace(/\\/g,'/').split('/');
-    let node=root;
-    parts.forEach((p,i)=>{
-      if(i===parts.length-1){node._f.push(f);}
+  if(window._d3Svg){
+    window._d3Svg.selectAll('g.d3-node').each(function(d){
+      if(!q){d3.select(this).classed('dimmed',false).classed('matched',false);}
       else{
-        if(!node._d[p])node._d[p]={_f:[],_d:{}};
-        node=node._d[p];
+        const nm=(d.data.name||'').toLowerCase();
+        const pt=(d.data.path||'').toLowerCase();
+        const ds=(d.data.desc||'').toLowerCase();
+        const match=nm.includes(q)||pt.includes(q)||ds.includes(q);
+        d3.select(this).classed('dimmed',!match).classed('matched',match);
       }
     });
+  }
+}
+
+/* ── D3 OSINT-Framework tree ─────────────────────────── */
+function buildOSINTData(){
+  const root={name:'WebSecure v20',type:'root',children:[]};
+  const dirMap={'':root};
+  FILES.forEach(f=>{
+    if(f.path.endsWith('/'))return;          // skip directory-descriptor entries
+    const parts=f.path.replace(/\\/g,'/').split('/');
+    for(let i=0;i<parts.length-1;i++){
+      const key=parts.slice(0,i+1).join('/');
+      if(!dirMap[key]){
+        const parentKey=parts.slice(0,i).join('/');
+        const par=dirMap[parentKey]||root;
+        const dn={name:parts[i],type:'dir',path:key,children:[]};
+        dirMap[key]=dn;
+        if(!par.children)par.children=[];
+        par.children.push(dn);
+      }
+    }
+    const parentKey=parts.slice(0,-1).join('/');
+    const par=dirMap[parentKey]||root;
+    if(!par.children)par.children=[];
+    par.children.push({name:parts[parts.length-1],type:f.type,path:f.path,desc:f.desc,isLeaf:true});
   });
   return root;
 }
 
-function countDeep(node){
-  let c=(node._f||[]).length;
-  Object.values(node._d||{}).forEach(ch=>c+=countDeep(ch));
-  return c;
+function bezierLink(s,t){
+  const m=(s.y+t.y)/2;
+  return `M${s.y},${s.x}C${m},${s.x} ${m},${t.x} ${t.y},${t.x}`;
 }
 
-function renderLeaf(f){
-  const fname=f.path.split('/').pop();
-  const icon=TYPE_ICONS[f.type]||'📄';
-  const shortDesc=f.desc.length>68?f.desc.substring(0,68)+'…':f.desc;
-  return `<div class="tree-item t-${f.type}" data-path="${f.path.toLowerCase()}" onclick="showDetail('${f.path.replace(/'/g,"\\'")}')">
-    <span class="arrow" style="opacity:0">&#9658;</span>
-    <span class="icon">${icon}</span>
-    <span class="type-pill tp-${f.type}">${f.type.substring(0,3).toUpperCase()}</span>
-    <span class="node-label"><span class="fname">${fname}</span><span class="fdesc">${shortDesc}</span></span>
-  </div>`;
-}
+function initD3Tree(){
+  const container=document.getElementById('d3-container');
+  const W=Math.max(container.clientWidth||0,window.innerWidth-48);
+  const H=Math.max(container.clientHeight||0,window.innerHeight-200);
+  const svg=d3.select('#d3-svg').attr('width',W).attr('height',H);
+  svg.selectAll('*').remove();
 
-function renderDir(name,node,path){
-  const id='d_'+path.replace(/[^a-z0-9]/gi,'_');
-  const total=countDeep(node);
-  const childDirs=Object.keys(node._d||{}).sort();
-  let html=`<div class="tree-node">
-    <div class="tree-dir-header" onclick="toggleNode('${id}')">
-      <span class="arrow" id="arr_${id}">&#9658;</span>
-      <span class="icon">📁</span>
-      <span class="dir-name">${name}/</span>
-      <span class="dir-count">${total} dosya</span>
-    </div>
-    <div class="tree-children" id="ch_${id}">`;
-  childDirs.forEach(c=>{
-    html+=renderDir(c,node._d[c],path+'/'+c);
+  const gWrap=svg.append('g');
+  const zoom=d3.zoom().scaleExtent([0.04,4]).on('zoom',e=>gWrap.attr('transform',e.transform));
+  svg.call(zoom);
+
+  const g=gWrap.append('g');
+  const initTX=130, initTY=H/2;
+  svg.call(zoom.transform, d3.zoomIdentity.translate(initTX,initTY));
+
+  const treeLayout=d3.tree().nodeSize([22,240]);
+  let root=d3.hierarchy(buildOSINTData());
+
+  // collapse everything deeper than depth 1
+  root.descendants().forEach(d=>{
+    if(d.depth>1&&d.children){d._children=d.children;d.children=null;}
   });
-  (node._f||[]).forEach(f=>html+=renderLeaf(f));
-  html+='</div></div>';
-  return html;
+
+  let uid=0;
+  root.descendants().forEach(d=>{d.id=++uid; d.x0=0; d.y0=0;});
+
+  function nodeColor(d){
+    if(d.data.type==='root')return'#58a6ff';
+    if(d.data.type==='dir')return d._children?'#ffa657':'rgba(121,192,255,.1)';
+    return TYPE_COLORS[d.data.type]||'#8b949e';
+  }
+  function nodeStroke(d){
+    if(d.data.type==='root')return'#58a6ff';
+    if(d.data.type==='dir')return d._children?'#ffa657':'#79c0ff';
+    return TYPE_COLORS[d.data.type]||'#8b949e';
+  }
+  function textColor(d){
+    if(d.data.type==='root')return'#79c0ff';
+    if(d.data.type==='dir')return d._children?'#ffa657':'#79c0ff';
+    return TYPE_COLORS[d.data.type]||'var(--muted)';
+  }
+  function nodeR(d){
+    if(d.data.type==='root')return 9;
+    if(d.data.isLeaf)return 3.5;
+    return 5.5;
+  }
+  function isLeafClass(d){ return (!d.children&&!d._children)||d.data.isLeaf; }
+
+  function update(src){
+    treeLayout(root);
+    const nodes=root.descendants();
+    const links=root.links();
+
+    // ── links ──
+    const lSel=g.selectAll('path.d3-link').data(links,d=>d.target.id);
+    const lEnter=lSel.enter().insert('path','g').attr('class','d3-link')
+      .attr('d',()=>{ const o={x:src.x0||0,y:src.y0||0}; return bezierLink(o,o); });
+    lSel.merge(lEnter).transition().duration(280)
+      .attr('d',d=>bezierLink(d.source,d.target));
+    lSel.exit().transition().duration(280)
+      .attr('d',()=>{ const o={x:src.x,y:src.y}; return bezierLink(o,o); }).remove();
+
+    // ── nodes ──
+    const nSel=g.selectAll('g.d3-node').data(nodes,d=>d.id);
+    const nEnter=nSel.enter().append('g')
+      .attr('class',d=>'d3-node'+(isLeafClass(d)?' leaf':''))
+      .attr('transform',`translate(${src.y0||0},${src.x0||0})`)
+      .on('click',(ev,d)=>{
+        ev.stopPropagation();
+        if(d.data.isLeaf){ showDetail(d.data.path); return; }
+        if(d.children){d._children=d.children;d.children=null;}
+        else{d.children=d._children;d._children=null;}
+        update(d);
+      });
+
+    nEnter.append('circle').attr('r',0)
+      .attr('fill',nodeColor).attr('stroke',nodeStroke).attr('stroke-width',1.5);
+
+    // text + halo (clone inserted below)
+    nEnter.append('text')
+      .attr('dy','0.31em')
+      .attr('x',d=>d.children||d._children?-10:10)
+      .attr('text-anchor',d=>d.children||d._children?'end':'start')
+      .attr('fill',textColor)
+      .text(d=>d.data.name)
+      .clone(true).lower()
+        .attr('fill','none').attr('stroke','#0d1117').attr('stroke-width',4)
+        .attr('stroke-linejoin','round');
+
+    const nAll=nSel.merge(nEnter);
+    nAll.transition().duration(280)
+      .attr('class',d=>'d3-node'+(isLeafClass(d)?' leaf':''))
+      .attr('transform',d=>`translate(${d.y},${d.x})`);
+
+    nAll.select('circle').transition().duration(280)
+      .attr('r',nodeR).attr('fill',nodeColor).attr('stroke',nodeStroke);
+
+    nAll.selectAll('text')
+      .attr('x',d=>d.children||d._children?-10:10)
+      .attr('text-anchor',d=>d.children||d._children?'end':'start')
+      .attr('fill',textColor);
+
+    nSel.exit().transition().duration(280)
+      .attr('transform',`translate(${src.y},${src.x})`).remove();
+
+    nodes.forEach(d=>{d.x0=d.x; d.y0=d.y;});
+  }
+
+  root.x0=0; root.y0=0;
+  update(root);
+  window._d3Svg=d3.select('#d3-svg');
 }
 
 function buildReport(files){
@@ -823,34 +928,28 @@ function buildReport(files){
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
-  // Tree
-  const root=buildNodes(FILES);
-  let treeHtml='';
-  (root._f||[]).forEach(f=>treeHtml+=renderLeaf(f));
-  Object.keys(root._d||{}).sort().forEach(name=>{
-    treeHtml+=renderDir(name,root._d[name],name);
-  });
-  document.getElementById('treeRoot').innerHTML=treeHtml;
-
   // Stats bar
   const typeCounts={};
   FILES.forEach(f=>{typeCounts[f.type]=(typeCounts[f.type]||0)+1;});
-  const pillBg  ={entry:'rgba(248,81,73,.18)',core:'rgba(88,166,255,.15)',scanner:'rgba(63,185,80,.15)',integration:'rgba(255,166,87,.15)',reporter:'rgba(188,140,255,.15)',cli:'rgba(57,211,83,.1)',config:'rgba(210,153,34,.15)',test:'rgba(255,123,114,.15)',wordlist:'rgba(158,203,255,.12)',tool:'rgba(255,215,0,.08)'};
-  const pillCol ={entry:'#f85149',core:'#58a6ff',scanner:'#3fb950',integration:'#ffa657',reporter:'#bc8cff',cli:'#39d353',config:'#d29922',test:'#ff7b72',wordlist:'#9ecbff',tool:'#ffd700'};
+  const pillBg={entry:'rgba(248,81,73,.18)',core:'rgba(88,166,255,.15)',scanner:'rgba(63,185,80,.15)',integration:'rgba(255,166,87,.15)',reporter:'rgba(188,140,255,.15)',cli:'rgba(57,211,83,.1)',config:'rgba(210,153,34,.15)',test:'rgba(255,123,114,.15)',wordlist:'rgba(158,203,255,.12)',tool:'rgba(255,215,0,.08)'};
   let statsHtml='<div class="tree-stats">';
   TYPE_ORDER.forEach(t=>{
     if(!typeCounts[t])return;
     const bg=pillBg[t]||'rgba(139,148,158,.1)';
-    const col=pillCol[t]||'#8b949e';
+    const col=TYPE_COLORS[t]||'#8b949e';
     statsHtml+=`<div class="ts-item" style="background:${bg};color:${col};border:1px solid ${col}33">${TYPE_ICONS[t]||'📄'}&nbsp;<span class="ts-count">${typeCounts[t]}</span>&nbsp;${t}</div>`;
   });
   statsHtml+=`<div class="ts-item" style="background:rgba(139,148,158,.1);color:#8b949e;border:1px solid #30363d">📊&nbsp;<span class="ts-count">${FILES.length}</span>&nbsp;toplam</div>`;
   statsHtml+='</div>';
-  document.getElementById('treeRoot').insertAdjacentHTML('beforebegin',statsHtml);
+  document.getElementById('d3-stats').innerHTML=statsHtml;
+
+  // D3 tree
+  initD3Tree();
 
   // Report
   document.getElementById('reportGrid').innerHTML=buildReport(FILES);
 });
 </script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
 </body>
 </html>
