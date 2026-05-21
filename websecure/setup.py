@@ -26,6 +26,8 @@ if __name__ == "__main__":
             "lxml>=5.2.2",
             "tldextract>=5.1.2",
             "cryptography>=42.0.0",
+            "pyOpenSSL>=24.0.0",
+            "sslyze>=6.0.0",
             "jinja2>=3.1.0",
             "cvss>=3.2",
         ],

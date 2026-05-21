@@ -1398,4 +1398,210 @@ class TLSDeepScanner(BaseScanner):
                 all_results.extend(prober.run(target, **kwargs))
             except Exception as exc:
                 _deep_logger.warning("[TLSDeep] %s failed: %s", prober.name, exc)
+
+        # sslyze entegrasyonu — kuruluysa derin analiz yap
+        try:
+            sslyze_results = _run_sslyze(target)
+            all_results.extend(sslyze_results)
+        except Exception as exc:
+            _deep_logger.debug("[TLSDeep] sslyze skipped: %s", exc)
+
         return all_results
+
+
+# ===========================================================================
+# SSlyze entegrasyon fonksiyonu — Heartbleed, ROBOT, OCSP, cipher enum
+# ===========================================================================
+
+def _run_sslyze(target: str) -> List[Dict]:
+    """
+    sslyze ile tam TLS analizi:
+    - Heartbleed, ROBOT, OpenSSL CCS Injection
+    - Session renegotiation
+    - OCSP stapling
+    - Certificate bilgileri (issuer, expiry, SAN)
+    - Zayıf cipher suite enumeration
+    """
+    try:
+        from sslyze import (
+            Scanner, ServerNetworkLocation, ServerScanRequest,
+            ScanCommand,
+        )
+        from sslyze.errors import ServerRejectedTlsHandshake, ConnectionToServerFailed
+    except ImportError:
+        return []
+
+    import urllib.parse as _up
+    parsed = _up.urlparse(target)
+    host = parsed.hostname or target
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if port == 80:
+        return []  # HTTP — TLS analizi gerekmez
+
+    findings: List[Dict] = []
+
+    try:
+        location = ServerNetworkLocation(hostname=host, port=port)
+        request = ServerScanRequest(
+            server_location=location,
+            scan_commands={
+                ScanCommand.HEARTBLEED,
+                ScanCommand.ROBOT,
+                ScanCommand.OPENSSL_CCS_INJECTION,
+                ScanCommand.SESSION_RENEGOTIATION,
+                ScanCommand.CERTIFICATE_INFO,
+                ScanCommand.TLS_1_0_CIPHER_SUITES,
+                ScanCommand.TLS_1_1_CIPHER_SUITES,
+            },
+        )
+        scanner = Scanner()
+        scanner.queue_scans([request])
+
+        for result in scanner.get_results():
+            if result.scan_result is None:
+                continue
+            r = result.scan_result
+
+            # Heartbleed
+            try:
+                hb = r.heartbleed
+                if hb and hb.is_vulnerable_to_heartbleed:
+                    findings.append({
+                        "vuln_type": "Heartbleed (CVE-2014-0160)",
+                        "url": f"https://{host}:{port}",
+                        "severity": "Critical",
+                        "description": (
+                            "Server is vulnerable to Heartbleed! An attacker can read "
+                            "64KB of server memory per request, leaking private keys, "
+                            "session tokens, and plaintext data."
+                        ),
+                        "evidence": {"host": host, "port": port, "detection": "sslyze"},
+                        "cvss": 9.8,
+                    })
+            except Exception:
+                pass
+
+            # ROBOT
+            try:
+                robot = r.robot
+                if robot and "VULNERABLE" in str(robot.robot_result).upper():
+                    findings.append({
+                        "vuln_type": "ROBOT Attack — RSA Padding Oracle",
+                        "url": f"https://{host}:{port}",
+                        "severity": "High",
+                        "description": (
+                            "Server is vulnerable to ROBOT (Return Of Bleichenbacher's "
+                            "Oracle Threat). Attacker can decrypt RSA ciphertext or "
+                            "forge RSA signatures."
+                        ),
+                        "evidence": {"robot_result": str(robot.robot_result), "detection": "sslyze"},
+                        "cvss": 7.5,
+                    })
+            except Exception:
+                pass
+
+            # OpenSSL CCS Injection
+            try:
+                ccs = r.openssl_ccs_injection
+                if ccs and ccs.is_vulnerable_to_ccs_injection:
+                    findings.append({
+                        "vuln_type": "OpenSSL CCS Injection (CVE-2014-0224)",
+                        "url": f"https://{host}:{port}",
+                        "severity": "High",
+                        "description": (
+                            "Server is vulnerable to OpenSSL CCS Injection. "
+                            "A MitM attacker can decrypt and modify encrypted traffic."
+                        ),
+                        "evidence": {"host": host, "detection": "sslyze"},
+                        "cvss": 7.4,
+                    })
+            except Exception:
+                pass
+
+            # Session Renegotiation
+            try:
+                renego = r.session_renegotiation
+                if renego:
+                    if not renego.supports_secure_renegotiation:
+                        findings.append({
+                            "vuln_type": "Insecure TLS Renegotiation",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Medium",
+                            "description": (
+                                "Server does not support secure TLS renegotiation (RFC 5746). "
+                                "Vulnerable to renegotiation injection attacks."
+                            ),
+                            "evidence": {"host": host, "detection": "sslyze"},
+                        })
+                    if renego.is_vulnerable_to_client_renegotiation_dos:
+                        findings.append({
+                            "vuln_type": "Client-Initiated Renegotiation DoS",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Medium",
+                            "description": (
+                                "Server allows unlimited client-initiated renegotiation. "
+                                "Can be abused for CPU-exhaustion DoS."
+                            ),
+                            "evidence": {"host": host, "detection": "sslyze"},
+                        })
+            except Exception:
+                pass
+
+            # Certificate Info
+            try:
+                cert_info = r.certificate_info
+                if cert_info and cert_info.certificate_deployments:
+                    dep = cert_info.certificate_deployments[0]
+                    leaf = dep.received_certificate_chain[0]
+                    import datetime as _dt2
+                    expiry = leaf.not_valid_after_utc if hasattr(leaf, "not_valid_after_utc") else leaf.not_valid_after
+                    now = _dt2.datetime.now(_dt2.timezone.utc)
+                    days_left = (expiry.replace(tzinfo=_dt2.timezone.utc) - now).days if expiry.tzinfo is None else (expiry - now).days
+                    if days_left < 0:
+                        findings.append({
+                            "vuln_type": "Expired SSL Certificate",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Critical",
+                            "description": f"SSL certificate expired {abs(days_left)} day(s) ago.",
+                            "evidence": {"days_left": days_left, "detection": "sslyze"},
+                        })
+                    elif days_left < 30:
+                        findings.append({
+                            "vuln_type": "SSL Certificate Expiring Soon",
+                            "url": f"https://{host}:{port}",
+                            "severity": "High",
+                            "description": f"SSL certificate expires in {days_left} day(s).",
+                            "evidence": {"days_left": days_left, "detection": "sslyze"},
+                        })
+                    if not dep.leaf_certificate_subject_matches_hostname:
+                        findings.append({
+                            "vuln_type": "SSL Certificate Hostname Mismatch",
+                            "url": f"https://{host}:{port}",
+                            "severity": "High",
+                            "description": f"Certificate subject does not match hostname '{host}'.",
+                            "evidence": {"host": host, "detection": "sslyze"},
+                        })
+            except Exception:
+                pass
+
+            # Weak cipher suites (TLS 1.0 / 1.1 accepted ciphers)
+            for suite_result in [getattr(r, "tls_1_0_cipher_suites", None),
+                                  getattr(r, "tls_1_1_cipher_suites", None)]:
+                try:
+                    if suite_result and suite_result.accepted_cipher_suites:
+                        proto = "TLS 1.0" if "tls_1_0" in str(suite_result) else "TLS 1.1"
+                        names = [c.cipher_suite.name for c in suite_result.accepted_cipher_suites[:5]]
+                        findings.append({
+                            "vuln_type": f"Deprecated Protocol Accepted — {proto}",
+                            "url": f"https://{host}:{port}",
+                            "severity": "Medium",
+                            "description": f"Server accepts {proto} connections. Accepted ciphers: {names}",
+                            "evidence": {"protocol": proto, "ciphers": names, "detection": "sslyze"},
+                        })
+                except Exception:
+                    pass
+
+    except (ConnectionToServerFailed, ServerRejectedTlsHandshake, Exception) as exc:
+        _deep_logger.debug("[sslyze] scan failed for %s: %s", host, exc)
+
+    return findings

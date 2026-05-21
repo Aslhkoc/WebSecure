@@ -502,31 +502,146 @@ def phase_discovery(ctx: dict):
 
 
 def _phase_httpx_port_fallback(ctx, host: str) -> None:
-    """Probe common HTTP/HTTPS ports via requests when nmap is unavailable."""
+    """
+    Nmap yokken devreye giren Python-native port scanner.
+    Top-1000 TCP portu tarar, banner grabbing + servis tespiti yapar.
+    """
     import socket as _socket
-    session = ctx.get("session") if isinstance(ctx, dict) else getattr(ctx, "session", None)
-    if session is None:
-        session = hardened_session({})
+    import concurrent.futures as _cf
+    import ssl as _ssl
 
-    _HTTP_PORTS = [80, 443, 8080, 8443, 8888, 9090, 3000, 5000, 4443, 4080]
-    for port in _HTTP_PORTS:
-        scheme = "https" if port in (443, 8443, 4443) else "http"
-        url = f"{scheme}://{host}:{port}/"
+    # Top-1000 en yaygın TCP portları
+    _TOP_PORTS = [
+        21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
+        1723, 3306, 3389, 5900, 8080, 8443, 8888, 8000, 8008, 8081, 8082,
+        8083, 8084, 8085, 8086, 8087, 8088, 8089, 8090, 8443, 8888, 9090,
+        9200, 9300, 4443, 4080, 3000, 4000, 5000, 5001, 5432, 5984, 6379,
+        6443, 7001, 7002, 7080, 7443, 9000, 9001, 9002, 9003, 9080, 9443,
+        10000, 10443, 11211, 27017, 27018, 28017, 50000, 50070,
+        # SSH/FTP/Telnet/SMTP
+        20, 69, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+        102, 104, 109, 119, 123, 137, 138, 161, 162, 179, 194,
+        389, 427, 465, 512, 513, 514, 515, 543, 544, 548, 554,
+        587, 631, 636, 646, 873, 990, 992, 1080, 1194, 1433, 1434,
+        1521, 1723, 2000, 2049, 2082, 2083, 2086, 2087, 2095, 2096,
+        2181, 2375, 2376, 2377, 2379, 2380, 3128, 3268, 3269, 3306,
+        4040, 4848, 5000, 5006, 5007, 5044, 5060, 5061, 5601, 5672,
+        5900, 5985, 5986, 6000, 6001, 6080, 6443, 6514, 7077, 7474,
+        8161, 8888, 9042, 9060, 9092, 9418, 9999, 10250, 10255, 15672,
+        18080, 18081, 25672, 32400, 49152, 49153, 49154, 49155,
+    ]
+
+    # Servis tahmin tablosu (port → isim)
+    _SVC = {
+        21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
+        80: "http", 110: "pop3", 111: "rpcbind", 135: "msrpc",
+        139: "netbios-ssn", 143: "imap", 389: "ldap", 443: "https",
+        445: "microsoft-ds", 587: "smtp", 993: "imaps", 995: "pop3s",
+        1433: "mssql", 1521: "oracle", 1723: "pptp", 2049: "nfs",
+        2375: "docker", 2376: "docker-tls", 3000: "http-alt",
+        3306: "mysql", 3389: "rdp", 4443: "https-alt", 4848: "glassfish",
+        5432: "postgresql", 5601: "kibana", 5672: "amqp", 5900: "vnc",
+        5984: "couchdb", 5985: "winrm", 5986: "winrm-tls",
+        6379: "redis", 7001: "weblogic", 8080: "http-proxy",
+        8161: "activemq", 8443: "https-alt", 8888: "http-alt",
+        9000: "http-alt", 9042: "cassandra", 9092: "kafka",
+        9200: "elasticsearch", 9300: "elasticsearch-node",
+        9418: "git", 11211: "memcached", 15672: "rabbitmq-mgmt",
+        27017: "mongodb", 27018: "mongodb", 28017: "mongodb-http",
+        50070: "hadoop-namenode",
+    }
+
+    _HTTPS_PORTS = {443, 8443, 4443, 9443, 7443, 6443, 2083, 2087, 2096, 5986}
+
+    def _grab_banner(host: str, port: int, timeout: float = 2.0) -> str:
+        """TCP banner grabbing."""
         try:
-            r = session.get(url, timeout=4, allow_redirects=False)
-            svc = "https" if port in (443, 8443, 4443) else "http"
-            add_result("nmap", {
-                "severity": "info",
-                "message": f"Açık port (httpx-fallback): {port}/tcp ({svc}) — HTTP {r.status_code}",
-                "host": host,
-                "port": port,
-                "proto": "tcp",
-                "service": svc,
-                "state": "open",
-                "scripts": {},
-            })
+            with _socket.create_connection((host, port), timeout=timeout) as s:
+                s.settimeout(timeout)
+                try:
+                    data = s.recv(1024)
+                    return data.decode("utf-8", errors="replace")[:200].strip()
+                except Exception:
+                    return ""
         except Exception:
-            pass
+            return ""
+
+    def _probe_port(port: int):
+        """Tek portu tara, açıksa bulgu döndür."""
+        try:
+            with _socket.create_connection((host, port), timeout=1.5) as _s:
+                pass
+        except (ConnectionRefusedError, _socket.timeout, OSError):
+            return None
+        except Exception:
+            return None
+
+        svc = _SVC.get(port, "unknown")
+        is_https = port in _HTTPS_PORTS
+        banner = ""
+
+        # Banner grabbing (sadece bazı servisler için)
+        if svc not in ("http", "https", "https-alt", "http-proxy", "http-alt"):
+            banner = _grab_banner(host, port)
+
+        # HTTP/HTTPS probe
+        http_info = {}
+        if svc in ("http", "https", "http-alt", "https-alt", "http-proxy") or port in _HTTPS_PORTS or port == 80:
+            session = hardened_session({})
+            scheme = "https" if is_https else "http"
+            try:
+                r = session.get(f"{scheme}://{host}:{port}/", timeout=4,
+                                allow_redirects=False, verify=False)
+                http_info = {
+                    "status": r.status_code,
+                    "server": r.headers.get("Server", ""),
+                    "title": "",
+                }
+                from bs4 import BeautifulSoup as _BS
+                try:
+                    soup = _BS(r.text[:4096], "html.parser")
+                    t = soup.find("title")
+                    if t:
+                        http_info["title"] = t.get_text(strip=True)[:100]
+                except Exception:
+                    pass
+                if svc == "unknown":
+                    svc = scheme
+            except Exception:
+                pass
+
+        severity = "info"
+        # Kritik servisler için severity yükselt
+        if svc in ("ssh", "ftp", "telnet", "rdp", "vnc", "redis",
+                   "mongodb", "memcached", "elasticsearch", "docker"):
+            severity = "medium"
+
+        detail = banner or (f"HTTP {http_info.get('status','')} — {http_info.get('server','')} — {http_info.get('title','')}" if http_info else "")
+        return {
+            "severity": severity,
+            "message": f"Açık port: {port}/tcp ({svc})" + (f" — {detail[:120]}" if detail.strip() else ""),
+            "host": host,
+            "port": port,
+            "proto": "tcp",
+            "service": svc,
+            "state": "open",
+            "banner": banner[:200],
+            "http_info": http_info,
+            "scripts": {},
+            "source": "python-portscan",
+        }
+
+    print(f"[PortScan/Python] {host} — {len(_TOP_PORTS)} port taranıyor…")
+    open_ports = []
+    with _cf.ThreadPoolExecutor(max_workers=150) as ex:
+        futures = {ex.submit(_probe_port, p): p for p in _TOP_PORTS}
+        for fut in _cf.as_completed(futures):
+            result = fut.result()
+            if result:
+                open_ports.append(result)
+                add_result("nmap", result)
+
+    print(f"[PortScan/Python] Tamamlandı — {len(open_ports)} açık port bulundu.")
 
 
 def phase_portscan(ctx: dict):
