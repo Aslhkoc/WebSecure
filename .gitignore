@@ -31,3 +31,8 @@ drivers/
 # Tarama sırasında oluşturulan geçici/artifact dosyalar
 websecure/session.json
 websecure/-*
+
+# Claude Code yerel dosyaları (API anahtarı, session vb. içerebilir)
+.claude/settings.local.json
+.claude/worktrees/
+session.json
