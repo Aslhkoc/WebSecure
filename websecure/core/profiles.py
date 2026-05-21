@@ -41,11 +41,12 @@ _logger = logging.getLogger(__name__)
 _ALL_MODULES = [
     "xss", "sqli", "ssrf", "xxe", "cmdi", "ssti", "csrf", "crlf_injection",
     "open_redirect", "idor", "race_condition", "file_upload", "dom_xss",
-    "lfi", "request_smuggling", "mass_assignment", "jwt_attacks", "nosqli",
+    "lfi", "request_smuggling", "mass_assignment", "jwt_attacks", "nosqli", "nosql_injection",
     "auth_scanners", "cors", "headers", "tls", "graphql", "websocket_fuzz",
     "prototype_pollution", "js_analyzer", "session_scanner", "subdomain_takeover",
     "waf_fingerprint", "oast", "nmap", "subdomain", "passive_recon",
     "infrastructure", "owasp",
+    "clickjacking", "bypass_403", "param_pollution", "business_logic",
 ]
 
 _OWASP_TOP10_MODULES = [
@@ -64,7 +65,7 @@ _OWASP_TOP10_MODULES = [
 ]
 
 _API_MODULES = [
-    "sqli", "nosqli", "ssrf", "xxe", "idor", "auth_scanners",
+    "sqli", "nosqli", "nosql_injection", "ssrf", "xxe", "idor", "auth_scanners",
     "jwt_attacks", "mass_assignment", "graphql", "cors", "race_condition",
     "cmdi", "ssti", "open_redirect", "oast",
 ]

@@ -19,16 +19,15 @@ _logger = logging.getLogger(__name__)
 # Sistemdeki tüm modüller — her iki profilde de TAM AÇIK
 # ---------------------------------------------------------------------------
 _ALL_OFFENSIVE_MODULES = [
-    "request_smuggling", "mass_assignment", "jwt_attacks", "nosql_injection",
-    "websocket_fuzz", "ssrf", "xxe", "graphql", "sqlmap",
+    "request_smuggling", "mass_assignment", "jwt_attacks", "nosqli", "nosql_injection",
+    "websocket_fuzz", "ssrf", "xxe", "graphql",
     "xss", "sqli", "ssti", "cmdi", "csrf", "crlf_injection",
     "open_redirect", "idor", "race_condition", "prototype_pollution",
     "file_upload", "dom_xss", "headers", "tls",
     "auth_scanners", "owasp", "infrastructure", "passive_recon",
-    "js_analyzer", "session_scanner", "cors", "clickjacking", "hsts",
+    "js_analyzer", "session_scanner", "cors", "clickjacking",
     "param_pollution", "bypass_403", "business_logic",
-    "open_redirect", "lfi", "cmdi", "subdomain_takeover", "headers",
-    "waf_bypass", "auth_manager",
+    "lfi", "subdomain_takeover", "waf_fingerprint",
 ]
 
 def _enable_all_modules(cfg: dict) -> None:
