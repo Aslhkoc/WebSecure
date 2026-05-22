@@ -679,7 +679,6 @@
         "Incapsula"
       ]
     },
-    "interact_base": "https://interact.sh",
     "auto_bypass": true,
     "probe_on_start": true
   },
@@ -1191,6 +1190,62 @@
       "--tamper=space2comment,between,randomcase",
       "--threads=3"
     ]
+  },
+  "nuclei": {
+    "enabled": true,
+    "profile": "aggressive",
+    "rate_limit": 200,
+    "concurrency": 50,
+    "severity": "low,medium,high,critical",
+    "tags": "cve,default-logins,exposed-panels,misconfig,takeover,tech,xss,sqli,ssrf,rce,lfi,xxe,ssti,idor,redirect,auth-bypass,injection,traversal,disclosure,exposure,intrusive",
+    "auto_update": true,
+    "timeout": 300
+  },
+  "dalfox": {
+    "enabled": true,
+    "format": "json",
+    "waf_evasion": true,
+    "timeout": 60,
+    "worker": 100,
+    "delay": 0
+  },
+  "katana": {
+    "enabled": true,
+    "depth": 5,
+    "js_crawl": true,
+    "headless": false,
+    "concurrency": 10,
+    "parallelism": 10,
+    "rate_limit": 150,
+    "timeout": 10
+  },
+  "amass": {
+    "enabled": true,
+    "passive_only": true,
+    "timeout": 300,
+    "max_dns_queries": 20000
+  },
+  "httpx": {
+    "enabled": true,
+    "threads": 50,
+    "rate_limit": 150,
+    "timeout": 10,
+    "follow_redirects": true,
+    "http2": true,
+    "tech_detect": true,
+    "tls_probe": true
+  },
+  "subfinder": {
+    "enabled": true,
+    "all_sources": true,
+    "timeout": 120
+  },
+  "interactsh": {
+    "enabled": true,
+    "server": "https://oast.me",
+    "token": "",
+    "poll_interval": 5,
+    "timeout": 120
   },
   "wordlists": {
     "xss": "./websecure/wordlists/xss.txt",

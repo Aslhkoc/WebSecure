@@ -549,8 +549,213 @@ class SubfinderIntegration(ToolIntegration):
         )]
 
 
+# ---------------------------------------------------------------------------
+# InteractshIntegration — OAST/OOB callback server
+# ---------------------------------------------------------------------------
+
+class InteractshIntegration(ToolIntegration):
+    """
+    interactsh-client OAST (Out-of-Band Application Security Testing) entegrasyonu.
+
+    interactsh-client binary'sini çalıştırarak out-of-band callback kanalı sağlar.
+    DNS, HTTP, SMTP protokollerinde gelen callback'leri dinler ve raporlar.
+
+    Binary: tools/interactsh/interactsh-client.exe veya drivers/interactsh-client.exe
+    """
+
+    def __init__(
+        self,
+        binary_path: Optional[str] = None,
+        server: str = "https://oast.me",
+        timeout_s: int = 30,
+    ) -> None:
+        # Binary keşif: önce tools/, sonra drivers/, son olarak PATH
+        if not binary_path:
+            _root = Path(__file__).resolve().parent.parent.parent
+            for _candidate in [
+                _root / "tools" / "interactsh" / "interactsh-client.exe",
+                _root / "tools" / "interactsh" / "interactsh-client",
+                _root / "drivers" / "interactsh-client.exe",
+                _root / "drivers" / "interactsh-client",
+            ]:
+                if _candidate.exists():
+                    binary_path = str(_candidate)
+                    logger.debug(f"[interactsh] Binary bulundu: {binary_path}")
+                    break
+        super().__init__(binary_path or "interactsh-client")
+        self.server = server
+        self.timeout_s = timeout_s
+
+    @property
+    def tool_name(self) -> str:
+        return "interactsh"
+
+    def is_available(self) -> bool:
+        bp = self._binary_path
+        if bp and Path(bp).exists():
+            return True
+        return shutil.which("interactsh-client") is not None
+
+    def version(self) -> Optional[str]:
+        if not self.is_available():
+            return None
+        try:
+            proc = subprocess.run(
+                [self.binary, "-version"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=8, check=False,
+            )
+            out = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
+            return out.strip().splitlines()[0] if out.strip() else None
+        except Exception:
+            return None
+
+    def run(self, target: str, **kwargs) -> ToolResult:
+        """
+        interactsh-client'i kısa süreliğine başlatır, kayıt doğrulaması yapar
+        ve gelen etkileşimleri ToolFinding olarak döndürür.
+
+        Anahtar argümanlar
+        ------------------
+        timeout_s : int — kaç saniye dinlenecek (varsayılan 20)
+        server    : str — interactsh sunucusu
+        """
+        if not self.is_available():
+            logger.warning("[interactsh] Binary bulunamadı, atlanıyor.")
+            return ToolResult(tool=self.tool_name, target=target, status=ToolStatus.NOT_FOUND)
+
+        start = time.monotonic()
+        timeout_s = int(kwargs.get("timeout_s", min(self.timeout_s, 20)))
+        server = kwargs.get("server", self.server)
+
+        fd, out_file = tempfile.mkstemp(suffix=".json", prefix="ws_interactsh_")
+        os.close(fd)
+
+        try:
+            cmd = [
+                self.binary,
+                "-server", server,
+                "-json",
+                "-o", out_file,
+            ]
+
+            logger.info(f"[interactsh] Başlatılıyor: server={server} timeout={timeout_s}s")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            # Kısa süre çalıştır → kayıt doğrula + gelen eventleri al
+            try:
+                _, stderr_b = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                stderr_b = b""
+
+            # Kayıtlı domain'i stderr'den çıkart
+            domain = ""
+            stderr_text = (stderr_b or b"").decode("utf-8", "ignore")
+            import re as _re
+            for pattern in (
+                r"([a-z0-9]+\.oast\.[a-z]+)",
+                r"([a-z0-9]+\.interact\.sh)",
+                r"([a-z0-9]{8,}\.[a-z0-9]+\.[a-z]{2,})",
+            ):
+                m = _re.search(pattern, stderr_text, _re.I)
+                if m:
+                    domain = m.group(1)
+                    break
+
+            # Çıktı dosyasından event'leri ayrıştır
+            interactions: List[Dict[str, Any]] = []
+            if os.path.exists(out_file):
+                try:
+                    with open(out_file, encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                interactions.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+                except Exception as exc:
+                    logger.debug(f"[interactsh] Çıktı parse hatası: {exc!r}")
+
+            # Bulgular oluştur
+            findings: List[ToolFinding] = []
+
+            # Her etkileşim için bir bulgu
+            for ix in interactions:
+                protocol = str(ix.get("protocol") or ix.get("type") or "unknown").upper()
+                findings.append(ToolFinding(
+                    title=f"OAST Callback — {protocol}",
+                    severity=ToolSeverity.HIGH,
+                    url=target,
+                    tool=self.tool_name,
+                    description=(
+                        f"Out-of-band {protocol} etkileşimi alındı. "
+                        f"Kaynak: {ix.get('remote-address', ix.get('remote_address', 'unknown'))}"
+                    ),
+                    evidence=json.dumps(ix, ensure_ascii=False)[:400],
+                    tags=["oast", "oob", protocol.lower(), "interactsh"],
+                    confidence="high",
+                    verified=True,
+                    raw=ix,
+                ))
+
+            # Servis durum bulgusu
+            findings.append(ToolFinding(
+                title="interactsh OAST Server — Hazır",
+                severity=ToolSeverity.INFO,
+                url=target,
+                tool=self.tool_name,
+                description=(
+                    f"interactsh-client mevcut ve çalışıyor. "
+                    f"Server: {server}. "
+                    f"Domain: {domain or 'kayıt edilmedi'}. "
+                    f"Etkileşim: {len(interactions)}"
+                ),
+                evidence=f"Binary: {self.binary}",
+                tags=["oast", "interactsh", "info"],
+                confidence="high",
+                verified=True,
+            ))
+
+            duration = time.monotonic() - start
+            logger.info(
+                f"[interactsh] Tamamlandı — domain={domain or 'N/A'}  "
+                f"etkileşim={len(interactions)}  {duration:.1f}s"
+            )
+
+            return ToolResult(
+                tool=self.tool_name,
+                target=target,
+                status=ToolStatus.SUCCESS,
+                findings=findings,
+                duration_s=duration,
+                extra={"domain": domain, "interactions": interactions, "server": server},
+            )
+
+        except Exception as exc:
+            logger.error(f"[interactsh] Hata: {exc!r}", exc_info=True)
+            return ToolResult(
+                tool=self.tool_name, target=target,
+                status=ToolStatus.ERROR, stderr=str(exc),
+                duration_s=time.monotonic() - start,
+            )
+        finally:
+            try:
+                os.unlink(out_file)
+            except OSError:
+                pass
+
+
 __all__ = [
     "AmassWrapper",
     "SubfinderIntegration",
+    "InteractshIntegration",
     "run_amass",
 ]

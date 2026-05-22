@@ -19,16 +19,20 @@ results = registry.run_all("https://example.com", correlator=correlator)
 new_findings = correlator.all_findings()
 ```
 
-Araçlar
--------
-- nuclei    : CVE, misconfiguration, exposure taraması
-- ffuf      : Directory/endpoint/parametre fuzzing
-- nmap      : Port ve servis tespiti
-- sqlmap    : SQL injection doğrulama
-- amass     : Subdomain + ASN enumeration    [YENİ]
-- httpx     : HTTP/2 hızlı prob + tech detect [YENİ]
-- katana    : JS-aware web crawler            [YENİ]
-- dalfox    : XSS doğrulama                  [YENİ]
+Araçlar (11 araç tam entegreli)
+---------------------------------
+- nuclei      : CVE, misconfiguration, exposure taraması
+- ffuf        : Directory/endpoint/parametre fuzzing
+- feroxbuster : Recursive directory brute-force
+- nmap        : Port ve servis tespiti
+- sqlmap      : SQL injection doğrulama
+- amass       : Subdomain + ASN enumeration
+- subfinder   : Pasif subdomain OSINT
+- httpx       : HTTP/2 hızlı prob + tech detect
+- katana      : JS-aware web crawler
+- dalfox      : XSS doğrulama
+- interactsh  : OAST/OOB callback server
+
 SARIF
 -----
 ```python
@@ -112,12 +116,13 @@ _sqlmap = _safe_import("websecure.integrations.sqlmap", ["SQLMapClient", "SQLMap
 SQLMapClient = _sqlmap.get("SQLMapClient")
 SQLMapWrapper = _sqlmap.get("SQLMapWrapper")
 
-# Amass + Subfinder (recon)
+# Amass + Subfinder + Interactsh (recon + OAST)
 _amass = _safe_import("websecure.integrations.amass", [
-    "AmassWrapper", "SubfinderIntegration", "run_amass",
+    "AmassWrapper", "SubfinderIntegration", "InteractshIntegration", "run_amass",
 ])
 AmassWrapper = _amass.get("AmassWrapper")
 SubfinderIntegration = _amass.get("SubfinderIntegration")
+InteractshIntegration = _amass.get("InteractshIntegration")
 run_amass = _amass.get("run_amass")
 
 # httpx (YENİ)
@@ -162,6 +167,8 @@ def _auto_register_tools() -> ToolRegistry:
         # Subdomain / recon
         ("amass",        AmassWrapper),
         ("subfinder",    SubfinderIntegration),
+        # OAST / OOB callback
+        ("interactsh",   InteractshIntegration),
         # HTTP / crawl
         ("httpx",        HttpxWrapper),
         ("katana",       KatanaWrapper),
@@ -221,6 +228,7 @@ __all__ = [
     "SQLMapWrapper",
     "AmassWrapper",
     "SubfinderIntegration",
+    "InteractshIntegration",
     "HttpxWrapper",
     "KatanaWrapper",
     "DalfoxWrapper",
