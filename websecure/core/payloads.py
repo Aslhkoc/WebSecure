@@ -44,7 +44,16 @@ def _read_lines(path: Path) -> list[str]:
         path = Path(path)
     if (not path.exists()) or (not path.is_file()):
         return []
-    txt = path.read_text(encoding='utf-8', errors='ignore')
+    try:
+        txt = path.read_text(encoding='utf-8', errors='ignore')
+    except PermissionError:
+        import logging as _log
+        _log.getLogger(__name__).warning(f"[payloads] Permission denied reading wordlist: {path}")
+        return []
+    except OSError as _e:
+        import logging as _log
+        _log.getLogger(__name__).error(f"[payloads] Cannot read wordlist {path}: {_e!r}")
+        return []
     out: list[str] = []
     for line in txt.splitlines():
         s = line.strip()

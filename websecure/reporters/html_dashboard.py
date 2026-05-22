@@ -31,6 +31,7 @@ _LARGE_DETAIL_KEYS = {
     "response", "raw_response", "body", "html", "content",
     "page_source", "source", "html_content", "page", "text",
     "raw_body", "response_body", "res_body",
+    "request_body", "payloads",
 }
 
 

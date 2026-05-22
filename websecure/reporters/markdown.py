@@ -26,21 +26,23 @@ _SEV_ICON: dict = {
 
 
 def _norm_sev_tr(s: str | None) -> str:
-    """Normalize severity to English canonical."""
+    """Normalize severity to English canonical — handles Turkish and English variants."""
     s = (s or "Info").strip().lower()
-    if s in ("critical", "crit"): return "Critical"
-    if s in ("high", "severe"): return "High"
-    if s in ("medium", "med"): return "Medium"
-    if s in ("low",): return "Low"
+    if s in ("critical", "crit", "severe", "kritik"): return "Critical"
+    if s in ("high", "yüksek", "yuksek", "yüksek"): return "High"
+    if s in ("medium", "med", "orta"): return "Medium"
+    if s in ("low", "düşük", "dusuk", "düsük"): return "Low"
+    if s in ("info", "informational", "bilgi"): return "Info"
     return "Info"
 
 
 def _norm_sev_en(s: str | None) -> str:
     s = (s or "Info").strip().lower()
-    if s in ("critical", "crit"): return "Critical"
-    if s in ("high", "severe"): return "High"
-    if s in ("medium", "med"): return "Medium"
-    if s in ("low",): return "Low"
+    if s in ("critical", "crit", "severe", "kritik"): return "Critical"
+    if s in ("high", "yüksek", "yuksek"): return "High"
+    if s in ("medium", "med", "orta"): return "Medium"
+    if s in ("low", "düşük", "dusuk"): return "Low"
+    if s in ("info", "informational", "bilgi"): return "Info"
     return "Info"
 
 

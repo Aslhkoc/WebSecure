@@ -333,8 +333,12 @@ class CVSSScorer:
             # finding was NOT confirmed via bypass. If waf_bypassed=True the exploit
             # already worked through the WAF → complexity is Low (attacker succeeded).
             waf_bypassed = bool(finding.get("waf_bypassed") or finding.get("adaptive_waf_bypass"))
-            if self.waf_detected and not waf_bypassed and "/AC:L/" in vector:
-                vector = vector.replace("/AC:L/", "/AC:H/")
+            if self.waf_detected and not waf_bypassed:
+                if "/AC:L/" in vector:
+                    vector = vector.replace("/AC:L/", "/AC:H/")
+                # AC:M is not standard CVSS 3.x but handle defensively
+                elif "/AC:M/" in vector:
+                    vector = vector.replace("/AC:M/", "/AC:H/")
 
         except (ValueError, TypeError, AttributeError) as exc:
             _logger.debug(f"[reporting] CVSS vector adjustment failed for {vector!r}: {exc!r}")

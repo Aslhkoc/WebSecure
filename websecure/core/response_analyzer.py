@@ -155,7 +155,7 @@ class SQLErrorDetector:
             r"(\W|\A)SQL Server.*Driver",
             r"Warning.*mssql_",
             r"(\W|\A)SQL Server.*[0-9a-fA-F]{8}",
-            r"(?s)Exception.*\WSystem\.Data\.SqlClient\.",
+            r"Exception[^\n]{0,200}System\.Data\.SqlClient\.",
             r"Unclosed quotation mark after the character string",
             r"com\.microsoft\.sqlserver\.jdbc",
             r"Microsoft OLE DB Provider for SQL Server",
@@ -244,10 +244,14 @@ class SQLErrorDetector:
         for db, raws in cls._RAW.items():
             cls._PATTERNS[db] = [re.compile(r, re.I) for r in raws]
 
+    # SQL/DB error patterns only appear near the start of responses; cap to avoid ReDoS
+    _MAX_BODY_SCAN = 65_536  # 64 KB
+
     @classmethod
     def extract_fingerprints(cls, body: str) -> Set[str]:
         """Return set of 'DB:pattern_index' labels matching body."""
         cls._ensure_compiled()
+        body = body[:cls._MAX_BODY_SCAN]
         found: Set[str] = set()
         for db, patterns in cls._PATTERNS.items():
             for idx, pat in enumerate(patterns):
@@ -262,6 +266,7 @@ class SQLErrorDetector:
         Suitable for evidence strings.
         """
         cls._ensure_compiled()
+        body = body[:cls._MAX_BODY_SCAN]
         results: List[Tuple[str, str]] = []
         for db, patterns in cls._PATTERNS.items():
             for pat in patterns:
@@ -347,6 +352,7 @@ class FrameworkErrorDetector:
     }
 
     _PATTERNS: Dict[str, List[re.Pattern]] = {}
+    _MAX_BODY_SCAN = 65_536  # 64 KB — bound regex engine input to prevent ReDoS
 
     @classmethod
     def _ensure_compiled(cls) -> None:
@@ -358,6 +364,7 @@ class FrameworkErrorDetector:
     @classmethod
     def extract_fingerprints(cls, body: str) -> Set[str]:
         cls._ensure_compiled()
+        body = body[:cls._MAX_BODY_SCAN]
         found: Set[str] = set()
         for fw, patterns in cls._PATTERNS.items():
             for idx, pat in enumerate(patterns):
@@ -368,6 +375,7 @@ class FrameworkErrorDetector:
     @classmethod
     def detect(cls, body: str) -> List[Tuple[str, str]]:
         cls._ensure_compiled()
+        body = body[:cls._MAX_BODY_SCAN]
         results: List[Tuple[str, str]] = []
         for fw, patterns in cls._PATTERNS.items():
             for pat in patterns:
