@@ -222,7 +222,7 @@ class BaseScanner:
 
         entry: Dict[str, Any] = {
             "type": resolved_type,
-            "severity": severity,  # overridden by _apply_cvss_severity below
+            "severity": self._normalize_severity(severity),
             "url": url,
             "parameter": param,
             "payload": payload,
@@ -234,12 +234,9 @@ class BaseScanner:
         if extra:
             entry.update(extra)
 
-        entry = self._apply_cvss_severity(entry, hint_severity=severity)
-
         self.add("offensive", entry)
         self.logger.warning(
-            f"[{self.name.upper()}] {resolved_type} FOUND: {url} "
-            f"[{entry['severity']} / CVSS {entry.get('cvss_score', '?')}]"
+            f"[{self.name.upper()}] {resolved_type} FOUND: {url} [{entry['severity']}]"
             + (f" (param={param})" if param else "")
         )
 

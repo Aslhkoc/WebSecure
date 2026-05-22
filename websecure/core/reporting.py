@@ -30,21 +30,11 @@ def should_fail_ci(cfg: dict, results: dict) -> bool:
     normalized_fail = [s.strip().lower() for s in fail_on if isinstance(s, str)]
     if not normalized_fail:
         return False
-    # severity_aliases: map any TR/EN variant to canonical lowercase English
-    _SEV_ALIAS: dict[str, str] = {
-        "Critical": "critical", "critical": "critical", "crit": "critical", "severe": "critical",
-        "High": "high", "yuksek": "high", "high": "high",
-        "Medium": "medium", "medium": "medium", "med": "medium",
-        "Low": "low", "dusuk": "low", "low": "low",
-        "Informational": "info", "info": "info", "information": "info",
-    }
-
     counts: dict[str, int] = {}
     if "summary" in results and "counts" in results["summary"]:
         raw = results["summary"]["counts"]
-        # Normalize whatever the summary stored
         for k, v in (raw or {}).items():
-            canonical = _SEV_ALIAS.get(str(k).strip().lower(), "info")
+            canonical = _norm_sev_tr(str(k)).lower()
             counts[canonical] = counts.get(canonical, 0) + int(v or 0)
     elif "findings" in results:
         _findings = results["findings"]
@@ -59,8 +49,7 @@ def should_fail_ci(cfg: dict, results: dict) -> bool:
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                raw_s = str(item.get("severity") or "info").strip().lower()
-                canonical = _SEV_ALIAS.get(raw_s, "info")
+                canonical = _norm_sev_tr(item.get("severity")).lower()
                 counts[canonical] = counts.get(canonical, 0) + 1
 
     for severity, count in counts.items():
@@ -877,20 +866,25 @@ def _short_poc(s: str) -> str:
 
 def _norm_sev_tr(s: str | None) -> str:
     """Normalize severity to English canonical. Accepts English and Turkish inputs."""
-    s = (s or "Info").strip().lower()
-    if s in ("Critical", "critical", "crit", "severe"): return "Critical"
-    if s in ("High", "yuksek", "high"): return "High"
-    if s in ("Medium", "medium", "med"): return "Medium"
-    if s in ("Low", "dusuk", "low"): return "Low"
+    s = (s or "info").strip().lower()
+    if s in ("critical", "crit", "severe", "kritik"):
+        return "Critical"
+    if s in ("high", "yüksek", "yuksek"):
+        return "High"
+    if s in ("medium", "med", "orta"):
+        return "Medium"
+    if s in ("low", "düşük", "dusuk", "düsük"):
+        return "Low"
+    if s in ("info", "informational", "bilgi"):
+        return "Info"
     return "Info"
 
 
 def _sev_rank(s: str | None) -> int:
-    """Rank via EN normalization: critical=4 > high=3 > medium=2 > low=1 > info=0."""
+    """Rank via TR+EN normalization: critical=4 > high=3 > medium=2 > low=1 > info=0."""
     m = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
-    # Use EN-normalization for consistent ordering
     try:
-        return m.get(_norm_sev_en(s or ""), 0)
+        return m.get(_norm_sev_tr(s or "").lower(), 0)
     except (ValueError, TypeError, AttributeError) as exc:
         log_warn(f"[reporting] Severity rank lookup failed for {s!r}: {exc!r}")
         return 0
@@ -1512,10 +1506,14 @@ _CVSS_DEFAULTS = {
 
 def _norm_sev_en(s: str) -> str:
     s = (s or "").strip().lower()
-    if s in ("Critical", "critical", "crit"): return "critical"
-    if s in ("High", "high", "severe"): return "high"
-    if s in ("Medium", "medium", "med"): return "medium"
-    if s in ("Low", "low"): return "low"
+    if s in ("critical", "crit", "severe", "kritik"):
+        return "critical"
+    if s in ("high", "yüksek", "yuksek"):
+        return "high"
+    if s in ("medium", "med", "orta"):
+        return "medium"
+    if s in ("low", "düşük", "dusuk", "düsük"):
+        return "low"
     return "info"
 
 def _cvss_for_item(it: Dict[str, Any], cfg: Dict[str, Any] | None) -> dict:
