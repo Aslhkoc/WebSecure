@@ -107,6 +107,11 @@
             "severity_min": {
               "type": "string",
               "enum": [
+                "Info",
+                "Low",
+                "Medium",
+                "High",
+                "Critical",
                 "Bilgi",
                 "Düşük",
                 "Orta",
@@ -288,7 +293,8 @@
               "md",
               "html",
               "sarif",
-              "junit"
+              "junit",
+              "pdf"
             ]
           }
         },

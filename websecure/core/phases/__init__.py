@@ -4836,15 +4836,19 @@ def run_feroxbuster_scan(ctx) -> None:
         return
 
     _logger.info("Launching Feroxbuster scan...")
-    depth = int(_get_config(ctx, "discovery.depth", 2))
-    
+    # Correct config paths: feroxbuster.depth takes priority over discovery.feroxbuster.depth
+    depth = int(_get_config(ctx, "feroxbuster.depth",
+                _get_config(ctx, "discovery.feroxbuster.depth", 3)))
+    wordlist = _get_config(ctx, "feroxbuster.wordlist",
+               _get_config(ctx, "discovery.feroxbuster.wordlist", ""))
+
     extra_args = []
     # [Check 5] Proxy
     proxy = _resolve_proxy(ctx)
     if proxy:
         extra_args.extend(["--proxy", proxy])
-        
-    findings = wrapper.scan(url, depth=depth, extra_args=extra_args)
+
+    findings = wrapper.scan(url, wordlist=wordlist or None, depth=depth, extra_args=extra_args)
     
     new_eps = []
     for f in findings:

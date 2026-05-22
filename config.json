@@ -65,7 +65,7 @@
           "user_agent_rotation": true
         },
         "waf": {
-          "evasion_level": 2,
+          "evasion_level": 3,
           "randomize_fingerprint": true
         }
       }
@@ -78,7 +78,8 @@
       "md",
       "html",
       "sarif",
-      "junit"
+      "junit",
+      "pdf"
     ],
     "exit_on_fail": false,
     "fail_on": [],
@@ -279,7 +280,7 @@
         "./websecure/wordlists/dirs.txt",
         "./websecure/wordlists/files.txt"
       ],
-      "timeout": 10,
+      "timeout": 30,
       "threads": 50,
       "follow_redirects": true,
       "include_headers": true,
@@ -292,10 +293,9 @@
       "bin": "feroxbuster",
       "depth": 2,
       "threads": 10,
-      "rate_limit": 0,
+      "rate_limit": 100,
       "ignore_status": [
-        404,
-        401
+        404
       ],
       "max_results_per_target": 250,
       "pass_headers_from_session": true,
@@ -565,7 +565,7 @@
       "server": "https://oast.me",
       "token": "d753a6mue20k4855t8p0ym9ycdocz3fx5"
     },
-    "wait_seconds": 45,
+    "wait_seconds": 90,
     "channels": [
       "dns",
       "http"
@@ -685,7 +685,7 @@
   },
   "business_logic": {
     "enabled": true,
-    "timeout": 12,
+    "timeout": 30,
     "verify_tls": true,
     "flows": [
       {
@@ -787,7 +787,7 @@
     },
     "jwt_attacks": {
       "enabled": true,
-      "wordlist": "./wordlists/jwt_secrets.txt",
+      "wordlist": "./websecure/wordlists/jwt_secrets.txt",
       "alg_confusion": true
     },
     "nosql_injection": {
@@ -814,8 +814,8 @@
       "enabled": true
     },
     "crawl": {
-      "max_depth": 3,
-      "max_pages": 500,
+      "max_depth": 8,
+      "max_pages": 1000,
       "headless": false
     },
     "crawler": {
@@ -850,7 +850,7 @@
     }
   },
   "regex": {
-    "timeout_ms": 200
+    "timeout_ms": 1000
   },
   "upload": {
     "_deprecated": true,
@@ -874,7 +874,7 @@
   "content_discovery": {
     "enabled": true,
     "tool": "ffuf",
-    "wordlist": "./wordlists/common.txt",
+    "wordlist": "./websecure/wordlists/dirs.txt",
     "extensions": [
       "php",
       "asp",
@@ -909,7 +909,7 @@
   },
   "verify_tls": true,
   "jwt": {
-    "weak_secrets": "./wordlists/jwt_secrets.txt"
+    "weak_secrets": "./websecure/wordlists/jwt_secrets.txt"
   },
   "network": {
     "ports_common": [
@@ -971,7 +971,7 @@
     ],
     "max_concurrency_per_host": 4,
     "rate_limits": {
-      "default_rps": 1.5,
+      "default_rps": 10.0,
       "burst": 5
     },
     "budget": {
@@ -1000,7 +1000,7 @@
     "idempotent_only": true
   },
   "http_retries": 5,
-  "http_backoff": 0.3,
+  "http_backoff": 1.5,
   "retry_status_forcelist": [
     429,
     500,
@@ -1011,13 +1011,9 @@
   "retry_allowed_methods": [
     "HEAD",
     "GET",
-    "OPTIONS",
-    "POST",
-    "PUT",
-    "DELETE",
-    "PATCH"
+    "OPTIONS"
   ],
-  "pool_maxsize": 20,
+  "pool_maxsize": 50,
   "privacy": {
     "egress": {
       "mode": "proxy_pool",
@@ -1151,7 +1147,7 @@
     "requests_max": 20000,
     "time_seconds": 3600,
     "concurrency": 20,
-    "per_host_rps": 2,
+    "per_host_rps": 15,
     "burst": 10,
     "policy": "balanced"
   },
@@ -1174,14 +1170,15 @@
     ],
     "arguments": [
       "-sV",
-      "-T4"
+      "-T3",
+      "-sC"
     ]
   },
   "feroxbuster": {
     "enabled": true,
     "threads": 50,
-    "depth": 1,
-    "wordlist": "./wordlists/common.txt"
+    "depth": 3,
+    "wordlist": "./websecure/wordlists/dirs.txt"
   },
   "sqlmap": {
     "enabled": true,
@@ -1191,7 +1188,7 @@
       "--batch",
       "--parse-errors",
       "--technique=BEUSTQ",
-      "--dbms-cred=",
+      "--tamper=space2comment,between,randomcase",
       "--threads=3"
     ]
   },

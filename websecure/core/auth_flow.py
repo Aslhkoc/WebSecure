@@ -658,11 +658,10 @@ def run_auth_flow(
             "driver_cookies": _safe_get_cookies(driver) if (driver and _has_selenium) else []
         }
         add_result("sessions", session_data)
-
         add_result("meta", {"stage": "auth", "authenticated": bool(authenticated)})
 
-        emit("auth.final", {"authenticated": bool(authenticated)})
-        return bool(authenticated)
+    emit("auth.final", {"authenticated": bool(authenticated)})
+    return bool(authenticated)
 
 # -----------------------------------------------------------------------------
 # Rol oturumları (YENİ ŞEMA): cfg.auth.roles
