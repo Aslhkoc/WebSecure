@@ -22,7 +22,6 @@
     "wordlists": {
       "root": "./websecure/wordlists",
       "defaults": [
-        "./websecure/wordlists/common.txt",
         "./websecure/wordlists/dirs.txt",
         "./websecure/wordlists/files.txt"
       ]

@@ -2162,18 +2162,71 @@ def _runner_auth_matrix(ctx) -> None:
     results = _ensure_results_bucket(ctx)
     endpoints = results.get("endpoints", [url]) if results else [url]
     role_sessions = getattr(ctx, "role_sessions", {}) or {}
-    if not role_sessions:
-        add_result("meta", {"stage": "auth_matrix", "status": "skipped:no-role-sessions"})
-        return
+
     try:
-        scanner_cls = getattr(mod, "AuthMatrixScanner", None)
-        if scanner_cls:
-            scanner_cls(session=sess, results=results, role_sessions=role_sessions).run(
-                url, endpoints=endpoints, role_sessions=role_sessions
-            )
+        # Multi-role auth matrix (sadece role_sessions varsa)
+        if role_sessions:
+            scanner_cls = getattr(mod, "AuthMatrixScanner", None)
+            if scanner_cls:
+                scanner_cls(session=sess, results=results, role_sessions=role_sessions).run(
+                    url, endpoints=endpoints, role_sessions=role_sessions
+                )
+        else:
+            # role_sessions yoksa: module-level run() çağır — OAuth2, SAML, 2FA bypass, PasswordReset tarar
+            _logger.info("[phases] auth_matrix: role_sessions yok, temel auth taraması başlatılıyor")
+            if hasattr(mod, "run"):
+                mod.run(url, session=sess, results=results)
     except Exception as e:
         _logger.warning(f"[phases] AuthMatrix runner error: {e}")
         _report_phase_error("auth_matrix", "phases._runner_auth_matrix", e)
+
+
+def _runner_bypass_403(ctx) -> None:
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        _call_if_exists("websecure.scanners.bypass_403", ("run", "scan"), url,
+                        session=sess, results=results, cfg=getattr(ctx, "config", {}))
+    except Exception as e:
+        _logger.warning(f"[phases] bypass_403 runner error: {e}")
+        _report_phase_error("bypass_403", "phases._runner_bypass_403", e)
+
+
+def _runner_clickjacking(ctx) -> None:
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        _call_if_exists("websecure.scanners.clickjacking", ("run", "scan"), url,
+                        session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] clickjacking runner error: {e}")
+        _report_phase_error("clickjacking", "phases._runner_clickjacking", e)
+
+
+def _runner_param_pollution(ctx) -> None:
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        _call_if_exists("websecure.scanners.param_pollution", ("run", "scan"), url,
+                        session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] param_pollution runner error: {e}")
+        _report_phase_error("param_pollution", "phases._runner_param_pollution", e)
+
+
+def _runner_business_logic(ctx) -> None:
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    try:
+        _call_if_exists("websecure.scanners.business_logic", ("run", "scan"), url,
+                        session=sess, results=results)
+    except Exception as e:
+        _logger.warning(f"[phases] business_logic runner error: {e}")
+        _report_phase_error("business_logic", "phases._runner_business_logic", e)
 
 
 def _runner_dom_xss(ctx) -> None:
@@ -2975,6 +3028,35 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("crlf_injection", default=True),
             runner=lambda c: _safe(c, lambda: _runner_crlf_injection(c), "crlf_injection"),
             tags=["active", "injection", "header", "a03"],
+        ),
+        # ── Faz 20 — phase_offensive'de var ama plan'da eksikti ─────────────
+        Phase(
+            id="bypass_403",
+            title="403 Bypass (Path/Verb/Header)",
+            enabled=_flag("bypass_403", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_bypass_403(c), "bypass_403"),
+            tags=["active", "access_control", "bypass"],
+        ),
+        Phase(
+            id="clickjacking",
+            title="Clickjacking / Double-Click Jacking",
+            enabled=_flag("clickjacking", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_clickjacking(c), "clickjacking"),
+            tags=["active", "ui", "clickjacking"],
+        ),
+        Phase(
+            id="param_pollution",
+            title="HTTP Parameter Pollution (HPP)",
+            enabled=_flag("param_pollution", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_param_pollution(c), "param_pollution"),
+            tags=["active", "injection", "waf_bypass"],
+        ),
+        Phase(
+            id="business_logic",
+            title="Business Logic Flaws",
+            enabled=_flag("business_logic", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_business_logic(c), "business_logic"),
+            tags=["active", "logic", "a04"],
         ),
         # ── Faz 3 — Yeni bağlanan scanner'lar ────────────────────────────────
         Phase(
@@ -5967,13 +6049,14 @@ def run(target, cfg, *, session=None, debug=False, event_cb=None):
         _logger.debug(f"[run] AuthManager skip: {_auth_err}")
 
     # Plan çalıştırma (tüm fazlar + rapor)
-    if _is_from_modules(_run_plan_if_needed, "core.flow_runner", "flow_runner") and callable(_run_plan_if_needed):
-        _run_plan_if_needed(ctx, event_cb=event_cb)
-    else:
-        log_warn("run_plan_if_needed mevcut değil (flow_runner bulunamadı).")
+    # run_plan_if_needed bu modülde tanımlı (satır ~3551); _missing_guard kullanma
+    run_plan_if_needed(ctx)
 
-    # Raporu diske yazdır (susturma yok)
-    _flush_reporting(ctx)
+    # Raporu diske yazdır
+    try:
+        run_reporting_and_integration(ctx)
+    except Exception as _rep_e:
+        _logger.debug(f"[run] reporting error: {_rep_e!r}")
     return getattr(ctx, "results", None)
 
 

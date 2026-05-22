@@ -120,10 +120,10 @@ _DEFAULTS = {
         "open_redirect":  ["open_redirect.txt"],
         "redirect":       ["open_redirect.txt"],
         # Discovery / fuzzing
-        "dirs":           ["dirs.txt", "common.txt", "raft-small-words.txt"],
+        "dirs":           ["dirs.txt"],
         "files":          ["files.txt"],
-        "common":         ["common.txt"],
-        "wordlist":       ["dirs.txt", "common.txt"],
+        "common":         ["dirs.txt"],
+        "wordlist":       ["dirs.txt"],
         # Parameter / value fuzzing
         "params":         ["params.txt"],
         "values":         ["values.txt"],
