@@ -1381,6 +1381,7 @@ class ChainReactor:
         playbook_dirs:    Optional[List[str]] = None,
         enable_multihop:  bool = True,
     ) -> None:
+        self._last_graph: Optional["ExploitGraph"] = None  # Cached after analyze()
         self._builder         = ExploitGraphBuilder()
         self._pb_loader       = PlaybookLoader(extra_dirs=playbook_dirs)
         self._multihop        = MultiHopDetector()
@@ -1460,6 +1461,8 @@ class ChainReactor:
             f"[ChainReactor] Analiz tamamlandı: {len(chain_findings)} zincir tespit edildi "
             f"({len(graph.nodes())} düğüm)."
         )
+        # Cache graph (including synthetic nodes added by rules) for phase_chain_reactor
+        self._last_graph = graph
         return chain_findings
 
 
@@ -2800,8 +2803,9 @@ def phase_chain_reactor(ctx: Dict[str, Any]) -> None:
     session = ctx.get("session") or _req.Session()
     runner = ChainExploitRunner(session=session, ctx=ctx)
 
-    # Access the graph's internal nodes for node lookup during exploitation
-    graph = reactor._builder.build(results)
+    # Use the cached graph (includes synthetic nodes added by rules during analyze())
+    # Do NOT rebuild — a fresh build() would miss synthetic nodes (log_poison, rce, etc.)
+    graph = reactor._last_graph or reactor._builder.build(results)
 
     exploit_results: List[Dict[str, Any]] = []
     for cf in chain_findings[:5]:

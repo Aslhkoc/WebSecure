@@ -188,11 +188,8 @@ def run_business_logic_flows_legacy(session: requests.Session, base_url: str, cf
 # ================== PATCH: Modern Koşucu ==================
 
 # Yerel http istemcisi (opsiyonel)
-if _iul.find_spec("http") is not None:
-    _http_mod = importlib.import_module("http")
-    get_http = getattr(_http_mod, "get_http", None)
-elif _iul.find_spec("core.http") is not None:
-    _http_mod = importlib.import_module("core.http")
+if _iul.find_spec("websecure.core.http") is not None:
+    _http_mod = importlib.import_module("websecure.core.http")
     get_http = getattr(_http_mod, "get_http", None)
 else:
     get_http = None  # type: ignore
