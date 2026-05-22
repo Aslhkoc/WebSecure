@@ -1089,6 +1089,9 @@ class HttpClient:
         self.cfg = dict(cfg or {})
         self.mode = str((self.cfg.get("mode") or "authenticated")).lower()
 
+        # Proxy havuzu — must be initialized BEFORE egress degrade detection
+        self._proxy_pool = ProxyPool(self.cfg)
+        self._consecutive_blocks = 0  # [ACIL DURUM] Ardışık blok sayacı
 
         # Egress degrade detection
         priv = (self.cfg.get('privacy') or {}) if isinstance(self.cfg, dict) else {}
@@ -1105,7 +1108,6 @@ class HttpClient:
             ok = is_open('127.0.0.1', 9050)
             if not ok:
                 _emit_egress_degraded('tor', 'socks_port_unreachable', {'port': 9050, 'phase': ACTIVE_PHASE.get()})
-        pass  # DNS Tor uzerinden gider (socks5h)
         self._egress_degraded_checked = True
         # Anti-blocking pacing
         ab = (self.cfg.get("anti_blocking") or {})
@@ -1116,10 +1118,6 @@ class HttpClient:
         self._backoff_factor = float(ab_http.get("backoff_factor") or 2.0)
         self._jitter_ms = int(ab_http.get("jitter_ms") or 0)
         self._last_ts: float = 0.0
-
-        # Proxy havuzu
-        self._proxy_pool = ProxyPool(self.cfg)
-        self._consecutive_blocks = 0 # [ACIL DURUM] Ardışık blok sayacı
 
         http_cfg: Mapping[str, Any] = self.cfg.get("http", {})  # type: ignore
 
@@ -1992,14 +1990,8 @@ class AntiBlockingHTTP:
         note_http_response(getattr(resp, "status_code", 0), rt_ms)
         self._adjust_on_response(getattr(resp, "status_code", 0), getattr(resp, "headers", {}))
         return resp
-    # Initialize RPS from phase profile if available
-    prof = _HTTP_POLICY["phase_profiles"].get(ACTIVE_PHASE.get(), {})
-    if prof:
-        _CURRENT_RPS.set(int(prof.get("initial_rps", _CURRENT_RPS.get())))
 
-    # Attach smart request wrapper
-    import types as _types
-    session.request = _types.MethodType(_smart_request, session)
+
 def build_http_client(cfg: Dict[str, Any]) -> AntiBlockingHTTP:
     http_cfg = (cfg.get("http") or {})
     ab_cfg = ((cfg.get("anti_blocking") or {}).get("http") or {})
