@@ -150,7 +150,7 @@ def finalize_reports(ctx: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]
     out_dir = str(rep_cfg.get("output_dir") or cfg.get("output_dir") or "output")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "results.json")
-    results = ctx.get("results") or {} if isinstance(ctx, dict) else {}
+    results = (ctx.get("results") or {}) if isinstance(ctx, dict) else {}
     try:
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(results, fh, indent=2, ensure_ascii=False, default=str)

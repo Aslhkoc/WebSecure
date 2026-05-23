@@ -1301,12 +1301,6 @@ def _render_markdown_report_inline(results: Dict) -> str:
          lines.append("")
          lines.append(ssl_md)
 
-    # SSL/TLS Table
-    ssl_md = _render_ssl_table(results)
-    if ssl_md:
-         lines.append("")
-         lines.append(ssl_md)
-
     return "\n".join(lines)
 
 
@@ -1807,11 +1801,6 @@ def _write_evidence_bundle(results: Dict, out_dir: str) -> Optional[str]:
     mdata = json.dumps(manifest, ensure_ascii=False, indent=2).encode('utf-8')
     mf.write_bytes(mdata)
     return str(ev_dir) if copied > 0 else None
-
-    """
-    Çok-format raporlama + grafik üretimi.
-    'written' altında üretilen dosya yollarını döndürür.
-    """
 
 
 # -------------------- SARIF / JUnit / Delta yardımcıları --------------------
@@ -2379,13 +2368,13 @@ def finalize_addendum(results: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str,
           "### En çok tetiklenen ilk 10 URL:"]
     for u, n in sections["auth_coverage_delta"]["top_urls"]:
         md.append(f"  - {u} — {n}")
-    md.append("\\n## Public Surface Summary")
+    md.append("\n## Public Surface Summary")
     md.append(f"- Unique endpoints: {sections['public_surface']['endpoints']}")
     md.append(f"- JS hints: {sections['public_surface']['js_hints']}")
     md.append(f"- JS candidates: {sections['public_surface']['js_candidates']}")
     md_path = str(Path(out_dir, "report_addendum.md"))
     json_path = str(Path(out_dir, "report_addendum.json"))
-    Path(md_path).write_text("\\n".join(md), encoding="utf-8")
+    Path(md_path).write_text("\n".join(md), encoding="utf-8")
     Path(json_path).write_text(json.dumps(sections, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"written": {"addendum_md": md_path, "addendum_json": json_path}}
 
@@ -2589,21 +2578,6 @@ def _render_exploit_playbook(items: List[Dict]) -> str:
             lines.append(curl_cmd)
             lines.append("```")
 
-        # Plan C: structured PoC blocks
-        pm = it.get("poc_multi") or {}
-        if isinstance(pm, dict) and pm:
-            lines.append("")
-            lines.append("**PoC (Detaylı)**")
-            for name in ["curl", "httpie", "python", "node", "powershell", "raw"]:
-                val = pm.get(name)
-                if isinstance(val, str) and val.strip():
-                    lines.append(f"<details><summary>{name}</summary>")
-                    lines.append("")
-                    fence = "```powershell" if name == "powershell" else ("```http" if name == "raw" else "```")
-                    lines.append(fence)
-                    lines.append(val.strip())
-                    lines.append("```")
-                    lines.append("</details>")
     return "\n".join(lines)
 
 
@@ -3190,6 +3164,8 @@ if "_WS_QUITABLES" not in globals():
     _WS_QUITABLES = _weakref.WeakSet() if _weakref is not None else set()
 if "_WS_FINALIZED" not in globals():
     _WS_FINALIZED = False
+if "_FINALIZED_FLAG" not in globals():
+    _FINALIZED_FLAG = False
 
 def register_quitable(obj, label: str | None = None) -> bool:
     """

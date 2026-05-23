@@ -34,6 +34,7 @@ from websecure.core.session_manager import (
     SessionEntropyAnalyzer,
     SessionLifecycleProber,
 )
+from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 

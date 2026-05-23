@@ -3,14 +3,11 @@ import logging
 import time
 import random
 import contextvars
-from typing import Dict, Optional
-from urllib.parse import urlsplit, urlunsplit
-from requests import session
-from urllib3.util.retry import Retry
 import threading
 import socket
 import ssl
-from typing import Optional
+from typing import Dict, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 _logger = logging.getLogger(__name__)
 
@@ -366,6 +363,26 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry as Urllib3Retry
 _HTTPX_AVAILABLE = _impspec.find_spec("httpx") is not None
 
+# Lazy reporting imports — avoids circular deps (reporting imports http lazily inside a function)
+try:
+    from websecure.core.reporting import add_result, counters_inc, counters_add_bytes
+except ImportError:
+    def add_result(bucket, item): pass       # type: ignore[misc]
+    def counters_inc(name, delta=1): pass    # type: ignore[misc]
+    def counters_add_bytes(n): pass          # type: ignore[misc]
+
+
+class SmartSession(requests.Session):
+    """
+    requests.Session subclass that routes every request through _smart_request.
+    This wires the circuit breaker, identity rotation, live monitor, and rate
+    limiting into every HTTP call made by the framework.
+    """
+
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        return _smart_request(self, method, url, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # CAPTCHA middleware (lazy — only active when config sets a solver provider)
 # ---------------------------------------------------------------------------
@@ -455,7 +472,22 @@ _TRACE_CTX: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "websec_trace_id", default=None
 )
 
-HTTP_METRICS: dict[str, int] = {"2xx": 0, "403": 0, "429": 0, "total": 0}
+HTTP_METRICS: dict = {
+    "phase": None,
+    "requests": 0,
+    "errors": 0,
+    "2xx": 0,
+    "403": 0,
+    "429": 0,
+    "total": 0,
+    "ok_2xx": 0,
+    "err_4xx": 0,
+    "err_5xx": 0,
+    "ban_403": 0,
+    "throttle_429": 0,
+    "avg_rt_ms": 0.0,
+    "crawler_endpoints": 0,
+}
 
 
 # ---------- Structural Metrics (phase + latency histogram + 403/429 trend) ----------
@@ -971,9 +1003,10 @@ class _RequestsDriver:
         self._extra_delay_ms = min(ms, 2500)
         # Attempt Tor Rotation on Block
         try:
-             rotate_tor_identity()
+            from websecure.core.waf_bypass import rotate_tor_identity as _rotate_tor
+            _rotate_tor()
         except Exception as e:
-             _logger.debug(f"[http] Tor identity rotation failed: {e}")
+            _logger.debug(f"[http] Tor identity rotation failed: {e}")
 
     def request_once(self, method: str, url: str, **kw) -> requests.Response:
         # Circuit breaker pre-check — raises if scan is halted
@@ -1559,13 +1592,11 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
     Integrates WAF Bypass if configured, otherwise standard hardening.
     """
     c = dict(cfg or {})
-    
+
     # 1. WAF Evasion Check
     if WAFBypassAdapter and c.get("waf", {}).get("enabled"):
-        # Use WAFBypassSession which mounts the adapter
-        # Assuming WAFBypassSession is in websecure.core.waf_bypass or we mount manually
-        # Since we imported WAFBypassAdapter, let's mount it manually to a clean session
-        s = requests.Session()
+        # Mount WAFBypassAdapter on a SmartSession (preserves circuit-breaker + identity rotation)
+        s = SmartSession()
         adapter = WAFBypassAdapter()
         s.mount("https://", adapter)
         s.mount("http://", adapter)
@@ -1575,8 +1606,8 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
             "Accept": "*/*"
         })
     else:
-        # Standard Session
-        s = requests.Session()
+        # SmartSession wires _smart_request (circuit breaker, identity rotation, live monitor)
+        s = SmartSession()
         
     # 2. Add Timeouts & Retries (via adapter if not WAF)
     # (Note: WAF adapter wraps requests so it might handle retries differently, 
@@ -1788,19 +1819,13 @@ def _request_via_curl(
     elapsed = __import__("time").time() - t0
 
     raw = cp.stdout.decode("utf-8", "ignore")
-    # Split headers and body (first header block)
+    # Split headers and body — curl -i outputs headers followed by \r\n\r\n or \n\n
     header_txt = ""
     body_txt = raw
-    if "" in raw:
-
-
-        header_txt, body_txt = raw.split("", 1)
-
-
-    elif "" in raw:
-
-
-        header_txt, body_txt = raw.split("", 1)
+    if "\r\n\r\n" in raw:
+        header_txt, body_txt = raw.split("\r\n\r\n", 1)
+    elif "\n\n" in raw:
+        header_txt, body_txt = raw.split("\n\n", 1)
 
 
 
@@ -1872,22 +1897,6 @@ def verify_for_phase(cfg_or_session, phase: str = "", url: str | None = None) ->
     return base_verify
 
 
-HTTP_METRICS = {
-    "phase": None,
-    "requests": 0,
-    "errors": 0,
-    "2xx": 0,
-    "403": 0,
-    "429": 0,
-    "total": 0,
-    "ok_2xx": 0,
-    "err_4xx": 0,
-    "err_5xx": 0,
-    "ban_403": 0,
-    "throttle_429": 0,
-    "avg_rt_ms": 0.0,
-    "crawler_endpoints": 0
-}
 def note_http_response(status: int, rt_ms: int) -> None:
     HTTP_METRICS["total"] += 1
     if 200 <= status < 300:
@@ -2040,25 +2049,22 @@ def apply_privacy_headers(session, mode: str = "standard") -> None:
             hdrs.pop(k, None)
 
 
-from requests import Session
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-def build_session(cfg: dict) -> Session:
-    s = Session()
+def build_session(cfg: dict) -> SmartSession:
+    """Build a production-ready SmartSession from config (used by phases and scanners)."""
+    s = SmartSession()
     http_cfg = (cfg or {}).get("http", {}) or {}
     connect_timeout = float(http_cfg.get("connect_timeout", 15))
     read_timeout = float(http_cfg.get("read_timeout", 15))
     backoff = float(http_cfg.get("backoff_factor", 0.3))
     max_retries = int(http_cfg.get("max_retries", 1))
 
-    retry = Retry(
+    retry = Urllib3Retry(
         total=max_retries,
         connect=max_retries if http_cfg.get("retry_on_connect", True) else 0,
         read=max_retries if http_cfg.get("retry_on_read", True) else 0,
         status=max_retries,
-        allowed_methods=frozenset({"GET","HEAD","OPTIONS","POST"}),
-        status_forcelist=tuple(http_cfg.get("retry_on_status", [502,503,504])),
+        allowed_methods=frozenset({"GET", "HEAD", "OPTIONS", "POST"}),
+        status_forcelist=tuple(http_cfg.get("retry_on_status", [502, 503, 504])),
         backoff_factor=backoff,
         respect_retry_after_header=True,
         raise_on_status=False,

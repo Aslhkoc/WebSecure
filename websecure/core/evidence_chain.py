@@ -311,18 +311,20 @@ class EvidenceChainBuilder:
         ]
 
         # Escalate severity of root findings that participate in chains
-        chain_urls = {
-            step.url
-            for chain in chains
-            for step in chain.steps
-            if chain.chain_score >= 9.0
-        }
+        # Build url -> chain_severity map for critical chains (score >= 9.0)
+        url_to_chain_sev: Dict[str, str] = {}
+        for _chain in chains:
+            if _chain.chain_score >= 9.0:
+                for step in _chain.steps:
+                    url_to_chain_sev[step.url] = _chain.chain_severity
+
         for finding in offensive:
-            if finding.get("url") in chain_urls:
+            chain_sev = url_to_chain_sev.get(finding.get("url", ""))
+            if chain_sev:
                 current_sev = (finding.get("severity") or "Low").lower()
                 if current_sev not in ("critical",):
                     finding["chain_escalated"] = True
-                    finding["chain_severity"] = chain.chain_severity
+                    finding["chain_severity"] = chain_sev
 
         _logger.info(
             f"[Chain] Annotated {len(chains)} attack chains into results. "
