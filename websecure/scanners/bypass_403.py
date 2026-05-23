@@ -113,6 +113,13 @@ def _path_variants(path: str) -> List[str]:
         f"/{seg}%09/",
         f"/{seg}%20",
     ]
+    # Augment with PathMutator variants from evasion module
+    try:
+        from websecure.core.evasion import path_variants as _pv
+        variants.extend(_pv(path))
+    except (ImportError, Exception):
+        pass
+
     # deduplicate while preserving order
     seen: set = set()
     unique: List[str] = []
@@ -491,6 +498,7 @@ class EncodingBypass(BaseScanner):
         Return encoding / Unicode variants of *path*.
         Covers: single-encode, double-encode, Unicode full-width,
         HTML entity-style, hex case variants.
+        Also includes EncodingChain variants from evasion module.
         """
         p = path.rstrip("/")
         seg = p.lstrip("/") or "admin"
@@ -519,6 +527,13 @@ class EncodingBypass(BaseScanner):
             # Leading double encode
             f"/%2F{seg}%2F",
         ]
+
+        # Augment with EncodingChain multi-layer variants from evasion module
+        try:
+            from websecure.core.evasion import encoding_variants as _ev
+            variants.extend(_ev(path, depth=2))
+        except (ImportError, Exception):
+            pass
 
         # deduplicate
         seen: set = set()

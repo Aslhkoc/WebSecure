@@ -1454,12 +1454,74 @@ def _runner_browser_crawler(ctx) -> None:
                              "error": str(e)[:200]})
 
 
+def _runner_http_crawler_orchestrator(ctx) -> None:
+    """
+    CrawlerOrchestrator — HTTP + OpenAPI + GraphQL + gRPC + ParameterMiner + Sitemap.
+    Core crawler pipeline for endpoint discovery beyond Katana.
+    """
+    try:
+        from websecure.core.crawler import CrawlerOrchestrator
+        url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or ""
+        if not url:
+            return
+        session = getattr(ctx, "session", None) or hardened_session()
+        cfg = getattr(ctx, "config", {}) or {}
+        disc_cfg = cfg.get("discovery") or {}
+        orchestrator = CrawlerOrchestrator(
+            max_pages=int(disc_cfg.get("max_pages", 200)),
+            enable_openapi=bool(disc_cfg.get("enable_openapi", True)),
+            enable_graphql=bool(disc_cfg.get("enable_graphql", True)),
+            enable_grpc=bool(disc_cfg.get("enable_grpc", False)),
+            enable_version_scan=bool(disc_cfg.get("enable_version_scan", True)),
+            enable_param_mining=bool(disc_cfg.get("enable_param_mining", True)),
+            param_mine_limit=int(disc_cfg.get("param_mine_limit", 20)),
+        )
+        result = orchestrator.run(url, session)
+        # Merge discovered endpoints into ctx.results
+        ctx_results = getattr(ctx, "results", None)
+        if ctx_results is None:
+            ctx_results = {}
+            try:
+                ctx.results = ctx_results
+            except AttributeError:
+                pass
+        existing = set(ctx_results.get("endpoints", []))
+        existing.update(result.endpoints)
+        existing.update(result.api_endpoints)
+        ctx_results["endpoints"] = list(existing)
+        if result.discovered_params:
+            ctx_results.setdefault("discovered_params", {}).update(result.discovered_params)
+        if result.sitemap:
+            ctx_results["sitemap"] = result.sitemap
+        if result.api_endpoints:
+            ctx_results.setdefault("api_endpoints", [])
+            ctx_results["api_endpoints"] = list(set(
+                ctx_results["api_endpoints"] + result.api_endpoints
+            ))
+        add_result("meta", {
+            "stage": "http_crawler",
+            "status": "ok",
+            "endpoints": len(result.endpoints),
+            "api_endpoints": len(result.api_endpoints),
+            "grpc_services": len(result.grpc_services),
+        })
+        _logger.info(
+            "[phases] CrawlerOrchestrator: %d endpoints, %d API, %d gRPC",
+            len(result.endpoints), len(result.api_endpoints), len(result.grpc_services),
+        )
+    except Exception as exc:
+        _logger.debug(f"[phases] CrawlerOrchestrator error: {exc!r}")
+        _report_phase_error("http_crawler", "phases._runner_http_crawler_orchestrator", exc)
+
+
 def _runner_discovery(ctx) -> None:
     if is_blocked(ctx):
         add_result('meta', {'stage': 'discovery', 'status': 'skipped:blocked'})
         return
     # Katana kuruluysa keşif öncesi çalıştır — endpoint havuzunu zenginleştirir
     _runner_katana(ctx)
+    # CrawlerOrchestrator: HTTP + OpenAPI + GraphQL + gRPC + ParameterMiner + Sitemap
+    _runner_http_crawler_orchestrator(ctx)
     run_discovery_extended(ctx)
     # BrowserCrawler: HTTP crawler az endpoint bulduysa veya JS-heavy SPA ise devreye girer
     _runner_browser_crawler(ctx)

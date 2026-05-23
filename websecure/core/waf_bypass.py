@@ -196,6 +196,16 @@ class WAFBypassAdapter(HTTPAdapter):
                 elif tactic == "null_byte_ext":
                     path = path + "%00.html"
 
+            # 3e. PathMutator structural obfuscation (_evasion_path_mutate flag)
+            if self._get_flag("_evasion_path_mutate") and path.startswith("/"):
+                try:
+                    from websecure.core.evasion import PathMutator as _PM
+                    _pm_variants = _PM().mutate(path)
+                    if _pm_variants:
+                        path = random.choice(_pm_variants)
+                except (ImportError, Exception) as exc:
+                    logger.debug(f"[WAFBypass] PathMutator failed: {exc!r}")
+
             # Apply suffix if set (e.g. from random_path_suffix strategy)
             suffix = getattr(self._session_ref, "_bypass_path_suffix", None) if self._session_ref else None
             if suffix and not path.endswith(suffix):
@@ -322,6 +332,45 @@ class WAFBypassAdapter(HTTPAdapter):
                         request.url = urlunsplit(parts._replace(query=urlencode(params)))
             except (ImportError, AttributeError, ValueError) as exc:
                 logger.debug(f"[WAFBypass] CRLF injection failed: {exc!r}")
+
+        # 12. EncodingChain — multi-layer payload encoding (_evasion_encoding_chain flag)
+        if self._get_flag("_evasion_encoding_chain") and request.body:
+            try:
+                from websecure.core.evasion import EncodingChain
+                body_s = (
+                    request.body if isinstance(request.body, str)
+                    else request.body.decode("utf-8", "replace")
+                )
+                techniques = getattr(self._session_ref, "_evasion_chain_techniques", ["url", "html"])
+                request.body = EncodingChain().apply(body_s, techniques).encode("utf-8")
+                if "Content-Length" in request.headers:
+                    request.headers["Content-Length"] = str(len(request.body))
+            except (ImportError, AttributeError, UnicodeDecodeError) as exc:
+                logger.debug(f"[WAFBypass] EncodingChain failed: {exc!r}")
+
+        # 13. HTTP/2 pseudo-header reordering (_evasion_http2_pseudo flag)
+        if self._get_flag("_evasion_http2_pseudo"):
+            try:
+                from websecure.core.evasion import HTTP2EvasionHelper
+                _h2 = HTTP2EvasionHelper()
+                parsed_h2 = urlparse(request.url)
+                h2_headers = _h2.build_http2_headers(
+                    method=request.method or "GET",
+                    path=parsed_h2.path or "/",
+                    authority=parsed_h2.netloc or "",
+                    randomize_order=True,
+                )
+                # Store on session so curl_cffi / httpx drivers can consume them
+                if self._session_ref is not None:
+                    self._session_ref._h2_pseudo_headers = h2_headers
+                    # Inject non-pseudo headers into the request
+                    for k, v in h2_headers:
+                        if not k.startswith(":") and k.lower() not in (
+                            hk.lower() for hk in request.headers
+                        ):
+                            request.headers[k] = v
+            except (ImportError, AttributeError, ValueError) as exc:
+                logger.debug(f"[WAFBypass] HTTP2EvasionHelper failed: {exc!r}")
 
         return super().send(request, **kwargs)
 
@@ -619,8 +668,8 @@ def _s_path_param_poll(session):
 def _s_http2_pseudo(session):
     """
     HTTP/2 pseudo-header reordering.
-    Sets a flag so curl_cffi / httpx drivers send pseudo-headers in a
-    non-standard order that some WAFs do not expect.
+    Uses HTTP2EvasionHelper to build randomised pseudo-header order.
+    Sets a flag so WAFBypassAdapter applies it in send().
     """
     session._evasion_http2_pseudo = True
     # If curl_cffi is available, prefer it as it exposes header-order control
@@ -632,11 +681,34 @@ def _s_http2_pseudo(session):
         logger.debug(f"[WAFBypass] HTTP/2 pseudo-header curl_cffi setup failed: {exc!r}")
 
 
+@BypassStrategyEngine.register("path_mutator")
+def _s_path_mutator(session):
+    """
+    PathMutator structural obfuscation — generates dot-segment, semicolon,
+    double-slash and Unicode variants of the request path to bypass WAF
+    path-normalisation rules.
+    """
+    session._evasion_path_mutate = True
+
+
+@BypassStrategyEngine.register("encoding_chain")
+def _s_encoding_chain(session):
+    """
+    EncodingChain multi-layer payload encoding — applies URL + HTML encoding
+    layers to the request body to evade WAF signature matching.
+    """
+    session._evasion_encoding_chain = True
+    session._evasion_chain_techniques = ["url", "html"]
+
+
 _DEFAULT_BYPASS_STRATEGIES = [
     "xff_internal_cidr",
     "chunked_encoding",
     "double_url_encoding",
     "random_path_suffix",
+    "path_mutator",
+    "encoding_chain",
+    "http2_pseudo_header_order",
 ]
 
 def build_bypass_session(waf_profile=None) -> WAFBypassSession:

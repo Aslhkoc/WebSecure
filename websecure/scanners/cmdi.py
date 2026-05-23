@@ -602,10 +602,28 @@ class CMDiTimeBasedProber(BaseScanner):
 
     @staticmethod
     def _encoding_variants(payload: str) -> List[str]:
-        """Return plain, URL-encoded, and double-URL-encoded variants."""
+        """Return plain, URL-encoded, double-encoded, and EncodingChain variants."""
         encoded = urllib.parse.quote(payload, safe="")
         double_encoded = urllib.parse.quote(encoded, safe="")
-        return [payload, encoded, double_encoded]
+        variants = [payload, encoded, double_encoded]
+        # Augment with EncodingChain multi-layer variants from evasion module
+        try:
+            from websecure.core.evasion import encode_chain, encoding_variants as _ev
+            variants.extend(_ev(payload, depth=2))
+            # Also add a URL+HTML chain-encoded variant
+            chain_enc = encode_chain(payload, ["url", "html"])
+            if chain_enc not in variants:
+                variants.append(chain_enc)
+        except (ImportError, Exception):
+            pass
+        # deduplicate while preserving order
+        seen: set = set()
+        unique: List[str] = []
+        for v in variants:
+            if v not in seen:
+                seen.add(v)
+                unique.append(v)
+        return unique
 
     def _verify_time_based(
         self,
