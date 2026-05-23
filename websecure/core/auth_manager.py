@@ -32,9 +32,12 @@ from urllib.parse import urljoin, urlparse
 try:
     import requests
     from requests import Session
+    from websecure.core.http import hardened_session as _hardened_session
 except ImportError:
     requests = None  # type: ignore
     Session = object  # type: ignore
+    def _hardened_session(*args, **kwargs):  # type: ignore[misc]
+        return None
 
 _logger = logging.getLogger(__name__)
 
@@ -139,7 +142,7 @@ class AuthManager:
             if requests is None:
                 _logger.warning("[AuthManager] requests not available, skipping auth.")
                 return False
-            session = requests.Session()
+            session = _hardened_session({})
             ctx.session = session
 
         base_url = getattr(ctx, "url", "") or ""

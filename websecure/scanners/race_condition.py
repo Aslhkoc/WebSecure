@@ -422,11 +422,8 @@ def run(
     results: List[Dict[str, Any]] = []
 
     if session is None:
-        try:
-            import requests
-            session = requests.Session()
-        except ImportError:
-            logger.warning("[Race] requests not available")
+        from websecure.core.http import hardened_session as _hs
+        session = _hs({})
 
     probes = [
         ("Parallel POST",       lambda: _probe_parallel_post(url, session) if session else None),
@@ -462,6 +459,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from typing import Any, Dict, List, Optional, Tuple
 from websecure.scanners.base import BaseScanner
+from websecure.core.http import hardened_session as _hardened_session
 
 _race_logger = logging.getLogger(__name__ + ".adim7")
 
@@ -682,8 +680,8 @@ class RaceAuthBypassProber(BaseScanner):
 
         def _attempt(creds):
             try:
-                import requests
-                s = requests.Session()
+                
+                s = _hardened_session({})
                 r = s.post(login_url, json=creds, timeout=6)
                 if r.status_code not in (429, 423, 403):
                     with lock:
@@ -726,8 +724,8 @@ class RaceAuthBypassProber(BaseScanner):
 
             def _create():
                 try:
-                    import requests
-                    s = requests.Session()
+                    
+                    s = _hardened_session({})
                     r = s.post(url, json={"user": "race_test"}, timeout=6)
                     sess_id = r.cookies.get("session") or r.headers.get("X-Session-Token", "")
                     if sess_id:
@@ -799,8 +797,8 @@ class RaceDoubleSpendProber(BaseScanner):
 
         def _attempt():
             try:
-                import requests
-                s = requests.Session()
+                
+                s = _hardened_session({})
                 gate.wait()  # All threads start simultaneously
                 r = s.post(url, data=payload,
                            headers={"Content-Type": "application/json"}, timeout=8)
@@ -1285,8 +1283,8 @@ class SessionFixationRaceProber(BaseScanner):
 
         def _attempt():
             try:
-                import requests
-                s = requests.Session()
+                
+                s = _hardened_session({})
                 gate.wait()
                 r = s.post(url, json=payload, timeout=8)
                 # Try cookie, header, and body for tokens
@@ -1512,8 +1510,8 @@ class InventoryRaceProber(BaseScanner):
 
         def _attempt():
             try:
-                import requests
-                s = requests.Session()
+                
+                s = _hardened_session({})
                 gate.wait()
                 r = s.post(url, json=payload, timeout=10)
                 body_snippet = r.text[:150]

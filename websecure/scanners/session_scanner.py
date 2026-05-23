@@ -28,6 +28,7 @@ from urllib.parse import urlparse, urljoin, urlencode
 
 import requests
 
+from websecure.core.http import hardened_session
 from websecure.scanners.base import BaseScanner
 from websecure.core.session_manager import (
     CookieSecurityAnalyzer,
@@ -162,7 +163,7 @@ class SessionFixationExploiter(BaseScanner):
 
         # --- Test 1: Pre/post-auth token comparison ---
         try:
-            pre_session = requests.Session()
+            pre_session = hardened_session({})
             pre_session.verify = False
             r_pre = pre_session.get(login_url, timeout=_TIMEOUT, allow_redirects=True)
             pre_cookies = dict(pre_session.cookies)
@@ -206,7 +207,7 @@ class SessionFixationExploiter(BaseScanner):
         for param in self._SESSION_PARAMS:
             test_url = f"{login_url}?{param}={fixed_token}"
             try:
-                s = requests.Session()
+                s = hardened_session({})
                 s.verify = False
                 r = s.get(test_url, timeout=_TIMEOUT, allow_redirects=True)
                 jar = dict(s.cookies)
@@ -457,7 +458,7 @@ class BrowserFingerprintBypassProber(BaseScanner):
         original_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"
 
         # Step 1: Establish session with original UA
-        s = requests.Session()
+        s = hardened_session({})
         s.verify = False
         s.headers["User-Agent"] = original_ua
         try:
@@ -472,7 +473,7 @@ class BrowserFingerprintBypassProber(BaseScanner):
         # Step 2: Replay session with different UA / Accept headers
         for alt_ua in self._ALT_AGENTS[:2]:
             try:
-                replay = requests.Session()
+                replay = hardened_session({})
                 replay.verify = False
                 replay.cookies.update(session_cookies)
                 replay.headers["User-Agent"] = alt_ua
@@ -502,7 +503,7 @@ class BrowserFingerprintBypassProber(BaseScanner):
 
         # Step 3: IP spoof replay
         try:
-            spoof = requests.Session()
+            spoof = hardened_session({})
             spoof.verify = False
             spoof.cookies.update(session_cookies)
             spoof.headers["X-Forwarded-For"] = "1.2.3.4"
@@ -551,7 +552,7 @@ class ConcurrentSessionBypassProber(BaseScanner):
         credentials = kwargs.get("credentials") or {"username": "test", "password": "test"}
         n = int(kwargs.get("n_sessions", 3))
 
-        prober = SessionLifecycleProber(timeout=_TIMEOUT)
+        prober = SessionLifecycleProber(timeout=_TIMEOUT, session=self.session)
         result = prober.test_concurrent_sessions(
             login_url, protected_url, credentials, n_sessions=n
         )
@@ -781,7 +782,7 @@ class SessionScanner(BaseScanner):
 
         # Session entropy analysis (non-destructive, no credentials needed)
         try:
-            entropy_analyzer = SessionEntropyAnalyzer(sample_count=6)
+            entropy_analyzer = SessionEntropyAnalyzer(sample_count=6, session=self.session)
             entropy_result = entropy_analyzer.analyze(target)
             if entropy_result.get("severity") in ("Critical", "High", "Medium", "Critical", "High", "Medium"):
                 self.report_finding(

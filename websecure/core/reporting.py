@@ -333,14 +333,14 @@ def add_session(user: str, cookies: dict, headers: dict = None, origin_url: str 
     Adds a captured session to the report.
     Performs a quick liveness check (Liveness Check).
     """
-    import requests
+    from websecure.core.http import hardened_session as _hs
     verified = False
-    
+
     # Liveness Check
     if origin_url and cookies:
         try:
             # Try to access origin with cookies to see if we are still logged in
-            s = requests.Session()
+            s = _hs({})
             # Basic validation: If we get 200/302/403 (but different from public) -> Verified
             # Simplified: Just mark as captured. Real liveness check takes time.
             # But let's try a quick HEAD

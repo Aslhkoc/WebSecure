@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.reporting import add_result
+from websecure.core.http import hardened_session as _hardened_session
 
 logger = logging.getLogger(__name__)
 
@@ -320,12 +321,10 @@ class WorkflowSkipProber(BaseScanner):
         Try to access *late_path* directly in a fresh session (without visiting
         *early_path* first).  Returns a finding dict if accessible (200).
         """
-        import requests as _requests
-
         late_url = _join_url(target, late_path.lstrip("/"))
         try:
             # Use a brand-new session (no cookies from prior steps)
-            fresh_session = _requests.Session()
+            fresh_session = _hardened_session({})
             fresh_session.verify = False
             resp = fresh_session.get(late_url, timeout=7, allow_redirects=True)
             if _is_success(resp.status_code):
@@ -374,9 +373,7 @@ class WorkflowSkipProber(BaseScanner):
                 qs = dict(urllib.parse.parse_qsl(parsed.query))
                 qs["step"] = "3"
                 jump_url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(qs)))
-
-                import requests as _requests
-                fresh = _requests.Session()
+                fresh = _hardened_session({})
                 fresh.verify = False
                 resp_jump = fresh.get(jump_url, timeout=7)
 

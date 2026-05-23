@@ -36,6 +36,13 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple
 
 _logger = logging.getLogger(__name__)
 
+try:
+    from websecure.core.http import hardened_session as _hardened_session
+except ImportError:
+    def _hardened_session(*_args, **_kw):  # type: ignore[misc]
+        import requests as _r
+        return _r.Session()
+
 # -----------------------------------------------------------------------------
 # Data Classes
 # -----------------------------------------------------------------------------
@@ -1552,8 +1559,7 @@ class ChainExploitRunner:
     """
 
     def __init__(self, session=None, ctx: Optional[Dict[str, Any]] = None) -> None:
-        import requests as _req
-        self.session = session or _req.Session()
+        self.session = session or _hardened_session({})
         self.ctx = ctx or {}
         self._results: List[Dict[str, Any]] = []
 

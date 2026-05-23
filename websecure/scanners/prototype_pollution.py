@@ -29,6 +29,7 @@ import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.http import hardened_session
 
 logger = logging.getLogger(__name__)
 
@@ -485,12 +486,7 @@ def run(
     canary = _canary()
 
     if session is None:
-        try:
-            import requests
-            session = requests.Session()
-        except ImportError:
-            logger.warning("[ProtoPollution] requests not available")
-            return scan_results
+        session = hardened_session({})
 
     # -- 1. JSON body injection ----------------------------------------------
     for payload in _json_payloads(canary):

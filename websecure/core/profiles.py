@@ -1007,7 +1007,8 @@ class AdaptiveProfileEngine:
 
         probe_session = session
         if probe_session is None:
-            probe_session = requests.Session()
+            from websecure.core.http import hardened_session as _hs
+            probe_session = _hs({})
             probe_session.headers["User-Agent"] = (
                 "Mozilla/5.0 (compatible; WebSecureProbe/1.0)"
             )

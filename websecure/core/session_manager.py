@@ -23,6 +23,8 @@ from urllib.parse import urlparse, urljoin
 
 import requests
 
+from websecure.core.http import hardened_session
+
 _logger = logging.getLogger(__name__)
 
 
@@ -237,20 +239,26 @@ class SessionEntropyAnalyzer:
         re.I,
     )
 
-    def __init__(self, timeout: int = 8, sample_count: int = 10):
+    def __init__(self, timeout: int = 8, sample_count: int = 10, session=None):
         self.timeout = timeout
         self.sample_count = sample_count
+        self._session = session  # parent SmartSession reference (for circuit breaker/rate-limit)
 
     def collect_tokens(self, url: str, cookie_name: Optional[str] = None) -> List[str]:
-        """Make sample_count fresh requests and collect distinct session tokens."""
+        """Make sample_count fresh requests and collect distinct session tokens.
+
+        Each request uses a fresh hardened_session() so cookies are NOT shared
+        between samples (intentional for entropy testing), while still routing
+        through SmartSession circuit-breaker and rate-limiter.
+        """
         tokens: List[str] = []
         for _ in range(self.sample_count):
             try:
-                r = requests.get(
-                    url, timeout=self.timeout, verify=False,
-                    headers={"User-Agent": f"EntropyProbe/{uuid.uuid4().hex[:6]}"},
-                    allow_redirects=True,
-                )
+                # Fresh session per sample — intentional (entropy test requires
+                # distinct cookie jars). hardened_session() ensures circuit breaker.
+                _sess = hardened_session({})
+                _sess.headers["User-Agent"] = f"EntropyProbe/{uuid.uuid4().hex[:6]}"
+                r = _sess.get(url, timeout=self.timeout, verify=False, allow_redirects=True)
                 jar = dict(r.cookies)
                 if cookie_name and cookie_name in jar:
                     tokens.append(jar[cookie_name])
@@ -335,8 +343,9 @@ class SessionLifecycleProber:
     SOLID/SRP: Only session lifecycle testing.
     """
 
-    def __init__(self, timeout: int = 10):
+    def __init__(self, timeout: int = 10, session=None):
         self.timeout = timeout
+        self._session = session  # optional parent SmartSession reference
 
     def test_post_logout_validity(
         self,
@@ -351,7 +360,7 @@ class SessionLifecycleProber:
         3. Re-use saved session cookies on protected_url
         Returns whether old session is still valid (vulnerability).
         """
-        s = requests.Session()
+        s = hardened_session({})
         s.verify = False
         try:
             # Step 1: Login
@@ -363,8 +372,8 @@ class SessionLifecycleProber:
             # Step 2: Logout
             s.get(logout_url, timeout=self.timeout, allow_redirects=True)
 
-            # Step 3: Replay old session
-            replay_session = requests.Session()
+            # Step 3: Replay old session with a fresh hardened session
+            replay_session = hardened_session({})
             replay_session.verify = False
             replay_session.cookies.update(pre_logout_cookies)
             r_replay = replay_session.get(protected_url, timeout=self.timeout, allow_redirects=True)
@@ -402,7 +411,7 @@ class SessionLifecycleProber:
         """
         sessions: List[Dict[str, Any]] = []
         for i in range(n_sessions):
-            s = requests.Session()
+            s = hardened_session({})
             s.verify = False
             s.headers["User-Agent"] = f"ConcurrentTest/{i}/{uuid.uuid4().hex[:8]}"
             try:
@@ -418,7 +427,7 @@ class SessionLifecycleProber:
 
         # Check if first session is still valid after N logins
         first = sessions[0]
-        first_replay = requests.Session()
+        first_replay = hardened_session({})
         first_replay.verify = False
         first_replay.cookies.update(first["cookies"])
         try:

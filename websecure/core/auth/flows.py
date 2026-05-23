@@ -12,6 +12,7 @@ import re
 import random
 import requests
 from email.header import decode_header
+from websecure.core.http import hardened_session
 from typing import Optional, Callable, List, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -180,7 +181,7 @@ class DeviceCodeAuth:
         self.device_auth_url = device_auth_url
         self.token_url = token_url
         self.scope = scope
-        self.session = requests.Session()
+        self.session = hardened_session({})
 
     def authenticate(self) -> Optional[Dict[str, Any]]:
         """

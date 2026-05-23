@@ -1136,8 +1136,8 @@ def make_human_session(profile: str = "stealth") -> "HumanLikeAdapter":
         adapter = make_human_session("stealth")
         response = adapter.get("https://target.com/login")
     """
-    import requests
-    session = requests.Session()
+    from websecure.core.http import hardened_session as _hs
+    session = _hs({})
     return HumanLikeAdapter(session, profile=profile)
 
 

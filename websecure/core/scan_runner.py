@@ -683,9 +683,9 @@ def make_human_session(profile: str = "stealth"):
         from websecure.core.human_adapter import make_human_session as _make
         return _make(profile)
     except ImportError as exc:
-        logger.debug(f"[scan_runner] HumanLikeAdapter yüklenemedi, ham session: {exc}")
-        import requests
-        return requests.Session()
+        logger.debug(f"[scan_runner] HumanLikeAdapter yüklenemedi, hardened_session döndürülüyor: {exc}")
+        from websecure.core.http import hardened_session
+        return hardened_session({})
 
 
 def filter_false_positives(

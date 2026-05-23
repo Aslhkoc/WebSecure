@@ -228,6 +228,15 @@ class OpenRedirectScanner(BaseScanner):
         # Advanced prober — protocol-relative, JS-URI, unicode, IDN payloads
         adv = AdvancedRedirectProber(session=self.session, results=self.results)
         adv.run(target, **kwargs)
+        # Adim8 chains — OAuth theft + SSRF chain
+        try:
+            adim8 = OpenRedirectAdim8Scanner(session=self.session, results=self.results)
+            adim8.run(target, **kwargs)
+        except NameError:
+            # OpenRedirectAdim8Scanner defined later in file — forward reference safe at call time
+            pass
+        except Exception as exc:
+            logger.debug("[OpenRedirect] Adim8 chain error: %s", exc)
 
     def _probe_task(self, task: Tuple) -> Optional[Dict[str, Any]]:
         """Tek bir (test_url, param, payload, origin_url) kombinasyonunu test eder."""
@@ -499,8 +508,12 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None,
     cfg = cfg or {}
     or_cfg = cfg.get("open_redirect", {}) if isinstance(cfg, dict) else {}
     timeout = int(or_cfg.get("timeout", REQUEST_TIMEOUT))
-    scanner = OpenRedirectScanner(session=session, results=results, timeout=timeout)
-    return scanner.scan(target, urls=urls)
+    _results = results if results is not None else {}
+    scanner = OpenRedirectScanner(session=session, results=_results, timeout=timeout)
+    # scanner.run() calls scan() + AdvancedRedirectProber + OpenRedirectAdim8Scanner chains
+    scanner.run(target, urls=urls, **kwargs)
+    # Aggregate all findings from the results bucket
+    return _results.get("open_redirect", [])
 
 # ============================================================================
 # ADIM 8 — Open Redirect Zincirleri (SOLID Siniflar)

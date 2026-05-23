@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging, random, re, string, uuid, urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 from websecure.scanners.base import BaseScanner
+from websecure.core.http import hardened_session as _hardened_session
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +116,7 @@ def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) 
     results: List[Dict] = []
     canary = _canary_value()
     if session is None:
-        try:
-            import requests
-            session = requests.Session()
-        except ImportError:
-            logger.warning("[CRLF] requests not available")
-            return results
+        session = _hardened_session({})
     test_urls = _inject_urls(url, canary)
     for test_url in test_urls:
         seq_used = next((s for s in _CRLF_SEQS if s.lower() in test_url.lower()), "")
