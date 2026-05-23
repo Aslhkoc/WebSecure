@@ -2765,8 +2765,6 @@ def phase_chain_reactor(ctx: Dict[str, Any]) -> None:
              - ctx["results"]: dict of bucket -> list-of-finding-dicts
              - ctx["session"]: optional requests.Session for exploitation
     """
-    import requests as _req
-
     results = ctx.setdefault("results", {})
 
     # Collect all findings that look like real vulnerability reports
@@ -2806,7 +2804,7 @@ def phase_chain_reactor(ctx: Dict[str, Any]) -> None:
     ]
 
     # Attempt exploitation of top detected chains
-    session = ctx.get("session") or _req.Session()
+    session = ctx.get("session") or _hardened_session({})
     runner = ChainExploitRunner(session=session, ctx=ctx)
 
     # Use the cached graph (includes synthetic nodes added by rules during analyze())

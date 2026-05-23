@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import requests
 
+try:
+    from websecure.core.http import hardened_session as _hardened_session
+except ImportError:
+    def _hardened_session(*_a, **_kw):  # type: ignore[misc]
+        return requests.Session()
+
 _logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -132,7 +138,7 @@ class WAFPayloadClassifier:
                     if session:
                         r = session.get(url, timeout=self.timeout, allow_redirects=True)
                     else:
-                        r = requests.get(
+                        r = _hardened_session({}).get(
                             url, timeout=self.timeout, verify=False,
                             headers={"User-Agent": "Mozilla/5.0 (compatible; probe/1.0)"},
                         )
@@ -179,7 +185,7 @@ class WAFRateLimitAnalyzer:
                 if session:
                     r = session.get(probe_url, timeout=self.timeout)
                 else:
-                    r = requests.get(
+                    r = _hardened_session({}).get(
                         probe_url, timeout=self.timeout, verify=False,
                         headers={"User-Agent": "Mozilla/5.0"},
                     )

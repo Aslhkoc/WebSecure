@@ -12,6 +12,12 @@ from websecure.core.reporting import add_result
 from websecure.core.payloads import load_external_payloads
 
 try:
+    from websecure.core.oast import OASTScannerMixin as _OASTScannerMixin
+except ImportError:
+    class _OASTScannerMixin:  # type: ignore[assignment]
+        """Fallback no-op mixin when oast module is unavailable."""
+
+try:
     from websecure.core.utils import random_string
 except ImportError:
     import random as _rand
@@ -359,9 +365,13 @@ def _identify_service(body: str) -> Optional[str]:
 # SSRFScanner
 # =============================================================================
 
-class SSRFScanner(BaseScanner):
+class SSRFScanner(_OASTScannerMixin, BaseScanner):
     """
     Server-Side Request Forgery (SSRF) Scanner.
+
+    Inherits OASTScannerMixin for out-of-band DNS/HTTP callback verification:
+    use self.oast_new_token(), self.oast_payloads(), self.oast_poll(),
+    self.oast_correlate() for SSRF OOB confirmation.
 
     Techniques:
     - Cloud metadata endpoint probing (AWS, GCP, Azure, Alibaba)

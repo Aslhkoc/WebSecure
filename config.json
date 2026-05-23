@@ -539,9 +539,9 @@
   },
   "oast": {
     "enabled": true,
-    "provider": "generic",
-    "root_domain": "d753a6mue20k4855t8p0ym9ycdocz3fx5.oast.me",
-    "dns_domain": "d753a6mue20k4855t8p0ym9ycdocz3fx5.oast.me",
+    "provider": "interactsh",
+    "root_domain": "oast.me",
+    "dns_domain": "oast.me",
     "api_url": "",
     "api_key": "",
     "http_endpoint": "",
@@ -550,8 +550,8 @@
     "enable_dns": true,
     "enable_http": true,
     "enable_bxss": true,
-    "payload_prefix": "x",
-    "token_prefix": "x",
+    "payload_prefix": "ws",
+    "token_prefix": "ws",
     "max_injections_per_loc": 3,
     "extra_words": [
       "redirect_uri",
@@ -563,14 +563,18 @@
     "interactsh": {
       "enabled": true,
       "server": "https://oast.me",
-      "token": "d753a6mue20k4855t8p0ym9ycdocz3fx5"
+      "token": ""
     },
     "wait_seconds": 90,
     "channels": [
       "dns",
-      "http"
+      "http",
+      "smtp",
+      "ftp"
     ],
-    "interact_base": "https://interact.sh"
+    "interact_base": "https://oast.me",
+    "interact_register_path": "/register",
+    "interact_poll_path": "/poll"
   },
   "graphql": {
     "endpoints": [],
@@ -1224,6 +1228,13 @@
     "passive_only": false,
     "timeout": 300,
     "max_dns_queries": 20000
+  },
+  "subdomain": {
+    "passive_only": false,
+    "use_subfinder": true,
+    "use_amass": true,
+    "use_crtsh": true,
+    "threads": 50
   },
   "httpx": {
     "enabled": true,

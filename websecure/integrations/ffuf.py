@@ -20,6 +20,12 @@ try:
 except ImportError:
     _requests = None
 
+try:
+    from websecure.core.http import hardened_session as _hardened_session
+except ImportError:
+    def _hardened_session(*_a, **_kw):  # type: ignore[misc]
+        return _requests.Session() if _requests is not None else None
+
 from websecure.integrations.base import (
     ToolFinding,
     ToolIntegration,
@@ -119,9 +125,11 @@ class FFUFWrapper(ToolIntegration):
         _getter = None
         if self._session is not None:
             _getter = self._session.get
-        elif _requests is not None:
-            _getter = _requests.get
         else:
+            _hs = _hardened_session({})
+            if _hs is not None:
+                _getter = _hs.get
+        if _getter is None:
             return None
         try:
             rand_path = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))

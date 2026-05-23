@@ -17,6 +17,12 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 
+try:
+    from websecure.core.http import hardened_session as _hardened_session
+except ImportError:
+    def _hardened_session(*_a, **_kw):  # type: ignore[misc]
+        return _requests.Session()
+
 _logger = logging.getLogger(__name__)
 
 # Patterns indicating sensitive data in response
@@ -222,7 +228,7 @@ class IDORScanner(BaseScanner):
             if session:
                 resp = session.get(url, timeout=self.timeout, allow_redirects=True)
             else:
-                resp = _requests.get(url, timeout=self.timeout, allow_redirects=True)
+                resp = _hardened_session({}).get(url, timeout=self.timeout, allow_redirects=True)
             if resp.status_code < 400:
                 return resp.text
         except _requests.exceptions.Timeout as exc:

@@ -5346,12 +5346,36 @@ def run_oast_verification(ctx) -> None:
 def run_fuzz_and_param_discovery(ctx) -> None:
     """
     Parametre keşfi ve fuzzing fazı.
-    Ana döngüdeki (main.py) fuzzing adımından önce, spesifik parametre analizi yapar.
+    ParamDiscoveryPipeline (ffuf-based) ile parametre mining yapar.
     """
-    # [WS3] Eğer scanners/param_miner.py eklenirse buraya bağlanacak.
-    # Şimdilik ana döngüye bırakıyoruz ama logluyoruz.
-    add_result("meta", {"stage": "fuzz_param_discovery", "status": "delegated_to_main_loop"})
-    _logger.info("Fuzzing ve Parametre Analizi ana döngüye (fuzzing fazı) devredildi.")
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or ""
+    if not url:
+        add_result("meta", {"stage": "fuzz_param_discovery", "status": "skipped:no-url"})
+        return
+    try:
+        from websecure.integrations.ffuf import ParamDiscoveryPipeline
+        session = getattr(ctx, "session", None)
+        pipeline = ParamDiscoveryPipeline()
+        result = pipeline.discover(url, method="GET")
+        if result and result.params:
+            add_result("param_discovery", {
+                "url": url,
+                "params_found": result.params,
+                "total": len(result.params),
+                "source": "ParamDiscoveryPipeline",
+            })
+            # Inject discovered params into ctx for downstream scanners
+            existing = getattr(ctx, "discovered_params", []) or []
+            ctx.discovered_params = list(dict.fromkeys(existing + result.params))
+            _logger.info(
+                "[phases] ParamDiscoveryPipeline: %d params discovered at %s",
+                len(result.params), url,
+            )
+        else:
+            add_result("meta", {"stage": "fuzz_param_discovery", "status": "no_params_found"})
+    except Exception as exc:
+        _logger.debug("[phases] ParamDiscoveryPipeline error: %r", exc)
+        add_result("meta", {"stage": "fuzz_param_discovery", "status": "delegated_to_main_loop"})
 
 def run_authorization_matrix(ctx) -> None:
     """
