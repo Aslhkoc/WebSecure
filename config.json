@@ -305,7 +305,7 @@
   "port_scan": {
     "enabled": true,
     "detailed": true,
-    "arguments": "-T2 -sS -Pn",
+    "arguments": "-T4 -sS -Pn",
     "protocols": [
       "tcp",
       "udp"
@@ -1221,7 +1221,7 @@
   },
   "amass": {
     "enabled": true,
-    "passive_only": true,
+    "passive_only": false,
     "timeout": 300,
     "max_dns_queries": 20000
   },

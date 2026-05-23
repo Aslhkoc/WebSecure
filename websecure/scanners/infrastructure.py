@@ -344,7 +344,8 @@ class HeaderScanner(BaseScanner):
             with httpx.Client(verify=self.verify_tls) as c:
                 return c.get(url, headers=h, timeout=self.timeout)
         else:
-            return requests.get(url, headers=h, timeout=self.timeout, verify=self.verify_tls)
+            _fallback = hardened_session({})
+            return _fallback.get(url, headers=h, timeout=self.timeout, verify=self.verify_tls)
 
     def scan_url(self, url: str, origin_for_cors: str = None, do_preflight: bool = False) -> t.Dict[str, t.Any]:
         h = {"Origin": origin_for_cors} if origin_for_cors else None
@@ -948,7 +949,7 @@ class PySSLCertChecker:
         valid = False
         try:
             # Basit doğrulama kontrolü — verify=True (default) to check cert validity
-            _getter = (self._session.get if self._session is not None else requests.get)
+            _getter = (self._session.get if self._session is not None else hardened_session({}).get)
             _getter(url, timeout=timeout)
             valid = True
         except requests.exceptions.SSLError:
@@ -1015,7 +1016,7 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
     if hsts_header is None:
         # Probe HEAD
         try:
-            s = session or requests.Session()
+            s = session or hardened_session({})
             r = s.head("https://" + host, timeout=5, verify=False)
             hsts_on = "strict-transport-security" in r.headers.keys() or "Strict-Transport-Security" in r.headers
         except Exception as exc:
