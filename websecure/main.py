@@ -1806,6 +1806,7 @@ def _run_scan_phases(
             ctx = _Ctx()
             ctx.url, ctx.scheme, ctx.config, ctx.driver = url, scheme, cfg, driver
             ctx.target = url  # Faz 19 fix: faz runner'larının beklediği .target alanı
+            ctx.base_url = url  # Fix: base_url olmadan ffuf/feroxbuster/sqlmap/js_analysis atlıyordu
             ctx.session, ctx.results, ctx.detailed = session, results, detailed
             ctx.save_report, ctx.debug, ctx.logger = True, debug, logger
             # Faz 19 fix: human_adapter'ı plan çalışmadan ÖNCE inject et
@@ -2298,6 +2299,7 @@ def _run_scan_phases(
              ctx.results["discovery"] = locals().get("discovered")
         ctx.debug = debug
         ctx.target = url  # Use 'url' variable which represents the verified target
+        ctx.base_url = url  # Fix: base_url olmadan ffuf/feroxbuster/sqlmap/js_analysis atlıyordu
         ctx.url = url
 
         # Faz 19 fix: human_adapter'ı ikinci ctx'e de plan öncesi inject et

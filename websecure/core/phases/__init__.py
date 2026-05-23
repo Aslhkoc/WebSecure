@@ -3550,7 +3550,7 @@ def run_portscan(ctx):
     nmap_mode = {
         "STEALTH":    "stealth",    # -sT -T2 (root gerektirmez, gizli)
         "AGGRESSIVE": "aggressive", # -sV -sC --top-ports 10000 + vuln + root'ta -A
-        "NORMAL":     "deep",       # -sV -sC --top-ports 3000
+        "NORMAL":     "normal",     # -sV top-1000 ports (deep/65535 çok yavaş)
     }.get(scan_profile, "aggressive")
 
     # Akıllı port tarama stratejisi: hedefe göre mod seç
@@ -3571,10 +3571,14 @@ def run_portscan(ctx):
         resolved_ip = None
 
     _tor_proxy = cfg.get("_tor_proxy")
-    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode} (profil={scan_profile})")
+    # Config'deki port listesi ve ekstra argümanlar
+    _cfg_ports = nmap_cfg.get("ports", [])
+    ports_arg = ",".join(map(str, _cfg_ports)) if _cfg_ports else None
+    extra_args = list(nmap_cfg.get("arguments", []) or []) or None
+    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode} (profil={scan_profile}), ports={ports_arg or 'default'}")
 
     try:
-        scan_res = nmap.scan(host, mode=nmap_mode, proxy=_tor_proxy)
+        scan_res = nmap.scan(host, mode=nmap_mode, ports=ports_arg, extra_args=extra_args, proxy=_tor_proxy)
     except Exception as e:
         return _mk_result("portscan", "failed", {"error": str(e)})
 
@@ -3795,7 +3799,7 @@ def run_security_headers_basic(ctx, *, event_cb=None):
     from websecure.scanners.infrastructure import get_security_headers as _scan_headers
     from websecure.core.reporting import add_result
     sess = getattr(ctx, "session", None)
-    base_url = getattr(ctx, "base_url", None)
+    base_url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     results = getattr(ctx, "results", {})
     _scan_headers(base_url, results, session=sess, debug=bool(getattr(ctx, "debug", False)))
     add_result("headers_checked", {"base_url": base_url})
@@ -4629,7 +4633,7 @@ def run_sqlmap_scan(ctx) -> None:
         add_result("sqlmap", {"status": "skipped", "reason": "Integration module missing"})
         return
 
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     if not url:
         return
 
@@ -4797,7 +4801,7 @@ def run_ffuf_scan(ctx) -> None:
         add_result("ffuf", {"status": "skipped", "reason": "Integration module missing"})
         return
 
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     if not url:
         return
 
@@ -5014,10 +5018,10 @@ def run_feroxbuster_scan(ctx) -> None:
         add_result("feroxbuster", {"status": "skipped", "reason": "Integration module missing"})
         return
         
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     if not url:
         return
-        
+
     if not _get_config(ctx, "feroxbuster.enabled", True):
         return
 
@@ -5235,7 +5239,7 @@ def run_js_analysis(ctx) -> None:
     - Extracts hidden API endpoints / internal paths
     - Detects hardcoded secrets, tokens, API keys
     """
-    url = getattr(ctx, "base_url", None)
+    url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     if not url:
         return
 
