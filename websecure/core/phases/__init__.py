@@ -2808,6 +2808,107 @@ def _runner_dalfox_verify(ctx) -> None:
         _report_phase_error("dalfox_verify", "phases._runner_dalfox_verify", e)
 
 
+def _runner_xxe(ctx) -> None:
+    """XXE (XML External Entity) taraması — XXEScanner sınıfını doğrudan kullanır.
+    OAST domain kurulursa XXEScanner'a geçirilir; out-of-band konfirmasyonu sağlar.
+    """
+    mod = _opt_import("websecure.scanners.ssrf_xxe")
+    if not mod:
+        add_result("meta", {"stage": "xxe", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    if not url:
+        add_result("meta", {"stage": "xxe", "status": "skipped:no-url"})
+        return
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    debug = bool(getattr(ctx, "debug", False))
+    # OAST domain for out-of-band detection
+    oast_domain = _setup_oast_domain(ctx)
+    try:
+        xxe_cls = getattr(mod, "XXEScanner", None)
+        if xxe_cls:
+            cfg = getattr(ctx, "config", {}) or {}
+            oast_cfg = dict(cfg.get("oast", {}) or {})
+            if oast_domain:
+                oast_cfg["dns_domain"] = oast_domain
+            init_kw = dict(session=sess, results=results, debug=debug)
+            kw = _filter_kwargs(xxe_cls.__init__, init_kw)
+            scanner = xxe_cls(**kw)
+            endpoints = results.get("endpoints", [url]) or [url]
+            run_fn = getattr(scanner, "run", None) or getattr(scanner, "scan", None)
+            if callable(run_fn):
+                run_kw = dict(url=url, endpoints=endpoints, oast_cfg=oast_cfg)
+                run_fn(**_filter_kwargs(run_fn, run_kw))
+            # Flush findings
+            for item in (results.get("xxe") or []):
+                if isinstance(item, dict):
+                    add_result("xxe", item)
+                    if item.get("severity") in ("Critical", "High"):
+                        add_result("offensive", item)
+        else:
+            # Fallback: delegate to combined ssrf_xxe runner
+            _runner_scanners_ssrf_xxe(ctx)
+    except Exception as e:
+        _logger.warning(f"[phases] XXE runner error: {e}")
+        _report_phase_error("xxe", "phases._runner_xxe", e)
+
+
+def _runner_ssrf(ctx) -> None:
+    """SSRF (Server-Side Request Forgery) taraması — SSRFScanner sınıfını doğrudan kullanır.
+    OAST domain kurulursa out-of-band SSRF tespiti sağlanır.
+    """
+    mod = _opt_import("websecure.scanners.ssrf_xxe")
+    if not mod:
+        add_result("meta", {"stage": "ssrf", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    if not url:
+        add_result("meta", {"stage": "ssrf", "status": "skipped:no-url"})
+        return
+    sess = getattr(ctx, "session", None)
+    results = _ensure_results_bucket(ctx)
+    debug = bool(getattr(ctx, "debug", False))
+    # OAST domain for out-of-band detection
+    oast_domain = _setup_oast_domain(ctx)
+    try:
+        ssrf_cls = getattr(mod, "SSRFScanner", None)
+        if ssrf_cls:
+            endpoints = results.get("endpoints", [url]) or [url]
+            cfg = getattr(ctx, "config", {}) or {}
+            oast_cfg = dict(cfg.get("oast", {}) or {})
+            if oast_domain:
+                oast_cfg["dns_domain"] = oast_domain
+            # SSRFScanner(session, endpoints) — imzaya uyum
+            try:
+                scanner = ssrf_cls(sess, endpoints)
+            except TypeError:
+                init_kw = dict(session=sess, results=results, debug=debug)
+                scanner = ssrf_cls(**_filter_kwargs(ssrf_cls.__init__, init_kw))
+            if results is not None and not hasattr(scanner, "results"):
+                scanner.results = results
+            elif results is not None:
+                scanner.results = results
+            run_fn = getattr(scanner, "run", None)
+            if callable(run_fn):
+                run_kw = dict(oast_cfg=oast_cfg)
+                try:
+                    run_fn(**_filter_kwargs(run_fn, run_kw))
+                except TypeError:
+                    run_fn()
+            # Flush findings from scanner.results
+            for bucket_key in ("ssrf", "offensive"):
+                for item in (getattr(scanner, "results", {}) or {}).get(bucket_key) or []:
+                    if isinstance(item, dict):
+                        add_result(bucket_key, item)
+        else:
+            # Fallback: combined ssrf_xxe runner
+            _runner_scanners_ssrf_xxe(ctx)
+    except Exception as e:
+        _logger.warning(f"[phases] SSRF runner error: {e}")
+        _report_phase_error("ssrf", "phases._runner_ssrf", e)
+
+
 def _runner_session_analysis(ctx) -> None:
     """
     CookieSecurityAnalyzer + SessionLifecycleProber ile oturum güvenliğini denetler.

@@ -1152,6 +1152,17 @@ class HttpClient:
         self._jitter_ms = int(ab_http.get("jitter_ms") or 0)
         self._last_ts: float = 0.0
 
+        # Anti-blocking HTTP client — wires token-bucket RateLimiter + jitter + penalty
+        # backoff via AntiBlockingHTTP when anti_blocking.http is configured.
+        # build_http_client() constructs AntiBlockingHTTP wrapping a hardened_session;
+        # _pace_before() delegates to it when present, falling back to manual pacing.
+        self._anti_blocking_http: Optional[AntiBlockingHTTP] = None
+        if ab_http:
+            try:
+                self._anti_blocking_http = build_http_client(self.cfg)
+            except Exception as _ab_exc:
+                _logger.debug(f"[HTTP] AntiBlockingHTTP init failed, using manual pacing: {_ab_exc!r}")
+
         http_cfg: Mapping[str, Any] = self.cfg.get("http", {})  # type: ignore
 
         # TLS doğrulama
@@ -1232,7 +1243,14 @@ class HttpClient:
         )
 
     # ----- pacing -----
-    def _pace_before(self) -> None:
+    def _pace_before(self, method: str = "GET") -> None:
+        # Delegate to AntiBlockingHTTP token-bucket rate limiter when configured.
+        # This connects build_http_client() → RateLimiter → jitter → penalty into the flow.
+        if self._anti_blocking_http is not None:
+            self._anti_blocking_http.rl.acquire()
+            self._anti_blocking_http._sleep_policy(method)
+            return
+        # Fallback: simple interval-based pacing when AntiBlockingHTTP is not configured
         if self._interval <= 0:
             return
         now = time.monotonic()
@@ -1318,7 +1336,7 @@ class HttpClient:
 
     # ----- Dış API -----
     def request(self, method: str, url: str, **kw) -> UnifiedResponse:
-        self._pace_before()
+        self._pace_before(method)
 
         # curl_cffi sürücüsü — proxy rotation entegrasyonu
         if self.driver_name == "curl_cffi" and hasattr(self._driver, "update_proxy"):
@@ -1387,6 +1405,12 @@ class HttpClient:
 
         start = time.time()
         resp = self._do_request_with_retries(meth, url, **kw)
+
+        # Anti-blocking response adjustment — update penalty/backoff based on response status
+        if self._anti_blocking_http is not None:
+            _ab_status = int(getattr(resp, "status_code", 0) or 0)
+            _ab_headers = dict(getattr(resp, "headers", {}) or {})
+            self._anti_blocking_http._adjust_on_response(_ab_status, _ab_headers)
 
         # Kanıt/ölçüm kaydı
         counters_inc("http_requests", 1)
@@ -1590,8 +1614,14 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
     """
     Returns a production-ready, hardened requests.Session.
     Integrates WAF Bypass if configured, otherwise standard hardening.
+    When tls.soft_fail is True, uses SoftTLSSession to gracefully handle
+    certificate errors without completely disabling TLS verification.
     """
     c = dict(cfg or {})
+
+    # 1. Determine base session class: SoftTLS or Smart
+    tls_cfg = c.get("tls") if isinstance(c, dict) else {}
+    use_soft_tls = bool((tls_cfg or {}).get("soft_fail", False)) if isinstance(tls_cfg, dict) else False
 
     # 1. WAF Evasion Check
     if WAFBypassAdapter and c.get("waf", {}).get("enabled"):
@@ -1605,12 +1635,15 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Accept": "*/*"
         })
+    elif use_soft_tls:
+        # SoftTLSSession: runs preflight to detect cert errors, auto-softens verify per request
+        s = SoftTLSSession(c)
     else:
         # SmartSession wires _smart_request (circuit breaker, identity rotation, live monitor)
         s = SmartSession()
-        
+
     # 2. Add Timeouts & Retries (via adapter if not WAF)
-    # (Note: WAF adapter wraps requests so it might handle retries differently, 
+    # (Note: WAF adapter wraps requests so it might handle retries differently,
     # but we should ensure base resilience)
     if not (WAFBypassAdapter and c.get("waf", {}).get("enabled")):
         retry = Urllib3Retry(
@@ -1624,9 +1657,6 @@ def hardened_session(cfg: Optional[Mapping[str, Any]] = None) -> requests.Sessio
         s.mount("https://", adapter)
         s.mount("http://", adapter)
 
-    # 3. SoftTLS Wrappers if needed
-    # (Checking logic for SoftTLSSession is complex, skipping for simplicity unless requested)
-    
     return s
 
 
