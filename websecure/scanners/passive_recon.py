@@ -821,9 +821,9 @@ class CloudDetector(BaseScanner):
                     detected.add(provider)
                     # Takeover riski varsa ayrı bulgu üret
                     if "takeover" in provider.lower():
-                        # Hedef gerçekten erişilebilir mi kontrol et
+                        # Hedef gerçekten erişilebilir mi kontrol et — SmartSession kullan
                         try:
-                            probe = requests.head(f"https://{domain}", timeout=5)
+                            probe = self.session.head(f"https://{domain}", timeout=5)
                             alive = probe.status_code not in (404, 410)
                         except Exception:
                             alive = False
@@ -885,11 +885,11 @@ class EmailHarvester(BaseScanner):
             except Exception:
                 pass
 
-        # 2. Hunter.io API (opsiyonel — key varsa)
+        # 2. Hunter.io API (opsiyonel — key varsa) — SmartSession üzerinden
         key = self._hunter_key()
         if key:
             try:
-                r = requests.get(
+                r = self.session.get(
                     "https://api.hunter.io/v2/domain-search",
                     params={"domain": domain, "api_key": key, "limit": 100},
                     timeout=15,
