@@ -102,7 +102,7 @@ class CookieFlagScanner(BaseScanner):
         for path in self._PROBE_PATHS:
             url = base + path
             try:
-                r = requests.get(
+                r = self.session.get(
                     url, timeout=_TIMEOUT, verify=False,
                     allow_redirects=True,
                     headers={"User-Agent": "Mozilla/5.0 (compatible; CookieAudit/1.0)"},
@@ -268,7 +268,7 @@ class CookieInjectionProber(BaseScanner):
             for payload in self._CRLF_PAYLOADS[:4]:
                 test_url = f"{base}/?{param}={payload}"
                 try:
-                    r = requests.get(
+                    r = self.session.get(
                         test_url, timeout=_TIMEOUT, verify=False, allow_redirects=False,
                         headers={"User-Agent": "Mozilla/5.0"},
                     )
@@ -370,7 +370,7 @@ class JWTExpiryBypassProber(BaseScanner):
         if not jwt_token:
             # Try to collect a JWT from login or protected page
             try:
-                r = requests.get(
+                r = self.session.get(
                     protected_url, timeout=_TIMEOUT, verify=False,
                     headers={"Authorization": "Bearer invalid.token.here"},
                 )
@@ -399,7 +399,7 @@ class JWTExpiryBypassProber(BaseScanner):
             )),
         ]:
             try:
-                r = requests.get(
+                r = self.session.get(
                     protected_url, timeout=_TIMEOUT, verify=False,
                     headers={auth_header: f"Bearer {token}"},
                 )

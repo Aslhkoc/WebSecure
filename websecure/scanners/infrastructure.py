@@ -881,6 +881,9 @@ def _host_matches_san(host: str, san: t.Iterable[str]) -> bool:
     return False
 
 class PySSLCertChecker:
+    def __init__(self, session=None):
+        self._session = session  # optional SmartSession for SSL validation probe
+
     def check(self, url: str, *, timeout: int = 10) -> CertificateReport:
         host, port, scheme = _normalize_host(url)
         if scheme == "http":
@@ -944,8 +947,9 @@ class PySSLCertChecker:
        
         valid = False
         try:
-             # Basit doğrulama kontrolü
-            requests.get(url, timeout=timeout)
+            # Basit doğrulama kontrolü — verify=True (default) to check cert validity
+            _getter = (self._session.get if self._session is not None else requests.get)
+            _getter(url, timeout=timeout)
             valid = True
         except requests.exceptions.SSLError:
             valid = False

