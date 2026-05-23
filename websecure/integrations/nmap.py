@@ -438,13 +438,21 @@ class NmapWrapper(ToolIntegration):
         else:
             port_args1 = ["--top-ports", "1000"]
 
-        phase1 = (
-            [scan1, "-Pn", "--open"] + port_args1 +
-            ["-T4", "--min-rate", "1000" if raw else "500",
-             "--max-retries", "2", "--host-timeout", "600s"]
-        )
-        if on_windows and not raw:
-            phase1 += ["--unprivileged"]
+        if raw:
+            phase1 = (
+                [scan1, "-Pn", "--open"] + port_args1 +
+                ["-T4", "--min-rate", "1000", "--max-retries", "3",
+                 "--defeat-rst-ratelimit",   # RST rate-limit arkasındaki portları yakala
+                 "--host-timeout", "600s"]
+            )
+        else:
+            phase1 = (
+                [scan1, "-Pn", "--open"] + port_args1 +
+                ["-T4", "--min-rate", "300",  # Daha az agresif rate = daha az drop
+                 "--max-retries", "3",
+                 "--defeat-rst-ratelimit",    # Firewall'ın RST limiti arkasındaki portları göster
+                 "--host-timeout", "600s", "--unprivileged"]
+            )
 
         self._inject_proxy(phase1, proxy)
         t1 = max(timeout // 2, 300)
@@ -466,32 +474,38 @@ class NmapWrapper(ToolIntegration):
         print(f"\033[36;1m[Nmap AGRESİF]\033[0m Faz-2 — Derin analiz ({len(open_ports)} port)...")
         ports_str = ",".join(map(str, sorted(open_ports)))
 
+        _AGRESSIVE_SCRIPTS = (
+            "default,auth,discovery,vuln,exploit,malware,safe,brute,"
+            "banner,ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,"
+            "ssl-poodle,ssl-ccs-injection,ssl-date,sslv2,sslv2-drown,"
+            "http-title,http-headers,http-methods,http-auth-finder,"
+            "http-server-header,http-robots.txt,http-git,http-shellshock,"
+            "http-vuln-cve2017-5638,http-vuln-cve2015-1635,"
+            "http-backup-finder,http-default-accounts,http-open-proxy,"
+            "http-put,http-config-backup,http-phpmyadmin-dir-traversal,"
+            "http-wordpress-users,http-unsafe-output-escaping,http-csrf,"
+            "ssh-auth-methods,ssh-hostkey,ssh-brute,ssh2-enum-algos,"
+            "ftp-anon,ftp-bounce,ftp-brute,ftp-vsftpd-backdoor,ftp-proftpd-backdoor,"
+            "smtp-commands,smtp-open-relay,smtp-enum-users,smtp-vuln-cve2010-4344,"
+            "smb-os-discovery,smb-security-mode,smb-enum-shares,smb-enum-users,"
+            "smb-vuln-ms17-010,smb-vuln-ms08-067,smb2-security-mode,"
+            "mysql-info,mysql-empty-password,mysql-databases,mysql-users,"
+            "mysql-vuln-cve2012-2122,mysql-brute,"
+            "ms-sql-info,ms-sql-empty-password,ms-sql-config,ms-sql-xp-cmdshell,"
+            "rdp-enum-encryption,rdp-vuln-ms12-020,rdp-brute,"
+            "dns-recursion,dns-zone-transfer,dns-brute,dns-cache-snoop,"
+            "snmp-info,snmp-sysdescr,snmp-brute,snmp-interfaces,"
+            "mongodb-info,mongodb-databases,redis-info,redis-brute,"
+            "vnc-info,vnc-brute,ldap-brute,ldap-rootdse,"
+            "telnet-brute,telnet-ntlm-info"
+        )
+
         if raw:
-            # Tam güç: SYN + sürüm 9 + OS + -A + tüm NSE
+            # Tam güç: SYN + versiyon 9 + tüm NSE + OS tespiti (Linux/macOS)
             phase2 = [
                 "-sS", "-Pn", "-T4",
                 "-sV", "--version-intensity", "9", "--version-all",
-                "-O", "--osscan-guess",
-                "-A",
-                "--script", (
-                    "default,auth,discovery,vuln,exploit,malware,safe,brute,"
-                    "banner,ssl-cert,ssl-enum-ciphers,ssl-heartbleed,ssl-dh-params,"
-                    "ssl-poodle,ssl-ccs-injection,http-title,http-headers,http-methods,"
-                    "http-auth-finder,http-server-header,http-robots.txt,http-git,"
-                    "http-shellshock,http-vuln-cve2017-5638,http-vuln-cve2015-1635,"
-                    "http-backup-finder,http-default-accounts,"
-                    "ssh-auth-methods,ssh-hostkey,ssh2-enum-algos,"
-                    "ftp-anon,ftp-bounce,ftp-vsftpd-backdoor,"
-                    "smtp-commands,smtp-open-relay,smtp-enum-users,"
-                    "smb-os-discovery,smb-security-mode,smb-enum-shares,"
-                    "smb-vuln-ms17-010,smb-vuln-ms08-067,"
-                    "mysql-info,mysql-empty-password,mysql-databases,"
-                    "ms-sql-info,ms-sql-empty-password,"
-                    "rdp-enum-encryption,rdp-vuln-ms12-020,"
-                    "dns-recursion,dns-zone-transfer,"
-                    "snmp-info,snmp-sysdescr,"
-                    "mongodb-info,redis-info"
-                ),
+                "--script", _AGRESSIVE_SCRIPTS,
                 "--script-args",
                 "http.useragent=Mozilla/5.0,brute.firstonly=true,"
                 "vulns.showall=true,unsafe=1",
@@ -499,37 +513,24 @@ class NmapWrapper(ToolIntegration):
                 "--host-timeout", "600s",
                 "-p", ports_str,
             ]
-            if on_windows:
-                # Windows'ta OS detection kısıtlı — kaldır
-                phase2 = [a for a in phase2
-                          if a not in ("-O", "--osscan-guess", "-A")]
+            if not on_windows:
+                # OS detection sadece Linux/macOS'ta güvenilir
+                phase2[3:3] = ["-O", "--osscan-guess", "-A"]
         else:
-            # TCP connect — raw socket yok
+            # TCP connect — raw socket yok; maksimum NSE + versiyon yoğunluğu 9
             phase2 = [
                 "-sT", "-Pn", "-T4",
-                "-sV", "--version-intensity", "7",
+                "-sV", "--version-intensity", "9", "--version-all",
                 "-sC",
-                "--script", (
-                    "default,auth,safe,vuln,"
-                    "banner,ssl-cert,ssl-enum-ciphers,http-title,http-headers,"
-                    "http-methods,http-auth-finder,http-server-header,http-robots.txt,"
-                    "http-git,http-backup-finder,http-default-accounts,"
-                    "ssh-auth-methods,ssh-hostkey,ssh2-enum-algos,"
-                    "ftp-anon,ftp-syst,smtp-commands,smtp-open-relay,"
-                    "smb-security-mode,smb-enum-shares,"
-                    "mysql-info,mysql-empty-password,"
-                    "ms-sql-info,ms-sql-empty-password,"
-                    "rdp-enum-encryption,dns-recursion,"
-                    "mongodb-info,redis-info"
-                ),
+                "--script", _AGRESSIVE_SCRIPTS,
                 "--script-args",
-                "http.useragent=Mozilla/5.0,brute.firstonly=true,vulns.showall=true",
-                "--script-timeout", "60s",
+                "http.useragent=Mozilla/5.0,brute.firstonly=true,"
+                "vulns.showall=true,unsafe=1",
+                "--script-timeout", "90s",
                 "--host-timeout", "600s",
                 "-p", ports_str,
+                "--unprivileged",
             ]
-            if on_windows:
-                phase2 += ["--unprivileged"]
 
         if extra_args:
             phase2.extend(extra_args)
@@ -590,22 +591,30 @@ class NmapWrapper(ToolIntegration):
         port_args = ["-p", ports] if ports else ["--top-ports", "1000"]
 
         if raw:
-            # SYN half-open + fragmentasyon + decoy = maksimum gizlilik
+            # T1 (paranoid) + double-frag + 5 decoy + 1s delay = maksimum IDS evasion
             phase1 = (
                 ["-sS", "-Pn", "--open"] + port_args +
-                ["-T2", "--max-retries", "1", "--scan-delay", "500ms",
-                 "-f", "--data-length", "25", "-D", "RND:3",
-                 "--host-timeout", "900s"]
+                ["-T1",                         # Paranoid timing — IDS alarm eşiğinin altı
+                 "--max-retries", "1",
+                 "--scan-delay", "1s",           # Her probe arasında 1s bekle
+                 "-f", "-f",                    # Double frag: 8-byte paketler, DPI bypass
+                 "--data-length", "40",         # Rastgele padding — imza tespitini zorlaştır
+                 "-D", "RND:5,ME",              # 5 sahte IP + gerçek IP = kaynak tespiti zor
+                 "--randomize-hosts",           # Port sırasını karıştır
+                 "--host-timeout", "1800s"]     # T1 çok yavaş, geniş timeout
             )
         else:
-            # TCP connect — raw socket yok, en azından T2 yavaşlık sağlar
+            # TCP connect — raw socket yok; T2 + scan-delay en iyi evasion
             phase1 = (
                 ["-sT", "-Pn", "--open"] + port_args +
-                ["-T2", "--max-retries", "1",
-                 "--host-timeout", "900s"]
+                ["-T2",                         # Polite timing
+                 "--max-retries", "1",
+                 "--scan-delay", "300ms",       # Her probe arasında 300ms gecikme
+                 "--defeat-rst-ratelimit",      # Firewall RST throttle'ını atlatır
+                 "--randomize-hosts",           # Port sırası rastgele
+                 "--host-timeout", "1200s",
+                 "--unprivileged"]
             )
-            if on_windows:
-                phase1 += ["--unprivileged"]
 
         self._inject_proxy(phase1, proxy)
         t1 = max(timeout // 2, 300)
@@ -625,28 +634,31 @@ class NmapWrapper(ToolIntegration):
         ports_str = ",".join(map(str, sorted(open_ports)))
 
         if raw:
+            # SYN + T2 (scriptler için T1 çok yavaş) + frag + minimal script
             phase2 = [
                 "-sS", "-Pn", "-T2",
-                "-sV", "--version-intensity", "2",     # Düşük yoğunluk = az gürültü
-                "--script", "default,safe",             # Sadece safe = IDS radarı altında
+                "-sV", "--version-intensity", "3",  # Hafif versiyon tespiti — az probe
+                "--script", "default,safe,banner",  # safe + banner = bilgi ama gürültüsüz
                 "--script-args", "http.useragent=Mozilla/5.0",
-                "--script-timeout", "30s",
-                "--host-timeout", "600s",
+                "--script-timeout", "45s",
+                "--host-timeout", "900s",
+                "-f", "-f", "--data-length", "40",  # Double frag korunuyor
+                "-D", "RND:3,ME",                    # Faz 2'de de decoy
                 "-p", ports_str,
-                "-f", "--data-length", "25",            # Fragmentasyon korunuyor
             ]
         else:
+            # TCP connect stealth: T2 + scan-delay + minimal script
             phase2 = [
                 "-sT", "-Pn", "-T2",
-                "-sV", "--version-intensity", "2",
-                "--script", "default,safe",
+                "-sV", "--version-intensity", "3",
+                "--script", "default,safe,banner",
                 "--script-args", "http.useragent=Mozilla/5.0",
-                "--script-timeout", "30s",
-                "--host-timeout", "600s",
+                "--scan-delay", "150ms",
+                "--script-timeout", "45s",
+                "--host-timeout", "900s",
                 "-p", ports_str,
+                "--unprivileged",
             ]
-            if on_windows:
-                phase2 += ["--unprivileged"]
 
         if extra_args:
             phase2.extend(extra_args)
