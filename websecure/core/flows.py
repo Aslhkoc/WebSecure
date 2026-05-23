@@ -268,57 +268,84 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
     add_result("meta", {"stage":"bizlogic","flows_defined": len(flows), "flows_failed": findings})
     return findings
 
-# ================== (Varsa) İdempotensi Testleri için sarmalayıcı ==================
+# ================== İdempotensi Testleri ==================
 
-run_idem_fn = globals().get("run_idempotency_checks")
-if callable(run_idem_fn):
-    _orig_run_idempotency_checks = run_idem_fn
-    def run_idempotency_checks(session, base_url: str, cfg: Mapping[str, Any], results: Mapping[str, Any], *, debug: bool=False) -> int:  # type: ignore[override]
-        if _iul.find_spec("core.detect") is not None:
-            _d = importlib.import_module("core.detect")
+def run_idempotency_checks(
+    session,
+    base_url: str,
+    cfg: Mapping[str, Any],
+    results: Mapping[str, Any],
+    *,
+    debug: bool = False,
+) -> int:
+    """
+    Idempotency checks from config.business_logic.idempotency.checks.
+    Returns the number of anomalies found.
+    """
+    # response_fingerprint / idempotency_anomaly helpers
+    _rfp: Any = None
+    _idem_anom: Any = None
+    if _iul.find_spec("websecure.core.detect") is not None:
+        try:
+            _d = importlib.import_module("websecure.core.detect")
             _rfp = getattr(_d, "response_fingerprint", None)
             _idem_anom = getattr(_d, "idempotency_anomaly", None)
-        else:
-            def _rfp(txt: str) -> str: return str(hash(txt))
-            def _idem_anom(fps: list[str]) -> bool: return len(set(fps)) > 1
+        except Exception:
+            pass
+    if not callable(_rfp):
+        def _rfp(txt: str) -> str: return str(hash(txt))  # type: ignore[misc]
+    if not callable(_idem_anom):
+        def _idem_anom(fps: list) -> bool: return len(set(fps)) > 1  # type: ignore[misc]
 
-        bl = (cfg.get("business_logic") or {})
-        idem = (bl.get("idempotency") or {})
-        if not idem.get("enabled", True):
-            add_result("meta", {"stage":"idempotency","status":"skipped"})
-            return 0
-        checks = list(idem.get("checks") or [])
-        if not checks:
-            add_result("meta", {"stage":"idempotency","status":"skipped:no-checks"})
-            return 0
+    bl = (cfg.get("business_logic") or {})
+    idem = (bl.get("idempotency") or {})
+    if not idem.get("enabled", True):
+        add_result("meta", {"stage": "idempotency", "status": "skipped"})
+        return 0
+    checks = list(idem.get("checks") or [])
+    if not checks:
+        add_result("meta", {"stage": "idempotency", "status": "skipped:no-checks"})
+        return 0
 
-        client = get_http(cfg.get("http") or {}) if callable(get_http) else None
-        findings = 0
-        repeat = max(2, int(idem.get("repeat", 2)))
-        for chk in checks:
-            method = str(chk.get("method","POST")).upper()
-            url = _ws_normalize_url(base_url, str(chk.get("url") or "/"))
-            headers = dict(chk.get("headers") or {})
-            payload = chk.get("json")
-            timeout_s = float(idem.get("timeout", bl.get("timeout", 20)))
-            verify_tls = bool(idem.get("verify_tls", bl.get("verify_tls", True)))
-            fps: list[str] = []
-            codes: list[int] = []
-            for _ in range(repeat):
-                if client:
-                    resp_u = client.request(method, url, headers=headers, json=payload, timeout=timeout_s, verify=verify_tls)  # type: ignore
-                    fps.append(_rfp(resp_u.text or "") if callable(_rfp) else str(hash(resp_u.text or "")))
-                    codes.append(resp_u.status_code)
-                else:
-                    r = session.request(method, url, headers=headers, json=payload, timeout=timeout_s, verify=verify_tls)
-                    fps.append(_rfp(r.text or "") if callable(_rfp) else str(hash(r.text or "")))
-                    codes.append(r.status_code)
-            anom = _idem_anom(fps) if callable(_idem_anom) else len(set(fps)) > 1
-            item = {"name": chk.get("name") or "idempotency", "url": url, "status_set": sorted(set(codes)), "unique_fp": len(set(fps)), "unique_status": len(set(codes)), "anomaly": bool(anom)}
-            add_result("bizlogic_idempotency", item)
-            if anom:
-                findings += 1
-                add_result("bizlogic_findings", {"url": url, "note": "Aynı istek farklı yanıtlar", "method": method, "authenticated": False})
-        results.setdefault("bizlogic_summary", {})["idempotency_anomalies"] = findings  # type: ignore
-        add_result("meta", {"stage":"idempotency","tests": len(checks), "anomalies": findings})
-        return findings
+    client = get_http(cfg.get("http") or {}) if callable(get_http) else None
+    findings = 0
+    repeat = max(2, int(idem.get("repeat", 2)))
+    for chk in checks:
+        method = str(chk.get("method", "POST")).upper()
+        url = _ws_normalize_url(base_url, str(chk.get("url") or "/"))
+        headers = dict(chk.get("headers") or {})
+        payload = chk.get("json")
+        timeout_s = float(idem.get("timeout", bl.get("timeout", 20)))
+        verify_tls = bool(idem.get("verify_tls", bl.get("verify_tls", True)))
+        fps: List[str] = []
+        codes: List[int] = []
+        for _ in range(repeat):
+            if client is not None:
+                resp_u = client.request(method, url, headers=headers, json=payload, timeout=timeout_s, verify=verify_tls)  # type: ignore[union-attr]
+                fps.append(_rfp(resp_u.text or ""))
+                codes.append(resp_u.status_code)
+            else:
+                r = session.request(method, url, headers=headers, json=payload, timeout=timeout_s, verify=verify_tls)
+                fps.append(_rfp(r.text or ""))
+                codes.append(r.status_code)
+        anom = _idem_anom(fps)
+        item = {
+            "name": chk.get("name") or "idempotency",
+            "url": url,
+            "status_set": sorted(set(codes)),
+            "unique_fp": len(set(fps)),
+            "unique_status": len(set(codes)),
+            "anomaly": bool(anom),
+        }
+        add_result("bizlogic_idempotency", item)
+        if anom:
+            findings += 1
+            add_result("bizlogic_findings", {
+                "url": url,
+                "note": "Aynı istek farklı yanıtlar üretiyor (idempotency anomalisi)",
+                "method": method,
+                "authenticated": False,
+            })
+    results.setdefault("bizlogic_summary", {})["idempotency_anomalies"] = findings  # type: ignore[union-attr]
+    add_result("meta", {"stage": "idempotency", "tests": len(checks), "anomalies": findings})
+    return findings

@@ -2219,10 +2219,20 @@ class AdaptiveMutationEngine:
         return [_re.sub(r'%([0-9A-Fa-f]{2})', lambda m: f'%25{m.group(1)}', p)]
 
     def _unicode_mutate(self, p: str) -> List[str]:
-        """Unicode fullwidth equivalents for ASCII letters."""
+        """Unicode confusable / fullwidth equivalents for ASCII letters (WAF signature confusion)."""
+        # Cyrillic/Latin lookalikes that visual-match but differ at byte level
         _map = {
-            'a': 'a', 'e': 'e', 'i': 'i', 'o': 'o',
-            's': 's', 'l': 'l', 'n': 'n', 'r': 'r',
+            'a': 'а',  # Cyrillic а
+            'e': 'е',  # Cyrillic е
+            'i': 'і',  # Cyrillic і
+            'o': 'о',  # Cyrillic о
+            's': 'ѕ',  # Cyrillic ѕ
+            'l': 'Ӏ',  # Cyrillic Ӏ
+            'n': 'ո',  # Armenian ո
+            'r': 'г',  # Cyrillic г (approximate)
+            'c': 'с',  # Cyrillic с
+            'p': 'р',  # Cyrillic р
+            'x': 'х',  # Cyrillic х
         }
         return ["".join(_map.get(c.lower(), c) for c in p)]
 
