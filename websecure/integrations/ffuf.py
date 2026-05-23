@@ -41,9 +41,10 @@ class FFUFWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "ffuf"
 
-    def __init__(self, binary_path: str = "ffuf"):
+    def __init__(self, binary_path: str = "ffuf", session=None):
         super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
         self._binary_name = binary_path
+        self._session = session  # Optional SmartSession for baseline probing
         self._check_binary()
 
     def _check_binary(self):
@@ -112,14 +113,21 @@ class FFUFWrapper(ToolIntegration):
         Probe a guaranteed-nonexistent path to get the 404 response size.
         Returns the size as a string for ffuf -fs, or None on failure.
         This prevents false positives caused by soft-404 pages.
+        Uses self._session (SmartSession) when available; falls back to bare requests.
         """
-        if _requests is None:
+        # Prefer SmartSession so circuit-breaker / identity-rotation applies
+        _getter = None
+        if self._session is not None:
+            _getter = self._session.get
+        elif _requests is not None:
+            _getter = _requests.get
+        else:
             return None
         try:
             rand_path = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
             probe_url = base_url.rstrip("/") + "/" + rand_path
-            resp = _requests.get(probe_url, timeout=10, allow_redirects=True,
-                                 headers={"User-Agent": "WebSecure/1.0"})
+            resp = _getter(probe_url, timeout=10, allow_redirects=True,
+                           headers={"User-Agent": "WebSecure/1.0"})
             size = len(resp.content)
             logger.debug(f"[FFUF] Baseline 404 size for {base_url}: {size} bytes")
             return str(size)
