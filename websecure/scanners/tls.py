@@ -95,19 +95,24 @@ def check_weak_ciphers(host: str, port: int) -> List[str]:
             
     return weak_ciphers_found
 
-def scan_tls(url: str, **kwargs) -> Dict[str, Any]:
+def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs) -> Dict[str, Any]:
     """
-    Enhanced TLS Scanner.
+    Enhanced TLS Scanner — full orchestrator.
     Performs:
     1. Standard Certificate Analysis (Validity, Dates, Issuer) via infrastructure.py
     2. Protocol Support Check (TLS 1.0, 1.1)
     3. Weak Cipher Check (RC4, NULL, etc.)
+    4. Advanced TLS attacks: BEAST/POODLE, CRIME/BREACH, ROBOT, HTTP2/HTTP3, CDN misconfig
+    5. Deep cipher/protocol: WeakCipher, HSTS, ProtocolDowngrade, CertValidation, Compression
     """
-    results = kwargs.get("results") or {}
+    if results is None:
+        results = kwargs.get("results") or {}
+    if session is None:
+        session = kwargs.get("session")
 
     # 1. Base Cert Analysis — guarded: non-HTTPS hosts will fail gracefully
     try:
-        base_info = _get_cert_details(url, config=kwargs.get("config"), session=kwargs.get("session"))
+        base_info = _get_cert_details(url, config=kwargs.get("config"), session=session)
     except Exception as exc:
         _logger.warning(f"[TLS] Certificate analysis failed for {url}: {exc!r}")
         base_info = {}
@@ -167,6 +172,28 @@ def scan_tls(url: str, **kwargs) -> Dict[str, Any]:
         })
 
     results.setdefault("final", []).extend(findings)
+
+    # 4. Advanced TLS attacks (BEAST/POODLE, CRIME/BREACH, ROBOT, HTTP2/HTTP3, CDN)
+    try:
+        adim9 = TLSAdim9Scanner(session=session, results=results)
+        adim9_results = adim9.run(url, **kwargs)
+        findings.extend(adim9_results)
+        results.setdefault("final", []).extend(adim9_results)
+        if debug:
+            _logger.debug(f"[TLS] Adim9 scanner produced {len(adim9_results)} findings")
+    except Exception as exc:
+        _logger.debug(f"[TLS] Adim9 scanner error: {exc!r}")
+
+    # 5. Deep cipher/protocol checks (WeakCipher, HSTS, ProtocolDowngrade, CertValidation, Compression)
+    try:
+        deep = TLSDeepScanner(session=session, results=results)
+        deep_results = deep.run(url, **kwargs)
+        findings.extend(deep_results)
+        results.setdefault("final", []).extend(deep_results)
+        if debug:
+            _logger.debug(f"[TLS] Deep scanner produced {len(deep_results)} findings")
+    except Exception as exc:
+        _logger.debug(f"[TLS] Deep scanner error: {exc!r}")
 
     return {
         "certificate": base_info,
