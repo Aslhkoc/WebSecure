@@ -459,7 +459,7 @@ class NmapWrapper(ToolIntegration):
             print(f"\033[33m[Nmap AGRESİF]\033[0m {target} üzerinde açık port yok.")
             return []
 
-        print(f"\033[32m[Nmap AGRESİF Faz-1]\033[0m {len(open_ports)} port → "
+        print(f"\033[32m[Nmap AGRESİF Faz-1]\033[0m {len(open_ports)} port -> "
               f"{','.join(map(str, sorted(open_ports)[:30]))}{'...' if len(open_ports) > 30 else ''}")
 
         # --- FAZ 2: Derin servis + script analizi ---
@@ -617,7 +617,7 @@ class NmapWrapper(ToolIntegration):
             print(f"\033[33m[Nmap STEALTH]\033[0m {target} üzerinde açık port yok.")
             return []
 
-        print(f"\033[35m[Nmap STEALTH Faz-1]\033[0m {len(open_ports)} port → "
+        print(f"\033[35m[Nmap STEALTH Faz-1]\033[0m {len(open_ports)} port -> "
               f"{','.join(map(str, sorted(open_ports)[:30]))}")
 
         # --- FAZ 2: Sessiz servis analizi ---
@@ -696,7 +696,7 @@ class NmapWrapper(ToolIntegration):
             print(f"\033[33m[Nmap NORMAL]\033[0m {target} üzerinde açık port yok.")
             return []
 
-        print(f"\033[32m[Nmap NORMAL Faz-1]\033[0m {len(open_ports)} port → "
+        print(f"\033[32m[Nmap NORMAL Faz-1]\033[0m {len(open_ports)} port -> "
               f"{','.join(map(str, sorted(open_ports)[:30]))}")
 
         print(f"\033[36m[Nmap NORMAL]\033[0m Faz-2 — Servis analizi ({len(open_ports)} port)...")

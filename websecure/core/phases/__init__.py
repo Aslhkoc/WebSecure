@@ -1077,8 +1077,8 @@ def clear_critical_error(ctx: Any) -> None:
 # Timeouts are intentionally tight — aggressive mode must finish in a reasonable time.
 _PHASE_TIMEOUTS: Dict[str, int] = {
     # ── Heavy external tools ───────────────────────────────────────────────
-    "port_scan":          900,   # nmap two-stage: up to 15 min
-    "portscan":           900,
+    "port_scan":         1500,   # nmap two-stage: phase1(450)+phase2(900) = up to 25 min
+    "portscan":          1500,
     "sqlmap":             600,   # time-based blind SQL injection
     "passive_recon":      600,   # OSINT APIs + DNS + cert lookups
     "amass":              600,
