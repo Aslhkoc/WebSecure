@@ -897,8 +897,7 @@ class OASTMultiProtocolProber:
         }
         for hdr, val in headers_to_inject.items():
             try:
-                import requests
-                r = requests.get(url, headers={hdr: val}, timeout=6, verify=False)
+                r = self._session.get(url, headers={hdr: val}, timeout=6, verify=False)
                 results.append({"header": hdr, "value": val, "status": r.status_code})
             except Exception:
                 pass
@@ -911,11 +910,10 @@ class OASTMultiProtocolProber:
         results = []
         payloads = self._ldap.log4shell_payloads(token)
         inject_headers = ["User-Agent", "X-Api-Version", "X-Forwarded-For", "Referer", "Accept-Language"]
-        import requests
         for header in inject_headers:
             for payload in payloads[:2]:  # first 2 variants per header
                 try:
-                    r = requests.get(url, headers={header: payload}, timeout=6, verify=False)
+                    r = self._session.get(url, headers={header: payload}, timeout=6, verify=False)
                     results.append({"header": header, "payload": payload, "status": r.status_code})
                 except Exception:
                     pass
