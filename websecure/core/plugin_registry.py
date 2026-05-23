@@ -160,8 +160,8 @@ class PluginRegistry:
                             name = scanner_name
                             phase_name = phase
 
-                            def run(self, target, **kwargs):
-                                return run_fn(target, **kwargs)
+                            def run(self, target, _run_fn=run_fn, **kwargs):
+                                return _run_fn(target, **kwargs)
 
                         _FnPlugin.__name__ = f"{scanner_name}_plugin"
                         self.register(_FnPlugin, phase=phase)

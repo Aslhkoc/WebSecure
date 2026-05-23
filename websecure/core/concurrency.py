@@ -337,11 +337,11 @@ class ETACalculator:
       - ETA = remaining_tasks × avg_task_time
     """
 
-    def __init__(self, window: int = 50) -> None:
+    def __init__(self, window: int = 50, total_tasks: int = 0) -> None:
         self._window      = window
         self._task_times: deque[float] = deque(maxlen=window)
         self._lock        = threading.Lock()
-        self._total       = 0
+        self._total       = max(0, total_tasks)
         self._completed   = 0
         self._started_at  = time.monotonic()
         self._last_tick   = self._started_at

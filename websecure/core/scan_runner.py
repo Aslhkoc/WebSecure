@@ -645,12 +645,12 @@ def post_scan_persist(
         from websecure.core.exploit_orchestrator import exploit_from_results
         exploitation_results = exploit_from_results(
             scan_results={"findings": clean_findings},
-            cfg=cfg if isinstance(cfg, dict) else {"exploitation": {"enabled": True}},
+            cfg={"exploitation": {"enabled": True}},
         )
         if exploitation_results.get("exploit_results"):
             result["exploitation"] = {
-                "total": exploitation_results["summary"]["total"],
-                "successful": exploitation_results["summary"]["successful"],
+                "total": exploitation_results["exploit_summary"]["total_exploited"],
+                "successful": exploitation_results["exploit_summary"]["successful"],
             }
             logger.info(
                 f"[scan_runner] Exploitation: "
