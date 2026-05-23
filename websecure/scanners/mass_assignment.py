@@ -334,9 +334,15 @@ class MassAssignmentScanner(BaseScanner):
 # ---------------------------------------------------------------------------
 
 def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
-    import requests as _req
+    if session is None:
+        try:
+            from websecure.core.http import hardened_session as _hs
+            session = _hs({})
+        except ImportError:
+            import requests as _req
+            session = _req.Session()
     scanner = MassAssignmentScanner(
-        session=session or _req.Session(),
+        session=session,
         results={},
         debug=debug,
     )

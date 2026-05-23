@@ -525,6 +525,10 @@ class SQLInjectionScanner(BaseScanner):
         if urls:
             self._run_sqlmap_bridge(urls[0])
 
+        # --- Adım 4: Second-order & Stored SQLi probing ----------------------
+        self._run_second_order_phase(urls)
+        self._run_stored_sqli_phase(urls)
+
     def scan_url(self, url: str):
         parsed = urlparse(url)
         params = parse_qsl(parsed.query)
@@ -1291,6 +1295,99 @@ class SQLInjectionScanner(BaseScanner):
                     verified=True,
                     confidence="confirmed",
                 )
+
+
+    # -------------------------------------------------------------------------
+    # Second-order SQLi phase
+    # -------------------------------------------------------------------------
+
+    def _run_second_order_phase(self, urls: List[str]) -> None:
+        """
+        Adım 4a: Second-order (persistent) SQLi tespiti.
+
+        Tüm URL'leri write endpoint, diğerlerini (+ kendisi) read endpoint olarak kullanır.
+        Her URL'nin query parametrelerini ayrı ayrı dener.
+        """
+        if len(urls) < 1:
+            return
+        prober = SecondOrderSQLiProber()
+        for i, write_url in enumerate(urls):
+            parsed = urlparse(write_url)
+            params = parse_qsl(parsed.query)
+            if not params:
+                continue
+            # Read endpoints: diğer URL'ler + write URL'nin kendisi
+            read_urls = [write_url] + [u for j, u in enumerate(urls) if j != i]
+            for param_name, _ in params:
+                result = prober.probe(
+                    write_url=write_url,
+                    read_urls=read_urls,
+                    param=param_name,
+                    session=self.session,
+                    method="GET",
+                )
+                if result:
+                    self.report_finding(
+                        vuln_type="SQL Injection (Second-Order)",
+                        url=write_url,
+                        param=param_name,
+                        payload=result.get("payload", ""),
+                        severity="Critical",
+                        evidence=result.get("evidence", ""),
+                        extra={
+                            "write_url": result.get("write_url"),
+                            "read_url": result.get("read_url"),
+                        },
+                        detection_method="second_order_sqli",
+                        verified=True,
+                        confidence="confirmed",
+                    )
+
+    # -------------------------------------------------------------------------
+    # Stored SQLi phase
+    # -------------------------------------------------------------------------
+
+    def _run_stored_sqli_phase(self, urls: List[str]) -> None:
+        """
+        Adım 4b: Stored SQLi tespiti — marker injection & reflection.
+
+        Write endpoint'e unique marker inject eder, read endpoint'lerde
+        unescaped yansımasını arar. SecondOrderSQLiProber'dan bağımsız: SQL
+        hata imzası değil, marker string'inin ham yansıması aranır.
+        """
+        if len(urls) < 1:
+            return
+        prober = StoredSQLiProber()
+        for i, write_url in enumerate(urls):
+            parsed = urlparse(write_url)
+            params = parse_qsl(parsed.query)
+            if not params:
+                continue
+            read_urls = [write_url] + [u for j, u in enumerate(urls) if j != i]
+            for param_name, _ in params:
+                result = prober.probe(
+                    write_url=write_url,
+                    read_urls=read_urls,
+                    param=param_name,
+                    session=self.session,
+                    method="GET",
+                )
+                if result:
+                    self.report_finding(
+                        vuln_type="SQL Injection (Stored/Reflected Marker)",
+                        url=write_url,
+                        param=param_name,
+                        payload=result.get("payload", ""),
+                        severity="High",
+                        evidence=result.get("evidence", ""),
+                        extra={
+                            "write_url": result.get("write_url"),
+                            "read_url": result.get("read_url"),
+                        },
+                        detection_method="stored_sqli_marker",
+                        verified=True,
+                        confidence="high",
+                    )
 
 
 def run(url, session=None, results=None, debug=False, **kwargs):

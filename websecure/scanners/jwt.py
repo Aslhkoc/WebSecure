@@ -464,7 +464,15 @@ def run(url: str, session=None, debug: bool = False, **kwargs) -> int:
     """Module-level adapter for generic runners."""
     results = kwargs.get("results") if isinstance(kwargs.get("results"), dict) else None
     scanner = JWTScanner(session=session, results=results, debug=debug)
-    return scanner.run(url)
+    count = scanner.run(url)
+    # Run advanced JWT sub-scanners (JWTAdim6Scanner orchestrates
+    # JWTKeyConfusionExploiter, JWTAlgNoneBypass, JWTKidSQLInjector, JWTJKUSSRFProber)
+    try:
+        adim6 = JWTAdim6Scanner(session=session, results=scanner.results, debug=debug)
+        adim6.run(url)
+    except Exception as _exc:
+        logger.debug("[jwt.run] JWTAdim6Scanner failed: %r", _exc)
+    return count
 
 # ============================================================================
 # ADIM 6 — JWT Gelistirilmis Siniflar

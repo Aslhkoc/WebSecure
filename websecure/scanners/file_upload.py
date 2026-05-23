@@ -517,25 +517,71 @@ class FileUploadScanner(BaseScanner):
 # ---------------------------------------------------------------------------
 
 def run(
-    session,
-    endpoints: List[str],
-    results: Dict[str, Any],
+    url_or_session=None,
+    endpoints: List[str] = None,
+    results: Dict[str, Any] = None,
     debug: bool = False,
     base_url: str = None,
+    *,
+    url: str = None,
+    session=None,
+    **kwargs,
 ) -> List[Dict[str, Any]]:
+    """
+    Dual-convention entry point:
+      Standard:  run(url, session=session, results=results, ...)
+      Legacy:    run(session_obj, endpoints_list, results_dict, ...)
+    """
     if debug:
         logger.setLevel(logging.DEBUG)
 
-    scanner = FileUploadScanner(session=session, results=results, debug=debug)
+    # Detect calling convention
+    if isinstance(url_or_session, str):
+        # Standard convention: first arg is URL string
+        _url = url_or_session
+        _session = session or kwargs.get("session")
+        _results = results if results is not None else {}
+        _endpoints = endpoints or kwargs.get("endpoints") or [_url]
+        _base_url = base_url or _url
+    else:
+        # Legacy convention: run(session_obj, endpoints_list, results_dict, ...)
+        _session = url_or_session or session
+        _endpoints = endpoints or []
+        _results = results if results is not None else {}
+        _base_url = base_url or (url or (_endpoints[0] if _endpoints else ""))
+        _url = _base_url
+
+    if _session is None:
+        try:
+            from websecure.core.http import hardened_session as _hs
+            _session = _hs({})
+        except ImportError:
+            import requests as _req
+            _session = _req.Session()
+
+    # Phase 1: Standard upload scanner (extension/MIME/path-traversal/webshell)
+    scanner = FileUploadScanner(session=_session, results=_results, debug=debug)
     scanner.run(
-        url=base_url or (endpoints[0] if endpoints else ""),
-        endpoints=endpoints,
-        base_url=base_url,
+        url=_base_url or (_endpoints[0] if _endpoints else _url),
+        endpoints=_endpoints,
+        base_url=_base_url,
     )
 
+    # Phase 2: Adim 8 advanced attacks (polyglot, ImageTragick) — always run
+    import importlib as _il
+    _mod = _il.import_module(__name__)
+    _adim8_cls = getattr(_mod, "FileUploadAdim8Scanner", None)
+    if _adim8_cls is not None:
+        try:
+            _adim8_cls(session=_session, results=_results, debug=debug).run(_url or _base_url, **kwargs)
+        except Exception as _exc:
+            logger.debug("[file_upload.run] FileUploadAdim8Scanner failed: %r", _exc)
+
     return [
-        item for item in results.get("offensive", [])
-        if item.get("type") == "Unrestricted File Upload"
+        item for item in _results.get("offensive", [])
+        if item.get("type") in ("Unrestricted File Upload", "Polyglot File Upload")
+        or "ImageTragick" in item.get("type", "")
+        or "ImageMagick" in item.get("type", "")
     ]
 
 # ============================================================================

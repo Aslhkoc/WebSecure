@@ -299,11 +299,27 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
     try:
         rep_formats = rep_cfg.get("formats", ["html"])
         if "pdf" in rep_formats or rep_cfg.get("pdf", {}).get("enabled", False):
-            from websecure.reporters.pdf import PDFReporter
             pdf_path = os.path.join(out_dir, "report.pdf")
-            reporter = PDFReporter()
-            success = reporter.generate(results, cfg, pdf_path)
-            if success:
+            _pdf_ok = False
+            try:
+                from websecure.reporters.pdf import PDFReporter
+                reporter = PDFReporter()
+                _pdf_ok = reporter.generate(results, cfg, pdf_path)
+            except (ImportError, Exception) as _pdf_exc:
+                log_warn(f"[reporting] PDFReporter unavailable ({_pdf_exc!r}), falling back to PDFReportBuilder")
+            if not _pdf_ok:
+                # Fallback: PDFReportBuilder (inline WeasyPrint/reportlab/HTML)
+                try:
+                    findings_for_pdf = _coerce_final(results)
+                    owasp_m = results.get("owasp_mapping") if isinstance(results, dict) else None
+                    compliance_r = results.get("compliance_report") if isinstance(results, dict) else None
+                    _pdf_builder = PDFReportBuilder()
+                    actual_path = _pdf_builder.build(findings_for_pdf, pdf_path, owasp_m, compliance_r)
+                    _pdf_ok = bool(actual_path)
+                    pdf_path = actual_path or pdf_path
+                except Exception as _fb_exc:
+                    log_warn(f"[reporting] PDFReportBuilder fallback failed: {_fb_exc!r}")
+            if _pdf_ok:
                 out["written"]["pdf"] = pdf_path
                 print(f"\n\033[92m[+] PDF Report Generated: {pdf_path}\033[0m")
     except Exception as e:
@@ -1605,7 +1621,27 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     # CVSS/CWE Enrichment
     results = enrich_cvss_cwe(results, cfg)
 
+    # ---- OWASP Top 10 Mapping + Compliance + Remediation ----
+    try:
+        items_for_owasp = _coerce_final(results)
+        # Remediation enrichment (CWE + remediation text per finding)
+        remediation_gen = RemediationGuideGenerator()
+        enriched_items = remediation_gen.enrich_batch(items_for_owasp)
+        if isinstance(results, dict) and enriched_items:
+            results = dict(results)
+            results["final"] = enriched_items
 
+        # OWASP Top 10 mapping
+        owasp_mapper = OWASPTop10Mapper()
+        owasp_mapping = owasp_mapper.map(enriched_items)
+        results["owasp_mapping"] = owasp_mapping
+
+        # Compliance report (PCI-DSS, HIPAA, ISO 27001)
+        compliance_builder = ComplianceReportBuilder()
+        compliance_report = compliance_builder.build(owasp_mapping)
+        results["compliance_report"] = compliance_report
+    except Exception as _oc_exc:
+        log_warn(f"[reporting] OWASP/Compliance/Remediation enrichment failed: {_oc_exc!r}")
 
     # Charts
     charts = _generate_charts(results or {}, out_dir)
@@ -1703,7 +1739,7 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         _write(junit_path, junit_xml)
         written["junit"] = junit_path
 
-    # Delta (optional)
+    # Delta (optional) + Vulnerability Trend Analysis
     delta_cfg = rep_cfg.get("delta") or {}
     if delta_cfg.get("enabled"):
         baseline = delta_cfg.get("baseline")
@@ -1715,6 +1751,20 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         delta_path = os.path.join(out_dir, "delta.json")
         _json_dump(delta_path, delta)
         written["delta"] = delta_path
+
+        # Vulnerability Trend Analysis (compare baseline vs current)
+        try:
+            trend_analyzer = VulnerabilityTrendAnalyzer()
+            baseline_findings = _coerce_final(base)
+            current_findings = _coerce_final(results)
+            if baseline_findings and current_findings:
+                trend = trend_analyzer.compare(baseline_findings, current_findings)
+                results = dict(results)
+                results["vulnerability_trend"] = trend
+                _json_dump(os.path.join(out_dir, "trend.json"), trend)
+                written["trend"] = os.path.join(out_dir, "trend.json")
+        except Exception as _trend_exc:
+            log_warn(f"[reporting] VulnerabilityTrendAnalyzer failed: {_trend_exc!r}")
 
     # Integrations & CI
     _send_integrations(cfg, results, out_dir)

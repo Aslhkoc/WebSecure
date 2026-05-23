@@ -467,19 +467,30 @@ def check_vulnerable_components(url: str, results: Dict, session, debug: bool = 
     _summary(results, bucket, 0)
 
 # ----------------- Orchestrator -----------------
-def run(session, base_url: str, config: Dict[str, Any] | None = None, debug: bool = False, **kwargs) -> Dict[str, Any]:
+def run(url: str = "", session=None, config: Dict[str, Any] | None = None, debug: bool = False, **kwargs) -> Dict[str, Any]:
     """
-    OWASP yüzeyi: pratik konfig açıkları için hafif ve gürültüsü az kontroller.
-    Bu run() fonksiyonu kimlikli koşumdan çağrılabilir.
+    OWASP yüzeyi: pratik konfig açıkları için hafif ve gürültüsüz kontroller.
+    Bu run() fonksiyonu _call_scanner_if_available ile uyumlu (url, session, debug).
     """
-    results: Dict[str, Any] = {"target": base_url}
+    if session is None:
+        try:
+            from websecure.core.http import hardened_session as _hs
+            session = _hs({})
+        except ImportError:
+            import requests as _req
+            session = _req.Session()
+
+    results: Dict[str, Any] = {"target": url}
     # Çekirdek kontroller
-    check_broken_access_control(base_url, None, results, session, debug=debug)
-    check_sensitive_data_exposure(base_url, results, session, debug=debug)
-    check_authentication(base_url, results, session, debug=debug)
-    # Yeni kontroller
-    check_cache_poisoning_and_host_header(base_url, results, session, debug=debug)
-    check_backup_files(base_url, results, session, debug=debug)
+    check_broken_access_control(url, None, results, session, debug=debug)
+    check_sensitive_data_exposure(url, results, session, debug=debug)
+    check_authentication(url, results, session, debug=debug)
+    # Cache ve backup kontrolleri
+    check_cache_poisoning_and_host_header(url, results, session, debug=debug)
+    check_backup_files(url, results, session, debug=debug)
+    # Genişletilmiş kontroller (auto-append faz)
+    host_header_cache_poison(url, session, results, debug=debug)
+    backup_hunt(url, session, results, debug=debug)
     return results
 
 
@@ -733,6 +744,9 @@ def run_owasp_and_nuclei(
     check_authentication(url, results, session, debug=debug)
     check_cache_poisoning_and_host_header(url, results, session, debug=debug)
     check_backup_files(url, results, session, debug=debug)
+    # Genişletilmiş kontroller
+    host_header_cache_poison(url, session, results, debug=debug)
+    backup_hunt(url, session, results, debug=debug)
 
     # OWASP sonrası nuclei
     run_nuclei_signatures(url, results, session, config=config, debug=debug, auth_ctx=auth_ctx)
@@ -743,9 +757,19 @@ def run_owasp_and_nuclei(
 
 
 def _hx_safe_req(session, method: str, url: str, *, timeout: int = 7, allow_redirects: bool = False, headers: Optional[Dict[str,str]] = None):
-    meth = getattr(session, method.lower())
-    verify = getattr(session, "verify", True)
-    return meth(url, timeout=timeout, allow_redirects=allow_redirects, verify=verify, headers=headers or {})
+    try:
+        meth = getattr(session, method.lower())
+        verify = getattr(session, "verify", True)
+        return meth(url, timeout=timeout, allow_redirects=allow_redirects, verify=verify, headers=headers or {})
+    except Exception as _e:
+        class _Dummy:
+            def __init__(self, url, err):
+                self.status_code = 0
+                self.headers: Dict[str, str] = {}
+                self.text = ""
+                self.url = url
+                self.error = str(err)
+        return _Dummy(url, _e)
 
 def host_header_cache_poison(
     url: str,

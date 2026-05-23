@@ -2817,6 +2817,10 @@ class AdaptiveWAFBypass:
         self.session = session
         self.waf_name = waf_name
         self._bypass_library = WAFBypassLibrary()
+        # ML scorer: ranks bypass strategies by historical success rate
+        self._scorer = get_global_scorer()
+        # Adaptive mutation engine: generates payload variants on block
+        self._mutation_engine = AdaptiveMutationEngine()
 
     def try_bypass(
         self,
@@ -2841,9 +2845,19 @@ class AdaptiveWAFBypass:
         """
         bypasses = self._bypass_library.get_bypasses(self.waf_name)
 
-        for bypass in bypasses:
+        # ML scorer: rank strategies by historical success rate (epsilon-greedy)
+        strategy_names = [b.get("type", "unknown") for b in bypasses]
+        ranked_names = self._scorer.rank_strategies(strategy_names)
+        ranked_bypasses = sorted(
+            bypasses,
+            key=lambda b: ranked_names.index(b.get("type", "unknown"))
+            if b.get("type", "unknown") in ranked_names else len(ranked_names),
+        )
+
+        for bypass in ranked_bypasses:
             b_type = bypass.get("type", "unknown")
             transform = bypass.get("transform")
+            t0 = time.time()
 
             try:
                 # Header-only bypass: inject a special header, use original payload
@@ -2870,8 +2884,12 @@ class AdaptiveWAFBypass:
                     # No transform and not a header bypass — skip
                     continue
 
+                elapsed_ms = (time.time() - t0) * 1000
+                blocked = resp.status_code in (403, 406, 429)
+                self._scorer.record_attempt(b_type, blocked=blocked, status_code=resp.status_code, response_time_ms=elapsed_ms)
+
                 # A non-403/non-406 status indicates the WAF was bypassed
-                if resp.status_code not in (403, 406, 429):
+                if not blocked:
                     _logger.debug(
                         f"[AdaptiveWAFBypass] Bypass SUCCESS: type={b_type} "
                         f"status={resp.status_code} waf={self.waf_name}"
@@ -2882,6 +2900,30 @@ class AdaptiveWAFBypass:
                         "response_code": resp.status_code,
                         "waf": self.waf_name,
                     }
+
+                # WAF still blocking — try AdaptiveMutationEngine variants
+                for mutated_variant in self._mutation_engine.mutate(payload, category="generic")[:3]:
+                    try:
+                        resp2 = self.session.get(
+                            url,
+                            params={param: mutated_variant},
+                            timeout=timeout,
+                            allow_redirects=True,
+                        )
+                        if resp2.status_code not in (403, 406, 429):
+                            _logger.debug(
+                                f"[AdaptiveWAFBypass] Mutation bypass SUCCESS: type={b_type} "
+                                f"status={resp2.status_code} waf={self.waf_name}"
+                            )
+                            self._mutation_engine.record_tried(payload, mutated_variant)
+                            return {
+                                "bypass_type": f"{b_type}+mutation",
+                                "mutated_payload": mutated_variant,
+                                "response_code": resp2.status_code,
+                                "waf": self.waf_name,
+                            }
+                    except Exception:
+                        pass
 
             except Exception as exc:
                 _logger.debug(f"[AdaptiveWAFBypass] Bypass attempt ({b_type}) failed: {exc!r}")
@@ -3104,6 +3146,34 @@ class WAFBypassScanner:
             findings.append(finding)
             self._add("waf_bypass", finding)
             self.logger.info("[WAFBypassScanner] No WAF detected.")
+
+        # ---- Phase 2: HTTP/2 Multiplexing Evasion (if WAF detected) ----
+        if waf_vendor != "unknown" and waf_blocks_payload:
+            try:
+                h2_evasion = HTTP2MultiplexingEvasion(timeout=10.0, max_concurrent_streams=10)
+                h2_payloads = [
+                    {"params": {self._PROBE_PARAM: self._PROBE_PAYLOAD}, "method": "GET"},
+                    {"params": {self._PROBE_PARAM: f"/*{self._PROBE_PAYLOAD}*/"}, "method": "GET"},
+                    {"params": {self._PROBE_PARAM: self._PROBE_PAYLOAD.replace("<", "%3C")}, "method": "GET"},
+                ]
+                h2_results = h2_evasion.send_multiplexed(target, h2_payloads)
+                for h2r in h2_results:
+                    if isinstance(h2r, dict) and not h2r.get("error") and h2r.get("status", 403) not in (403, 406, 429):
+                        h2_finding = {
+                            "type": "WAF Bypass via HTTP/2 Multiplexing",
+                            "url": target,
+                            "severity": "Critical",
+                            "detail": (
+                                f"WAF ({waf_vendor}) bypassed via HTTP/2 multiplexed stream. "
+                                f"Payload reached server with HTTP {h2r.get('status')}."
+                            ),
+                            "evidence": {"waf_vendor": waf_vendor, "h2_status": h2r.get("status"), "payload": h2r.get("payload")},
+                        }
+                        findings.append(h2_finding)
+                        self._add("waf_bypass", h2_finding)
+                        break
+            except Exception as exc:
+                self.logger.debug(f"[WAFBypassScanner] HTTP2MultiplexingEvasion failed: {exc!r}")
 
         self.results.setdefault("waf_bypass_summary", {"vulnerabilities": len(findings)})
         return self.results

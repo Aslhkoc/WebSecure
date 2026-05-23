@@ -107,7 +107,7 @@ def _build_finding(technique: str, url: str, seq: str, evidence: Dict) -> Dict:
     }
 
 # ---------------------------------------------------------------------------
-# Backward-compatible run() — orijinal davranis korundu
+# Backward-compatible run() — calls basic probes AND CRLFScanner (Adim 5)
 # ---------------------------------------------------------------------------
 def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) -> List[Dict]:
     """Test url for CRLF injection. Returns list of finding dicts."""
@@ -117,6 +117,8 @@ def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) 
     canary = _canary_value()
     if session is None:
         session = _hardened_session({})
+
+    # Phase 1: Basic URL-parameter and path probe (legacy)
     test_urls = _inject_urls(url, canary)
     for test_url in test_urls:
         seq_used = next((s for s in _CRLF_SEQS if s.lower() in test_url.lower()), "")
@@ -138,23 +140,37 @@ def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) 
                     break
         except Exception as exc:
             logger.debug("[CRLF] Request error: %s", exc)
-    if results:
-        return results
-    parsed = urllib.parse.urlparse(url)
-    for seq in _CRLF_SEQS[:4]:
-        cookie_inj = urllib.parse.quote(f"{seq}Set-Cookie: wsp_injected={canary}; path=/", safe="%")
-        path_inj   = parsed.path.rstrip("/") + "/" + cookie_inj
-        test_url   = urllib.parse.urlunparse(parsed._replace(path=path_inj))
-        try:
-            resp = session.get(test_url, timeout=10, allow_redirects=False)
-            sc = resp.cookies.get("wsp_injected")
-            if sc == canary or _canary_in_headers(resp, canary):
-                results.append(_build_finding("Path segment -> Set-Cookie injection", test_url, seq, {
-                    "cookie": sc, "canary": canary, "status": resp.status_code,
-                }))
-                break
-        except Exception as exc:
-            logger.debug("[CRLF] Cookie probe error: %s", exc)
+
+    if not results:
+        parsed = urllib.parse.urlparse(url)
+        for seq in _CRLF_SEQS[:4]:
+            cookie_inj = urllib.parse.quote(f"{seq}Set-Cookie: wsp_injected={canary}; path=/", safe="%")
+            path_inj   = parsed.path.rstrip("/") + "/" + cookie_inj
+            test_url   = urllib.parse.urlunparse(parsed._replace(path=path_inj))
+            try:
+                resp = session.get(test_url, timeout=10, allow_redirects=False)
+                sc = resp.cookies.get("wsp_injected")
+                if sc == canary or _canary_in_headers(resp, canary):
+                    results.append(_build_finding("Path segment -> Set-Cookie injection", test_url, seq, {
+                        "cookie": sc, "canary": canary, "status": resp.status_code,
+                    }))
+                    break
+            except Exception as exc:
+                logger.debug("[CRLF] Cookie probe error: %s", exc)
+
+    # Phase 2: Adim 5 full CRLF scanner (HeaderInjectionProber, ResponseSplittingExploiter,
+    # CachePoisoningChain, LogPoisoningChain, CRLFResponseSplittingProber,
+    # CRLFCookieInjectionProber, CRLFXSSProber) — connected here to avoid orphan
+    try:
+        import importlib as _il
+        _mod = _il.import_module(__name__)
+        _crlf_cls = getattr(_mod, "CRLFScanner", None)
+        if _crlf_cls is not None:
+            adv_results = _crlf_cls(session=session, debug=debug).run(url)
+            results.extend(adv_results)
+    except Exception as exc:
+        logger.debug("[CRLF] CRLFScanner advanced phase failed: %s", exc)
+
     return results
 
 # ===========================================================================

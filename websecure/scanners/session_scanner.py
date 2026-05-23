@@ -784,7 +784,7 @@ class SessionScanner(BaseScanner):
         try:
             entropy_analyzer = SessionEntropyAnalyzer(sample_count=6, session=self.session)
             entropy_result = entropy_analyzer.analyze(target)
-            if entropy_result.get("severity") in ("Critical", "High", "Medium", "Critical", "High", "Medium"):
+            if entropy_result.get("severity") in ("Critical", "High", "Medium"):
                 self.report_finding(
                     type="Session Entropy",
                     severity=entropy_result["severity"],

@@ -441,6 +441,20 @@ def run(
         except Exception as exc:
             logger.debug("[Race] probe %s error: %s", name, exc)
 
+    # ADIM 7 + Deep scanner classes — RaceConditionScanner and RaceDeepScanner
+    # These are defined later in the file and provide gate-technique, auth-bypass,
+    # double-spend, HTTP/2 concurrent, TOCTOU, session-fixation and inventory probers.
+    import importlib as _il
+    _mod = _il.import_module(__name__)
+    for _scanner_cls_name in ("RaceConditionScanner", "RaceDeepScanner"):
+        _cls = getattr(_mod, _scanner_cls_name, None)
+        if _cls is not None:
+            try:
+                findings_extra = _cls(session=session, debug=debug).run(url)
+                results.extend(findings_extra)
+            except Exception as exc:
+                logger.debug("[Race] %s failed: %s", _scanner_cls_name, exc)
+
     return results
 
 # ============================================================================
