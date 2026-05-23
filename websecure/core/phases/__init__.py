@@ -2361,6 +2361,27 @@ def _runner_crlf_injection(ctx) -> None:
         _report_phase_error("crlf_injection", "phases._runner_crlf_injection", e)
 
 
+def _runner_waf_bypass_validate(ctx) -> None:
+    """WAFBypassScanner — WAF bypass doğrulama ve bypass mümkünlüğü testi."""
+    try:
+        from websecure.core.waf_bypass import WAFBypassScanner as _WAFBypassScanner
+    except ImportError:
+        add_result("meta", {"stage": "waf_bypass_validate", "status": "skipped:module-not-found"})
+        return
+    url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
+    if not url:
+        return
+    sess = getattr(ctx, "session", None) or hardened_session({})
+    results = _ensure_results_bucket(ctx)
+    debug = getattr(ctx, "debug", False)
+    try:
+        scanner = _WAFBypassScanner(session=sess, results=results, debug=debug)
+        scanner.run(url)
+    except Exception as e:
+        _logger.warning(f"[phases] WAF bypass validate runner error: {e}")
+        _report_phase_error("waf_bypass_validate", "phases._runner_waf_bypass_validate", e)
+
+
 def _runner_waf_fingerprint(ctx) -> None:
     """WAF davranış parmak izi analizi (waf_fingerprint modülü)."""
     mod = _opt_import("websecure.core.waf_fingerprint") or _opt_import("core.waf_fingerprint")
@@ -3100,6 +3121,13 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("waf_fingerprint", default=True),
             runner=lambda c: _safe(c, lambda: _runner_waf_fingerprint(c), "waf_fingerprint"),
             tags=["waf", "recon", "fingerprint"],
+        ),
+        Phase(
+            id="waf_bypass_validate",
+            title="WAF Bypass Doğrulama",
+            enabled=_flag("waf_bypass_validate", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_waf_bypass_validate(c), "waf_bypass_validate"),
+            tags=["waf", "bypass", "offensive"],
         ),
         Phase(
             id="human_adapter",
