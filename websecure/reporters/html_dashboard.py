@@ -4,10 +4,10 @@ websecure.reporters.html_dashboard
 HTML dashboard renderer for WebSecure scan results.
 Generates a modern, dark-mode, single-file HTML report.
 """
-import logging
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
