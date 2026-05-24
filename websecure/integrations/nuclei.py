@@ -362,7 +362,7 @@ class NucleiWrapper(ToolIntegration):
         profile: str = "normal",
         interactsh_url: Optional[str] = None,
         custom_templates: Optional[str] = None,
-        auto_update: bool = True,
+        auto_update: bool = False,
         deduplicate_fps: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         """

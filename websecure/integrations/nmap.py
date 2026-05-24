@@ -308,9 +308,11 @@ class NmapWrapper(ToolIntegration):
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — scan target and return ToolResult."""
         start = time.monotonic()
+        # Accept both 'mode' and 'scan_type' as aliases
+        mode = kwargs.get("mode") or kwargs.get("scan_type") or "aggressive"
         raw = self.scan(
             target,
-            mode=kwargs.get("mode", "aggressive"),
+            mode=mode,
             timeout=kwargs.get("timeout", 900),
             proxy=kwargs.get("proxy"),
         )
@@ -446,11 +448,11 @@ class NmapWrapper(ToolIntegration):
                  "--host-timeout", "600s"]
             )
         else:
+            # TCP connect — no raw socket. Avoid nmap-version-specific flags.
             phase1 = (
                 [scan1, "-Pn", "--open"] + port_args1 +
-                ["-T4", "--min-rate", "300",  # Daha az agresif rate = daha az drop
-                 "--max-retries", "3",
-                 "--defeat-rst-ratelimit",    # Firewall'ın RST limiti arkasındaki portları göster
+                ["-T4", "--min-rate", "300",
+                 "--max-retries", "2",
                  "--host-timeout", "600s", "--unprivileged"]
             )
 
@@ -461,6 +463,8 @@ class NmapWrapper(ToolIntegration):
         _rm_xml(xml1)
 
         if rc1 not in (0, 1) and not open_ports:
+            logger.error(f"[Nmap AGRESİF Faz-1] rc={rc1} — açık port bulunamadı. "
+                         f"Nmap hata kodu beklenmedik. Komut: nmap {' '.join(phase1)} {target}")
             print(f"\033[33m[Nmap AGRESİF Faz-1]\033[0m rc={rc1} — açık port bulunamadı, tarama durdu.")
             return []
         if not open_ports:
@@ -610,7 +614,6 @@ class NmapWrapper(ToolIntegration):
                 ["-T2",                         # Polite timing
                  "--max-retries", "1",
                  "--scan-delay", "300ms",       # Her probe arasında 300ms gecikme
-                 "--defeat-rst-ratelimit",      # Firewall RST throttle'ını atlatır
                  "--randomize-hosts",           # Port sırası rastgele
                  "--host-timeout", "1200s",
                  "--unprivileged"]

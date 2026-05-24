@@ -595,10 +595,22 @@ class FeroxbusterWrapper(ToolIntegration):
             ))
         return findings
 
+    @staticmethod
+    def _default_wordlist() -> Optional[str]:
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "wordlists" / "dirs.txt"
+        return str(p) if p.exists() else None
+
     def scan(self, target: str, wordlist: str = None, threads: int = 50,
              depth: int = 1, extra_args: List[str] = None) -> List[Dict[str, Any]]:
         if not self.is_available():
             logger.warning("Feroxbuster binary not found.")
+            return []
+
+        # On Windows feroxbuster has no built-in default wordlist path — require one.
+        effective_wordlist = wordlist or self._default_wordlist()
+        if not effective_wordlist:
+            logger.warning("[Feroxbuster] Wordlist bulunamadı — tarama atlandı.")
             return []
 
         fd, temp_output = tempfile.mkstemp(suffix=".json")
@@ -606,22 +618,22 @@ class FeroxbusterWrapper(ToolIntegration):
 
         try:
             cmd = [self.binary, "--url", target, "--threads", str(threads),
-                   "--depth", str(depth), "--json", "--output", temp_output]
-
-            if wordlist:
-                cmd.extend(["--wordlist", wordlist])
+                   "--depth", str(depth), "--json", "--output", temp_output,
+                   "--wordlist", effective_wordlist, "--no-state"]
 
             if extra_args:
                 cmd.extend(extra_args)
 
-            logger.info(f"Starting Feroxbuster on {target}...")
+            logger.info(f"[Feroxbuster] Başlatılıyor → {target} (wordlist={effective_wordlist})")
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
             try:
-                proc.communicate(timeout=600)
+                _, stderr_b = proc.communicate(timeout=600)
+                if proc.returncode not in (0, 1) and stderr_b:
+                    logger.warning(f"[Feroxbuster] rc={proc.returncode} stderr={stderr_b.decode('utf-8','ignore')[:300]}")
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
