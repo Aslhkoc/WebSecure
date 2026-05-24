@@ -571,10 +571,11 @@ def run_race_conditions(session: requests.Session, base_url: str, cfg: Dict[str,
 
         if anomaly:
             findings.append(item)
-            add_result('bizlogic_findings', {
+            add_result('vulnerability', {
                 'url': url,
                 'type': 'RACE_CONDITION',
-                'severity': 'Yüksek' if method not in _IDEMPOTENT else 'Orta',
+                'source': 'bizlogic_race',
+                'severity': 'High' if method not in _IDEMPOTENT else 'Medium',
                 'reason': 'Race anomali: status/boyut/parmak izi farklılıkları',
                 'method': method
             })

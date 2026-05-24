@@ -984,15 +984,15 @@ class DistributedScanCoordinator(_BaseCoordinator):
     def unlock_task(self, task_id: str) -> None:
         try:
             self._redis.delete(self._lock_key(task_id))
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug(f"[Coordinator] Redis unlock_task failed: {_e!r}")
 
     def extend_lock(self, task_id: str, ttl: int = 60) -> None:
         """Uzun süren görevler için TTL'yi uzat."""
         try:
             self._redis.expire(self._lock_key(task_id), ttl)
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug(f"[Coordinator] Redis extend_lock failed: {_e!r}")
 
     # -- Sonuç yönetimi -------------------------------------------------
 

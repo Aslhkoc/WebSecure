@@ -2503,7 +2503,7 @@ def _run_scan_phases(
                 base_cookies=(fuzz_cfg.get("base_cookies") or {}),
                 discovered=discovered_names_for_fuzz,
                 limits=fuzz_limits,
-                report_cb=lambda f: add_result("fuzz", redact_sensitive(f)) if callable(
+                report_cb=lambda f: add_result("vulnerability", {**redact_sensitive(f), "source": "fuzz"}) if callable(
                     globals().get("add_result")) else None,
                 debug=debug,
                 heuristics_cfg=(cfg.get('fuzz') or {}).get('heuristics'),

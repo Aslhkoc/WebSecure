@@ -225,64 +225,108 @@ class SubfinderWrapper:
 # 3. Amass entegrasyonu
 # ---------------------------------------------------------------------------
 
-class AmassWrapper:
-    """Amass binary wrapper (passive + active enum)."""
+try:
+    from websecure.integrations.amass import AmassWrapper as _AmassIntegration
 
-    def __init__(self, binary: str = "amass"):
-        self.binary = binary
-        self._find_binary()
+    class AmassWrapper:
+        """
+        Adapter: integrations/amass.AmassWrapper'ı subdomain tarayıcısının
+        beklediği List[Dict] arayüzüne dönüştürür (ToolResult → List[Dict]).
+        """
 
-    def _find_binary(self):
-        if shutil.which(self.binary):
-            return
-        from pathlib import Path
-        root = Path(__file__).resolve().parent.parent.parent
-        for p in [
-            str(root / "tools" / "amass" / "amass.exe"),
-            r"C:\tools\amass\amass.exe",
-        ]:
-            if os.path.exists(p):
-                self.binary = p
+        def __init__(self, binary: str = "amass"):
+            self._impl = _AmassIntegration(
+                binary_path=binary if binary != "amass" else None
+            )
+
+        def is_available(self) -> bool:
+            return self._impl.is_available()
+
+        def run(
+            self, domain: str, passive: bool = True, timeout: int = 180
+        ) -> List[Dict[str, Any]]:
+            result = self._impl.run(domain, passive_only=passive, timeout_s=timeout)
+            # ToolResult.extra["subdomains"] -> List[str]
+            extra = getattr(result, "extra", None) or {}
+            subdomains: List[str] = extra.get("subdomains") or []
+            out: List[Dict[str, Any]] = []
+            for sub in subdomains:
+                if sub:
+                    ip = _resolve(str(sub))
+                    out.append({"subdomain": str(sub), "ip": ip or "", "method": "amass"})
+            logger.info(f"[Amass] {len(out)} subdomain bulundu (integration adapter)")
+            return out
+
+except ImportError:
+    class AmassWrapper:  # type: ignore[no-redef]
+        """Amass binary wrapper (pasif + aktif enum) — integration yoksa fallback."""
+
+        def __init__(self, binary: str = "amass"):
+            self.binary = binary
+            self._find_binary()
+
+        def _find_binary(self):
+            if shutil.which(self.binary):
                 return
+            from pathlib import Path
+            root = Path(__file__).resolve().parent.parent.parent
+            for p in [
+                str(root / "tools" / "amass" / "amass.exe"),
+                r"C:\tools\amass\amass.exe",
+            ]:
+                if os.path.exists(p):
+                    self.binary = p
+                    return
 
-    def is_available(self) -> bool:
-        return bool(shutil.which(self.binary) or os.path.isfile(self.binary))
+        def is_available(self) -> bool:
+            return bool(shutil.which(self.binary) or os.path.isfile(self.binary))
 
-    def run(self, domain: str, passive: bool = True, timeout: int = 180) -> List[Dict[str, Any]]:
-        if not self.is_available():
-            logger.debug("[Amass] Binary bulunamadı, atlanıyor.")
-            return []
+        def run(
+            self, domain: str, passive: bool = True, timeout: int = 180
+        ) -> List[Dict[str, Any]]:
+            if not self.is_available():
+                logger.debug("[Amass] Binary bulunamadı, atlanıyor.")
+                return []
 
-        fd, tmp = tempfile.mkstemp(suffix=".txt")
-        os.close(fd)
-        try:
-            cmd = [self.binary, "enum", "-d", domain, "-o", tmp]
-            if passive:
-                cmd.append("-passive")
-            logger.info(f"[Amass] {'Pasif' if passive else 'Aktif'} enum başlıyor: {domain}")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=timeout)
-            results = []
-            if os.path.isfile(tmp):
-                with open(tmp, encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        sub = line.strip()
-                        if sub and domain in sub:
-                            ip = _resolve(sub)
-                            results.append({"subdomain": sub, "ip": ip or "", "method": "amass"})
-            logger.info(f"[Amass] {len(results)} subdomain bulundu")
-            return results
-        except subprocess.TimeoutExpired:
-            logger.warning("[Amass] Zaman aşımı")
-            return []
-        except Exception as e:
-            logger.error(f"[Amass] Hata: {e}")
-            return []
-        finally:
+            fd, tmp = tempfile.mkstemp(suffix=".txt")
+            os.close(fd)
             try:
-                os.remove(tmp)
-            except Exception as exc:
-                pass
+                cmd = [self.binary, "enum", "-d", domain, "-o", tmp]
+                if passive:
+                    cmd.append("-passive")
+                logger.info(
+                    f"[Amass] {'Pasif' if passive else 'Aktif'} enum başlıyor: {domain}"
+                )
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=timeout,
+                )
+                results: List[Dict[str, Any]] = []
+                if os.path.isfile(tmp):
+                    with open(tmp, encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            sub = line.strip()
+                            if sub and domain in sub:
+                                ip = _resolve(sub)
+                                results.append(
+                                    {"subdomain": sub, "ip": ip or "", "method": "amass"}
+                                )
+                logger.info(f"[Amass] {len(results)} subdomain bulundu")
+                return results
+            except subprocess.TimeoutExpired:
+                logger.warning("[Amass] Zaman aşımı")
+                return []
+            except Exception as e:
+                logger.error(f"[Amass] Hata: {e}")
+                return []
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 # ---------------------------------------------------------------------------

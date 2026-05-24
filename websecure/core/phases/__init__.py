@@ -1843,7 +1843,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     if isinstance(fb, list):
         for item in fb:
             if isinstance(item, dict):
-                add_result("file_upload", item)
+                add_result("vulnerability", {**item, "source": "file_upload"})
     add_result("meta", {"stage": "file_upload", "tested": len(endpoints)})
 
 def _runner_jwt(ctx) -> None:
@@ -5490,7 +5490,7 @@ def run_fuzz_and_param_discovery(ctx) -> None:
         pipeline = ParamDiscoveryPipeline()
         result = pipeline.discover(url, method="GET")
         if result and result.params:
-            add_result("param_discovery", {
+            add_result("discovery", {
                 "url": url,
                 "params_found": result.params,
                 "total": len(result.params),

