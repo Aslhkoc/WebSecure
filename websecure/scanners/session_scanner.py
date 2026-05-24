@@ -807,7 +807,7 @@ class SessionScanner(BaseScanner):
             logger.debug(f"[SessionScanner] Entropy analysis failed: {e}")
 
         for finding in all_findings:
-            add_result("session_scanner", finding)
+            add_result("session", finding)
             if finding.get("severity") in ("Critical", "High", "Medium"):
                 add_result("offensive", finding)
 

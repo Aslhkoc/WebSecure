@@ -1460,7 +1460,7 @@ class ChainReactor:
         try:
             from websecure.core.reporting import add_result
             for cf in chain_findings:
-                add_result("chain_reactor", _chain_finding_to_dict(cf))
+                add_result("vulnerability", _chain_finding_to_dict(cf))
         except Exception as exc:
             _logger.warning(f"[ChainReactor] Raporlama hatası: {exc!r}")
 

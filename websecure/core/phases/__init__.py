@@ -418,7 +418,7 @@ def phase_waf_detect(ctx: dict):
                 pass
         except (ImportError, AttributeError) as exc:
             _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
-        add_result("waf_detection", {
+        add_result("waf", {
             "url": target,
             "target": target,
             "vendor": profile.vendor,
@@ -445,7 +445,7 @@ def phase_waf_detect(ctx: dict):
             _resp = _sess.get(target, timeout=8, allow_redirects=True, verify=False)
             _waf = _dwfr(_resp)
             _conf = 0.75 if _waf.blocked else 0.0
-            add_result("waf_detection", {
+            add_result("waf", {
                 "url": target,
                 "target": target,
                 "vendor": _waf.vendor or ("Unknown" if _waf.blocked else "None"),
@@ -654,7 +654,7 @@ def phase_portscan(ctx: dict):
     """
     nmap_cfg = ctx.get("config", {}).get("nmap", {}) or {}
     if not nmap_cfg.get("enabled", True):
-        add_result("portscan", {"severity": "note", "message": "nmap disabled"})
+        add_result("meta", {"stage": "portscan", "severity": "note", "message": "nmap disabled"})
         return
 
     from websecure.integrations.nmap import NmapWrapper
@@ -668,7 +668,7 @@ def phase_portscan(ctx: dict):
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı — httpx fallback ile HTTP portları taranıyor."})
+        add_result("meta", {"stage": "portscan", "severity": "warning", "message": "Nmap binary bulunamadı — httpx fallback ile HTTP portları taranıyor."})
         _phase_httpx_port_fallback(ctx, host)
         return
 
@@ -782,7 +782,7 @@ def phase_portscan(ctx: dict):
         ctx_results["port_scan"] = port_records
 
     if not res:
-        add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
+        add_result("meta", {"stage": "portscan", "severity": "note", "message": "Açık port bulunamadı (Nmap)."})
 
 def phase_tls(ctx: dict):
     url = ctx.get("url") or ctx.get("target", "")
@@ -903,7 +903,7 @@ def phase_offensive(ctx: dict):
             if callable(fp_cls):
                 report = fp_cls().fingerprint(url, session=session)
                 if report:
-                    add_result("waf_fingerprint", {
+                    add_result("waf", {
                         "url": url,
                         "vendor": getattr(report, "vendor", "unknown"),
                         "confidence": getattr(report, "confidence", 0.0),
@@ -1572,7 +1572,7 @@ def _runner_subdomain(ctx) -> None:
         cfg = getattr(ctx, "config", {}) or {}
         results = _sub_run(target, cfg=cfg)
         for r in results:
-            add_result("subdomains", r)
+            add_result("subdomain", r)
         _logger.info(f"[phases] Subdomain tarama tamamlandı: {len(results)} bulgu")
     except Exception as e:
         _logger.warning(f"[phases] Subdomain tarama hatası: {e}")
@@ -1824,7 +1824,7 @@ def _runner_scanners_file_upload(ctx) -> None:
     debug = bool(getattr(ctx, "debug", False))
     cfg = getattr(ctx, "config", {}) or {}
 
-    endpoints_cfg = _deep_get(cfg, "scanners.file_upload.endpoints", None)
+    endpoints_cfg = _deep_get(cfg, "file_upload.endpoints", None)
     if endpoints_cfg and not isinstance(endpoints_cfg, list):
         endpoints_cfg = [endpoints_cfg]
 
@@ -2107,7 +2107,7 @@ def _runner_owasp_nuclei(ctx) -> None:
                 continue
             _item.setdefault("source", "owasp")
             _item.setdefault("owasp_bucket", _bk)
-            add_result("owasp", _item)
+            add_result("vulnerability", _item)
             if _item.get("severity") in ("Critical", "High", "Medium"):
                 add_result("offensive", _item)
 
@@ -2458,7 +2458,7 @@ def _runner_waf_fingerprint(ctx) -> None:
             fp = fingerprinter_cls()
             report = fp.fingerprint(url, session=sess)
             if report:
-                add_result("waf_fingerprint", {
+                add_result("waf", {
                     "url": url,
                     "vendor": getattr(report, "vendor", "unknown"),
                     "confidence": getattr(report, "confidence", 0.0),
@@ -3027,6 +3027,13 @@ def _offensive_phases(ctx) -> List[Phase]:
             tags=["session", "cookie", "passive", "auth"],
         ),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
+        Phase(
+            id="http_crawler_orchestrator",
+            title="HTTP Crawler Orchestrator (OpenAPI/GraphQL/gRPC/Param)",
+            enabled=_flag("http_crawler_orchestrator", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_http_crawler_orchestrator(c), "http_crawler_orchestrator"),
+            tags=["crawl", "recon", "endpoints", "openapi", "graphql"],
+        ),
         Phase(id="passive_recon", title="Pasif Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_passive_recon(c), "passive_recon"), tags=["passive"]),
         Phase(
             id="httpx_probe",
@@ -3544,7 +3551,7 @@ def run_portscan(ctx):
 
     # Nmap disabled ise atla
     if not nmap_cfg.get("enabled", True):
-        add_result("portscan", {"severity": "note", "message": "Nmap devre dışı (config)."})
+        add_result("meta", {"stage": "portscan", "severity": "note", "message": "Nmap devre dışı (config)."})
         return _mk_result("portscan", "skipped", {"reason": "disabled"})
 
     url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
@@ -3559,7 +3566,7 @@ def run_portscan(ctx):
 
     nmap = NmapWrapper()
     if not nmap.is_available():
-        add_result("portscan", {"severity": "warning", "message": "Nmap binary bulunamadı — sudo apt install nmap"})
+        add_result("meta", {"stage": "portscan", "severity": "warning", "message": "Nmap binary bulunamadı — sudo apt install nmap"})
         return _mk_result("portscan", "failed", {"error": "nmap_missing"})
 
     # --- Mod seçimi: scan_profile'a göre —
@@ -3735,7 +3742,7 @@ def run_portscan(ctx):
     results["open_ports"] = open_ports
 
     if not port_records:
-        add_result("portscan", {"severity": "note", "message": "Açık port bulunamadı (Nmap)."})
+        add_result("meta", {"stage": "portscan", "severity": "note", "message": "Açık port bulunamadı (Nmap)."})
 
     return _mk_result("portscan", "ok", {"scanned": nmap_mode, "open": len(open_ports)})
 
@@ -3823,7 +3830,7 @@ def run_security_headers_basic(ctx, *, event_cb=None):
     base_url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
     results = getattr(ctx, "results", {})
     _scan_headers(base_url, results, session=sess, debug=bool(getattr(ctx, "debug", False)))
-    add_result("headers_checked", {"base_url": base_url})
+    add_result("meta", {"stage": "headers_checked", "base_url": base_url})
     return results.get("headers", {})
 
 
@@ -3843,7 +3850,7 @@ def run_tls_basic(ctx, *, event_cb=None):
         config=config,
         debug=bool(getattr(ctx, "debug", False)),
     )
-    add_result("tls_checked", {"base_url": base_url})
+    add_result("meta", {"stage": "tls_checked", "base_url": base_url})
     return results.get("tls", {})
 
 def run_plan_if_needed(ctx: dict):
@@ -4099,12 +4106,12 @@ def _resolve_proxy(ctx) -> str | None:
 
     # 1. Check if Tor is active via proxy_manager
     # CRITICAL: socks5h:// routes DNS through Tor too — prevents DNS leak to ISP
-    tor = _get_config(ctx, "proxy.tor.enabled", False)
+    tor = _get_config(ctx, "proxy.tor_control.enabled", False)
     if tor:
         return "socks5h://127.0.0.1:9050"
 
     # 2. Check explicit proxy
-    proxy_url = _get_config(ctx, "http.proxy")
+    proxy_url = _get_config(ctx, "proxy.url")
     if proxy_url:
         return proxy_url
 
@@ -4651,7 +4658,7 @@ def run_sqlmap_scan(ctx) -> None:
     [Check 1, 2, 5] Tools working, Payload/Exploit, Proxy support.
     """
     if SQLMapWrapper is None:
-        add_result("sqlmap", {"status": "skipped", "reason": "Integration module missing"})
+        add_result("meta", {"stage": "sqlmap", "status": "skipped", "reason": "Integration module missing"})
         return
 
     url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None) or getattr(ctx, "target", None)
@@ -4665,7 +4672,7 @@ def run_sqlmap_scan(ctx) -> None:
     _logger.info("Launching SQLMap scan...")
     wrapper = SQLMapWrapper()
     if not wrapper.is_available():
-        add_result("sqlmap", {"status": "skipped", "reason": "Binary not found in PATH"})
+        add_result("meta", {"stage": "sqlmap", "status": "skipped", "reason": "Binary not found in PATH"})
         return
 
     # [Check 2] Payloads/Exploit levels
@@ -4853,7 +4860,7 @@ def run_ffuf_scan(ctx) -> None:
     
     # [WS3] Smart Login Audit
     # We run this if discovery found forms, or if we want to probe the login page specifically
-    if _get_config(ctx, "offensive.login_audit.enabled", True):
+    if _get_config(ctx, "login_discovery.enabled", True):
         try:
             from websecure.core.auth_flow import LoginAuditor
             
@@ -4892,7 +4899,7 @@ def run_ffuf_scan(ctx) -> None:
                         
                 results = auditor.run_audit()
                 for res in results:
-                    add_result("auth", res)
+                    add_result("vulnerability", res)
                     
         except Exception as e:
             _logger.error(f"[Login-Audit] Failed: {e}")
@@ -4990,7 +4997,7 @@ def run_ffuf_scan(ctx) -> None:
                 add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
 
         # --- Header fuzzing: IP spoofing / auth bypass / WAF bypass ---
-        _hdr_fuzz_enabled = _get_config(ctx, "offensive.ffuf.header_fuzzing", True)
+        _hdr_fuzz_enabled = _get_config(ctx, "ffuf.header_fuzzing", True)
         if _hdr_fuzz_enabled:
             try:
                 hdr_findings = wrapper.fuzz_headers(
@@ -5055,8 +5062,7 @@ def run_feroxbuster_scan(ctx) -> None:
     # Correct config paths: feroxbuster.depth takes priority over discovery.feroxbuster.depth
     depth = int(_get_config(ctx, "feroxbuster.depth",
                 _get_config(ctx, "discovery.feroxbuster.depth", 3)))
-    wordlist = _get_config(ctx, "feroxbuster.wordlist",
-               _get_config(ctx, "discovery.feroxbuster.wordlist", ""))
+    wordlist = _get_config(ctx, "feroxbuster.wordlist", "")
 
     extra_args = []
     # [Check 5] Proxy
@@ -5264,14 +5270,14 @@ def run_js_analysis(ctx) -> None:
     if not url:
         return
 
-    if not _get_config(ctx, "offensive.js_analysis.enabled", True):
-        add_result("js_analysis", {"status": "skipped", "reason": "Disabled in config"})
+    if not _get_config(ctx, "offensive.scanners.js_analysis.enabled", True):
+        add_result("js", {"status": "skipped", "reason": "Disabled in config"})
         return
 
     try:
         from websecure.scanners.js_analyzer import JSAnalyzer
     except ImportError:
-        add_result("js_analysis", {"status": "skipped", "reason": "js_analyzer module missing"})
+        add_result("js", {"status": "skipped", "reason": "js_analyzer module missing"})
         return
 
     _logger.info("[JSAnalyzer] Starting JavaScript file analysis...")
@@ -5282,7 +5288,7 @@ def run_js_analysis(ctx) -> None:
     findings = analyzer.run(url)
 
     for f in findings:
-        add_result("js_analysis", f)
+        add_result("js", f)
         if f.get("severity") in ("High", "Critical"):
             add_result("offensive", f)
 

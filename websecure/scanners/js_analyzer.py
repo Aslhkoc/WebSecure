@@ -389,7 +389,7 @@ def run(url: str, session=None, results: Dict = None, debug: bool = False, **kwa
     analyzer = JSAnalyzer(session=session, results=results or {}, debug=debug)
     findings = analyzer.run(url)
     for f in findings:
-        add_result("js_analysis", f)
+        add_result("js", f)
         # High severity secrets also go to offensive bucket
         if f.get("severity") in ("High", "Critical"):
             add_result("offensive", f)

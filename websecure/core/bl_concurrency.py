@@ -529,7 +529,7 @@ def run_race_conditions(session: requests.Session, base_url: str, cfg: Dict[str,
         max_inflight = int(rate_cfg.get("max_inflight", conc)) if rate_cfg.get("max_inflight") is not None else conc
 
         if method not in _IDEMPOTENT and debug:
-            add_result("bizlogic_race", {"name": name, "note": f"Non-idempotent method under race: {method}"})
+            add_result("meta", {"source": "bizlogic_race", "name": name, "note": f"Non-idempotent method under race: {method}"})
 
         spec = RaceSpec(
             name=name, method=method, url=url, headers=headers, data=data, jsn=jsn,
@@ -578,7 +578,7 @@ def run_race_conditions(session: requests.Session, base_url: str, cfg: Dict[str,
                 'reason': 'Race anomali: status/boyut/parmak izi farklılıkları',
                 'method': method
             })
-        add_result("bizlogic_race", item)
+        add_result("vulnerability", {**item, "source": "bizlogic_race", "type": "Race Condition"})
         _emit(event_cb, "bl.done", {"name": name, "engine": used_engine, "anomaly": anomaly})
 
     add_result("meta", {"stage": "race", "tests": total_tests, "anomaly_count": len(findings)})

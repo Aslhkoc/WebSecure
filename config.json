@@ -379,7 +379,8 @@
     "auth_only_mark_findings": true
   },
   "login_discovery": {
-    "verify_tls": true
+    "verify_tls": true,
+    "enabled": true
   },
   "fuzz": {
     "per_param": 50,
@@ -849,6 +850,9 @@
       },
       "request_smuggling": {
         "enabled": true
+      },
+      "js_analysis": {
+        "enabled": true
       }
     }
   },
@@ -1193,7 +1197,8 @@
       "--technique=BEUSTQ",
       "--tamper=space2comment,between,randomcase",
       "--threads=3"
-    ]
+    ],
+    "random_agent": true
   },
   "nuclei": {
     "enabled": true,
@@ -1302,5 +1307,8 @@
     "timeout_seconds": 20,
     "retries": 2,
     "user_agent": "Mozilla/5.0 (compatible; WebSecure/2.5)"
+  },
+  "ffuf": {
+    "header_fuzzing": true
   }
 }

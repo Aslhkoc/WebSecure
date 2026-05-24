@@ -178,7 +178,7 @@ def run_business_logic_flows_legacy(session: requests.Session, base_url: str, cf
             if not passed and st.get("required", True):
                 ok = False; break
 
-        add_result("bizlogic_flows", {"name": name, "ok": ok, "steps": step_report})
+        add_result("vulnerability", {"source": "bizlogic_flows", "name": name, "ok": ok, "steps": step_report})
         completed += int(ok)
 
     add_result("meta", {"stage":"bizlogic","flows_defined": len(flows), "flows_ok": completed})
@@ -252,17 +252,17 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
             failures = _as(types.SimpleNamespace(status_code=status), text, step.get("expect") or []) if callable(_as) else []
             if failures:
                 ok_so_far = False
-                add_result("bizlogic_flow_step", {"flow": fname, "step": idx, "url": url, "status": status, "failures": failures})
+                add_result("vulnerability", {"source": "bizlogic_flow_step", "flow": fname, "step": idx, "url": url, "status": status, "failures": failures})
                 if step.get("stop_on_fail", True):
                     break
             else:
-                add_result("bizlogic_flow_step", {"flow": fname, "step": idx, "url": url, "status": status, "ok": True})
+                add_result("meta", {"source": "bizlogic_flow_step", "flow": fname, "step": idx, "url": url, "status": status, "ok": True})
 
         if ok_so_far:
-            add_result("bizlogic_flow", {"name": fname, "status": "ok"})
+            add_result("meta", {"source": "bizlogic_flow", "name": fname, "status": "ok"})
         else:
             findings += 1
-            add_result("bizlogic_flow", {"name": fname, "status": "failed"})
+            add_result("vulnerability", {"source": "bizlogic_flow", "severity": "Medium", "type": "Business Logic Flow Failure", "name": fname, "status": "failed"})
 
     results.setdefault("bizlogic_summary", {})["flow_failures"] = findings  # type: ignore[index]
     add_result("meta", {"stage":"bizlogic","flows_defined": len(flows), "flows_failed": findings})
@@ -337,10 +337,12 @@ def run_idempotency_checks(
             "unique_status": len(set(codes)),
             "anomaly": bool(anom),
         }
-        add_result("bizlogic_idempotency", item)
+        add_result("meta", {"source": "bizlogic_idempotency", **item})
         if anom:
             findings += 1
-            add_result("bizlogic_findings", {
+            add_result("vulnerability", {
+                "source": "bizlogic_idempotency", "severity": "Medium",
+                "type": "Business Logic: Idempotency Anomaly",
                 "url": url,
                 "note": "Aynı istek farklı yanıtlar üretiyor (idempotency anomalisi)",
                 "method": method,

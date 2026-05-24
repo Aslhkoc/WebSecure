@@ -157,7 +157,7 @@ def offensive_mass_assignment(url, session, **kwargs):
             if res and isinstance(res, list):
                 if callable(globals().get("add_result")):
                     for r in res:
-                         add_result("mass_assignment", r)
+                         add_result("vulnerability", r)
         except Exception as e:
             _logger.error(f"Mass Assignment failed: {e}")
 
@@ -1940,7 +1940,7 @@ def _run_scan_phases(
                 if hunter_res:
                     print(f"[!] DİKKAT: {len(hunter_res)} adet oturum güvenlik bulgusu!")
                     if callable(globals().get("add_result")):
-                        add_result("auth_weakness", {"session_findings": hunter_res})
+                        add_result("vulnerability", {"session_findings": hunter_res})
             except ImportError:
                 print("[!] Session Scanner modülü yüklenemedi.")
             except Exception as e:
@@ -2584,7 +2584,7 @@ def _run_scan_phases(
             if ok_authz and isinstance(auth_findings, (list, tuple)):
                 for f in auth_findings:
                     if callable(globals().get("add_result")):
-                        add_result("authorization", f)
+                        add_result("vulnerability", f)
             elif not ok_authz and callable(globals().get("add_result")):
                 add_result("errors", {"stage": "authorization", "error": str(auth_findings)})
 

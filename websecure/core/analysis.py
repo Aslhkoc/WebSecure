@@ -1129,7 +1129,8 @@ class LoginDiscovery:
                 _logger.debug(f"[LoginDiscovery] Request failed for {url!r}: {exc!r}")
                 
         # 3. Report
-        add_result("login_discovery", {
+        add_result("discovery", {
+            "source": "login_discovery",
             "base": base_url,
             "candidates": [{"url": u, "score": s} for u, s in results[:10]]
         })
