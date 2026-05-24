@@ -914,8 +914,8 @@ class OASTMultiProtocolProber:
             try:
                 _rb = _dns_rb_cls(attacker_ip="", target_ip="127.0.0.1")
                 payloads["dns_rebinding"] = [_rb.rbndr_us_domain(), _rb.one_u_ms_domain()]
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # DNS exfil probe queries (OASTDataExfiltrator — defined later in this module)
         _exfil_cls = globals().get("OASTDataExfiltrator")
@@ -924,8 +924,8 @@ class OASTMultiProtocolProber:
                 _exfil = _exfil_cls(self.oob_domain, encoding="base32")
                 probe = f"oast-probe:{token}".encode("utf-8")
                 payloads["dns_exfil"] = _exfil.build_dns_exfil_queries(probe, token)[:3]
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return payloads
 
@@ -948,8 +948,8 @@ class OASTMultiProtocolProber:
             try:
                 r = self._session.get(url, headers={hdr: val}, timeout=6, verify=False)
                 results.append({"header": hdr, "value": val, "status": r.status_code})
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
         return results
 
     def inject_log4shell(self, url: str, token: str) -> List[Dict[str, Any]]:
@@ -964,8 +964,8 @@ class OASTMultiProtocolProber:
                 try:
                     r = self._session.get(url, headers={header: payload}, timeout=6, verify=False)
                     results.append({"header": header, "payload": payload, "status": r.status_code})
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
         return results
 
 
@@ -1051,8 +1051,8 @@ class OASTCorrelationEngine:
                         tok, inject_ts=inject_ts, callback_ts=callback_ts,
                         protocol=protocol_detected,
                     )
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
 
             finding = {
                 **injection,
@@ -1096,8 +1096,8 @@ class OASTCorrelationEngine:
             if self._timing is not None:
                 try:
                     base["timing_analysis"] = self._timing.analyze()
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
             return base
 
 
@@ -1313,8 +1313,8 @@ class OASTDataExfiltrator:
                 try:
                     idx = int(idx_part.split("of")[0])
                     chunks[idx] = chunk
-                except ValueError:
-                    pass
+                except ValueError as _fix_e:
+                    _logger.debug(f"[core.oast] {type(_fix_e).__name__}: {_fix_e!r}")
         ordered = [chunks[k] for k in sorted(chunks)]
         return self.decode("".join(ordered))
 

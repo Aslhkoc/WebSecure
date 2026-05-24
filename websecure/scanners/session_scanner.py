@@ -376,8 +376,8 @@ class JWTExpiryBypassProber(BaseScanner):
                     headers={"Authorization": "Bearer invalid.token.here"},
                 )
                 jwt_token = self._find_jwt_in_response(r)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.session_scanner] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if not jwt_token:
             logger.debug("[JWTExpiry] No JWT token found — skipping")

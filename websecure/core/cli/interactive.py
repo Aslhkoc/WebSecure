@@ -9,6 +9,7 @@ Interactive wizard prompts extracted from main():
 Each function mutates `cfg` in-place and returns None.
 All functions respect args.dry_run / args.batch (non-interactive mode).
 """
+import logging
 from __future__ import annotations
 
 import os
@@ -22,6 +23,8 @@ from typing import TYPE_CHECKING
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+_logger = logging.getLogger(__name__)
 
 def _try_autostart_tor() -> str | None:
     """Detect a running Tor instance or start one. Returns socks URL or None."""
@@ -44,8 +47,8 @@ def _try_autostart_tor() -> str | None:
                     _time.sleep(1)
                     if _proxy_alive("socks5h://127.0.0.1:9150"):
                         return "socks5h://127.0.0.1:9150"
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.cli.interactive] {type(_fix_e).__name__}: {_fix_e!r}")
 
     try:
         subprocess.Popen(["tor"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -53,8 +56,8 @@ def _try_autostart_tor() -> str | None:
             _time.sleep(1)
             if _proxy_alive("socks5h://127.0.0.1:9050"):
                 return "socks5h://127.0.0.1:9050"
-    except Exception:
-        pass
+    except Exception as _fix_e:
+        _logger.debug(f"[core.cli.interactive] {type(_fix_e).__name__}: {_fix_e!r}")
 
     return None
 

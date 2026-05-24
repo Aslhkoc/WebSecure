@@ -255,8 +255,8 @@ class BrowserCrawler:
                         body = request.post_data
                         if body:
                             req_record["body"] = body[:4096]
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        _logger.debug(f"[core.browser_crawler] {type(_fix_e).__name__}: {_fix_e!r}")
                     self._intercepted_requests.append(req_record)
                     if url not in self._api_requests:
                         self._api_requests.append(url)
@@ -374,8 +374,8 @@ class BrowserCrawler:
                         """)
                         if spa_forms:
                             self._result.forms_meta.append({"url": url + "#spa", "forms": spa_forms})
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        _logger.debug(f"[core.browser_crawler] {type(_fix_e).__name__}: {_fix_e!r}")
 
                     # Detect framework
                     tech = await self._detect_framework(page, url)
@@ -514,9 +514,9 @@ class BrowserCrawler:
                     if result:
                         detected.append(framework)
                 except Exception as exc:
-                    pass
+                    _logger.debug(f"[core.browser_crawler] {type(exc).__name__}: {exc!r}")
         except Exception as exc:
-            pass
+            _logger.debug(f"[core.browser_crawler] {type(exc).__name__}: {exc!r}")
         return detected
 
     def _scan_for_secrets(self, content: str, url: str) -> None:

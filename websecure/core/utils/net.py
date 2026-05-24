@@ -22,8 +22,8 @@ def silence_insecure_request_warnings() -> None:
     try:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except (ImportError, AttributeError):
-        pass
+    except (ImportError, AttributeError) as _fix_e:
+        _logger.debug(f"[core.utils.net] {type(_fix_e).__name__}: {_fix_e!r}")
 
 # ========================== URL & Scheme ==========================
 def _host_of_url(url: str) -> str:
@@ -71,7 +71,7 @@ def detect_canonical_scheme(u: str, timeout: int = 6) -> SchemeDetectionResult:
             if r.status_code < 400:
                 return SchemeDetectionResult("https", r.url, "HTTPS Accessible")
     except Exception as exc:
-        pass
+        _logger.debug(f"[core.utils.net] {type(exc).__name__}: {exc!r}")
 
     # Try HTTP (Head)
     try:
@@ -83,7 +83,7 @@ def detect_canonical_scheme(u: str, timeout: int = 6) -> SchemeDetectionResult:
                     return SchemeDetectionResult("https", r.url, "HTTP Redirects to HTTPS")
                 return SchemeDetectionResult("http", r.url, "HTTP Accessible")
     except Exception as exc:
-        pass
+        _logger.debug(f"[core.utils.net] {type(exc).__name__}: {exc!r}")
         
     return SchemeDetectionResult("http", f"http://{host}{path}", "Fallback")
 

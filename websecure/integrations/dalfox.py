@@ -183,8 +183,8 @@ class DalfoxWrapper(ToolIntegration):
             try:
                 from websecure.core.phases import register_child_proc, unregister_child_proc
                 register_child_proc(proc)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
             try:
                 _, stderr_b = proc.communicate(timeout=_timeout_df)
             except subprocess.TimeoutExpired:
@@ -195,8 +195,8 @@ class DalfoxWrapper(ToolIntegration):
                 try:
                     from websecure.core.phases import unregister_child_proc
                     unregister_child_proc(proc)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
 
             if proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
@@ -514,6 +514,7 @@ def verify_xss(
     """
     wrapper = DalfoxWrapper(blind_callback=blind_callback)
     if not wrapper.is_available():
+        logger.warning("[Dalfox] verify_xss_findings: binary bulunamadı, atlanıyor.")
         return []
     result = wrapper.verify_xss_findings(xss_findings, cookie=cookie)
     return [f.to_dict() for f in result.findings]

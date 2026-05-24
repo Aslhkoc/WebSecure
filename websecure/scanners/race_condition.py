@@ -505,8 +505,8 @@ def _recv_response(sock: socket.socket, timeout: float = 2.0) -> str:
             if not chunk:
                 break
             data += chunk
-    except (socket.timeout, OSError):
-        pass
+    except (socket.timeout, OSError) as _fix_e:
+        logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
     return data.decode("utf-8", errors="replace")
 
 
@@ -554,8 +554,8 @@ class GateTechniqueExploiter(BaseScanner):
                 r = self.session.get(url, timeout=4)
                 if r.status_code not in (404, 410):
                     found.append(path)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
         return found or ["/api/transfer", "/api/pay"]
 
     def _build_gate_request(self, host: str, path: str, body: str) -> Tuple[bytes, bytes]:
@@ -589,8 +589,8 @@ class GateTechniqueExploiter(BaseScanner):
         for sock in sockets:
             try:
                 sock.sendall(head)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Phase 2: fire all last bytes simultaneously
         gate_event = threading.Event()
@@ -604,8 +604,8 @@ class GateTechniqueExploiter(BaseScanner):
                 resp = _recv_response(sock)
                 with lock:
                     responses.append(resp)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
             finally:
                 try:
                     sock.close()
@@ -682,8 +682,8 @@ class RaceAuthBypassProber(BaseScanner):
                 r = self.session.get(url, timeout=4)
                 if r.status_code not in (404, 410):
                     return url
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_login_race(self, login_url: str, n: int) -> Optional[Dict]:
@@ -700,8 +700,8 @@ class RaceAuthBypassProber(BaseScanner):
                 if r.status_code not in (429, 423, 403):
                     with lock:
                         successes.append(r.status_code)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         with ThreadPoolExecutor(max_workers=n) as pool:
             futs = [pool.submit(_attempt, c) for c in credentials]
@@ -745,8 +745,8 @@ class RaceAuthBypassProber(BaseScanner):
                     if sess_id:
                         with lock:
                             session_ids.append(sess_id)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
             with ThreadPoolExecutor(max_workers=n) as pool:
                 futs = [pool.submit(_create) for _ in range(n)]
@@ -819,10 +819,10 @@ class RaceDoubleSpendProber(BaseScanner):
                 if r.status_code in (200, 201):
                     with lock:
                         successes.append({"status": r.status_code, "body": r.text[:100]})
-            except threading.BrokenBarrierError:
-                pass
-            except Exception:
-                pass
+            except threading.BrokenBarrierError as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         threads = [threading.Thread(target=_attempt) for _ in range(n)]
         for t in threads:
@@ -1111,8 +1111,8 @@ class TOCTOUProber(BaseScanner):
                 if r.status_code not in (404, 410, 401):
                     balance_url = url
                     break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         spend_url = None
         spend_data = {}
@@ -1124,8 +1124,8 @@ class TOCTOUProber(BaseScanner):
                     spend_url = url
                     spend_data = data
                     break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if not spend_url:
             return None
@@ -1136,8 +1136,8 @@ class TOCTOUProber(BaseScanner):
             try:
                 r = self.session.get(balance_url, timeout=5)
                 initial_balance_text = r.text[:200]
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Step 2: Fire N concurrent POSTs
         successes = []
@@ -1151,10 +1151,10 @@ class TOCTOUProber(BaseScanner):
                 if r.status_code in (200, 201):
                     with lock:
                         successes.append(r.text[:100])
-            except threading.BrokenBarrierError:
-                pass
-            except Exception:
-                pass
+            except threading.BrokenBarrierError as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         threads = [threading.Thread(target=_spend) for _ in range(self._N_CONCURRENT)]
         for t in threads:
@@ -1168,8 +1168,8 @@ class TOCTOUProber(BaseScanner):
             try:
                 r = self.session.get(balance_url, timeout=5)
                 final_balance_text = r.text[:200]
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if len(successes) > 1:
             return {
@@ -1201,8 +1201,8 @@ class TOCTOUProber(BaseScanner):
                 if r.status_code not in (404, 410):
                     upload_url = url
                     break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if not upload_url:
             return None
@@ -1221,10 +1221,10 @@ class TOCTOUProber(BaseScanner):
                 if r.status_code in (200, 201):
                     with lock:
                         successes.append(r.status_code)
-            except threading.BrokenBarrierError:
-                pass
-            except Exception:
-                pass
+            except threading.BrokenBarrierError as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         threads = [threading.Thread(target=_upload) for _ in range(5)]
         for t in threads:
@@ -1320,15 +1320,15 @@ class SessionFixationRaceProber(BaseScanner):
                             or body.get("session_token")
                             or body.get("reset_token")
                         )
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
                 if token and isinstance(token, str) and len(token) > 4:
                     with lock:
                         tokens.append(token)
-            except threading.BrokenBarrierError:
-                pass
-            except Exception:
-                pass
+            except threading.BrokenBarrierError as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         threads = [threading.Thread(target=_attempt) for _ in range(n)]
         for t in threads:
@@ -1347,8 +1347,8 @@ class SessionFixationRaceProber(BaseScanner):
                 if r.status_code not in (404, 410):
                     login_url = url
                     break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if not login_url:
             return None
@@ -1399,8 +1399,8 @@ class SessionFixationRaceProber(BaseScanner):
                 if r.status_code not in (404, 410):
                     reset_url = url
                     break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if not reset_url:
             return None
@@ -1461,8 +1461,8 @@ class SessionFixationRaceProber(BaseScanner):
                         "min_recommended_bits": 64,
                     },
                 }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -1537,10 +1537,10 @@ class InventoryRaceProber(BaseScanner):
                             "status": r.status_code,
                             "body": body_snippet,
                         })
-            except threading.BrokenBarrierError:
-                pass
-            except Exception:
-                pass
+            except threading.BrokenBarrierError as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
 
         threads = [threading.Thread(target=_attempt) for _ in range(self._N_CONCURRENT)]
         for t in threads:

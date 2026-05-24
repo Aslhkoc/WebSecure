@@ -406,8 +406,8 @@ class AuthManager:
                         new_token = rdata[key]
                         self._session.headers["Authorization"] = f"Bearer {new_token}"
                         break
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.auth_manager] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return self._verify_auth()
 
@@ -433,8 +433,8 @@ class AuthManager:
             resp = self._session.get(self._base_url, timeout=10)
             if resp.status_code not in (401, 403):
                 return True
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.auth_manager] {type(_fix_e).__name__}: {_fix_e!r}")
         return False
 
 

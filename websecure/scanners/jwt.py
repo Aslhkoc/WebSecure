@@ -296,9 +296,9 @@ class JWTScanner(BaseScanner):
                     if keys:
                         break
                 except Exception as exc:
-                    pass
+                    logger.debug(f"[scanners.jwt] {type(exc).__name__}: {exc!r}")
         except Exception as exc:
-            pass
+            logger.debug(f"[scanners.jwt] {type(exc).__name__}: {exc!r}")
         return keys
 
     # -------------------------------------------------------------------------
@@ -576,8 +576,8 @@ class JWTKeyConfusionExploiter(BaseScanner):
                 candidate = auth_hdr[7:]
                 if self._looks_like_jwt(candidate):
                     return candidate
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.jwt] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _looks_like_jwt(self, s: str) -> bool:

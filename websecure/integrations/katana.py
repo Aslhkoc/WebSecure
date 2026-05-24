@@ -205,8 +205,8 @@ class KatanaWrapper(ToolIntegration):
             try:
                 from websecure.core.phases import register_child_proc
                 register_child_proc(proc)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.katana] {type(_fix_e).__name__}: {_fix_e!r}")
 
             timed_out = False
             stderr_b = b""
@@ -227,8 +227,8 @@ class KatanaWrapper(ToolIntegration):
                 try:
                     from websecure.core.phases import unregister_child_proc
                     unregister_child_proc(proc)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[integrations.katana] {type(_fix_e).__name__}: {_fix_e!r}")
 
             if not timed_out and proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:400]
@@ -524,6 +524,7 @@ def crawl_target(
     """
     wrapper = KatanaWrapper(depth=depth, js_crawl=js_crawl)
     if not wrapper.is_available():
+        logger.warning("[Katana] crawl_site: binary bulunamadı, atlanıyor.")
         return []
     result = wrapper.run(target)
     return result.extra.get("unique_urls", [])

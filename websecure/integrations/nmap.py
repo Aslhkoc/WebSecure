@@ -70,8 +70,8 @@ def _has_npcap() -> bool:
             )
             if "RUNNING" in r.stdout:
                 return True
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
     # DLL var ama servis sorgulanamadı — yine de True say
     return True
 
@@ -171,8 +171,8 @@ def _run_nmap(binary: str, args: List[str], target: str,
         try:
             from websecure.core.phases import register_child_proc, unregister_child_proc
             register_child_proc(proc)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Gerçek zamanlı stdout okuma — kullanıcı tarama ilerlemesini görür
         stdout_lines: List[str] = []
@@ -206,8 +206,8 @@ def _run_nmap(binary: str, args: List[str], target: str,
             try:
                 from websecure.core.phases import unregister_child_proc
                 unregister_child_proc(proc)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
 
         stdout = "\n".join(stdout_lines)
         stderr = "\n".join(stderr_lines)
@@ -272,8 +272,8 @@ class NmapWrapper(ToolIntegration):
             install_dir, _ = winreg.QueryValueEx(key, "")
             winreg.CloseKey(key)
             candidates.insert(0, os.path.join(install_dir, "nmap.exe"))
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # 4. Sistem PATH'i doğrudan os.environ'dan yeniden oku (process başlatıldıktan sonra güncellenmiş olabilir)
         try:
@@ -288,8 +288,8 @@ class NmapWrapper(ToolIntegration):
                     self._binary_path = found
                     logger.info(f"[Nmap] Binary (shell lookup): {found}")
                     return
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
 
         for c in candidates:
             if os.path.exists(c):
@@ -913,8 +913,8 @@ class NmapParser:
                 if state is not None and state.get("state") == "open":
                     try:
                         ports.append(int(port.get("portid", 0)))
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as _fix_e:
+                        logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
             return ports
         except ET.ParseError:
             pass  # Bozuk XML → fallback
@@ -932,8 +932,8 @@ class NmapParser:
             ):
                 try:
                     ports.append(int(m.group(1)))
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as _fix_e:
+                    logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
             if ports:
                 logger.debug(f"[Nmap] Regex fallback ile {len(ports)} port kurtarıldı.")
         except Exception as e:

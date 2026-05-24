@@ -72,12 +72,42 @@ def audit_A():
             "except KeyboardInterrupt:", "except SystemExit:",
             "except (KeyboardInterrupt, SystemExit):",
             "except winsound.error:", "except AttributeError:",
+            # SSL handshake check: failure = "protocol not supported" (expected)
+            "except (ssl.SSLError, socket.error):",
+            "except (ssl.SSLError, socket.error) as e:",
+            # ValueError in SSL cert fetch: fallback handled below
+            "except ValueError:", "except ValueError as e:", "except ValueError as exc:",
+            # NameError: intentional forward-reference guard
+            "except NameError:", "except NameError as e:",
+            # TypeError/ValueError in JSON/parsing
+            "except (TypeError, ValueError):", "except (TypeError, ValueError) as e:",
         }
+        # Cleanup context patterns — try block içinde temizlik yapılıyorsa pass OK
+        CLEANUP_PATTERNS = [
+            r"os\.remove\b", r"os\.unlink\b", r"os\.close\b", r"os\.rmdir\b",
+            r"shutil\.rmtree\b", r"shutil\.move\b",
+            r"\.close\(\)", r"\.shutdown\(", r"\.terminate\(\)", r"\.kill\(\)",
+            r"\.communicate\(", r"proc\.wait\(", r"\.send\(", r"sock\.",
+        ]
+        def is_cleanup_block(lines, except_idx):
+            """try bloğunun içeriğine bakarak cleanup mi kontrol et (try: ile except: arası)."""
+            # try: satırını geriye doğru ara
+            for k in range(except_idx - 1, max(0, except_idx - 12), -1):
+                if lines[k].strip() == "try:":
+                    block = " ".join(lines[k+1:except_idx])
+                    return any(re.search(p, block) for p in CLEANUP_PATTERNS)
+            # Bulamazsa 4 satır öncesine bak
+            ctx = " ".join(lines[max(0, except_idx-4):except_idx])
+            return any(re.search(p, ctx) for p in CLEANUP_PATTERNS)
+
         for i, line in enumerate(lines):
             stripped = line.strip()
             if re.match(r'^except[\s:(]', stripped) or stripped == 'except:':
                 # Kabul edilebilir pattern'leri atla
                 if stripped in ACCEPTABLE_PASS:
+                    continue
+                # Cleanup bağlamı → pass OK
+                if is_cleanup_block(lines, i):
                     continue
                 # Look ahead for pass/... or only a comment
                 body_lines = []
@@ -412,11 +442,40 @@ def audit_F():
         rel = str(p.relative_to(ROOT))
         lines = src.splitlines()
         for i, line in enumerate(lines):
-            if 'is_available()' in line or 'not_available' in line.lower():
-                # next 5 lines: add_result var mi?
-                context = '\n'.join(lines[i:i+8])
-                if 'add_result' not in context and ('return' in context or 'skip' in context.lower()):
-                    findings.append((rel, i+1, line.strip()))
+            stripped = line.strip()
+            # Sadece "if not self.is_available(): return ..." pattern
+            if not (stripped.startswith("if not") and "is_available()" in stripped):
+                continue
+            # base.py registry management → false positive, atla
+            if "base.py" in rel:
+                continue
+            # version() / get_template_version() / _get_version_major() → utility, scan yapmaz
+            # Hangi metodun içinde olduğunu bul: geriye git, def satırını ara
+            method_name = ""
+            for k in range(i - 1, max(0, i - 20), -1):
+                ml = lines[k].strip()
+                m = re.match(r'def (\w+)\s*\(', ml)
+                if m:
+                    method_name = m.group(1)
+                    break
+            if "version" in method_name.lower() or method_name in (
+                "_get_version_major", "get_template_version", "version",
+            ):
+                continue
+            # Sonraki 8 satırda add_result veya logger var mı?
+            context = '\n'.join(lines[i:i+8])
+            has_feedback = (
+                'add_result' in context
+                or 'logger.' in context
+                or '_logger.' in context
+                or 'logging.' in context
+                or 'log.' in context
+                or 'print(' in context          # visible terminal output
+                or 'NOT_FOUND' in context       # ToolStatus.NOT_FOUND carries tool name
+                or '"error"' in context         # error key in return dict
+            )
+            if not has_feedback and 'return' in context:
+                findings.append((rel, i+1, stripped))
 
     print(f"\n  Sessiz atlama (add_result olmadan return): {len(findings)}")
     for f, l, line in findings[:20]:

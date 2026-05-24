@@ -643,8 +643,8 @@ class CheckpointHook:
         if self._eta is not None and duration_s > 0:
             try:
                 self._eta.tick(duration_s)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.checkpoint] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def on_module_done(self, module: str) -> None:
         self._cp.mark_module_done(module)
@@ -671,8 +671,8 @@ class CheckpointHook:
             try:
                 snap = self._eta.snapshot()
                 eta_str = snap.get("eta_human", "?")
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.checkpoint] {type(_fix_e).__name__}: {_fix_e!r}")
         logger.info(
             f"[checkpoint] İlerleme: %{pct:.1f}  "
             f"({state.completed_count}/{state.total_tasks} görev)  "

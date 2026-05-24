@@ -334,8 +334,8 @@ def _detect_xml_endpoints(base_url: str, session) -> List[str]:
             r = session.get(url, timeout=5, verify=False)
             if r.status_code not in (404, 410):
                 found.append(url)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.ssrf_xxe] {type(_fix_e).__name__}: {_fix_e!r}")
     return found or [base_url]
 
 
@@ -348,8 +348,8 @@ def _post_xml_payload(session, url: str, xml: str, timeout: int = 10) -> Optiona
                 headers={"Content-Type": ct}, timeout=timeout, verify=False,
             )
             return r
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.ssrf_xxe] {type(_fix_e).__name__}: {_fix_e!r}")
     return None
 
 
@@ -463,8 +463,8 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                                         "role": role_name,
                                         "cred_snippet": cred_body[:300],
                                     }
-                            except Exception:
-                                pass
+                            except Exception as _fix_e:
+                                logger.debug(f"[scanners.ssrf_xxe] {type(_fix_e).__name__}: {_fix_e!r}")
 
                     finding = {
                         "type": "SSRF — Cloud Metadata Exposed",

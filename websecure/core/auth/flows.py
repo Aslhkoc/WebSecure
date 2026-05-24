@@ -79,7 +79,7 @@ class EmailOtpProvider:
                 try:
                     conn.logout()
                 except Exception as exc:
-                    pass
+                    logger.debug(f"[core.auth.flows] {type(exc).__name__}: {exc!r}")
         return None
 
     def _connect(self) -> imaplib.IMAP4:
@@ -107,7 +107,7 @@ class EmailOtpProvider:
                 if typ == "OK" and data and data[0]:
                     return data[0].split()
             except Exception as exc:
-                pass
+                logger.debug(f"[core.auth.flows] {type(exc).__name__}: {exc!r}")
         return []
 
     def _process_message(self, conn: imaplib.IMAP4, uid: bytes) -> Optional[str]:
@@ -134,7 +134,7 @@ class EmailOtpProvider:
             if m:
                 return m.group(1)
         except Exception as exc:
-            pass
+            logger.debug(f"[core.auth.flows] {type(exc).__name__}: {exc!r}")
         return None
 
     def _decode_subject(self, msg) -> str:

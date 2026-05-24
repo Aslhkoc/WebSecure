@@ -255,8 +255,8 @@ class SQLInjectionScanner(BaseScanner):
             try:
                 r = self.session.get(url, timeout=10)
                 lengths.append(len(r.text))
-            except _requests.exceptions.RequestException:
-                pass
+            except _requests.exceptions.RequestException as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         if len(lengths) < 2:
             mean = float(lengths[0]) if lengths else 0.0
             result = (mean, mean * 0.15, time.monotonic())
@@ -429,8 +429,8 @@ class SQLInjectionScanner(BaseScanner):
             try:
                 self.session.get(url, timeout=15)
                 times.append(time.time() - t0)
-            except _requests.exceptions.RequestException:
-                pass
+            except _requests.exceptions.RequestException as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         if len(times) < 2:
             mean = times[0] if times else 1.0
             return mean, mean * 0.2
@@ -499,8 +499,8 @@ class SQLInjectionScanner(BaseScanner):
                     hits += 1
             except _requests.exceptions.Timeout:
                 hits += 1  # timeout itself is evidence of delay
-            except _requests.exceptions.RequestException:
-                pass
+            except _requests.exceptions.RequestException as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         return hits >= min_hits
 
     def run(self, url, **kwargs):
@@ -1125,8 +1125,8 @@ class SQLInjectionScanner(BaseScanner):
                     oob_host = OASTClient().get_host()
             else:
                 oob_host = OASTClient().get_host()
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
 
         prober = OOBSQLiProber()
         for url in urls:
@@ -1494,8 +1494,8 @@ class OOBSQLiProber:
                 try:
                     session.get(injected, timeout=10)
                     sent.append({"db": db, "payload": payload})
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         return sent
 
 
@@ -1535,8 +1535,8 @@ class StackedQueryProber:
                         hits += 1
                 except _requests.exceptions.Timeout:
                     hits += 1
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
             if hits >= confirm_n:
                 evidence = (
                     f"Stacked query confirmed ({hits}/{confirm_n} shots >= {time_threshold}s) "
@@ -1690,8 +1690,8 @@ class SecondOrderSQLiProber:
                                 "payload": payload,
                                 "evidence": f"Second-order SQLi: pattern '{pat}' triggered at {read_url}",
                             }
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -1741,8 +1741,8 @@ class StoredSQLiProber:
                             "payload": marker_val,
                             "evidence": f"Stored SQLi: marker '{raw_marker}' unescaped at {read_url}",
                         }
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -1771,8 +1771,8 @@ class AdaptivePayloadMutator:
                 r = session.get(injected, timeout=timeout)
                 if r.status_code not in self._BLOCK_CODES:
                     return variant, r.status_code, r.text
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _variants(self, payload: str) -> List[str]:
@@ -1961,8 +1961,8 @@ class SQLiExploiter:
             try:
                 r = self.session.get(self._inject_fn(url, param, db_query), timeout=10)
                 databases = re.findall(r'([a-z_][a-z0-9_]{1,64})\|', r.text, re.I)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
 
         schema["databases"] = databases or schema.get("tables", [])
         return schema
@@ -2094,8 +2094,8 @@ class SQLiExploiter:
             import shutil as _sh
             try:
                 _sh.rmtree(out_dir)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def attempt_file_read(
         self, url: str, param: str, db_hint: str = "mysql"
@@ -2173,8 +2173,8 @@ class SQLiExploiter:
             r = self.session.get(f"{shell_url}?c=id", timeout=10)
             if "uid=" in r.text or r.status_code == 200:
                 return shell_url
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return None
 

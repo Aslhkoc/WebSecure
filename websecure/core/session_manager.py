@@ -128,8 +128,8 @@ class CookieSecurityAnalyzer:
             elif pl.startswith("max-age="):
                 try:
                     result.max_age = int(part.split("=", 1)[1])
-                except ValueError:
-                    pass
+                except ValueError as _fix_e:
+                    _logger.debug(f"[core.session_manager] {type(_fix_e).__name__}: {_fix_e!r}")
             elif pl.startswith("expires="):
                 result.expires = part.split("=", 1)[1].strip()
 

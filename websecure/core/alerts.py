@@ -22,7 +22,7 @@ class AlertManager:
             try:
                 winsound.Beep(freq, dur)
             except Exception as exc:
-                pass
+                _logger.debug(f"[core.alerts] {type(exc).__name__}: {exc!r}")
 
     @staticmethod
     def _play_pattern(pattern):

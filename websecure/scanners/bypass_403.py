@@ -117,8 +117,8 @@ def _path_variants(path: str) -> List[str]:
     try:
         from websecure.core.evasion import path_variants as _pv
         variants.extend(_pv(path))
-    except (ImportError, Exception):
-        pass
+    except (ImportError, Exception) as _fix_e:
+        logger.debug(f"[scanners.bypass_403] {type(_fix_e).__name__}: {_fix_e!r}")
 
     # deduplicate while preserving order
     seen: set = set()
@@ -532,8 +532,8 @@ class EncodingBypass(BaseScanner):
         try:
             from websecure.core.evasion import encoding_variants as _ev
             variants.extend(_ev(path, depth=2))
-        except (ImportError, Exception):
-            pass
+        except (ImportError, Exception) as _fix_e:
+            logger.debug(f"[scanners.bypass_403] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # deduplicate
         seen: set = set()

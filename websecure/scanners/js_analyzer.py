@@ -179,8 +179,8 @@ class JSAnalyzer:
                 r = self.session.head(candidate, timeout=5, allow_redirects=True)
                 if r.status_code == 200:
                     js_urls.add(candidate)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.js_analyzer] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # 4. Webpack chunk discovery — numbered chunk files (0.chunk.js ... 20.chunk.js)
         parsed_base = urlparse(base_url)
@@ -199,8 +199,8 @@ class JSAnalyzer:
                     r = self.session.head(url, timeout=4, allow_redirects=True)
                     if r.status_code == 200:
                         return url
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.js_analyzer] {type(_fix_e).__name__}: {_fix_e!r}")
             return None
 
         import concurrent.futures as _cf

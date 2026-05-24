@@ -1499,8 +1499,8 @@ class TorController:
                     try:
                         from websecure.core.circuit_breaker import cb_reset as _cb_reset
                         _cb_reset()
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
                     return True
                 else:
                     _logger.warning(f"[Tor] Signal failed: {resp.strip()}")
@@ -2233,8 +2233,8 @@ class AdaptiveMutationEngine:
                 key = f"{category}:{variant}"
                 if key not in self._tried[payload]:
                     mutations.append(variant)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return mutations
 
@@ -2564,8 +2564,8 @@ class WAFFingerprint:
             resp_body = ""
             try:
                 resp_body = response.text[:8192]
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
 
             best_vendor = "unknown"
             best_score = 0
@@ -2922,8 +2922,8 @@ class AdaptiveWAFBypass:
                                 "response_code": resp2.status_code,
                                 "waf": self.waf_name,
                             }
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
 
             except Exception as exc:
                 _logger.debug(f"[AdaptiveWAFBypass] Bypass attempt ({b_type}) failed: {exc!r}")
@@ -2990,8 +2990,8 @@ class WAFBypassScanner:
             try:
                 self._base.add(bucket, entry)
                 return
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
         with threading.Lock():
             self.results.setdefault(bucket, []).append(entry)
 

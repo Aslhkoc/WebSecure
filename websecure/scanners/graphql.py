@@ -56,8 +56,8 @@ class GraphQLClient:
         if "json" in ct or s.startswith("{") or s.startswith("["):
             try:
                 return json.loads(text)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as _fix_e:
+                logger.debug(f"[scanners.graphql] {type(_fix_e).__name__}: {_fix_e!r}")
         return {}
 
     def post(self, url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any], str, float]:

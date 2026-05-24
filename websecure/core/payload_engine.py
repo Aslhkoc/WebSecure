@@ -1397,8 +1397,8 @@ class WordlistUpdater:
                 try:
                     size_bytes = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
                     size_mb = round(size_bytes / 1024 / 1024, 1)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[core.payload_engine] {type(_fix_e).__name__}: {_fix_e!r}")
             result[name] = {
                 "exists": exists,
                 "is_git": is_git,

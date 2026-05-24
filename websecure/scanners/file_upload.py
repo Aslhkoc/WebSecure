@@ -330,8 +330,8 @@ def _find_uploaded_url(response_text: str, filename: str, base_url: str) -> Opti
             val = data.get(key) or (data.get("data") or {}).get(key) if isinstance(data.get("data"), dict) else None
             if val and isinstance(val, str):
                 return urljoin(base_url, val)
-    except (ValueError, AttributeError):
-        pass
+    except (ValueError, AttributeError) as _fix_e:
+        logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
 
     # 2. HTML src/href containing the filename
     safe_name = re.escape(filename.split("/")[-1].split("\x00")[0])
@@ -756,8 +756,8 @@ class PolyglotFileUploader(BaseScanner):
                 r = self.session.get(url, timeout=5)
                 if r.status_code not in (404, 410):
                     found.append((url, self._UPLOAD_FIELD_NAMES[0]))
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
         return found or [(base, self._UPLOAD_FIELD_NAMES[0])]
 
     def _try_upload(self, url: str, field: str, payload: Dict) -> Optional[Dict]:
@@ -805,8 +805,8 @@ class PolyglotFileUploader(BaseScanner):
                     if isinstance(val, str) and val.startswith("/"):
                         return urllib.parse.urljoin(base_url, val)
                     return val
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
         loc = resp.headers.get("location", "")
         if loc:
             return urllib.parse.urljoin(base_url, loc)
@@ -823,8 +823,8 @@ class PolyglotFileUploader(BaseScanner):
                 return body[:200]
             if "SVG+XXE" in payload_name and re.search(r"root:.*:0:0:|bin/bash", body):
                 return body[:200]
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -865,8 +865,8 @@ class ImageTragickExploiter(BaseScanner):
                 r = self.session.get(url, timeout=5)
                 if r.status_code not in (404, 410):
                     found.append((url, "image"))
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
         return found or [(base, "image")]
 
     def _try_imagetragick(self, url: str, field: str, payload: Dict) -> Optional[Dict]:

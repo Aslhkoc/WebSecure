@@ -11,6 +11,8 @@ Hızlı Kullanım
 ```python
 from websecure.integrations import ToolRegistry, FindingCorrelator
 
+_logger = logging.getLogger(__name__)
+
 registry = ToolRegistry.instance()
 correlator = FindingCorrelator()
 
@@ -188,8 +190,8 @@ def _auto_register_tools() -> ToolRegistry:
             try:
                 tool = cls()
                 registry.register(tool)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[integrations.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
     return registry
 
@@ -197,8 +199,8 @@ def _auto_register_tools() -> ToolRegistry:
 # Modül yüklendiğinde otomatik kayıt
 try:
     _auto_register_tools()
-except Exception:
-    pass
+except Exception as _fix_e:
+    _logger.debug(f"[integrations.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
 
 # ---------------------------------------------------------------------------

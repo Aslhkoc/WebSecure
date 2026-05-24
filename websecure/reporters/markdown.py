@@ -365,8 +365,8 @@ def render(results: Dict) -> str:
                 test_url = urlunparse(_p._replace(query=urlencode(_params)))
                 if test_url != target_url:
                     lines.append(f"- **Test URL** *(payload enjekte edildi)*: `{test_url[:300]}`")
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[reporters.markdown] {type(_fix_e).__name__}: {_fix_e!r}")
 
         lines.append(f"- **Parameter**: `{param}`")
         if payload:

@@ -1281,8 +1281,8 @@ class ExploitGraphBuilder:
                 val = float(finding.get(key, 0))
                 if 0 < val <= 10:
                     return val
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as _fix_e:
+                _logger.debug(f"[core.chain_reactor] {type(_fix_e).__name__}: {_fix_e!r}")
         return CVSSChainCalculator.score_for_severity(severity)
 
 

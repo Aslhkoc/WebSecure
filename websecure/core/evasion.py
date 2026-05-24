@@ -389,7 +389,7 @@ class EncodingChain:
             try:
                 variants.add(self.apply(payload, [t]))
             except Exception as exc:
-                pass
+                _logger.debug(f"[core.evasion] {type(exc).__name__}: {exc!r}")
 
         if depth >= 2:
             for t1 in single:
@@ -398,7 +398,7 @@ class EncodingChain:
                         try:
                             variants.add(self.apply(payload, [t1, t2]))
                         except Exception as exc:
-                            pass
+                            _logger.debug(f"[core.evasion] {type(exc).__name__}: {exc!r}")
 
         return sorted(variants, key=len)
 

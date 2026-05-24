@@ -170,8 +170,8 @@ class Mutator:
             try:
                 v.encode("utf-8")
                 result.append(v)
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                pass
+            except (UnicodeEncodeError, UnicodeDecodeError) as _fix_e:
+                _logger.debug(f"[core.mutator] {type(_fix_e).__name__}: {_fix_e!r}")
         return result[:max_variants]
 
     @staticmethod

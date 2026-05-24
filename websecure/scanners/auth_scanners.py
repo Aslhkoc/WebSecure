@@ -84,8 +84,8 @@ class AuthenticatedSession:
                 try:
                     j = r2.json()
                     tok = j.get("token") or j.get("access_token")
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as _fix_e:
+                    _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
             self.ctx.token = tok
             return True
         return False
@@ -679,8 +679,8 @@ class OAuth2AttackSurface(BaseScanner):
                 r = self.session.get(url, timeout=5, allow_redirects=False)
                 if r.status_code not in (404, 410):
                     found.append(url)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return found or [base]
 
     def _inject_redirect_uri(self, endpoint: str, bypass: str) -> str:
@@ -1079,8 +1079,8 @@ class SAMLInjector(BaseScanner):
                 r = self.session.get(url, timeout=5, allow_redirects=False)
                 if r.status_code not in (404, 410):
                     return url
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _make_evil_assertion(self, username: str = "admin") -> str:
@@ -1249,8 +1249,8 @@ class TwoFABypassProber(BaseScanner):
                 r = self.session.get(url, timeout=5, allow_redirects=False)
                 if r.status_code not in (404, 410):
                     return url
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _try_direct_bypass(self, base: str) -> Optional[Dict]:
@@ -1271,8 +1271,8 @@ class TwoFABypassProber(BaseScanner):
                             ),
                             "evidence": {"path": path, "status": r.status_code, "body_hint": body[:100]},
                         }
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _try_rate_limit_bypass(self, two_fa_url: str) -> Optional[Dict]:
@@ -1292,8 +1292,8 @@ class TwoFABypassProber(BaseScanner):
                 # If we keep getting non-429 responses, rate limiting is bypassed
                 if r.status_code != 429:
                     success_count += 1
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         if success_count >= 4:
             return {
                 "vuln_type": "2FA Rate Limit Bypass via IP Header Rotation",
@@ -1411,8 +1411,8 @@ class PasswordResetAttacker(BaseScanner):
                 r = self.session.get(url, timeout=5, allow_redirects=False)
                 if r.status_code not in (404, 410):
                     return url
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_host_header_injection(self, reset_url: str, email: str) -> List[Dict]:
@@ -1496,8 +1496,8 @@ class PasswordResetAttacker(BaseScanner):
                 token_match = re.search(r"[?&]token=([A-Za-z0-9_\-]{6,})", loc + (r.text or ""))
                 if token_match:
                     tokens.append(token_match.group(1))
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         if len(tokens) < 2:
             return None
         t1, t2 = tokens
@@ -1642,8 +1642,8 @@ class PrivilegeEscalationProber(BaseScanner):
                                 "evidence": {"field": field, "value": str(val),
                                              "status": r.status_code, "body_snippet": body[:150]},
                             }
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_method_override(self, url: str, auth_headers: Dict) -> Optional[Dict]:
@@ -1667,8 +1667,8 @@ class PrivilegeEscalationProber(BaseScanner):
                         ),
                         "evidence": {"override_header": extra_hdrs, "status": r.status_code},
                     }
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -1744,8 +1744,8 @@ class BOLAIDORChain(BaseScanner):
                         # Store the template
                         found.append(url)
                         break
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return found or [base]
 
     def _fuzz_numeric_id(self, endpoint: str, victim_hdrs: Dict, attacker_hdrs: Dict) -> List[Dict]:
@@ -1860,8 +1860,8 @@ class BOLAIDORChain(BaseScanner):
                                     "evidence": {"param": id_param, "id": test_id,
                                                  "status": r.status_code, "body_len": len(body)},
                                 })
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
         return results
 
 

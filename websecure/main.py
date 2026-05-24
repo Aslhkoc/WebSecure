@@ -1610,8 +1610,8 @@ def main() -> None:
     try:
         from websecure.core.phases import _install_sigint_handler  # noqa: PLC0415
         _install_sigint_handler()
-    except (ImportError, Exception):
-        pass
+    except (ImportError, Exception) as _fix_e:
+        _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
 
     _ = _ensure_wl(cfg)
     results: dict = {"phase_timings": {}, "sections": []}
@@ -1812,8 +1812,8 @@ def _run_scan_phases(
             # Faz 19 fix: human_adapter'ı plan çalışmadan ÖNCE inject et
             try:
                 ctx.human_adapter = _human_adapter_inst  # None olabilir, sorun değil
-            except (AttributeError, TypeError):
-                pass
+            except (AttributeError, TypeError) as _fix_e:
+                _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
             
             # [WS3] Inject manual phases for correct reporting
             manual_plan = [
@@ -1976,8 +1976,8 @@ def _run_scan_phases(
             results["_plan_ran"] = True
             try:
                 ctx._plan_ran = True
-            except (AttributeError, TypeError):
-                pass
+            except (AttributeError, TypeError) as _fix_e:
+                _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
         else:
             print("[!] CRITICAL: run_plan_if_needed fonksiyonu bulunamadi, manuel yedek calistiriliyor...")
             # Fallback: phases.py:phase_portscan() doğrudan çağrılır
@@ -2306,8 +2306,8 @@ def _run_scan_phases(
         if _human_adapter_inst is not None:
             try:
                 ctx.human_adapter = _human_adapter_inst
-            except (AttributeError, TypeError):
-                pass
+            except (AttributeError, TypeError) as _fix_e:
+                _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # [Fix] Direct Phase Execution — only runs if first call at line ~1911 did NOT execute
         # Faz 19 fix: _plan_ran kontrolü results dict üzerinden yapılır (ctx nesne değiştiğinden)
@@ -2319,8 +2319,8 @@ def _run_scan_phases(
             results["_plan_ran"] = True
             try:
                 ctx._plan_ran = True
-            except (AttributeError, TypeError):
-                pass
+            except (AttributeError, TypeError) as _fix_e:
+                _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
         else:
             _logger.debug("[main] Faz planı zaten çalıştırıldı, ikinci çağrı atlandı.")
 
@@ -2777,8 +2777,8 @@ if __name__ == "__main__":
         sys.stdout.write("\n[i] Cikmak icin Enter'a basin...\n")
         sys.stdout.flush()
         sys.stdin.readline()
-    except (EOFError, KeyboardInterrupt, UnicodeDecodeError, OSError):
-        pass
+    except (EOFError, KeyboardInterrupt, UnicodeDecodeError, OSError) as _fix_e:
+        _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
 
 
 

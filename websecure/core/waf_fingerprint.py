@@ -144,8 +144,8 @@ class WAFPayloadClassifier:
                         )
                     if r.status_code in (400, 403, 406, 429, 503):
                         blocked_count += 1
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.waf_fingerprint] {type(_fix_e).__name__}: {_fix_e!r}")
             results[probe_type] = blocked_count > 0
 
         return results

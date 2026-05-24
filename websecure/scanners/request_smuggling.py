@@ -77,8 +77,8 @@ def _send_recv(
                 if not chunk:
                     break
                 chunks.append(chunk)
-        except socket.timeout:
-            pass
+        except socket.timeout as _fix_e:
+            logger.debug(f"[scanners.request_smuggling] {type(_fix_e).__name__}: {_fix_e!r}")
         elapsed = time.perf_counter() - t0
         s.close()
         return b"".join(chunks), elapsed
@@ -351,8 +351,8 @@ def _probe_differential(
                 if not c:
                     break
                 chunks.append(c)
-        except socket.timeout:
-            pass
+        except socket.timeout as _fix_e:
+            logger.debug(f"[scanners.request_smuggling] {type(_fix_e).__name__}: {_fix_e!r}")
         s.close()
         raw  = b"".join(chunks)
         body = _response_body(raw)
@@ -594,8 +594,8 @@ def _recv_all(sock: socket.socket, timeout: float = 2.0) -> bytes:
             if not chunk:
                 break
             data += chunk
-    except (socket.timeout, OSError):
-        pass
+    except (socket.timeout, OSError) as _fix_e:
+        logger.debug(f"[scanners.request_smuggling] {type(_fix_e).__name__}: {_fix_e!r}")
     return data
 
 

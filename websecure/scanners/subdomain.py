@@ -478,8 +478,8 @@ class DNSZoneTransfer:
                                 ip = _resolve(part)
                                 if ip and ip not in ns_ips:
                                     ns_ips.append(ip)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.subdomain] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Yöntem 2: Yaygın NS prefix'leri dene
         if not ns_ips:

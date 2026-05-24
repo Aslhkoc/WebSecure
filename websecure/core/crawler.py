@@ -124,8 +124,8 @@ def _url_template(url: str) -> str:
         try:
             keys = sorted(parse_qs(parsed.query, keep_blank_values=True).keys())
             return f"{parsed.netloc}/{'/'.join(norm)}?{'&'.join(keys)}"
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.crawler] {type(_fix_e).__name__}: {_fix_e!r}")
     return f"{parsed.netloc}/{'/'.join(norm)}"
 
 
@@ -499,8 +499,8 @@ class GRPCProber:
             if proto == "h2":
                 return [{"service": "unknown_grpc", "port": port,
                          "methods": [], "source": "h2_alpn_detected"}]
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.crawler] {type(_fix_e).__name__}: {_fix_e!r}")
         return []
 
 

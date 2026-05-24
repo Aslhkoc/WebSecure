@@ -393,6 +393,7 @@ def run_amass(
     """
     wrapper = AmassWrapper(passive_only=passive_only, timeout_s=timeout_s)
     if not wrapper.is_available():
+        logger.warning("[Amass] get_subdomains: binary bulunamadı, atlanıyor.")
         return []
     result = wrapper.run(target, include_asn=include_asn)
     return result.extra.get("subdomains", [])
@@ -679,8 +680,8 @@ class InteractshIntegration(ToolIntegration):
                                 continue
                             try:
                                 interactions.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                pass
+                            except json.JSONDecodeError as _fix_e:
+                                logger.debug(f"[integrations.amass] {type(_fix_e).__name__}: {_fix_e!r}")
                 except Exception as exc:
                     logger.debug(f"[interactsh] Çıktı parse hatası: {exc!r}")
 

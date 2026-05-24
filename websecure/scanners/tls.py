@@ -90,8 +90,8 @@ def check_weak_ciphers(host: str, port: int) -> List[str]:
                     if cipher:
                         c_name = cipher[0]
                         weak_ciphers_found.append(f"{name} ({c_name})")
-        except (ssl.SSLError, socket.error):
-            pass
+        except (ssl.SSLError, socket.error) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
             
     return weak_ciphers_found
 
@@ -303,8 +303,8 @@ class TLSBEASTPoodleProber(BaseScanner):
                             ),
                             "evidence": {"tls_version": ver, "cipher": cipher[0], "host": host},
                         }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_poodle(self, host: str, port: int) -> Optional[Dict]:
@@ -324,8 +324,8 @@ class TLSBEASTPoodleProber(BaseScanner):
                             "description": "Server supports SSLv3. Vulnerable to POODLE attack.",
                             "evidence": {"version": s.version(), "host": host},
                         }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_tls11(self, host: str, port: int) -> Optional[Dict]:
@@ -346,8 +346,8 @@ class TLSBEASTPoodleProber(BaseScanner):
                             "description": "TLS 1.1 is deprecated (RFC 8996). Disable and use TLS 1.2/1.3 only.",
                             "evidence": {"version": "TLS 1.1", "host": host},
                         }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -399,8 +399,8 @@ class TLSCRIMEBREACHProber(BaseScanner):
                             ),
                             "evidence": {"compression": comp, "host": host},
                         }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _probe_breach(self, url: str) -> Optional[Dict]:
@@ -544,8 +544,8 @@ class HTTP2HTTP3Checker(BaseScanner):
                             "description": "Server supports HTTP/2 (ALPN negotiated h2). Modern protocol.",
                             "evidence": {"alpn": proto},
                         }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _check_h3(self, url: str) -> Optional[Dict]:
@@ -559,8 +559,8 @@ class HTTP2HTTP3Checker(BaseScanner):
                     "description": f"Server advertises HTTP/3/QUIC via Alt-Svc: {alt[:100]}",
                     "evidence": {"alt_svc": alt},
                 }
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 
@@ -644,8 +644,8 @@ class CDNMisconfigProber(BaseScanner):
                     "description": f"CDN/proxy headers exposed: Via={via!r}, X-Cache={xcache!r}, Server={srv!r}",
                     "evidence": {"via": via, "x_cache": xcache, "server": srv},
                 })
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return results
 
@@ -756,8 +756,8 @@ class WeakCipherSuiteProber(BaseScanner):
                                 "host": host,
                             },
                         }
-        except (ssl.SSLError, socket.error, OSError):
-            pass
+        except (ssl.SSLError, socket.error, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except AttributeError:
             pass
         except Exception as exc:
@@ -800,8 +800,8 @@ class WeakCipherSuiteProber(BaseScanner):
                                 "host": host,
                             },
                         }
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[WeakCipher] subprocess fallback error: %s", exc)
 
@@ -1028,8 +1028,8 @@ class TLSProtocolDowngradeProber(BaseScanner):
             pass  # Python/OpenSSL removed SSLv2 — server almost certainly doesn't support it
         except ssl.SSLError:
             pass  # Handshake failed — server correctly rejects SSLv2
-        except (socket.error, OSError):
-            pass
+        except (socket.error, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[Downgrade] SSLv2 probe error: %s", exc)
         return None
@@ -1062,8 +1062,8 @@ class TLSProtocolDowngradeProber(BaseScanner):
             pass  # SSLv3 constant unavailable in this Python/OpenSSL build
         except ssl.SSLError:
             pass  # Handshake failed — server correctly rejects SSLv3
-        except (socket.error, OSError):
-            pass
+        except (socket.error, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[Downgrade] SSLv3 probe error: %s", exc)
         return None
@@ -1095,10 +1095,10 @@ class TLSProtocolDowngradeProber(BaseScanner):
                         }
         except AttributeError:
             pass
-        except ssl.SSLError:
-            pass
-        except (socket.error, OSError):
-            pass
+        except ssl.SSLError as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
+        except (socket.error, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[Downgrade] TLSv1.0 probe error: %s", exc)
         return None
@@ -1130,10 +1130,10 @@ class TLSProtocolDowngradeProber(BaseScanner):
                         }
         except AttributeError:
             pass
-        except ssl.SSLError:
-            pass
-        except (socket.error, OSError):
-            pass
+        except ssl.SSLError as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
+        except (socket.error, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[Downgrade] TLSv1.1 probe error: %s", exc)
         return None
@@ -1391,8 +1391,8 @@ class TLSCompressionProber(BaseScanner):
                         "host": host,
                     },
                 }
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as _fix_e:
+            _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as exc:
             _deep_logger.debug("[Compression] subprocess error: %s", exc)
 
@@ -1505,8 +1505,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                         "evidence": {"host": host, "port": port, "detection": "sslyze"},
                         "cvss": 9.8,
                     })
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # ROBOT
             try:
@@ -1524,8 +1524,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                         "evidence": {"robot_result": str(robot.robot_result), "detection": "sslyze"},
                         "cvss": 7.5,
                     })
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # OpenSSL CCS Injection
             try:
@@ -1542,8 +1542,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                         "evidence": {"host": host, "detection": "sslyze"},
                         "cvss": 7.4,
                     })
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # Session Renegotiation
             try:
@@ -1571,8 +1571,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                             ),
                             "evidence": {"host": host, "detection": "sslyze"},
                         })
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # Certificate Info
             try:
@@ -1608,8 +1608,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                             "description": f"Certificate subject does not match hostname '{host}'.",
                             "evidence": {"host": host, "detection": "sslyze"},
                         })
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # Weak cipher suites (TLS 1.0 / 1.1 accepted ciphers)
             for suite_result in [getattr(r, "tls_1_0_cipher_suites", None),
@@ -1625,8 +1625,8 @@ def _run_sslyze(target: str) -> List[Dict]:
                             "description": f"Server accepts {proto} connections. Accepted ciphers: {names}",
                             "evidence": {"protocol": proto, "ciphers": names, "detection": "sslyze"},
                         })
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
 
     except (ConnectionToServerFailed, ServerRejectedTlsHandshake, Exception) as exc:
         _deep_logger.debug("[sslyze] scan failed for %s: %s", host, exc)

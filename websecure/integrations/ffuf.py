@@ -161,6 +161,7 @@ class FFUFWrapper(ToolIntegration):
         :return: List of findings
         """
         if not self.is_available():
+            logger.warning("[Ffuf] run_scan: binary bulunamadı, atlanıyor.")
             return []
 
         if "FUZZ" not in url:
@@ -464,6 +465,7 @@ class FFUFWrapper(ToolIntegration):
         Useful for discovering hidden/undocumented headers that change behavior.
         """
         if not self.is_available():
+            logger.warning("[Ffuf] fuzz_headers: binary bulunamadı, atlanıyor.")
             return []
 
         _temp_wl = None
@@ -642,8 +644,8 @@ class FeroxbusterWrapper(ToolIntegration):
                                     "lines": data.get("line_count"),
                                     "title": data.get("title", "")
                                 })
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as _fix_e:
+                            logger.debug(f"[integrations.ffuf] {type(_fix_e).__name__}: {_fix_e!r}")
             return results
 
         except Exception as e:

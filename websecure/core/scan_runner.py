@@ -241,8 +241,8 @@ class ScanSession:
         if ETACalc is not None and total_tasks > 0:
             try:
                 self._eta = ETACalc(total_tasks=total_tasks)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.scan_runner] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Hook
         self._hook = None
@@ -555,8 +555,8 @@ def post_scan_persist(
         _db = None
         try:
             _db = _get_db()
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[core.scan_runner] {type(_fix_e).__name__}: {_fix_e!r}")
         tracker = get_score_tracker(db=_db)
         snapshot = tracker.record(
             scan_id=scan_id,

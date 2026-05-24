@@ -620,8 +620,8 @@ class XSSScanner(BaseScanner):
                 try:
                     bl = self.session.get(url, timeout=8)
                     baseline_status = bl.status_code
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.xss] {type(_fix_e).__name__}: {_fix_e!r}")
                 if baseline_status == 404:
                     return None  # both 404 -> false positive
 
@@ -808,8 +808,8 @@ class XSSScanner(BaseScanner):
                 csp_bypasses = csp_analyzer.get_bypass_payloads(csp_info)
                 if csp_bypasses:
                     logger.info("[XSS] CSP detected on %s -> %d bypass payloads", url, len(csp_bypasses))
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.xss] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # Prototype pollution — URL-level, no specific param
             for f in pp_prober.probe(url, self.session):
@@ -1709,8 +1709,8 @@ class XSSToATOChain:
                     # Payload inject edilmemişse JS ile çalıştır
                     page.evaluate(steal_js)
                     page.wait_for_timeout(3000)  # callback için bekle
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.xss] {type(_fix_e).__name__}: {_fix_e!r}")
                 finally:
                     browser.close()
             return True

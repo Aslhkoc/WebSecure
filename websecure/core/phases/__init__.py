@@ -49,8 +49,8 @@ def unregister_child_proc(proc) -> None:
     with _CHILD_PROCS_LOCK:
         try:
             _CHILD_PROCS.remove(proc)
-        except ValueError:
-            pass
+        except ValueError as _fix_e:
+            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
 
 def _kill_all_children() -> None:
@@ -103,8 +103,8 @@ def _install_sigint_handler():
             _fe.start()
 
         signal.signal(signal.SIGINT, _handler)
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as _fix_e:
+        _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result, redact_sensitive
 # Safe imports for optional scanners
@@ -403,8 +403,8 @@ def phase_waf_detect(ctx: dict):
                 ctx["waf_profile"] = profile
             else:
                 ctx.waf_profile = profile
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
         # Bypass session oluştur
         try:
             from websecure.core.waf_bypass import build_bypass_session
@@ -414,8 +414,8 @@ def phase_waf_detect(ctx: dict):
                     ctx["bypass_session"] = _bypass_sess
                 else:
                     ctx.bypass_session = _bypass_sess
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
         except (ImportError, AttributeError) as exc:
             _logger.debug(f"[phases] WAF bypass session unavailable: {exc!r}")
         add_result("waf", {
@@ -468,8 +468,8 @@ def phase_waf_detect(ctx: dict):
                         ctx["waf_profile"] = _waf
                     else:
                         ctx.waf_profile = _waf
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
         except Exception as _e2:
             _logger.debug(f"[phases] detect_waf_from_response fallback skipped: {_e2}")
 
@@ -603,12 +603,12 @@ def _phase_httpx_port_fallback(ctx, host: str) -> None:
                     t = soup.find("title")
                     if t:
                         http_info["title"] = t.get_text(strip=True)[:100]
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
                 if svc == "unknown":
                     svc = scheme
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
         severity = "info"
         # Kritik servisler için severity yükselt
@@ -969,8 +969,8 @@ def get_results() -> dict:
                 import importlib as _im
                 mod = _im.import_module("reporting")
                 _reporting_mod = mod
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
     fn = getattr(mod, "get_results", None) if mod is not None else None
     if callable(fn):
         try:
@@ -2518,8 +2518,8 @@ def _runner_human_adapter(ctx) -> None:
         if hasattr(ctx, "__dict__") or hasattr(ctx, "__slots__"):
             try:
                 setattr(ctx, "human_adapter", human_sess)
-            except (AttributeError, TypeError):
-                pass
+            except (AttributeError, TypeError) as _fix_e:
+                _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
         add_result("meta", {"stage": "human_adapter", "status": "active", "profile": _scan_profile})
         _logger.info(f"[phases] HumanLike adapter aktif: {_scan_profile}")
     except ImportError:
@@ -3545,8 +3545,8 @@ def run_portscan(ctx):
         _ctx_results = {}
         try:
             ctx.results = _ctx_results
-        except (AttributeError, TypeError):
-            pass
+        except (AttributeError, TypeError) as _fix_e:
+            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
     results = _ctx_results
 
     # Nmap disabled ise atla
@@ -3733,8 +3733,8 @@ def run_portscan(ctx):
         results["os_guess"] = os_guesses[0]
         try:
             ctx.os_guess = os_guesses[0]
-        except (AttributeError, TypeError):
-            pass
+        except (AttributeError, TypeError) as _fix_e:
+            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
     # Reporting uyumluluğu için results dict'e de yaz
     results["port_scan"] = port_records
@@ -3862,8 +3862,8 @@ def run_plan_if_needed(ctx: dict):
     try:
         from websecure.core.circuit_breaker import reset_circuit_breaker as _reset_cb
         _reset_cb()
-    except Exception:
-        pass
+    except Exception as _fix_e:
+        _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
     # Inject AsyncScanRunner into ctx so individual scanners can use parallel HTTP probes
     try:
@@ -3876,8 +3876,8 @@ def run_plan_if_needed(ctx: dict):
             ctx["async_runner"] = _ar
         else:
             setattr(ctx, "async_runner", _ar)
-    except Exception:
-        pass
+    except Exception as _fix_e:
+        _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
     plan = build_plan(ctx)
     if not plan:
@@ -5312,8 +5312,8 @@ def run_reporting_and_integration(ctx) -> None:
     try:
         import os as _os
         _os.makedirs(_out_dir, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as _fix_e:
+        _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
     if "sarif" not in _formats:
         try:

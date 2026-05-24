@@ -138,8 +138,8 @@ class DashboardState:
         with self._lock:
             try:
                 self._sse_clients.remove(q)
-            except ValueError:
-                pass
+            except ValueError as _fix_e:
+                logger.debug(f"[cli.web_ui] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def _broadcast(self, data: Dict[str, Any]) -> None:
         msg = f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -544,8 +544,8 @@ class WebDashboard:
         if open_browser:
             try:
                 webbrowser.open(self.url)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[cli.web_ui] {type(_fix_e).__name__}: {_fix_e!r}")
         print(f"  [*] Web Dashboard: {self.url}")
 
     def stop(self) -> None:

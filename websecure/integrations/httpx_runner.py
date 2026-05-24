@@ -477,6 +477,7 @@ def probe_hosts(
     """
     wrapper = HttpxWrapper(threads=threads)
     if not wrapper.is_available():
+        logger.warning("[Httpx] probe_bulk_hosts: binary bulunamadı, atlanıyor.")
         return []
     result = wrapper.probe_bulk(hosts, tech_detect=tech_detect)
     return [ProbeResult(**p) for p in result.extra.get("probe_results", [])]

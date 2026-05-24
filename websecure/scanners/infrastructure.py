@@ -711,8 +711,8 @@ class HeaderScanner(BaseScanner):
                     "evidence": body[:300],
                     "cwe": "CWE-444",
                 })
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.infrastructure] {type(_fix_e).__name__}: {_fix_e!r}")
         return findings
 
     def _test_cache_deception(self, url: str) -> t.List[HeaderFinding]:
@@ -781,8 +781,8 @@ class HeaderScanner(BaseScanner):
                             break
                 except Exception:
                     continue
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.infrastructure] {type(_fix_e).__name__}: {_fix_e!r}")
         return findings
 
 # ============================================================================
@@ -831,8 +831,8 @@ def _extract_cert_details_from_obj(cert) -> dict:
         try:
             san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
             san_list = san_ext.value.get_values_for_type(x509.DNSName)
-        except x509.ExtensionNotFound:
-            pass
+        except x509.ExtensionNotFound as _fix_e:
+            _logger.debug(f"[scanners.infrastructure] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return {
             "subject_CN":  sub_cn,
@@ -970,7 +970,7 @@ class PySSLCertChecker:
                     dt_na = dt_na.replace(tzinfo=timezone.utc)
                 days = (dt_na - datetime.now(timezone.utc)).days
             except Exception as exc:
-                pass
+                _logger.debug(f"[scanners.infrastructure] {type(exc).__name__}: {exc!r}")
 
         return CertificateReport(
             host=host, port=port, scheme=scheme,
@@ -1020,7 +1020,7 @@ def check_ssl_certificate(url: str, *, timeout=10, config=None, session=None, hs
             r = s.head("https://" + host, timeout=5, verify=False)
             hsts_on = "strict-transport-security" in r.headers.keys() or "Strict-Transport-Security" in r.headers
         except Exception as exc:
-            pass            
+            _logger.debug(f"[scanners.infrastructure] {type(exc).__name__}: {exc!r}")
             
     # TLS version weakness
     tls_warnings: t.List[str] = []

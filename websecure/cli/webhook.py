@@ -388,8 +388,8 @@ class WebhookDispatcher:
                     for cb in self._callbacks:
                         try:
                             cb(event, ok)
-                        except Exception:
-                            pass
+                        except Exception as _fix_e:
+                            logger.debug(f"[cli.webhook] {type(_fix_e).__name__}: {_fix_e!r}")
                 except Exception as exc:
                     logger.error(f"[Webhook] Worker hatası: {exc!r}", exc_info=True)
             self._queue.task_done()

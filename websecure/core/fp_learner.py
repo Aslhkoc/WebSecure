@@ -77,8 +77,8 @@ class FPRule:
                 age_days = (_dt.datetime.now(_dt.timezone.utc) - created).days
                 if age_days > _RULE_TTL_DAYS:
                     return False
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.fp_learner] {type(_fix_e).__name__}: {_fix_e!r}")
 
         title = finding.get("title", "")
         url = finding.get("url", "")
@@ -439,8 +439,8 @@ class FPLearner:
                 try:
                     rule = FPRule.from_dict(d)
                     self._rules[rule.fingerprint()] = rule
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[core.fp_learner] {type(_fix_e).__name__}: {_fix_e!r}")
             logger.debug(f"[FPLearner] {len(self._rules)} FP kuralı yüklendi.")
         except Exception as exc:
             logger.error(f"[FPLearner] Yükleme hatası: {exc!r}")
@@ -453,8 +453,8 @@ class FPLearner:
             from websecure.db.repository import FindingRepository
             # Sadece logluyoruz; FP repository ayrı eklenebilir
             logger.debug("[FPLearner] DB kayıt (FP tablo repo genişletilebilir).")
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[core.fp_learner] {type(_fix_e).__name__}: {_fix_e!r}")
 
 
 # ---------------------------------------------------------------------------

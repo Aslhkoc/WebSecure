@@ -111,8 +111,8 @@ def new_tor_identity() -> bool:
         try:
             from websecure.core.circuit_breaker import cb_reset as _cb_reset
             _cb_reset()
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.egress] {type(_fix_e).__name__}: {_fix_e!r}")
         return True
 
     # 2. Cookie auth dene
@@ -125,8 +125,8 @@ def new_tor_identity() -> bool:
             try:
                 from websecure.core.circuit_breaker import cb_reset as _cb_reset
                 _cb_reset()
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[core.egress] {type(_fix_e).__name__}: {_fix_e!r}")
             return True
         _logger.warning("[egress] Cookie auth da başarısız. Tor control port erişilemiyor.")
     else:

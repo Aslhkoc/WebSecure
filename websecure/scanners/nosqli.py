@@ -49,8 +49,8 @@ def _load_nosqli_payloads() -> List[Tuple[str, str]]:
             try:
                 obj = json.loads(stripped)
                 extra_json.append((obj, "ext_operator"))
-            except (json.JSONDecodeError, ValueError):
-                pass
+            except (json.JSONDecodeError, ValueError) as _fix_e:
+                logger.debug(f"[scanners.nosqli] {type(_fix_e).__name__}: {_fix_e!r}")
         elif stripped not in seen_str:
             seen_str.add(stripped)
             extra_str.append((stripped, "ext_string"))

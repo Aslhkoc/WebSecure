@@ -267,8 +267,8 @@ class CmdiScanner(BaseScanner):
                     hits += 1
             except _requests.exceptions.Timeout:
                 hits += 1
-            except _requests.exceptions.RequestException:
-                pass
+            except _requests.exceptions.RequestException as _fix_e:
+                logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
             if hits >= min_hits:
                 return True
         return False
@@ -374,8 +374,8 @@ class CmdiScanner(BaseScanner):
             poller = get_global_poller()
             if poller and hasattr(poller, "_domain"):
                 return poller._domain
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
         return (self.results or {}).get("oast_domain")
 
     def _scan_oob_cmdi(self, url: str, params: list, param_name: str) -> None:
@@ -403,8 +403,8 @@ class CmdiScanner(BaseScanner):
             t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
             try:
                 self.session.get(t_url, timeout=REQUEST_TIMEOUT)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # BUG FIX: The previous 10-second blocking poll was executed synchronously
         # for every parameter (e.g., 5 params = 50s of blocking sleep) and stalled
@@ -477,16 +477,16 @@ class CMDiOOBDNSProber(BaseScanner):
                 t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
                 try:
                     self.session.get(t_url, timeout=REQUEST_TIMEOUT)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
 
                 # Also try URL-encoded variant
                 new_qs_enc = [(p, v + encoded_payload if p == param_name else v) for p, v in params]
                 t_url_enc = urlunparse(parsed._replace(query=urlencode(new_qs_enc)))
                 try:
                     self.session.get(t_url_enc, timeout=REQUEST_TIMEOUT)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # Check OAST poller for immediate callback
             if oast_domain:
@@ -614,8 +614,8 @@ class CMDiTimeBasedProber(BaseScanner):
             chain_enc = encode_chain(payload, ["url", "html"])
             if chain_enc not in variants:
                 variants.append(chain_enc)
-        except (ImportError, Exception):
-            pass
+        except (ImportError, Exception) as _fix_e:
+            logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
         # deduplicate while preserving order
         seen: set = set()
         unique: List[str] = []
@@ -644,8 +644,8 @@ class CMDiTimeBasedProber(BaseScanner):
                     hits += 1
             except _requests.exceptions.Timeout:
                 hits += 1
-            except _requests.exceptions.RequestException:
-                pass
+            except _requests.exceptions.RequestException as _fix_e:
+                logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
             if hits >= self._VERIFY_MIN_HITS:
                 return True
         return False

@@ -398,11 +398,11 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
                     try:
                         from websecure.core.profiles import apply_profile
                         cfg = apply_profile(profile_id, cfg)
-                    except Exception:
-                        pass
+                    except Exception as _fix_e:
+                        _logger.debug(f"[core.scan_profile] {type(_fix_e).__name__}: {_fix_e!r}")
                     return profile_id, cfg
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as _fix_e:
+            _logger.debug(f"[core.scan_profile] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # Yerlesik profil secimi
         matched = next((e for e in MENU_ENTRIES if e[0] == sel), None)

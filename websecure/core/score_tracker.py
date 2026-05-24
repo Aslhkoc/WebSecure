@@ -480,8 +480,8 @@ class ScoreTracker:
                         tenant_id=d.get("tenant_id"),
                     )
                     self._history.append(snap)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[core.score_tracker] {type(_fix_e).__name__}: {_fix_e!r}")
             logger.debug(f"[ScoreTracker] {len(self._history)} skor yüklendi.")
         except Exception as exc:
             logger.error(f"[ScoreTracker] Yükleme hatası: {exc!r}")
@@ -530,8 +530,8 @@ def get_score_tracker(db=None) -> ScoreTracker:
             try:
                 from websecure.db import get_db
                 db = get_db()
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[core.score_tracker] {type(_fix_e).__name__}: {_fix_e!r}")
         _tracker_instance = ScoreTracker(db=db)
     elif db is not None and _tracker_instance._db is None:
         # Mevcut singleton'a DB bağla

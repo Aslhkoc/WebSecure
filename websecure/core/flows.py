@@ -18,6 +18,8 @@ else:
 
 # ================== Yardımcılar ==================
 
+_logger = logging.getLogger(__name__)
+
 def _looks_like_json(s: str) -> bool:
     if not isinstance(s, str):
         return False
@@ -290,8 +292,8 @@ def run_idempotency_checks(
             _d = importlib.import_module("websecure.core.detect")
             _rfp = getattr(_d, "response_fingerprint", None)
             _idem_anom = getattr(_d, "idempotency_anomaly", None)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.flows] {type(_fix_e).__name__}: {_fix_e!r}")
     if not callable(_rfp):
         def _rfp(txt: str) -> str: return str(hash(txt))  # type: ignore[misc]
     if not callable(_idem_anom):

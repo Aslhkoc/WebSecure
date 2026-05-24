@@ -4,12 +4,15 @@ websecure.reporters.html_dashboard
 HTML dashboard renderer for WebSecure scan results.
 Generates a modern, dark-mode, single-file HTML report.
 """
+import logging
 from __future__ import annotations
 
 import json
 import os
 from datetime import datetime, timezone
 
+
+_logger = logging.getLogger(__name__)
 
 def _escape(s):
     if s is None:
@@ -100,8 +103,8 @@ def _parse_nmap_ssl_cert(text: str) -> dict:
                     ts.rstrip("Z").replace(" ", "T").split("+")[0]
                 )
                 cert["days_remaining"] = (_dt.now().date() - exp.date()).days * -1
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                _logger.debug(f"[reporters.html_dashboard] {type(_fix_e).__name__}: {_fix_e!r}")
 
         elif lower.startswith("sha-1:") or lower.startswith("sha1:"):
             cert["fingerprint"] = line.split(":", 1)[1].strip()

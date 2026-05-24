@@ -108,8 +108,8 @@ class ToolFinding:
             try:
                 from websecure.core.cvss import lookup_cwe
                 cwe = lookup_cwe(self.title)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.base] {type(_fix_e).__name__}: {_fix_e!r}")
 
         return {
             "type":        self.title,

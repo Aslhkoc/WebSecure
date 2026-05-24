@@ -268,8 +268,8 @@ class SQLMapWrapper(ToolIntegration):
                                 if r.get("parameter") not in seen:
                                     results.append(r)
                                     seen.add(r.get("parameter"))
-                        except Exception:
-                            pass
+                        except Exception as _fix_e:
+                            logger.debug(f"[integrations.sqlmap] {type(_fix_e).__name__}: {_fix_e!r}")
 
             return results
 
@@ -321,8 +321,8 @@ def _parse_sqlmap_csv(csv_path: str, target: str) -> List[Dict[str, Any]]:
                         f"via {techniques or 'unknown technique'}."
                     ),
                 })
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as _fix_e:
+        logger.debug(f"[integrations.sqlmap] {type(_fix_e).__name__}: {_fix_e!r}")
     except Exception as e:
         logger.debug(f"[SQLMap] CSV parse error: {e}")
     return results

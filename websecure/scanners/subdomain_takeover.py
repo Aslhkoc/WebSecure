@@ -83,8 +83,8 @@ def _resolve_cname(domain: str) -> Optional[str]:
         import dns.resolver
         answers = dns.resolver.resolve(domain, "CNAME")
         return str(answers[0].target).rstrip(".")
-    except Exception:
-        pass
+    except Exception as _fix_e:
+        logger.debug(f"[scanners.subdomain_takeover] {type(_fix_e).__name__}: {_fix_e!r}")
     try:
         out = subprocess.check_output(
             ["nslookup", "-type=CNAME", domain], timeout=5, stderr=subprocess.DEVNULL

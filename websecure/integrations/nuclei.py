@@ -280,8 +280,8 @@ class NucleiWrapper(ToolIntegration):
             if _LAST_UPDATE_FILE.exists():
                 last = float(_LAST_UPDATE_FILE.read_text(encoding="utf-8").strip())
                 return (time.time() - last) > _TEMPLATE_STALENESS_SECONDS
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nuclei] {type(_fix_e).__name__}: {_fix_e!r}")
         return True
 
     def _mark_updated(self) -> None:
@@ -440,8 +440,8 @@ class NucleiWrapper(ToolIntegration):
             try:
                 from websecure.core.phases import register_child_proc
                 register_child_proc(proc)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.nuclei] {type(_fix_e).__name__}: {_fix_e!r}")
 
             try:
                 _, stderr_b = proc.communicate(timeout=timeout)
@@ -454,8 +454,8 @@ class NucleiWrapper(ToolIntegration):
                 try:
                     from websecure.core.phases import unregister_child_proc
                     unregister_child_proc(proc)
-                except Exception:
-                    pass
+                except Exception as _fix_e:
+                    logger.debug(f"[integrations.nuclei] {type(_fix_e).__name__}: {_fix_e!r}")
 
             # rc=0 → bulgu yok, rc=1 → bulgu var; diğerleri hata
             if proc.returncode not in (0, 1):
@@ -816,6 +816,7 @@ def run_nuclei_with_correlation(
     """
     wrapper = NucleiWrapper()
     if not wrapper.is_available():
+        logger.warning("[Nuclei] run_nuclei: binary bulunamadı, atlanıyor.")
         return [], []
 
     fps = frozenset(existing_fingerprints or set())

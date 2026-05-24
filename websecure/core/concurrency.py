@@ -783,8 +783,8 @@ class StreamingURLProcessor:
                         f" -> batch {current} -> {new}"
                     )
                 return new
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.concurrency] {type(_fix_e).__name__}: {_fix_e!r}")
         return current
 
     @property
@@ -1017,8 +1017,8 @@ class DistributedScanCoordinator(_BaseCoordinator):
         try:
             self._redis.hset(self._workers_key(), worker_id, str(time.time()))
             self._redis.expire(self._workers_key(), 120)
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.concurrency] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def active_workers(self) -> Dict[str, float]:
         """Son 2 dakika içinde heartbeat gönderen worker'ları döner."""
@@ -1038,8 +1038,8 @@ class DistributedScanCoordinator(_BaseCoordinator):
     def set_meta(self, key: str, value: Any) -> None:
         try:
             self._redis.hset(self._meta_key(), key, str(value))
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.concurrency] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def get_meta(self, key: str) -> Optional[str]:
         try:

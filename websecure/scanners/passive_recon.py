@@ -197,7 +197,7 @@ class ContentDiscoveryScanner(BaseScanner):
                     ))
 
         except Exception as exc:
-            pass
+            logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
         return findings
 
     def _check_sitemap(self, base_url: str) -> List[Dict]:
@@ -227,7 +227,7 @@ class ContentDiscoveryScanner(BaseScanner):
                         evidence={"subdomains": list(subs)}
                     ))
         except Exception as exc:
-            pass
+            logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
         return findings
 
     def _extract_subdomains(self, content: str, base_url: str) -> Set[str]:
@@ -250,7 +250,7 @@ class ContentDiscoveryScanner(BaseScanner):
                 if domain and domain.endswith(root_domain) and domain != base_domain:
                     subdomains.add(domain)
         except Exception as exc:
-            pass
+            logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
         return subdomains
 
     def _probe_files(self, base_url: str) -> List[Dict]:
@@ -290,7 +290,7 @@ class ContentDiscoveryScanner(BaseScanner):
                     evidence={"content_snippet": content[:300]},
                 ))
             except Exception as exc:
-                pass
+                logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
         return findings
 
 class APISchemaDiscovery(BaseScanner):
@@ -339,7 +339,7 @@ class APISchemaDiscovery(BaseScanner):
                     try:
                         schema = resp.json()
                     except Exception as exc:
-                        pass
+                        logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
 
                 endpoints = []
                 if schema:
@@ -682,8 +682,8 @@ class S3BucketScanner(BaseScanner):
                         details=f"S3 bucket mevcut ancak kısıtlı: {name}",
                         evidence={"bucket": name, "endpoint": ep},
                     )
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.passive_recon] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _check_gcs(self, name: str) -> Optional[Dict]:
@@ -704,8 +704,8 @@ class S3BucketScanner(BaseScanner):
                     details=f"GCS bucket mevcut ancak kısıtlı: {name}",
                     evidence={"bucket": name},
                 )
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.passive_recon] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def _check_azure(self, name: str) -> Optional[Dict]:
@@ -728,8 +728,8 @@ class S3BucketScanner(BaseScanner):
                         details=f"Azure Blob mevcut ancak kısıtlı: {name}",
                         evidence={"container": name},
                     )
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.passive_recon] {type(_fix_e).__name__}: {_fix_e!r}")
         return None
 
     def scan(self, domain: str) -> List[Dict[str, Any]]:
@@ -834,8 +834,8 @@ class CloudDetector(BaseScanner):
                                 details=f"CNAME {cname_hint} işaret ediyor ancak hedef servis yanıt vermiyor — takeover mümkün",
                                 evidence={"cname": cname_hint, "provider": provider, "domain": domain},
                             ))
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.passive_recon] {type(_fix_e).__name__}: {_fix_e!r}")
 
         if detected:
             findings.append(self.create_finding(
@@ -882,8 +882,8 @@ class EmailHarvester(BaseScanner):
                     for email in self._EMAIL_RE.findall(r.text):
                         if domain in email:
                             found_emails.add(email.lower())
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.passive_recon] {type(_fix_e).__name__}: {_fix_e!r}")
 
         # 2. Hunter.io API (opsiyonel — key varsa) — SmartSession üzerinden
         key = self._hunter_key()

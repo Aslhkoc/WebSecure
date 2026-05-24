@@ -809,8 +809,8 @@ class HumanLikeAdapter:
                 )
                 self._context.record_visit(homepage)
                 time.sleep(random.uniform(0.5, 2.0))
-        except Exception:
-            pass
+        except Exception as _fix_e:
+            _logger.debug(f"[core.human_adapter] {type(_fix_e).__name__}: {_fix_e!r}")
 
     def _simulate_reading(self, content_length: int) -> None:
         """

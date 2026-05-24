@@ -422,7 +422,7 @@ class WebCrawler:
                     first_url = cp["queue"][0][0] if cp["queue"] else self.root
                     get_live_monitor().log_resume(pages_crawled, first_url)
                 except Exception as exc:
-                    pass
+                    logger.debug(f"[crawler] {type(exc).__name__}: {exc!r}")
 
         # Robots & Sitemap
         if not self.cfg.ignore_robots:
@@ -977,10 +977,10 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                                 }
                             })
                             alert.accept()
-                        except NoAlertPresentException:
-                            pass
+                        except NoAlertPresentException as _fix_e:
+                            logger.debug(f"[crawler] {type(_fix_e).__name__}: {_fix_e!r}")
                     except Exception as e:
-                        pass
+                        logger.debug(f"[crawler] {type(e).__name__}: {e!r}")
                         
                     time.sleep(1)
                     
@@ -1009,7 +1009,7 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 try:
                     driver.quit()
                 except Exception as exc:
-                    pass
+                    logger.debug(f"[crawler] {type(exc).__name__}: {exc!r}")
             if tmp_profile and os.path.exists(tmp_profile):
                 try:
                     shutil.rmtree(tmp_profile, ignore_errors=True)

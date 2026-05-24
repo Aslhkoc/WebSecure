@@ -367,8 +367,8 @@ class APIServer:
             try:
                 from websecure.db.repository import ScanRepository
                 scan = ScanRepository(self._db).get(scan_id)
-            except Exception:
-                pass
+            except Exception as _fix_e:
+                logger.debug(f"[api.server] {type(_fix_e).__name__}: {_fix_e!r}")
             target = scan.target if scan else "unknown"
             calc = ScoreCalculator()
             snap = calc.calculate(scan_id, target, [self._finding_to_dict(f) for f in findings])
