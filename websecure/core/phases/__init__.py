@@ -2485,7 +2485,7 @@ def _runner_exploit_orchestrator(ctx) -> None:
         url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
         # Bulguları tüm saldırı kovalarından topla
         all_findings: list = []
-        for bucket in ("offensive", "sqli", "xss", "ssrf", "idor", "ssti", "cmdi", "lfi", "scored_findings"):
+        for bucket in ("offensive", "sqli", "xss", "ssrf", "idor", "ssti", "cmdi", "lfi", "final"):
             bucket_items = results.get(bucket, [])
             if isinstance(bucket_items, list):
                 all_findings.extend([i for i in bucket_items if isinstance(i, dict)])
@@ -2552,7 +2552,7 @@ def _runner_verify_and_score(ctx) -> None:
         waf_detected = bool(getattr(waf_profile, "detected", False)) if waf_profile else False
         auth_required = bool(getattr(ctx, "authenticated", False))
         scored = score_findings(verified, auth_required=auth_required, waf_detected=waf_detected)
-        add_result("scored_findings", {"findings": scored, "total": len(scored)})
+        add_result("final", {"findings": scored, "total": len(scored)})
         _logger.info(f"[phases] Verified & scored {len(scored)} findings")
 
         # Warn if OAST-dependent findings exist but OAST was not configured
@@ -2578,7 +2578,7 @@ def _runner_verify_and_score(ctx) -> None:
         # Tüm anlamlı bulgular
         corr_findings: list = []
         for bucket, items in g_res.items():
-            if isinstance(items, list) and bucket not in ("meta", "errors", "scored_findings", "oast_callbacks"):
+            if isinstance(items, list) and bucket not in ("meta", "errors", "final", "oast_callbacks"):
                 corr_findings.extend([i for i in items if isinstance(i, dict) and i.get("type")])
 
         if len(corr_findings) >= 2:
@@ -3306,6 +3306,27 @@ def _offensive_phases(ctx) -> List[Phase]:
             runner=lambda c: _safe(c, lambda: _runner_exploit_orchestrator(c), "exploit_orchestrator"),
             tags=["exploitation", "rce", "post_exploit", "chain"],
         ),
+        Phase(
+            id="oast_verification",
+            title="OAST Callback Doğrulama (Interactsh)",
+            enabled=_flag("oast_verification", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_oast_verification(c), "oast_verification"),
+            tags=["oast", "verify", "blind", "ssrf", "xxe"],
+        ),
+        Phase(
+            id="fuzz_param_discovery",
+            title="Fuzz & Parametre Keşfi",
+            enabled=_flag("fuzz_param_discovery", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_fuzz_and_param_discovery(c), "fuzz_param_discovery"),
+            tags=["fuzz", "param", "discovery", "active"],
+        ),
+        Phase(
+            id="authorization_matrix",
+            title="Authorization Matrix (IDOR/PrivEsc)",
+            enabled=_flag("authorization_matrix", default=True),
+            runner=lambda c: _safe(c, lambda: _runner_authorization_matrix(c), "authorization_matrix"),
+            tags=["auth", "idor", "access_control", "active"],
+        ),
         # ── Doğrulama & Raporlama ─────────────────────────────────────────
         Phase(id="verify_and_score", title="Doğrulama & Skorlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_verify_and_score(c), "verify_and_score"), tags=["verify","score"]),
         Phase(id="reporting", title="Raporlama", enabled=True, runner=lambda c: _safe(c, lambda: _runner_reporting_and_integration(c), "reporting"), tags=["report"])
@@ -3620,7 +3641,7 @@ def run_portscan(ctx):
         _base_url = f"{_scheme}://{_h}:{p}"
 
         if "ssl-cert" in scripts:
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": "Info", "type": "SSL Certificate",
                 "url": _base_url, "host": _h, "port": p,
                 "message": f"SSL Certificate on {_h}:{p}",
@@ -3634,7 +3655,7 @@ def run_portscan(ctx):
                 _cs = "High"; _ctype = "Weak TLS Cipher Suite"
             elif " - B" in _ct:
                 _cs = "Medium"; _ctype = "Moderate TLS Cipher Suite"
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": _cs, "type": _ctype,
                 "url": _base_url, "host": _h, "port": p,
                 "message": f"TLS Cipher Suites on {_h}:{p}",
@@ -3642,7 +3663,7 @@ def run_portscan(ctx):
             })
 
         if "ssl-heartbleed" in scripts and "VULNERABLE" in scripts["ssl-heartbleed"].upper():
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": "Critical", "type": "SSL Heartbleed (CVE-2014-0160)",
                 "url": _base_url, "host": _h, "port": p,
                 "message": f"Heartbleed vulnerability on {_h}:{p}",
@@ -3650,7 +3671,7 @@ def run_portscan(ctx):
             })
 
         if "ssl-poodle" in scripts and "VULNERABLE" in scripts["ssl-poodle"].upper():
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": "High", "type": "SSL POODLE (CVE-2014-3566)",
                 "url": _base_url, "host": _h, "port": p,
                 "message": f"POODLE vulnerability on {_h}:{p}",
@@ -3660,7 +3681,7 @@ def run_portscan(ctx):
         if "ssl-dh-params" in scripts:
             _dh = scripts["ssl-dh-params"]
             if any(kw in _dh.lower() for kw in ("logjam", "weak", "anonymous")):
-                add_result("tls_findings", {
+                add_result("tls", {
                     "severity": "Medium", "type": "Weak DH Parameters",
                     "url": _base_url, "host": _h, "port": p,
                     "message": f"Weak DH parameters on {_h}:{p}",
@@ -3668,7 +3689,7 @@ def run_portscan(ctx):
                 })
 
         if "http-title" in scripts:
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": "Info", "type": "HTTP Title",
                 "url": _base_url, "host": _h, "port": p,
                 "message": scripts["http-title"][:150],
@@ -3676,7 +3697,7 @@ def run_portscan(ctx):
             })
 
         if "http-server-header" in scripts:
-            add_result("tls_findings", {
+            add_result("tls", {
                 "severity": "Info", "type": "HTTP Server Header",
                 "url": _base_url, "host": _h, "port": p,
                 "message": f"Server: {scripts['http-server-header'][:100]}",
@@ -4103,8 +4124,8 @@ def run_discovery_extended(ctx) -> None:
     
     # Configure Crawler
     c_cfg = CrawlerConfig()
-    c_cfg.max_depth = int(_get_config(ctx, "discovery.max_depth", 3))
-    c_cfg.max_pages = int(_get_config(ctx, "discovery.max_pages", 50))
+    c_cfg.max_depth = int(_get_config(ctx, "crawl.max_depth", 3))
+    c_cfg.max_pages = int(_get_config(ctx, "crawl.max_pages", 50))
     
     # [Check 1] Visibility
     is_visible = bool(getattr(ctx, "visible", False) or _get_config(ctx, "crawl.browser.headless") is False)
@@ -5084,7 +5105,7 @@ def run_nuclei_scan(ctx) -> None:
     if not url:
         return
 
-    if not _get_config(ctx, "offensive.nuclei.enabled", True):
+    if not _get_config(ctx, "nuclei.enabled", True):
         add_result("nuclei", {"status": "skipped", "reason": "Disabled in config"})
         return
 
@@ -5112,9 +5133,9 @@ def run_nuclei_scan(ctx) -> None:
     # ------------------------------------------------------------------
     tech_stack   = list(getattr(ctx, "technologies", []) or [])
     proxy        = _resolve_proxy(ctx)
-    severity     = _get_config(ctx, "offensive.nuclei.severity", "low,medium,high,critical")
-    extra_tags   = _get_config(ctx, "offensive.nuclei.extra_tags", "") or ""
-    auto_update  = bool(_get_config(ctx, "offensive.nuclei.auto_update_templates", True))
+    severity     = _get_config(ctx, "nuclei.severity", "low,medium,high,critical")
+    extra_tags   = _get_config(ctx, "nuclei.tags", "") or ""
+    auto_update  = bool(_get_config(ctx, "nuclei.auto_update", True))
     tags         = extra_tags.strip() if extra_tags.strip() else None
     nuclei_cfg   = cfg.get("_nuclei", {}) or {}
 
