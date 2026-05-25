@@ -455,8 +455,8 @@ def ensure_session(session: requests.Session, config: Optional[Dict[str, Any]] =
     marker = cfg.get("valid_marker")
     return (marker in (r.text or "")) if marker else True
 
-def is_session_alive(session: requests.Session) -> bool:
-    return ensure_session(session, None)
+def is_session_alive(session: requests.Session, config: Optional[Dict[str, Any]] = None) -> bool:
+    return ensure_session(session, config)
 
 # -----------------------------------------------------------------------------
 # Token yenileme ve 401 retry
@@ -751,7 +751,9 @@ def smart_login(session: requests.Session,
         ok = False
     roles = ((cfg.get("auth") or {}).get("roles") or [])
     if roles:
-        _ = build_role_sessions(session, cfg, debug=debug)
+        role_sessions = build_role_sessions(session, cfg, debug=debug)
+        # Attach to session so scanners can access per-role sessions
+        setattr(session, "_role_sessions", role_sessions)
     return bool(ok)
 
 # -----------------------------------------------------------------------------
@@ -935,18 +937,24 @@ class MailboxAdapter:
         # IMAP
         host = self.imap.get("host"); user = self.imap.get("user"); pwd = self.imap.get("password")
         port = int(self.imap.get("port", 993)); use_ssl = bool(self.imap.get("ssl", True))
-        M = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
-        M.login(user, pwd)
-        M.select('INBOX')
-        typ, data = M.search(None, 'ALL')
-        for num in reversed(data[0].split()):
-            typ, msg_data = M.fetch(num, '(RFC822)')
-            msg = BytesParser().parsebytes(msg_data[0][1])
-            body = (msg.get_payload(decode=True) or b'').decode(errors='ignore')
-            link = self._extract_link(body)
-            if link:
-                return link
-        return None
+        try:
+            M = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
+            M.login(user, pwd)
+            M.select('INBOX')
+            typ, data = M.search(None, 'ALL')
+            for num in reversed(data[0].split()):
+                typ, msg_data = M.fetch(num, '(RFC822)')
+                msg = BytesParser().parsebytes(msg_data[0][1])
+                body = (msg.get_payload(decode=True) or b'').decode(errors='ignore')
+                link = self._extract_link(body)
+                if link:
+                    return link
+            return None
+        except Exception as _imap_exc:
+            logging.getLogger(__name__).warning(
+                "[MailboxAdapter] IMAP error (host=%s user=%s): %s", host, user, _imap_exc
+            )
+            return None
 
     @staticmethod
     def _extract_body_mailhog(m: Dict[str, Any]) -> str:
@@ -1039,8 +1047,12 @@ def perform_login(cfg: dict, session=None):
     # 1) Basic login()
     ok = False
     if login_url:
-        try_res = login(sess, cfg)
-        ok = bool(try_res and (ensure_session(sess, cfg) or is_session_alive(sess)))
+        try:
+            try_res = login(sess, cfg)
+        except Exception as _login_exc:
+            logging.getLogger(__name__).debug("[perform_login] login() error: %s", _login_exc)
+            try_res = None
+        ok = bool(try_res and ensure_session(sess, cfg))
 
     # 2) Strategy flow (requests + webdriver)
     if not ok:

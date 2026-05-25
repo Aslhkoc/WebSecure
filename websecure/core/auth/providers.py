@@ -102,10 +102,19 @@ class Null2FA(_Base2FA):
         return True
 
 def create_twofactor_provider(cfg: TwoFAConfig) -> TwoFactorProvider:
+    import logging as _log
     method = (cfg.method or "none").lower()
-    if method == "totp" and cfg.totp_secret:
-        return Totp2FA(cfg.totp_secret)
-    if method == "email" and cfg.imap_host and cfg.imap_user:
-        return EmailOtp2FA(cfg)
+    if method == "totp":
+        if cfg.totp_secret:
+            return Totp2FA(cfg.totp_secret)
+        _log.getLogger(__name__).warning(
+            "[2FA] method='totp' configured but totp_secret is missing — 2FA bypassed"
+        )
+    elif method == "email":
+        if cfg.imap_host and cfg.imap_user:
+            return EmailOtp2FA(cfg)
+        _log.getLogger(__name__).warning(
+            "[2FA] method='email' configured but imap_host/imap_user missing — 2FA bypassed"
+        )
     # SMS, Push placeholders can be added here
     return Null2FA()
