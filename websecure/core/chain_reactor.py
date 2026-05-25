@@ -337,6 +337,14 @@ class ChainRule(ABC):
     ) -> ChainFinding:
         if cvss_score is None:
             cvss_score = CVSSChainCalculator.combined([n.cvss for n in nodes])
+        # Auto-generate path from nodes so phase_chain_reactor() doesn't skip this finding
+        if path is None and nodes:
+            path = ChainPath(
+                node_ids=[n.node_id for n in nodes],
+                edges=[],
+                combined_cvss=cvss_score,
+                impact_label=severity,
+            )
         return ChainFinding(
             chain_id=chain_id,
             title=title,
@@ -1529,12 +1537,12 @@ def _chain_finding_to_dict(cf: ChainFinding) -> Dict[str, Any]:
 # Geriye Uyumlu Public API
 # -----------------------------------------------------------------------------
 
-def analyze_chains(results: Dict[str, Any]) -> None:
+def analyze_chains(results: Dict[str, Any]):
     """
     Geriye dönük uyumluluk giriş noktası.
     scan_runner / main tarafından tüm results dict'i ile çağrılır.
     """
-    ChainReactor().analyze(results)
+    return ChainReactor().analyze(results)
 
 
 # -----------------------------------------------------------------------------
