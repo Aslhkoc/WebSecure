@@ -170,6 +170,12 @@ class PathNormalizationBypass(BaseScanner):
                     body = resp.text
 
                     if status in (200, 301, 302):
+                        if status in (301, 302):
+                            location = resp.headers.get("Location", "").lower()
+                            _auth_paths = ("/login", "/auth", "/sign", "/error",
+                                           "/403", "/401", "/forbidden", "/access-denied")
+                            if any(p in location for p in _auth_paths):
+                                continue  # redirect to auth page — not a bypass
                         finding = {
                             "vuln_type": "403 Bypass — Path Normalisation (Confirmed)",
                             "url": url,

@@ -108,8 +108,8 @@ AZURE_HEADERS = {"Metadata": "true"}
 # Cloud metadata success markers
 METADATA_MARKERS = [
     "ami-id", "instance-id", "local-ipv4", "public-hostname",
-    "service-accounts", "project-id", "subscriptionId",
-    "IAMCredentials", "Token", "Expiration",
+    "service-accounts", "project-id",
+    "IAMCredentials",
 ]
 
 # Internal port scanning targets

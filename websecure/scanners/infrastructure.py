@@ -177,13 +177,16 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
         
     # HSTS
     hsts = _header(resp, "Strict-Transport-Security")
+    _resp_url = str(getattr(resp, "url", "") or "")
+    _is_https = _resp_url.lower().startswith("https://")
     if _bool(hsts):
         cov.hsts = "PASS"; cov.notes["hsts"] = hsts
         if "max-age" not in hsts.lower():
              findings.append(HeaderFinding("HSTS Invalid", "Low", "Missing max-age.", evidence={"HSTS": hsts}, tags=["HSTS"]))
     else:
         cov.hsts = "FAIL"; cov.notes["hsts"] = "missing"
-        findings.append(HeaderFinding("Missing HSTS", "Medium", "HSTS required for HTTPS.", tags=["HSTS"]))
+        if _is_https:
+            findings.append(HeaderFinding("Missing HSTS", "Medium", "HSTS required for HTTPS.", tags=["HSTS"]))
         
     # XFO
     xfo = _header(resp, "X-Frame-Options")

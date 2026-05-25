@@ -135,10 +135,14 @@ class DNSBruteForce:
         words = self._load_words()
         found: List[Dict[str, Any]] = []
 
+        import random as _rand
+        _canary = f"nonexistent-canary-{_rand.randint(100000, 999999)}.{domain}"
+        _wildcard_ip = _resolve(_canary)
+
         def check(word: str):
             fqdn = f"{word}.{domain}"
             ip = _resolve(fqdn)
-            if ip:
+            if ip and ip != _wildcard_ip:
                 return {"subdomain": fqdn, "ip": ip, "method": "dns_brute"}
             return None
 
