@@ -338,6 +338,13 @@ class InteractshClient(_BaseOSAT, IOSATClient):
                 self._correlation_id = str(
                     data.get("id") or data.get("correlation_id") or ""
                 )
+                if not self._correlation_id:
+                    _logger.warning(
+                        "[OAST] interactsh yanıt geldi fakat correlation_id boş — "
+                        "polling token eşleşmesi çalışmayacak"
+                    )
+                    self._registered = False
+                    return
                 self._secret = str(data.get("secret-key") or data.get("secret") or secret)
                 root = str(data.get("domain") or "").strip(".")
                 if root:
@@ -346,7 +353,7 @@ class InteractshClient(_BaseOSAT, IOSATClient):
                 self._registered = True
                 _logger.info(
                     f"[OAST] interactsh kaydı başarılı: "
-                    f"id={self._correlation_id[:12] if self._correlation_id else '?'}, "
+                    f"id={self._correlation_id[:12]}, "
                     f"domain={self.cfg.root_domain}, encrypted={self._encrypted}"
                 )
         except Exception as e:
@@ -399,7 +406,12 @@ class InteractshClient(_BaseOSAT, IOSATClient):
                     # Ham istek içinde token ara
                     raw_req = str(ev.get("raw-request") or ev.get("request") or "")
                     for t in tokens:
-                        if t and t in raw_req:
+                        # Use delimited search to avoid short-token substring collisions
+                        if t and any(
+                            f"{sep}{t}{sep2}" in raw_req
+                            for sep in (".", "/", "=", "?", "&", " ", "\n", "\r")
+                            for sep2 in (".", " ", "\n", "\r", "&", '"', "'", "")
+                        ):
                             tok = t
                             break
                 if tok in tokens:
@@ -560,8 +572,12 @@ def run_oast_on_target(
             loop.close()
         ex.submit(_runner).result()
 
+    # Wait for DNS propagation before polling (interactsh callbacks typically arrive in 3-15s)
+    _dns_wait = getattr(cfg, "dns_propagation_wait", 10)
+    time.sleep(_dns_wait)
+
     # Poll
-    found = poll_events_sync(client, tokens, timeout=getattr(cfg, "poll_interval", 10)+5)
+    found = poll_events_sync(client, tokens, timeout=getattr(cfg, "poll_interval", 20) + 10)
     
     # Correlate
     results = []
@@ -1184,7 +1200,8 @@ class DNSRebindingAttacker:
         try:
             packed = _socket.inet_aton(ip)
             return packed.hex()
-        except Exception:
+        except Exception as exc:
+            _logger.warning("[DNSRebinding] IP to hex failed for %r: %s", ip, exc)
             return ip.replace(".", "-")
 
     def rbndr_us_domain(self) -> str:

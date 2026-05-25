@@ -372,8 +372,12 @@ class CmdiScanner(BaseScanner):
         try:
             from websecure.core.oast import get_global_poller
             poller = get_global_poller()
-            if poller and hasattr(poller, "_domain"):
-                return poller._domain
+            if poller:
+                client = getattr(poller, "_client", None)
+                cfg = getattr(client, "cfg", None)
+                domain = getattr(cfg, "root_domain", None) or getattr(cfg, "dns_domain", None)
+                if domain:
+                    return domain
         except Exception as _fix_e:
             logger.debug(f"[scanners.cmdi] {type(_fix_e).__name__}: {_fix_e!r}")
         return (self.results or {}).get("oast_domain")
@@ -385,6 +389,7 @@ class CmdiScanner(BaseScanner):
         """
         domain = self._get_oast_domain()
         if not domain:
+            logger.debug("[CMDi OOB] OAST domain not configured — skipping OOB probe for %s", url)
             return
 
         import random as _rnd, string as _str
