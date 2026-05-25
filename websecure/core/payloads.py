@@ -416,7 +416,7 @@ def url_encode_twice(s: str) -> str:
     return quote(quote(s, safe=""), safe="")
 
 def wrap_json(key: str, value: str) -> str:
-    return '{"%s":"%s"}' % (key, value.replace('"','\"'))
+    return '{"%s":"%s"}' % (key, value.replace('"', '\\"'))
 
 def wrap_xml(tag: str, value: str) -> str:
     return f"<{tag}>{value}</{tag}>"

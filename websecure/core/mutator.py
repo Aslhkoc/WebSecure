@@ -175,17 +175,6 @@ class Mutator:
         return result[:max_variants]
 
     @staticmethod
-    def mutate_padding(payload: str) -> str:
-        """
-        User Code #2 'fragmented_request' logic.
-        """
-        chars = list(payload)
-        random.shuffle(chars)
-        noise = "".join(chars)
-        mid = len(noise) // 2
-        return noise[:mid] + payload + noise[mid:]
-
-    @staticmethod
     def mutate_xss(payload: str, max_variants: int = 30) -> list[str]:
         """Generates evasive variants of an XSS payload."""
         variants = set()

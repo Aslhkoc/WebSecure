@@ -580,9 +580,13 @@ class UnicodeEscapeMutation(MutationStrategy):
         )
         if escaped != payload:
             variants.append(escaped)
-        # Homoglyph replacement (örn. a->a, Cyrillic)
-        # Basit: 'a' -> 'a' (Kiril a)
-        homogl = payload.replace("a", "a").replace("e", "e")
+        # Homoglyph replacement: Latin -> Cyrillic lookalikes (U+0430, U+0435, U+043E, U+0440, U+0441)
+        homogl = (payload
+                  .replace("a", "а")
+                  .replace("e", "е")
+                  .replace("o", "о")
+                  .replace("p", "р")
+                  .replace("c", "с"))
         if homogl != payload:
             variants.append(homogl)
         return variants[:3]
@@ -1614,13 +1618,16 @@ class PayloadEngine:
 # ---------------------------------------------------------------------------
 
 _engine_instance: Optional[PayloadEngine] = None
+_engine_lock = __import__("threading").Lock()
 
 
 def get_engine() -> PayloadEngine:
     """Global PayloadEngine singleton'ı döndür."""
     global _engine_instance
     if _engine_instance is None:
-        _engine_instance = PayloadEngine()
+        with _engine_lock:
+            if _engine_instance is None:
+                _engine_instance = PayloadEngine()
     return _engine_instance
 
 
