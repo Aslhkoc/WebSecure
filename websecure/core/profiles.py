@@ -871,6 +871,10 @@ class ProfileLoader:
             if missing:
                 _logger.warning(f"[ProfileLoader] {path.name} eksik alan: {missing}")
                 return None
+            # Validate profile semantics before accepting
+            validation_warnings = ProfileValidator.validate(data)
+            for w in validation_warnings:
+                _logger.warning("[ProfileLoader] %s dogrulama uyarisi: %s", path.name, w)
             profile = CustomProfile(data, source_path=str(path))
             _logger.debug(f"[ProfileLoader] Yuklendi: {path.name} -> '{profile.NAME}'")
             return profile

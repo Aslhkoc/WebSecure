@@ -103,8 +103,14 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
         try:
             with p.open("r", encoding="utf-8") as f:
                 cfg = json.load(f)
+        except json.JSONDecodeError as e:
+            logging.error(
+                "config.json parse hatası — satır %d sütun %d: %s. "
+                "Tüm tarayıcılar built-in defaults ile çalışacak.",
+                e.lineno, e.colno, e.msg,
+            )
         except Exception as e:
-            logging.error(f"Failed to load config from {path}: {e}")
+            logging.error("Config yüklenemedi (%s): %s — built-in defaults kullanılıyor.", path, e)
 
     _validate_version(cfg, path)
 
@@ -307,9 +313,14 @@ def apply_active_profile(cfg: Dict[str, Any]) -> Dict[str, Any]:
             
     # 3. Normalize http.timeout -> http.timeout_seconds
     # Profiles set "timeout" but http.py reads "timeout_seconds"
+    # Use pop() to remove the old key so both keys don't coexist
     http_sec = cfg.get("http")
-    if isinstance(http_sec, dict) and "timeout" in http_sec and "timeout_seconds" not in http_sec:
-        http_sec["timeout_seconds"] = http_sec["timeout"]
+    if isinstance(http_sec, dict) and "timeout" in http_sec:
+        if "timeout_seconds" not in http_sec:
+            http_sec["timeout_seconds"] = http_sec.pop("timeout")
+        else:
+            # timeout_seconds already present — remove stale "timeout" to avoid confusion
+            del http_sec["timeout"]
 
     # 4. Special handling for 'safe_full' or 'aggressive' flags
     if active_name == "safe_full":

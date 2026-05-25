@@ -339,6 +339,7 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
             s = (val if isinstance(val, str) else "").strip()
             return s if s != "" else default
         except EOFError:
+            _logger.info("[ScanProfile] Non-interactive mod tespit edildi — varsayilan secim: '%s'", default)
             return default
 
     def _get_apply_active_profile():
@@ -446,13 +447,19 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
         try:
             from websecure.core.profiles import apply_profile
             cfg = apply_profile(profile_id, cfg)
-        except Exception:
-            # Fallback: eski uygulamalar
+        except Exception as _pe:
+            _logger.warning(
+                "[ScanProfile] ProfileRegistry '%s' uygulanamadi (%s) — built-in fallback kullaniliyor.",
+                profile_id, _pe,
+            )
+            # Fallback: built-in uygulamalar
             if profile_id == "aggressive":
                 cfg = _apply_aggressive_profile(cfg)
             else:
                 cfg = _apply_stealth_profile(cfg)
 
+        # Sync scan_profile setting so apply_active_profile re-applies the SAME profile
+        cfg.setdefault("settings", {})["scan_profile"] = profile_id
         apply_active_profile = _get_apply_active_profile()
         cfg = apply_active_profile(cfg)
         return profile_id, cfg
