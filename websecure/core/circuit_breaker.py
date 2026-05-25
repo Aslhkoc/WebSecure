@@ -305,8 +305,8 @@ class ScanCircuitBreaker:
                         f"Recovery timeout: {self._cfg.recovery_timeout}s"
                     ),
                 })
-            except Exception:
-                pass  # reporting unavailable — trip_log still captures the event
+            except Exception as _rep_exc:
+                _logger.debug("[CircuitBreaker] reporting unavailable: %r — trip_log still captures the event", _rep_exc)
 
         elif new_state == CBState.HALF_OPEN:
             self._half_open_probes = 0

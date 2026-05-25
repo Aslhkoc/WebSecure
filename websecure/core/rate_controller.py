@@ -86,7 +86,10 @@ class RateMetrics:
             if not self._samples:
                 return 0.0
             times = sorted(s.elapsed_s for s in self._samples)
-            idx = max(0, int(len(times) * 0.90) - 1)
+            # P7 fix: previous formula `int(len*0.90) - 1` undershot by one position.
+            # For 10 samples: int(10*0.90)-1 = 8 → index 8 = 9th value (80th pct, not 90th).
+            # Correct: clamp int(len*0.90) to [0, len-1].
+            idx = min(int(len(times) * 0.90), len(times) - 1)
             return times[idx]
 
     def block_rate(self) -> float:

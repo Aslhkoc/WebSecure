@@ -150,6 +150,9 @@ class AsyncRateGate:
         self._sem = asyncio.Semaphore(upper)
         self._acq = 0
         self._acq_lock = asyncio.Lock()
+        # P12 fix: threading.Lock for synchronous release() to avoid race conditions
+        import threading as _threading
+        self._sync_release_lock = _threading.Lock()
 
     async def acquire(self) -> None:
         await self._sem.acquire()
@@ -157,21 +160,19 @@ class AsyncRateGate:
             self._acq += 1
 
     def release(self) -> None:
-        def _release():
-            # asyncio.Semaphore.release istisna atmaz; dahili sayaç güvenliği için koruma
-            return
-        # Sayaç tutarlılığı
-        async def _dec():
-            async with self._acq_lock:
-                if self._acq > 0:
-                    self._acq -= 1
+        # P12 fix: was fire-and-forget with loop.create_task() — counter could remain
+        # un-decremented after release() returned, causing race conditions and possible
+        # double-release of the semaphore. Use a threading-compatible synchronous approach
+        # instead: guard with a regular threading.Lock so the decrement is immediate.
+        with self._sync_release_lock:
+            if self._acq > 0:
+                self._acq -= 1
+                # asyncio.Semaphore.release() does not raise even when called synchronously
+                # from a non-async context, so this is safe.
+                try:
                     self._sem.release()
-        # Koşan döngüde planla
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-        if loop.is_running():
-            loop.create_task(_dec())
-        else:
-            asyncio.run(_dec())
+                except Exception:
+                    pass
 
     async def throttle(self) -> None:
         if self.period <= 0:
@@ -571,15 +572,15 @@ def run_race_conditions(session: requests.Session, base_url: str, cfg: Dict[str,
 
         if anomaly:
             findings.append(item)
-            add_result('vulnerability', {
-                'url': url,
-                'type': 'RACE_CONDITION',
-                'source': 'bizlogic_race',
-                'severity': 'High' if method not in _IDEMPOTENT else 'Medium',
-                'reason': 'Race anomali: status/boyut/parmak izi farklılıkları',
-                'method': method
+            # P9 fix: was reporting twice — once with minimal dict and once with full item.
+            # Only emit one structured finding per anomaly.
+            add_result("vulnerability", {
+                **item,
+                "source": "bizlogic_race",
+                "type": "Race Condition",
+                "severity": "High" if method not in _IDEMPOTENT else "Medium",
+                "reason": "Race anomali: status/boyut/parmak izi farklılıkları",
             })
-        add_result("vulnerability", {**item, "source": "bizlogic_race", "type": "Race Condition"})
         _emit(event_cb, "bl.done", {"name": name, "engine": used_engine, "anomaly": anomaly})
 
     add_result("meta", {"stage": "race", "tests": total_tests, "anomaly_count": len(findings)})

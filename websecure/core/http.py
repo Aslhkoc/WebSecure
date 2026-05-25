@@ -939,9 +939,10 @@ class _RequestsDriver:
         pool_conns = int(http_cfg.get("pool_connections", 100))
         pool_max = int(http_cfg.get("pool_maxsize", 100))
         
-        # Determine if we should use WAF Bypass Adapter
-        # Default to True for now as requested "strength", or check config
-        use_waf_bypass = True 
+        # P4 fix: was hardcoded True — now reads from config; defaults to True
+        # to preserve existing "strength" behaviour when not explicitly configured.
+        _waf_sub = http_cfg.get("waf") or {}
+        use_waf_bypass = bool(_waf_sub.get("enabled", True))
         
         try:
             from websecure.core.waf_bypass import WAFBypassAdapter
@@ -953,7 +954,8 @@ class _RequestsDriver:
         else:
              adapter = HTTPAdapter(max_retries=0, pool_connections=pool_conns, pool_maxsize=pool_max)
 
-        self.s = hardened_session({})
+        # P4 fix: was passing empty dict {} — losing all http config (tls, user-agent, etc.)
+        self.s = hardened_session(http_cfg)
         self.s.mount("http://", adapter)
         self.s.mount("https://", adapter)
 
@@ -1382,6 +1384,8 @@ class HttpClient:
         if unauth and self._kimliksiz_idempotent:
             allowed = set(allowed_http_methods(self.cfg, unauthenticated=True))
             if meth not in allowed:
+                # P6 fix: was silently skipping with no log — add debug trace for visibility
+                _logger.debug("[HTTP] Skipping non-idempotent %s in unauthenticated mode: %s", meth, url)
                 add_result("http_skipped", {"url": url, "method": meth, "reason": "idempotent_only"})
 
                 class _Synthetic:
@@ -2034,7 +2038,8 @@ class AntiBlockingHTTP:
 def build_http_client(cfg: Dict[str, Any]) -> AntiBlockingHTTP:
     http_cfg = (cfg.get("http") or {})
     ab_cfg = ((cfg.get("anti_blocking") or {}).get("http") or {})
-    sess = hardened_session(http_cfg)
+    # P4 fix: pass full cfg so hardened_session() can read top-level waf/tls/privacy keys.
+    sess = hardened_session(cfg)
     return AntiBlockingHTTP(sess, ab_cfg)
 
 

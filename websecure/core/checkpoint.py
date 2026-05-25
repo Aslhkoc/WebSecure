@@ -280,7 +280,16 @@ class ScanCheckpoint:
         with self._lock:
             self._state.update_elapsed(self._start_ts)
             data = self._serializer.dumps(self._state)
-            _atomic_write(self._path, data)
+            try:
+                _atomic_write(self._path, data)
+            except Exception as exc:
+                # P3 fix: _atomic_write exception used to propagate silently, leaving
+                # self._last_save un-updated and the caller with no indication of failure.
+                logger.error(
+                    "[checkpoint] Kaydetme hatası (%s): %r — checkpoint kaydedilemedi",
+                    self._path, exc,
+                )
+                return False
             self._last_save = time.monotonic()
 
         logger.info(

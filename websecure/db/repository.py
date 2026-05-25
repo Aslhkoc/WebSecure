@@ -385,7 +385,16 @@ class FindingRepository:
         params: List[Any] = [scan_id]
         if not include_fp:
             query += " AND false_positive=0"
-        query += " ORDER BY severity, created_at"
+        # P7 fix: alphabetical ORDER BY severity sorts Critical < High < Info < Low < Medium
+        # which is wrong. Use CASE expression for correct Critical→High→Medium→Low→Info order.
+        query += (
+            " ORDER BY CASE severity"
+            " WHEN 'Critical' THEN 1"
+            " WHEN 'High'     THEN 2"
+            " WHEN 'Medium'   THEN 3"
+            " WHEN 'Low'      THEN 4"
+            " ELSE 5 END, created_at"
+        )
         with self._db.connection() as conn:
             rows = conn.execute(query, params).fetchall()
         return [self._row_to_finding(r) for r in rows]

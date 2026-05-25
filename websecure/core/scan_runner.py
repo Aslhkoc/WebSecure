@@ -304,7 +304,10 @@ class ScanSession:
             _SR(_db_new).create(_scan_obj)
             logger.debug(f"[scan_runner] DB scan başlangıç kaydı: {scan_id}")
         except Exception as _dbs_exc:
-            logger.debug(f"[scan_runner] DB scan başlangıç kaydı atlandı: {_dbs_exc!r}")
+            # P6 fix: DB start-record failure was only logged at debug level, making it
+            # invisible in production. Elevate to warning so operators notice the gap
+            # (post-scan UPDATE will fail if this INSERT never happened).
+            logger.warning(f"[scan_runner] DB scan başlangıç kaydı başarısız: {_dbs_exc!r}")
 
         return session
 
