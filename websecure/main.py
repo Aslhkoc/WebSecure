@@ -1182,73 +1182,6 @@ def _passive_js_analyze(session: requests.Session, js_urls: list[str], results: 
         results.setdefault("artifacts", {}).setdefault("js_keys", []).extend(keys)
 
 
-# ------------------ Faz Planı Çalıştırıcı (YENİ) ------------------
-def _run_phase_plan(ctx, *, skip_legacy_offensive=True):
-
-    results = getattr(ctx, "results", {})
-    if not isinstance(results, dict):
-        results = {}
-        setattr(ctx, "results", results)
-
-    plan = build_plan(ctx)  # hata olursa yükselir; bastırma yok
-
-    ran = 0
-    enabled = 0
-    visible_meta = []
-    results.setdefault("phase_timings", {})
-
-    print(f"[DEBUG] Phase Plan Built ({len(plan)} items): {[p.get('id') for p in plan if isinstance(p, dict)]}")
-
-    if not isinstance(plan, (list, tuple)):
-
-        # Protokol: plan beklenen formatta değilse koşma
-        add_result("phase_plan", {"visible": [], "enabled_total": 0, "ran": 0, "error": "invalid_plan_format"})
-        if skip_legacy_offensive:
-            results["_skip_legacy_offensive"] = True
-        return {"ran": 0, "enabled": 0}
-
-    # Phase state machine: track completed phases to prevent re-runs
-    completed_phases: set = results.setdefault("_completed_phases", set())
-
-    for item in plan:
-        if not isinstance(item, dict):
-            continue
-        rid = item.get("id")
-        visible_meta.append({
-            "id": rid,
-            "title": item.get("title"),
-            "enabled": bool(item.get("enabled")),
-            "reason": item.get("reason"),
-            "tags": item.get("tags", []),
-        })
-
-        if not item.get("enabled"):
-            continue
-
-        runner = item.get("runner")
-        if not callable(runner):
-            continue
-
-        # Skip already-completed phases (resume / re-run protection)
-        if rid and rid in completed_phases:
-            _logger.debug(f"[phase_plan] Phase '{rid}' already completed — skipping")
-            continue
-
-        enabled += 1
-        t0 = time.time()
-        runner(ctx)  # hata olursa yükselir; bastırma yok
-        ran += 1
-        results["phase_timings"][rid] = round(time.time() - t0, 2)
-        if rid:
-            completed_phases.add(rid)
-
-    add_result("phase_plan", {"visible": visible_meta, "enabled_total": enabled, "ran": ran})
-
-    if skip_legacy_offensive:
-        results["_skip_legacy_offensive"] = True
-
-    return {"ran": ran, "enabled": enabled}
-
 # ------------------ Ana akış ------------------
 # FAZ-EK: Egress policy helpers -> core/egress.py'e taşındı
 from websecure.core.egress import (
@@ -1789,6 +1722,7 @@ def _run_scan_phases(
                     "human_adapter", "_plan_ran", "target", "waf_profile",
                     "bypass_session", "technologies", "authenticated",
                     "base_url",
+                    "auth_ctx", "auth",
                 )
 
                 @property
@@ -1956,6 +1890,13 @@ def _run_scan_phases(
         if bool(_assi.get('enabled')) and callable(globals().get("run_device_code_flow")):
             if run_device_code_flow(session, cfg):
                 print('[Auth] Device Code ile token alındı.')
+
+        auth_ctx = _build_auth_ctx(session, cfg)
+        try:
+            ctx.auth_ctx = auth_ctx
+            ctx.auth = (cfg.get('auth') or {}) if isinstance(cfg, dict) else {}
+        except (AttributeError, TypeError):
+            pass
 
         def mark(phase_name, start_t=None):
             if 'phase_timings' not in results or not isinstance(results.get('phase_timings'), dict):
@@ -2190,27 +2131,27 @@ def _run_scan_phases(
                 if callable(globals().get("add_result")):
                     add_result("errors", {"stage": "crawl_browser", "error": str(res)})
 
-                    print("[•] SSRF/XXE sezgisel kontroller…")
-                    t = mark("ssrf_xxe")
-                    if callable(globals().get("ssrf_xxe_scan")):
-                        kw = dict(session=session, endpoints=endpoints[:40], oast_cfg=oast_cfg, results=results,
-                                  debug=debug,
-                                  auth_ctx=auth_ctx)
-                        # imza uyumu için anahtar adlarını fonskiyon imzasına göre filtrele
-                        fk = _kw_filter(ssrf_xxe_scan, **kw)
-                        # bazı sürümlerde 'endpoints' yerine yalnızca pozisyonel kullanılıyor olabilir:
-                        if not fk:
-                            # minimum pozisyonel: (session, endpoints, oast_cfg, results)
-                            ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, endpoints[:40], oast_cfg, results,
-                                                           call_timeout=900.0)
-                        else:
-                            ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, **fk, call_timeout=900.0)
-                        if not ok_ssrf and callable(globals().get("add_result")):
-                            add_result("errors", {"stage": "ssrf_xxe", "error": str(res_ssrf)})
-                    else:
-                        if callable(globals().get("add_result")):
-                            add_result("errors", {"stage": "ssrf_xxe", "error": "module_missing"})
-                    mark("ssrf_xxe", t)
+        print("[•] SSRF/XXE sezgisel kontroller…")
+        t = mark("ssrf_xxe")
+        if callable(globals().get("ssrf_xxe_scan")):
+            kw = dict(session=session, endpoints=endpoints[:40], oast_cfg=oast_cfg, results=results,
+                      debug=debug,
+                      auth_ctx=auth_ctx)
+            # imza uyumu için anahtar adlarını fonskiyon imzasına göre filtrele
+            fk = _kw_filter(ssrf_xxe_scan, **kw)
+            # bazı sürümlerde 'endpoints' yerine yalnızca pozisyonel kullanılıyor olabilir:
+            if not fk:
+                # minimum pozisyonel: (session, endpoints, oast_cfg, results)
+                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, endpoints[:40], oast_cfg, results,
+                                               call_timeout=900.0)
+            else:
+                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, **fk, call_timeout=900.0)
+            if not ok_ssrf and callable(globals().get("add_result")):
+                add_result("errors", {"stage": "ssrf_xxe", "error": str(res_ssrf)})
+        else:
+            if callable(globals().get("add_result")):
+                add_result("errors", {"stage": "ssrf_xxe", "error": "module_missing"})
+        mark("ssrf_xxe", t)
 
         gql_eps = [u for u in endpoints if isinstance(u, str) and ("/graphql" in u.lower())]
         gql_cfg = (cfg.get("graphql") or {})
@@ -2514,8 +2455,6 @@ def _run_scan_phases(
             ok_fz, err_or_none = _safe_call(fuzz_fn, **kwargs, call_timeout=900.0)
             if not ok_fz and callable(globals().get("add_result")):
                 add_result("errors", {"stage": "fuzz", "url": u, "error": str(err_or_none)})
-
-        mark("fuzzing", t_fz)
 
         mark("fuzzing", t_fz)
 

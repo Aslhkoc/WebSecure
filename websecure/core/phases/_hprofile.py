@@ -181,7 +181,9 @@ class HProfileManager:
         rate = 0.0 if self._req_count <= 0 else (self._blocked_count / float(self._req_count))
         cur = self._active
         nxt = cur
-        if cur == 'aggressive' and rate >= pol.down_when_block_rate_above:
+        if cur in ('nightmare', 'deep') and rate >= pol.down_when_block_rate_above:
+            nxt = 'aggressive' if cur == 'nightmare' else 'normal'
+        elif cur == 'aggressive' and rate >= pol.down_when_block_rate_above:
             nxt = 'normal'
         elif cur == 'normal' and rate >= pol.down_when_block_rate_above:
             nxt = 'stealth'
