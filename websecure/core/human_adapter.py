@@ -305,8 +305,8 @@ class AggressiveProfile(BehaviorProfile):
     @property
     def timing(self) -> TimingProfile:
         return TimingProfile(
-            think_time_min=0.1, think_time_max=0.8,
-            reading_time_min=0.1, reading_time_max=0.5,
+            think_time_min=0.5, think_time_max=1.5,
+            reading_time_min=0.3, reading_time_max=0.8,
             burst_probability=0.35,
         )
 

@@ -121,9 +121,16 @@ class WAFBypassAdapter(HTTPAdapter):
         # 0. Continuous IP rotation — swap proxy every N requests
         sess = self._session_ref
         if sess is not None and hasattr(sess, "_req_counter"):
-            sess._req_counter += 1
+            _lock = getattr(sess, "_counter_lock", None)
+            if _lock:
+                with _lock:
+                    sess._req_counter += 1
+                    _cur = sess._req_counter
+            else:
+                sess._req_counter += 1
+                _cur = sess._req_counter
             rotate_every = getattr(sess, "_rotate_every", 10)
-            if sess._req_counter % max(1, rotate_every) == 0:
+            if _cur % max(1, rotate_every) == 0:
                 try:
                     from websecure.core.waf_bypass import get_tor_proxy
                     new_proxy = get_tor_proxy()
@@ -132,11 +139,11 @@ class WAFBypassAdapter(HTTPAdapter):
                         proxy_str = list(new_proxy.values())[0]
                         logger.debug(
                             "[WAFBypass] Continuous rotation: proxy -> %s (req#%d)",
-                            proxy_str, sess._req_counter,
+                            proxy_str, _cur,
                         )
                         try:
                             from websecure.core.reporting import get_live_monitor
-                            get_live_monitor().log_rotation(sess._req_counter, proxy_str)
+                            get_live_monitor().log_rotation(_cur, proxy_str)
                         except (ImportError, AttributeError) as exc:
                             logger.debug(f"[WAFBypass] Live monitor log_rotation failed: {exc!r}")
                 except Exception as exc:
@@ -394,6 +401,7 @@ class WAFBypassSession(requests.Session):
         self.jitter_range   = jitter_range
         self._rotate_every  = rotate_every   # rotate proxy after this many requests
         self._req_counter   = 0              # incremented by WAFBypassAdapter.send()
+        self._counter_lock  = __import__("threading").Lock()
         # Pass self so adapter can read bypass flags from this session
         adapter = WAFBypassAdapter(session_ref=self)
         self.mount("https://", adapter)
@@ -1258,6 +1266,7 @@ class ResidentialProxyPool:
                     pool = filtered
 
             if not pool:
+                logger.warning("[ProxyPool] No active proxies available (strategy=%s, country=%s)", strategy, country)
                 return None
 
             s = (strategy or self.strategy).lower()
@@ -1278,7 +1287,7 @@ class ResidentialProxyPool:
 
     def _pick_rr(self, pool: List[ProxyEntry]) -> ProxyEntry:
         self._rr_idx = (self._rr_idx + 1) % len(pool)
-        e = pool[self._rr_idx % len(pool)]
+        e = pool[self._rr_idx]
         e.last_used = time.monotonic()
         return e
 

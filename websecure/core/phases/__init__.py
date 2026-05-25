@@ -2462,7 +2462,7 @@ def _runner_waf_fingerprint(ctx) -> None:
                     "url": url,
                     "vendor": getattr(report, "vendor", "unknown"),
                     "confidence": getattr(report, "confidence", 0.0),
-                    "bypass_hints": getattr(report, "bypass_hints", []),
+                    "bypass_hints": getattr(report, "bypass_strategies", []),
                     "rate_limit": getattr(report, "rate_limit", {}),
                     "detected": getattr(report, "detected", False),
                     "message": f"WAF parmak izi: {getattr(report, 'vendor', 'unknown')}",
