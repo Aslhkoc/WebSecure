@@ -4796,11 +4796,14 @@ def run_xss_scan(ctx) -> None:
         if not _eps:
              _eps = [getattr(ctx, "base_url", "")]
 
+        _cfg = getattr(ctx, "config", {}) or {}
+        _oast_domain = (_cfg.get("oast") or {}).get("dns_domain") or None
         run_local_xss(
             _eps,
             getattr(ctx, "session", None),
             results=_results,
-            debug=bool(getattr(ctx, "debug", False))
+            debug=bool(getattr(ctx, "debug", False)),
+            oast_domain=_oast_domain,
         )
     else:
         _logger.warning("[XSS] Internal scanner missing (xss.py).")

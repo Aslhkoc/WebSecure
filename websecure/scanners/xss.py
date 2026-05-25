@@ -325,10 +325,11 @@ class XSSScanner(BaseScanner):
     MAX_URL_PAYLOADS = 200 # tüm wordlist denenir (yüksek kapsamlı)
     MAX_FORM_PAYLOADS = 50 # form input'ları için de tam kapsam
 
-    def __init__(self, session=None, results: Dict = None, debug=False):
+    def __init__(self, session=None, results: Dict = None, debug=False, oast_domain: str = None):
         super().__init__(session, results, debug)
         self.canary_prefix = "wsxss"
         self._seen_url_params: set = set()   # (normalized_url, param_name) — test edilenleri izle
+        self._oast_domain: Optional[str] = oast_domain
 
         # Context-aware payload sets — tried first before the wordlist
         self._context_payloads: Dict[str, List[str]] = {
@@ -790,7 +791,7 @@ class XSSScanner(BaseScanner):
         tt_prober      = TrustedTypesBypassProber()
         pp_prober      = PrototypePollutionXSSProber()
         tl_prober      = TemplateLiteralInjectionProber()
-        blind_prober   = BlindXSSProber()
+        blind_prober   = BlindXSSProber(oob_host=self._oast_domain)
         ato_gen        = XSSToATOChain()
 
         for url in urls[:10]:
@@ -985,8 +986,8 @@ class XSSScanner(BaseScanner):
             )
 
 
-def run(url, session=None, results=None, debug=False, **kwargs):
-    scanner = XSSScanner(session, results, debug)
+def run(url, session=None, results=None, debug=False, oast_domain: str = None, **kwargs):
+    scanner = XSSScanner(session, results, debug, oast_domain=oast_domain)
     scanner.run(url, results=results, **kwargs)
 
 
