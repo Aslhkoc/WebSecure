@@ -56,16 +56,31 @@ def export_sarif(results: Dict[str, Any], out_path: str) -> None:
     for it in findings:
         rule_id = it.get("cwe") or it.get("type") or "generic"
         msg = it.get("message") or it.get("title") or it.get("type") or "finding"
-        run["results"].append({"ruleId": str(rule_id), "message": {"text": str(msg)}})
+        # P10: include physicalLocation so SARIF viewers can link results to source
+        url_str = str(it.get("url") or "")
+        sarif_result: Dict[str, Any] = {
+            "ruleId": str(rule_id),
+            "message": {"text": str(msg)},
+        }
+        if url_str:
+            sarif_result["locations"] = [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": url_str},
+                }
+            }]
+        run["results"].append(sarif_result)
 
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
         "runs": [run],
     }
-    with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump(sarif, fh, indent=2, ensure_ascii=False)
-    logger.info(f"[report_generator] SARIF raporu yazıldı (fallback): {out_path}")
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(sarif, fh, indent=2, ensure_ascii=False)
+        logger.info(f"[report_generator] SARIF raporu yazıldı (fallback): {out_path}")
+    except OSError as exc:
+        logger.error(f"[report_generator] SARIF fallback dosyası yazılamadı ({out_path!r}): {exc!r}")
 
 
 # ---------------------------------------------------------------------------

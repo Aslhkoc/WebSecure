@@ -373,7 +373,9 @@ def _make_rule_id(tool: str, title: str) -> str:
     """Araç ve başlıktan deterministik kural ID'si üret."""
     key = f"{tool}:{title}".lower()
     short = hashlib.md5(key.encode()).hexdigest()[:8]  # noqa: S324
-    safe_title = "".join(c if c.isalnum() else "_" for c in title[:30])
+    # Normalize title to lowercase before building safe_title so the rule ID
+    # is consistent regardless of the original casing (e.g. "XSS" vs "xss").
+    safe_title = "".join(c if c.isalnum() else "_" for c in title.lower()[:30])
     return f"WS/{tool.upper()}/{safe_title}_{short}"
 
 

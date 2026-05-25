@@ -85,8 +85,8 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
     try:
         from websecure.core.fp_learner import get_fp_learner
         findings = get_fp_learner().filter_findings(findings)
-    except Exception:
-        pass  # FPLearner yoksa atla
+    except Exception as _fp_exc:
+        log_warn(f"[reporting] FPLearner unavailable or error: {_fp_exc!r}")
 
     # 1. Deduplicate
     unique = _dedupe_findings(findings)

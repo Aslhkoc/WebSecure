@@ -595,22 +595,34 @@ def render_html_dashboard(results: dict) -> str:
         {**_f, "detail": _cap_detail(_f.get("detail") or {})}
         for _f in findings
     ]
-    findings_json = (
-        json.dumps(_ser_findings, default=str)
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-    # Hard safety cap: if still > 2 MB, strip detail entirely
-    if len(findings_json) > 2_000_000:
-        _ser_findings_min = [
-            {**_f, "detail": {"message": "Detail omitted — payload too large for inline report."}}
-            for _f in findings
-        ]
+    try:
         findings_json = (
-            json.dumps(_ser_findings_min, default=str)
+            json.dumps(_ser_findings, default=str)
             .replace("<", "\\u003c")
             .replace(">", "\\u003e")
         )
+    except Exception as _jdump_exc:
+        _logger.warning("[html_dashboard] findings JSON serialization failed: %r — using empty list", _jdump_exc)
+        findings_json = "[]"
+    # Hard safety cap: if still > 2 MB, strip detail entirely
+    if len(findings_json) > 2_000_000:
+        _logger.warning(
+            "[html_dashboard] Findings JSON exceeds 2 MB (%d KB) — stripping detail fields for inline report",
+            len(findings_json) // 1024,
+        )
+        try:
+            _ser_findings_min = [
+                {**_f, "detail": {"message": "Detail omitted — payload too large for inline report."}}
+                for _f in findings
+            ]
+            findings_json = (
+                json.dumps(_ser_findings_min, default=str)
+                .replace("<", "\\u003c")
+                .replace(">", "\\u003e")
+            )
+        except Exception as _jdump2_exc:
+            _logger.warning("[html_dashboard] findings JSON fallback serialization failed: %r", _jdump2_exc)
+            findings_json = "[]"
     _data_size_kb = len(findings_json) // 1024
 
     # --- Ports Data Prep ---

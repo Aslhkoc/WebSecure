@@ -267,9 +267,14 @@ def render_risk_matrix(findings: List[Dict]) -> str:
              "|:-:|---|:-:|:-:|---|:-:|"]
     for i, (vtype, info) in enumerate(rows[:20], 1):
         lines.append(
-            f"| {i} | {vtype} | {info['sev_label']} | {info['count']} | {info['advice']} | {info['effort']} |"
+            f"| {i} | {_esc_md(vtype)} | {_esc_md(info['sev_label'])} | {info['count']} | {_esc_md(info['advice'])} | {_esc_md(info['effort'])} |"
         )
     return "\n".join(lines)
+
+def _esc_md(s: str) -> str:
+    """Escape pipe/backtick/asterisk characters that break Markdown tables."""
+    return (str(s) or "").replace("|", "\\|").replace("`", "\\`").replace("*", "\\*")
+
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
