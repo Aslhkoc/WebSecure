@@ -15,12 +15,7 @@ from websecure.core.payloads import load_external_payloads
 
 logger = logging.getLogger(__name__)
 
-# Smart context analysis
-try:
-    from websecure.core.analysis import analyze_input_context, should_skip_payload_category
-    _HAS_ANALYZER = True
-except ImportError:
-    _HAS_ANALYZER = False
+# Context analysis now delegated to BaseScanner._should_skip_param (Fix 2+3)
 
 # ---------------------------------------------------------------------------
 # Payload definitions
@@ -356,10 +351,8 @@ class NoSQLiScanner(BaseScanner):
         string_args = []
         bracket_args = []
         for param in params:
-            if _HAS_ANALYZER:
-                ctx = analyze_input_context(name=param, source="param", url_path=url)
-                if should_skip_payload_category(ctx.context, "nosqli"):
-                    continue
+            if self._should_skip_param(param, "nosqli"):
+                continue
             for payload_str, pay_type in _URL_STRING_PAYLOADS:
                 string_args.append((param, payload_str, pay_type))
             for op, label in _BRACKET_OPERATORS:

@@ -1989,8 +1989,16 @@ def _run_scan_phases(
         # Plan B (B8): Smart endpoint prioritization — re-rank after crawl
         if _PLAN_B_AVAILABLE and _EndpointPrioritizer is not None and len(endpoints) > 1:
             try:
+                # Fix 5: Build method_map from forms_meta so POST endpoints score higher
+                _method_map: Dict[str, list] = {}
+                for _fm in results.get("forms_meta", []) or []:
+                    _fm_action = _fm.get("action") or ""
+                    _fm_method = (_fm.get("method") or "GET").upper()
+                    if _fm_action and _fm_method != "GET":
+                        _method_map.setdefault(_fm_action, []).append(_fm_method)
+
                 _prioritizer = _EndpointPrioritizer()
-                _ranked = _prioritizer.rank(endpoints)
+                _ranked = _prioritizer.rank(endpoints, method_map=_method_map)
                 # Re-order endpoints: critical/high first
                 _grouped = _prioritizer.group_by_priority(_ranked)
                 _ordered_eps = (

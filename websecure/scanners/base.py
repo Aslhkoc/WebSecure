@@ -70,6 +70,13 @@ class BaseScanner:
         if debug:
             self.logger.setLevel(logging.DEBUG)
 
+        # Fix 1: FalsePositiveReducer — lazy-loaded per scanner instance
+        try:
+            from ..core.fp_reducer import FalsePositiveReducer as _FPR
+            self._fpr = _FPR(self.session)
+        except Exception:
+            self._fpr = None
+
     def _resolve_max_workers(self) -> int:
         try:
             from websecure.core.payloads import _load_cfg
@@ -239,6 +246,77 @@ class BaseScanner:
             f"[{self.name.upper()}] {resolved_type} FOUND: {url} [{entry['severity']}]"
             + (f" (param={param})" if param else "")
         )
+
+    def verify_finding(
+        self,
+        vuln_type: str,
+        url: str,
+        param: str,
+        payload: str,
+        probe_fn: Callable[[], bool],
+        detection_method: str = "error_based",
+    ) -> bool:
+        """
+        Fix 1: FP-reduction pipeline gate.
+        Re-runs probe_fn N times per detection_method threshold.
+        Returns True if confirmed (safe to report), False if suppressed.
+        Falls back to True when FPR is unavailable so scanners never silently drop findings.
+        """
+        if self._fpr is None:
+            return True
+        v = self._fpr.verify_and_gate(
+            vuln_type=vuln_type,
+            url=url,
+            param=param,
+            payload=payload,
+            probe_fn=probe_fn,
+            detection_method=detection_method,
+        )
+        if not v.is_confirmed:
+            self.logger.debug(
+                f"[FPR] Suppressed {vuln_type} @ {url} param={param} "
+                f"({v.successes}/{v.attempts} confirmations, key={v.finding_key})"
+            )
+        return v.is_confirmed
+
+    def _should_skip_param(self, param_name: str, attack_category: str, value: str = "") -> bool:
+        """
+        Fix 2+3: Context-aware param filter.
+        Returns True when this param is irrelevant for the given attack category
+        (e.g. a CSRF token for SQLi, or a redirect param for NoSQLi).
+        Applies tech-stack filtering: if MongoDB detected, SQLi is skipped.
+        Falls back to False (don't skip) on any import/analysis error.
+        """
+        try:
+            from ..core.analysis import analyze_input_context, should_skip_payload_category
+            tech = set(self.results.get("tech_stack", [])) or None
+            ctx = analyze_input_context(name=param_name, value=value, source="param")
+            return should_skip_payload_category(ctx.context, attack_category, tech_stack=tech)
+        except Exception:
+            return False
+
+    def check_anomaly(
+        self,
+        baseline_len: int,
+        baseline_time_ms: float,
+        baseline_body: str,
+        current_len: int,
+        current_time_ms: float,
+        current_body: str,
+    ) -> float:
+        """
+        Fix 4: Anomaly scoring for blind injection detection.
+        Compares response length, timing, and body similarity against baseline.
+        Returns score 0.0–1.0; >0.5 = likely significant response change.
+        """
+        try:
+            from ..core.analysis import anomaly_score
+            return float(anomaly_score(
+                baseline={"len": baseline_len, "time_samples": [baseline_time_ms], "body": baseline_body},
+                current={"len": current_len, "time_ms": current_time_ms, "body": current_body},
+            )["score"])
+        except Exception:
+            return 0.0
 
     # ------------------------------------------------------------------
     # FAZ 2.1 — URL parameter injection (replaces _inject_param duplicates)
