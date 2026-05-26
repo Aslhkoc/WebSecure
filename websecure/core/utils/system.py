@@ -53,31 +53,47 @@ def _chrome_service():
     return None
 
 
-def _chrome_opts(headless: bool, proxy: str, profile_dir: str, new_headless: bool = True):
+def _chrome_opts(headless: bool, proxy: str, profile_dir: str,
+                  new_headless: bool = True, swiftshader: bool = False):
     from selenium.webdriver.chrome.options import Options
     opts = Options()
 
     if headless:
-        # --headless=new bazı Windows Admin kurulumlarında crash yapabiliyor;
-        # new_headless=False olduğunda eski --headless modunu kullan
         opts.add_argument("--headless=new" if new_headless else "--headless")
 
     if proxy:
         opts.add_argument(f"--proxy-server={proxy}")
 
-    opts.add_argument(f"--user-data-dir={profile_dir}")
+    if profile_dir:
+        opts.add_argument(f"--user-data-dir={profile_dir}")
+
+    # Sandbox & process isolation
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+
+    # GPU — swiftshader = pure software rendering (Chrome instance exited hatası için)
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-gpu-sandbox")
     opts.add_argument("--disable-software-rasterizer")
     opts.add_argument("--disable-features=VizDisplayCompositor")
+    opts.add_argument("--in-process-gpu")
+    if swiftshader:
+        opts.add_argument("--use-gl=swiftshader")
+        opts.add_argument("--use-angle=swiftshader")
+
+    # Crash / logging
+    opts.add_argument("--disable-crash-reporter")
+    opts.add_argument("--disable-logging")
+    opts.add_argument("--log-level=3")
+    opts.add_argument("--silent")
+
+    # Otomasyon / uzantı gürültüsü
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-default-apps")
     opts.add_argument("--no-first-run")
     opts.add_argument("--window-size=1920,1080")
     opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_argument("--log-level=3")
+    opts.add_argument("--disable-web-security")
     # NOT: --remote-debugging-port=0 kullanma — DevToolsActivePort hatasına yol açar
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
@@ -96,30 +112,30 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
 
         profile_dir = tempfile.mkdtemp(prefix="ws_chrome_")
 
-        # Deneme 1: --headless=new (modern mod)
-        try:
-            driver = webdriver.Chrome(service=service, options=_chrome_opts(headless, proxy, profile_dir, new_headless=True))
-            logging.info("[WebDriver] Chrome başlatıldı (headless=new).")
-            return driver
-        except Exception as e1:
-            logging.warning(f"[WebDriver] headless=new başarısız: {type(e1).__name__} — eski mod deneniyor...")
+        attempts = [
+            # (headless, new_headless, swiftshader, label)
+            (headless, True,  False, "headless=new"),
+            (headless, False, False, "headless eski mod"),
+            (False,    False, False, "GUI mod"),
+            (headless, True,  True,  "headless=new + SwiftShader"),
+            (False,    False, True,  "GUI + SwiftShader (profil yok)"),
+        ]
 
-        # Deneme 2: eski --headless modu
-        try:
-            driver = webdriver.Chrome(service=service, options=_chrome_opts(headless, proxy, profile_dir, new_headless=False))
-            logging.info("[WebDriver] Chrome başlatıldı (headless eski mod).")
-            return driver
-        except Exception as e2:
-            logging.warning(f"[WebDriver] Eski headless de başarısız: {type(e2).__name__} — headless=False deneniyor...")
+        for is_headless, new_hl, swift, label in attempts:
+            # Son denemede user-data-dir'i de kaldır (bazı ortamlarda temp sorun çıkarır)
+            pdir = profile_dir if label != "GUI + SwiftShader (profil yok)" else None
+            try:
+                driver = webdriver.Chrome(
+                    service=service,
+                    options=_chrome_opts(is_headless, proxy, pdir, new_hl, swift),
+                )
+                logging.info(f"[WebDriver] Chrome başlatıldı ({label}).")
+                return driver
+            except Exception as exc:
+                logging.warning(f"[WebDriver] {label} başarısız: {type(exc).__name__} — sonraki deneniyor...")
 
-        # Deneme 3: headless olmadan (GUI modu, son çare)
-        try:
-            driver = webdriver.Chrome(service=service, options=_chrome_opts(False, proxy, profile_dir, new_headless=False))
-            logging.info("[WebDriver] Chrome başlatıldı (headless=False, GUI modu).")
-            return driver
-        except Exception as e3:
-            logging.warning(f"[WebDriver] GUI mod da başarısız: {e3}")
-            raise e3
+        logging.warning("[WebDriver] Tüm başlatma denemeleri başarısız.")
+        return None
 
     except Exception as e:
         logging.warning(f"WebDriver init failed: {e}")
