@@ -9,8 +9,9 @@ Interactive wizard prompts extracted from main():
 Each function mutates `cfg` in-place and returns None.
 All functions respect args.dry_run / args.batch (non-interactive mode).
 """
-import logging
 from __future__ import annotations
+
+import logging
 
 import os
 import subprocess
