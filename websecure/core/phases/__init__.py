@@ -1085,8 +1085,8 @@ _PHASE_TIMEOUTS: Dict[str, int] = {
     "nuclei":             480,   # many templates
     "subdomain":          480,
     "owasp_and_nuclei":   480,
-    "feroxbuster":        300,   # recursive dir brute-force (was 420)
-    "ffuf":               300,   # content + file fuzzing (was 420)
+    "feroxbuster":        420,   # recursive dir brute-force
+    "ffuf":               480,   # content + file fuzzing (stealth'te _safe() 3x uygular)
     # ── Crawlers / probers ─────────────────────────────────────────────────
     "discovery":          240,
     "katana":             180,
@@ -1196,6 +1196,15 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
 
     phase_timeout = _PHASE_TIMEOUTS.get(phase_id, _DEFAULT_PHASE_TIMEOUT)
+
+    # Stealth profilinde harici araçlara (ffuf, feroxbuster, sqlmap) 3x zaman ver —
+    # çünkü -rate 1-2 ile çalışıyorlar ve aynı iş çok daha uzun sürüyor.
+    _ctx_cfg = getattr(ctx, "config", {}) or {}
+    _scan_profile = str((_ctx_cfg.get("settings") or {}).get("scan_profile", "normal")).lower()
+    if _scan_profile == "stealth" and phase_id in (
+        "ffuf", "feroxbuster", "sqlmap", "nuclei", "amass", "subdomain", "passive_recon"
+    ):
+        phase_timeout = int(phase_timeout * 3)
 
     t = threading.Thread(target=fn, name=f"phase::{phase_id}", daemon=True)
     t.start()

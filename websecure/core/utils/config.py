@@ -96,10 +96,30 @@ def _manual_type_checks(cfg: dict) -> List[str]:
     return issues
 
 
-def load_config(path: str = "config.json") -> Dict[str, Any]:
+def _resolve_config_path(path: str) -> Path:
+    """config.json'u CWD'de değilse proje kökünde ara.
+
+    Dosya yapısı: <project_root>/websecure/core/utils/config.py
+    config.json:  <project_root>/config.json
+    Bu yüzden 4 üst dizin == proje kökü.
+    """
     p = Path(path)
-    cfg = {}
     if p.exists():
+        return p
+    # websecure/core/utils/config.py → 4 üst = proje kökü
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    candidate = project_root / path
+    if candidate.exists():
+        return candidate
+    return p  # bulunamadıysa orijinali döndür, caller handle eder
+
+
+def load_config(path: str = "config.json") -> Dict[str, Any]:
+    p = _resolve_config_path(path)
+    cfg = {}
+    found = False
+    if p.exists():
+        found = True
         try:
             with p.open("r", encoding="utf-8") as f:
                 cfg = json.load(f)
@@ -112,7 +132,9 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
         except Exception as e:
             logging.error("Config yüklenemedi (%s): %s — built-in defaults kullanılıyor.", path, e)
 
-    _validate_version(cfg, path)
+    # Versiyon uyarısını yalnızca dosya bulundu ama alan eksikse göster
+    if found:
+        _validate_version(cfg, str(p))
 
     # Run comprehensive validation; emit every warning found
     for msg in validate_config(cfg):
@@ -125,7 +147,7 @@ def load_config(path: str = "config.json") -> Dict[str, Any]:
 def _validate_version(cfg: Dict[str, Any], path: str) -> None:
     ver = cfg.get("version")
     if ver is None:
-        logging.warning(
+        logging.debug(
             "[Config] 'version' alanı bulunamadı (%s). "
             "config.json'a \"version\": \"1.0\" ekleyin.",
             path,
