@@ -234,6 +234,7 @@ def _apply_stealth_profile(cfg: dict) -> dict:
     cfg.setdefault("_sqlmap", {}).update({
         "risk": 3, "level": 5,
         "threads": 1,
+        "timeout": 1800,  # --delay=5 ile 300+ istek = 1500s+ gerekebilir
         "extra_args": [
             "--delay=5", "--random-agent", "--batch", "--forms", "--crawl=3",
             "--tamper=space2comment,between,randomcase,charencode,equaltolike,greatest",

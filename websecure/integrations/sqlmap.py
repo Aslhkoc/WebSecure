@@ -233,6 +233,10 @@ class SQLMapWrapper(ToolIntegration):
             if proxy:
                 cmd.extend(["--proxy", proxy.replace("socks5h://", "socks5://")])
 
+            # Timeout: profile'dan oku; yoksa 600s varsayılan.
+            # Stealth --delay=5 ile her istek 5s → 600s minimum gerekli.
+            _run_timeout = int(_p.get("timeout", 600))
+
             logger.info(f"Starting SQLMap binary scan on {target}...")
             proc = subprocess.Popen(
                 cmd,
@@ -240,11 +244,13 @@ class SQLMapWrapper(ToolIntegration):
                 stderr=subprocess.PIPE,
             )
             try:
-                stdout_b, stderr_b = proc.communicate(timeout=300)
+                stdout_b, stderr_b = proc.communicate(timeout=_run_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
-                logger.warning("[SQLMap] Zaman aşımı (300s) — kısmi sonuçlar ayrıştırılıyor")
+                logger.warning(
+                    "[SQLMap] Zaman aşımı (%ds) — kısmi sonuçlar ayrıştırılıyor", _run_timeout
+                )
                 stdout_b, stderr_b = b"", b""
             stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
             stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""

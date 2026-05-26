@@ -764,6 +764,33 @@ class PostMessageInterceptionProber(BaseScanner):
         except Exception as exc:
             _logger.warning(f"[PostMessageInterceptionProber] Event loop error: {exc!r}")
 
+    # URL'nin DOM/postMessage handler'ı barındırabilecek bir HTML sayfası olup
+    # olmadığını belirleyen pattern'ler.
+    _API_PATH_PATTERNS = (
+        "/api/", "/rest/", "/graphql", "/gql",
+        "/v1/", "/v2/", "/v3/", "/v4/",
+        ".json", ".xml", ".csv", ".txt", ".rss", ".atom",
+    )
+    _API_EXTENSIONS = {".json", ".xml", ".csv", ".txt", ".rss", ".atom", ".yaml", ".yml"}
+
+    @classmethod
+    def _is_html_candidate(cls, url: str) -> bool:
+        """False döner → postMessage testi atlanır (JSON/API endpoint)."""
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(url.rstrip("\\/"))
+            path_lower = parsed.path.lower()
+            # Bilinen API path prefixleri
+            if any(p in path_lower for p in cls._API_PATH_PATTERNS):
+                return False
+            # Dosya uzantısı
+            ext = path_lower.rsplit(".", 1)[-1] if "." in path_lower.rsplit("/", 1)[-1] else ""
+            if f".{ext}" in cls._API_EXTENSIONS:
+                return False
+        except Exception:
+            pass
+        return True
+
     async def _async_run(self, endpoints: List[str]) -> None:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=self.headless)
@@ -773,6 +800,11 @@ class PostMessageInterceptionProber(BaseScanner):
             await context.add_init_script(script=_POSTMESSAGE_INTERCEPT_JS)
             page = await context.new_page()
             for url in endpoints[:20]:
+                if not self._is_html_candidate(url):
+                    _logger.debug(
+                        "[PostMessageInterceptionProber] API/data endpoint atlandı: %s", url
+                    )
+                    continue
                 await self._probe_url(page, url)
             await browser.close()
 
@@ -780,6 +812,19 @@ class PostMessageInterceptionProber(BaseScanner):
         """Navigate and send canary postMessages; inspect listener hits."""
         try:
             await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+
+            # İkinci güvenlik katmanı: sayfanın Content-Type'ına bak.
+            # JSON/XML dönen endpoint'lerde DOM veya postMessage handler olmaz.
+            content_type = await page.evaluate(
+                "() => { try { return document.contentType || ''; } catch(e) { return ''; } }"
+            )
+            if any(t in (content_type or "").lower() for t in ("json", "xml", "plain", "csv")):
+                _logger.debug(
+                    "[PostMessageInterceptionProber] Non-HTML content-type (%s), atlandı: %s",
+                    content_type, url,
+                )
+                return
+
             await page.wait_for_timeout(600)
 
             canary = _MONKEY_CANARY
