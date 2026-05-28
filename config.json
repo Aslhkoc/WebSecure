@@ -1,6 +1,11 @@
 {
   "$schema": "./config.schema.json",
   "version": "1.0",
+  "exploitation": {
+    "enabled": true,
+    "lhost": "192.168.1.103",
+    "lport": 4444
+  },
   "_meta": {
     "version": "2.5.2-b8",
     "last_updated": "2026-03-31T00:00:00Z",

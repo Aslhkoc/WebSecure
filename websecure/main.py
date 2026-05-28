@@ -2288,6 +2288,8 @@ def _run_scan_phases(
                     _exp_res = _exploit_fr(
                         scan_results={"findings": _exp_findings, "target": url},
                         cfg=cfg,
+                        lhost=_exploit_cfg.get("lhost", ""),
+                        lport=int(_exploit_cfg.get("lport", 4444)),
                     )
                     mark("exploit_orchestrator", t_ex)
                     if _exp_res and callable(globals().get("add_result")):
