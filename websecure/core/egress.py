@@ -69,11 +69,10 @@ def _tor_cookie_auth() -> Optional[bytes]:
         os.path.expanduser("~/.tor/control_auth_cookie"),
         "/var/run/tor/control.authcookie",
         "/var/lib/tor/control_auth_cookie",
-        # Windows Tor Browser
+        # Windows Tor Browser (use env vars — never hardcode username)
         os.path.expandvars(r"%APPDATA%\tor\control_auth_cookie"),
         os.path.expandvars(r"%LOCALAPPDATA%\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie"),
-        r"C:\Users\Acer\Desktop\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie",
-        r"C:\Users\Acer\AppData\Roaming\tor\control_auth_cookie",
+        os.path.expandvars(r"%APPDATA%\Tor Browser\Browser\TorBrowser\Data\Tor\control_auth_cookie"),
     ]
     for path in cookie_paths:
         try:

@@ -35,12 +35,8 @@ def _try_autostart_tor() -> str | None:
         if _proxy_alive(f"socks5h://127.0.0.1:{_port}"):
             return f"socks5h://127.0.0.1:{_port}"
 
-    _tb_paths = [
-        r"C:\Users\Acer\Desktop\Tor Browser\Browser\firefox.exe",
-        r"C:\Program Files\Tor Browser\Browser\firefox.exe",
-        r"C:\Users\Acer\AppData\Local\Programs\Tor Browser\Browser\firefox.exe",
-    ]
-    for _tb in _tb_paths:
+    from websecure.core.platform_compat import tor_browser_exe_candidates as _tor_candidates
+    for _tb in _tor_candidates():
         if os.path.exists(_tb):
             try:
                 subprocess.Popen([_tb], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

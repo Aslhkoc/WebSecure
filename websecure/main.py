@@ -2652,7 +2652,7 @@ if __name__ == "__main__":
         import json
         _tm_cfg = {}
         if os.path.exists("config.json"):
-            with open("config.json", "r") as f: _tm_cfg = json.load(f)
+            with open("config.json", "r", encoding="utf-8") as f: _tm_cfg = json.load(f)
             
         tm = ToolManager(_tm_cfg)
         # Only ask if interactive and not configured

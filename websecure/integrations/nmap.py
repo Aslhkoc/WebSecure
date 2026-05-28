@@ -252,48 +252,50 @@ class NmapWrapper(ToolIntegration):
             return
 
         # 2. Yaygın kurulum konumları (Windows + Linux + macOS)
+        import sys as _sys
         from pathlib import Path
-        candidates = [
-            r"C:\Program Files (x86)\Nmap\nmap.exe",
-            r"C:\Program Files\Nmap\nmap.exe",
-            r"C:\Nmap\nmap.exe",
-            r"C:\tools\nmap\nmap.exe",
-            "/usr/bin/nmap",
-            "/usr/local/bin/nmap",
-            "/opt/homebrew/bin/nmap",
-            str(Path(__file__).resolve().parent.parent.parent / "tools" / "Nmap" / "nmap.exe"),
-        ]
+        from websecure.core.platform_compat import binary_candidates as _bc, binary_name as _bn
+        root = Path(__file__).resolve().parent.parent.parent
 
-        # 3. Windows PATH kayıt defterinden de dene
-        try:
-            import winreg
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                 r"SOFTWARE\Nmap")
-            install_dir, _ = winreg.QueryValueEx(key, "")
-            winreg.CloseKey(key)
-            candidates.insert(0, os.path.join(install_dir, "nmap.exe"))
-        except Exception as _fix_e:
-            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
+        candidates_path: list = list(_bc(root, "nmap"))
+        if _sys.platform == "win32":
+            # Windows standard install locations (use env vars where possible)
+            pf   = os.environ.get("ProgramFiles",       r"C:\Program Files")
+            pf86 = os.environ.get("ProgramFiles(x86)",  r"C:\Program Files (x86)")
+            candidates_path += [
+                os.path.join(pf, "Nmap", "nmap.exe"),
+                os.path.join(pf86, "Nmap", "nmap.exe"),
+                r"C:\Nmap\nmap.exe",
+            ]
+            # Windows registry lookup
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Nmap")
+                install_dir, _ = winreg.QueryValueEx(key, "")
+                winreg.CloseKey(key)
+                candidates_path.insert(0, os.path.join(install_dir, "nmap.exe"))
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
+        else:
+            # Linux / macOS standard locations
+            candidates_path += [
+                "/usr/bin/nmap",
+                "/usr/local/bin/nmap",
+                "/opt/homebrew/bin/nmap",      # macOS Homebrew
+                "/opt/homebrew/opt/nmap/bin/nmap",
+            ]
 
-        # 4. Sistem PATH'i doğrudan os.environ'dan yeniden oku (process başlatıldıktan sonra güncellenmiş olabilir)
-        try:
-            import subprocess as _sp
-            if platform.system() == "Windows":
-                result = _sp.run(["where", "nmap"], capture_output=True, text=True, timeout=5)
-            else:
-                result = _sp.run(["which", "nmap"], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                found = result.stdout.strip().splitlines()[0]
-                if found and os.path.exists(found):
-                    self._binary_path = found
-                    logger.info(f"[Nmap] Binary (shell lookup): {found}")
-                    return
-        except Exception as _fix_e:
-            logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
+        # 3. shutil.which() is already cross-platform; use it as secondary lookup
+        #    (covers updated PATH after process start, no shell spawning needed)
+        _found_which = shutil.which("nmap")
+        if _found_which:
+            self._binary_path = _found_which
+            logger.info(f"[Nmap] Binary (which): {_found_which}")
+            return
 
-        for c in candidates:
-            if os.path.exists(c):
-                self._binary_path = c
+        for c in candidates_path:
+            if os.path.exists(str(c)):
+                self._binary_path = str(c)
                 logger.info(f"[Nmap] Binary (fallback): {c}")
                 return
 

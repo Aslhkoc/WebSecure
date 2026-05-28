@@ -168,7 +168,9 @@ class _ThreadingFallbackAdapter:
         pass
 
     async def request(self, task: AsyncScanTask) -> AsyncScanResult:
-        loop = asyncio.get_event_loop()
+        # get_running_loop() is the correct call inside an async context (Python 3.7+)
+        # and avoids the DeprecationWarning of get_event_loop() in Python 3.10+.
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._sync_request, task)
 
     def _sync_request(self, task: AsyncScanTask) -> AsyncScanResult:

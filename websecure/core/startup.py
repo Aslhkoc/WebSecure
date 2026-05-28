@@ -12,9 +12,14 @@ import re
 import sys
 import time
 import subprocess
-import zipfile
 import urllib.request
 from pathlib import Path
+
+from websecure.core.platform_compat import (
+    binary_name as _bin_name,
+    github_release_info as _platform_info,
+    extract_binary_from_archive as _extract_binary,
+)
 
 _ROOT = Path(__file__).resolve().parent.parent.parent  # project root
 
@@ -91,35 +96,56 @@ def ensure_interactsh(cfg: dict) -> bool:
     if _oast.get("enabled") and _ic.get("enabled") and _tok and "BURAYA" not in _tok:
         return True
 
-    exe_path = _ROOT / "drivers" / "interactsh-client.exe"
+    os_name, arch = _platform_info()
+    _ic_bin = _bin_name("interactsh-client")
+    exe_path = _ROOT / "drivers" / _ic_bin
+
+    # Also check PATH — if already installed system-wide, skip download
+    import shutil as _shutil
+    if not exe_path.exists() and _shutil.which("interactsh-client"):
+        exe_path = Path(_shutil.which("interactsh-client"))
 
     if not exe_path.exists():
-        print("[*] interactsh-client.exe bulunamadi. GitHub'dan indiriliyor...")
+        print(f"[*] {_ic_bin} bulunamadi. GitHub'dan indiriliyor ({os_name}/{arch})...")
         try:
             import json as _json
             api_url = "https://api.github.com/repos/projectdiscovery/interactsh/releases/latest"
             with urllib.request.urlopen(api_url, timeout=15) as r:
                 data = _json.loads(r.read())
-            asset_url = next(
-                (a["browser_download_url"] for a in data.get("assets", [])
-                 if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
-                 and a["name"].endswith(".zip")),
-                None,
-            )
+
+            # Match asset for current platform — prefer .zip, fall back to .tar.gz
+            asset_url = None
+            for _ext in (".zip", ".tar.gz"):
+                asset_url = next(
+                    (a["browser_download_url"] for a in data.get("assets", [])
+                     if os_name in a["name"].lower()
+                     and arch in a["name"].lower()
+                     and a["name"].endswith(_ext)),
+                    None,
+                )
+                if asset_url:
+                    break
+
             if not asset_url:
-                print("[!] interactsh Windows binary bulunamadi. Elle indirin.")
+                print(f"[!] interactsh {os_name}/{arch} binary bulunamadi. Elle indirin.")
                 return False
-            zip_path = _ROOT / "drivers" / "interactsh-client.zip"
+
+            archive_name = asset_url.split("/")[-1]
+            archive_path = _ROOT / "drivers" / archive_name
             exe_path.parent.mkdir(parents=True, exist_ok=True)
-            urllib.request.urlretrieve(asset_url, zip_path)
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                for member in zf.namelist():
-                    if member.endswith(".exe") and "interactsh-client" in member:
-                        with zf.open(member) as src, open(exe_path, "wb") as dst:
-                            dst.write(src.read())
-                        break
-            zip_path.unlink(missing_ok=True)
-            print(f"[+] interactsh-client.exe indirildi: {exe_path}")
+            print(f"[*] indiriliyor: {archive_name}")
+            urllib.request.urlretrieve(asset_url, archive_path)
+
+            dest_path = _ROOT / "drivers" / _ic_bin
+            ok = _extract_binary(archive_path, dest_path, "interactsh-client")
+            archive_path.unlink(missing_ok=True)
+
+            if not ok:
+                print("[!] interactsh binary arsivden cikartilamadi.")
+                return False
+
+            exe_path = dest_path
+            print(f"[+] {_ic_bin} indirildi: {exe_path}")
         except Exception as exc:
             print(f"[!] interactsh indirme hatasi: {exc}")
             return False
@@ -180,47 +206,66 @@ def ensure_interactsh(cfg: dict) -> bool:
 
 def ensure_nuclei(cfg: dict) -> bool:  # noqa: ARG001
     """
-    tools/nuclei/nuclei.exe varsa True döner.
-    Yoksa GitHub releases'tan en güncel Windows amd64 sürümünü indirir.
+    tools/nuclei/nuclei[.exe] varsa True döner.
+    Yoksa GitHub releases'tan mevcut platform için doğru binary'yi indirir
+    (Windows: .zip/nuclei.exe, Linux/macOS: .zip or .tar.gz/nuclei).
     """
+    import shutil as _shutil
+
+    os_name, arch = _platform_info()
+    _nuclei_bin = _bin_name("nuclei")
+
     candidates = [
-        _ROOT / "tools" / "nuclei" / "nuclei.exe",
-        _ROOT / "tools" / "nuclei.exe",
+        _ROOT / "tools" / "nuclei" / _nuclei_bin,
+        _ROOT / "tools" / _nuclei_bin,
     ]
     for c in candidates:
         if c.exists():
             return True
 
-    print("[*] Nuclei bulunamadi. GitHub'dan indiriliyor...")
+    # Also accept if available system-wide in PATH
+    if _shutil.which("nuclei"):
+        return True
+
+    print(f"[*] Nuclei bulunamadi. GitHub'dan indiriliyor ({os_name}/{arch})...")
     try:
         import json as _json
         api_url = "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest"
         with urllib.request.urlopen(api_url, timeout=15) as r:
             data = _json.loads(r.read())
-        asset_url = next(
-            (a["browser_download_url"] for a in data.get("assets", [])
-             if "windows" in a["name"].lower() and "amd64" in a["name"].lower()
-             and a["name"].endswith(".zip")),
-            None,
-        )
+
+        asset_url = None
+        for _ext in (".zip", ".tar.gz"):
+            asset_url = next(
+                (a["browser_download_url"] for a in data.get("assets", [])
+                 if os_name in a["name"].lower()
+                 and arch in a["name"].lower()
+                 and a["name"].endswith(_ext)),
+                None,
+            )
+            if asset_url:
+                break
+
         if not asset_url:
-            print("[!] Nuclei Windows binary bulunamadi.")
+            print(f"[!] Nuclei {os_name}/{arch} binary bulunamadi.")
             return False
 
         dest_dir = _ROOT / "tools" / "nuclei"
         dest_dir.mkdir(parents=True, exist_ok=True)
-        zip_path = dest_dir / "nuclei.zip"
-        print(f"[*] Nuclei indiriliyor: {asset_url.split('/')[-1]}")
-        urllib.request.urlretrieve(asset_url, zip_path)
+        archive_name = asset_url.split("/")[-1]
+        archive_path = dest_dir / archive_name
+        print(f"[*] Nuclei indiriliyor: {archive_name}")
+        urllib.request.urlretrieve(asset_url, archive_path)
 
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for member in zf.namelist():
-                if member.endswith(".exe") and "nuclei" in member.lower():
-                    with zf.open(member) as src, open(dest_dir / "nuclei.exe", "wb") as dst:
-                        dst.write(src.read())
-                    break
-        zip_path.unlink(missing_ok=True)
-        print(f"[+] Nuclei kuruldu: {dest_dir / 'nuclei.exe'}")
+        dest_path = dest_dir / _nuclei_bin
+        ok = _extract_binary(archive_path, dest_path, "nuclei")
+        archive_path.unlink(missing_ok=True)
+
+        if not ok:
+            print("[!] Nuclei binary arsivden cikartilamadi.")
+            return False
+
+        print(f"[+] Nuclei kuruldu: {dest_path}")
         return True
     except Exception as exc:
         print(f"[!] Nuclei indirme hatasi: {exc}")

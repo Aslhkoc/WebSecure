@@ -177,14 +177,11 @@ class SubfinderWrapper:
         if shutil.which(self.binary):
             return
         from pathlib import Path
+        from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
-        for p in [
-            str(root / "tools" / "subfinder" / "subfinder.exe"),
-            str(root / "tools" / "subfinder"),
-            r"C:\tools\subfinder\subfinder.exe",
-        ]:
-            if os.path.exists(p):
-                self.binary = p
+        for _cand in _bc(root, "subfinder"):
+            if _cand.exists():
+                self.binary = str(_cand)
                 return
 
     def is_available(self) -> bool:
@@ -273,13 +270,11 @@ except ImportError:
             if shutil.which(self.binary):
                 return
             from pathlib import Path
+            from websecure.core.platform_compat import binary_candidates as _bc
             root = Path(__file__).resolve().parent.parent.parent
-            for p in [
-                str(root / "tools" / "amass" / "amass.exe"),
-                r"C:\tools\amass\amass.exe",
-            ]:
-                if os.path.exists(p):
-                    self.binary = p
+            for _cand in _bc(root, "amass"):
+                if _cand.exists():
+                    self.binary = str(_cand)
                     return
 
         def is_available(self) -> bool:

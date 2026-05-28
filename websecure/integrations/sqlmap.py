@@ -115,12 +115,13 @@ class SQLMapWrapper(ToolIntegration):
             return True
         # SQLMap is often a Python script in the tools/ directory — check there too
         from pathlib import Path
+        from websecure.core.platform_compat import binary_candidates as _bc, binary_name as _bn
         root = Path(__file__).resolve().parent.parent.parent
-        for candidate in [
+        _script_candidates = [
             root / "tools" / "sqlmap" / "sqlmap.py",
             root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py",
-            root / "tools" / "sqlmap" / "sqlmap.exe",
-        ]:
+        ]
+        for candidate in _script_candidates + list(_bc(root, "sqlmap")):
             if candidate.exists():
                 self._binary_path = str(candidate)
                 return True
@@ -175,19 +176,19 @@ class SQLMapWrapper(ToolIntegration):
         if not self.is_available():
             # Try to find if not in path
             from pathlib import Path
+            from websecure.core.platform_compat import binary_candidates as _bc
             root = Path(__file__).resolve().parent.parent.parent
-            possible = [
-                str(root / "tools" / "sqlmap" / "sqlmap.py"),
-                str(root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py"),
-                str(root / "tools" / "sqlmap" / "sqlmap.exe")
-            ]
+            _scan_candidates = [
+                root / "tools" / "sqlmap" / "sqlmap.py",
+                root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py",
+            ] + list(_bc(root, "sqlmap"))
             found = False
-            for p in possible:
-                if os.path.exists(p):
-                    self._binary_path = p
+            for _cand in _scan_candidates:
+                if _cand.exists():
+                    self._binary_path = str(_cand)
                     found = True
                     break
-            
+
             if not found:
                 logger.warning("SQLMap binary not found.")
                 return []

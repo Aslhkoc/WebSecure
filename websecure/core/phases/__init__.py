@@ -1410,13 +1410,16 @@ def _runner_browser_crawler(ctx) -> None:
         crawler = BrowserCrawler(config)
         import asyncio as _asyncio
         try:
-            loop = _asyncio.get_event_loop()
+            # Python 3.10+ deprecates get_event_loop() outside async context.
+            # Use get_event_loop_policy().get_event_loop() for sync callers, which
+            # falls back gracefully; wrap in try/except for final safety.
+            loop = _asyncio.get_event_loop_policy().get_event_loop()
             if loop.is_closed():
-                loop = _asyncio.new_event_loop()
-                _asyncio.set_event_loop(loop)
+                raise RuntimeError("event loop is closed")
             result = loop.run_until_complete(crawler.crawl(url))
         except RuntimeError:
             loop = _asyncio.new_event_loop()
+            _asyncio.set_event_loop(loop)
             result = loop.run_until_complete(crawler.crawl(url))
 
         # Endpoint'leri ctx.results'a ekle
@@ -4902,7 +4905,7 @@ def run_ffuf_scan(ctx) -> None:
                 if not os.path.exists(wl_path):
                      _logger.warning("[Login-Audit] Wordlist not found, generating default...")
                      # write basic if missing (failsafe)
-                     with open(wl_path, "w") as f: f.write("admin\n123456\npassword\n")
+                     with open(wl_path, "w", encoding="utf-8") as f: f.write("admin\n123456\npassword\n")
                 
                 auditor = LoginAuditor(getattr(ctx, "session"), url, wl_path)
                 

@@ -58,14 +58,11 @@ class FFUFWrapper(ToolIntegration):
             return
 
         from pathlib import Path
+        from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
-        possible = [
-            str(root / "tools" / "ffuf" / "ffuf.exe"),
-            str(root / "tools" / "ffuf.exe")
-        ]
-        for p in possible:
-            if os.path.exists(p):
-                self._binary_path = p
+        for _cand in _bc(root, "ffuf"):
+            if _cand.exists():
+                self._binary_path = str(_cand)
                 return
 
         logger.warning(f"FFUF binary not found at '{self.binary}'. Fuzzing will be disabled.")
@@ -546,14 +543,11 @@ class FeroxbusterWrapper(ToolIntegration):
         if shutil.which(self.binary):
             return
         from pathlib import Path
+        from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
-        possible = [
-            str(root / "tools" / "feroxbuster" / "feroxbuster.exe"),
-            str(root / "tools" / "feroxbuster.exe"),
-        ]
-        for p in possible:
-            if os.path.exists(p):
-                self._binary_path = p
+        for _cand in _bc(root, "feroxbuster"):
+            if _cand.exists():
+                self._binary_path = str(_cand)
                 return
 
     def is_available(self) -> bool:

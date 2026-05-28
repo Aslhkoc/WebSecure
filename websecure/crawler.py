@@ -938,7 +938,8 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
             # Check for local driver
             driver_path = None
             # Prioritize drivers/chromedriver.exe in project root
-            local_driver = Path(__file__).parent.parent / "drivers" / "chromedriver.exe"
+            from websecure.core.platform_compat import binary_name as _bn
+            local_driver = Path(__file__).parent.parent / "drivers" / _bn("chromedriver")
             if local_driver.exists():
                 driver_path = str(local_driver)
                 logger.info(f"[UC] Using local driver: {driver_path}")
