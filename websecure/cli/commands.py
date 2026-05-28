@@ -287,6 +287,19 @@ def build_parser() -> argparse.ArgumentParser:
     comp_p.add_argument("--install", action="store_true")
 
     # --------------------------------------------------------
+    # setup  — dış araçları indir/kur
+    # --------------------------------------------------------
+    setup_p = subparsers.add_parser(
+        "setup",
+        help="Tüm dış araçları kontrol et ve eksik olanları otomatik kur",
+    )
+    setup_p.add_argument(
+        "--tool", "-t",
+        metavar="ARAÇ",
+        help="Sadece belirli bir aracı kur (nuclei/httpx/katana/…)",
+    )
+
+    # --------------------------------------------------------
     # api  (Adım 20 — REST API sunucusu)
     # --------------------------------------------------------
     api_p = subparsers.add_parser("api", help="REST API sunucusu başlat")
@@ -353,6 +366,33 @@ def _cmd_api(ns: argparse.Namespace) -> int:
         logger.error(f"[API] Sunucu hatası: {exc!r}", exc_info=True)
         print(f"[!] REST API başlatılamadı: {exc}", file=sys.stderr)
         return 1
+
+
+def _cmd_setup(ns: argparse.Namespace, cfg: dict) -> int:
+    """
+    `websecure setup` — Tüm dış araçları kontrol et ve eksik olanları kur.
+
+    Kullanım
+    --------
+    websecure setup               # hepsini kontrol et / indir
+    websecure setup --tool nuclei # sadece nuclei'yi kur
+    """
+    from websecure.core.startup import setup_all, _ensure_go_binary, _GO_TOOLS
+
+    tool = getattr(ns, "tool", None)
+
+    if tool:
+        if tool not in _GO_TOOLS:
+            valid = ", ".join(sorted(_GO_TOOLS.keys()))
+            print(f"[!] Bilinmeyen araç: '{tool}'\n    Geçerliler: {valid}", file=sys.stderr)
+            return 1
+        ok = _ensure_go_binary(tool)
+        print(f"[{'OK' if ok else 'FAIL'}] {tool}")
+        return 0 if ok else 1
+
+    results = setup_all(cfg)
+    failed  = [k for k, v in results.items() if not v]
+    return 0 if not failed else 1
 
 
 def _cmd_db(ns: argparse.Namespace) -> int:
@@ -478,6 +518,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             if ns.install:
                 comp_args.append("--install")
             return run_completion_cli(comp_args)
+
+        elif cmd == "setup":
+            return _cmd_setup(ns, cfg)
 
         elif cmd == "api":
             return _cmd_api(ns)

@@ -1,0 +1,17 @@
+.venv/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.git/
+.gitignore
+websecure/output/
+websecure/records/
+websecure/tests/
+*.log
+*.json
+!websecure/config/
