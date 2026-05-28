@@ -644,9 +644,10 @@ def _console_alert(bucket, item):  # noqa: E302
 def _save_evidence_artifact(item: Dict[str, Any], suffix: str, content: str) -> None:
     """Saves raw evidence to the evidence/ folder in output."""
     try:
-        # Determine output dir (global hack or passed?)
-        # We'll use a relative 'output/evidence' for now
-        evidence_dir = os.path.join(os.getcwd(), "websecure/output/evidence")
+        # Resolve via __file__ so it works regardless of CWD on all platforms.
+        # reporting.py lives at websecure/core/reporting.py; .parent.parent = websecure/
+        _pkg_dir = pathlib.Path(__file__).resolve().parent.parent
+        evidence_dir = str(_pkg_dir / "output" / "evidence")
         os.makedirs(evidence_dir, exist_ok=True)
         
         safe_name = _safe_host_for_filename(item.get("url") or "unknown")
