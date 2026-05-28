@@ -22,11 +22,13 @@ from importlib import import_module
 try:
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes as _crypto_hashes
     from cryptography.hazmat.primitives.serialization import Encoding as _CryptoEncoding
     _HAS_CRYPTO = True
 except ImportError:
     _HAS_CRYPTO = False
     _CryptoEncoding = None
+    _crypto_hashes = None  # type: ignore[assignment]
 
 import requests
 from websecure.core.http import hardened_session, verify_for_phase, classify_access_block
@@ -827,7 +829,7 @@ def _extract_cert_details_from_obj(cert) -> dict:
         nb = cert.not_valid_before_utc if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before
         na = cert.not_valid_after_utc  if hasattr(cert, "not_valid_after_utc")  else cert.not_valid_after
 
-        fp = cert.fingerprint(hashlib.sha256()).hex()
+        fp = cert.fingerprint(_crypto_hashes.SHA256()).hex()
 
         # Subject Alternative Names
         san_list: t.List[str] = []

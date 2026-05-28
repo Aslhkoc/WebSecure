@@ -197,8 +197,12 @@ class ScanCircuitBreaker:
             if self._state == CBState.HALF_OPEN:
                 if 200 <= s < 300:
                     self._transition(CBState.CLOSED, f"probe succeeded ({s})")
-                else:
+                elif s == -1 or s >= 500:
+                    # Only trip OPEN on actual failures (network error or 5xx).
+                    # 4xx (403, 429, etc.) means the server is alive and responding —
+                    # staying HALF_OPEN avoids falsely blocking a healthy-but-rate-limited target.
                     self._transition(CBState.OPEN, f"probe failed ({s})")
+                # else: 4xx — server is responding; remain HALF_OPEN for next probe
                 return
 
             if self._state == CBState.CLOSED:

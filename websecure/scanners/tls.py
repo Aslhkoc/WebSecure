@@ -779,11 +779,13 @@ class WeakCipherSuiteProber(BaseScanner):
             output = result.stdout.decode("utf-8", errors="replace") + \
                      result.stderr.decode("utf-8", errors="replace")
             # Successful handshake marker
-            if "Cipher    :" in output and "NONE" not in output:
+            if "Cipher    :" in output:
                 # Extract cipher name from output
                 for line in output.splitlines():
                     if "Cipher    :" in line:
                         negotiated_name = line.split(":")[-1].strip()
+                        if negotiated_name in ("", "NONE", "(NONE)"):
+                            break
                         return {
                             "vuln_type": f"Weak Cipher Suite — {cipher_name}",
                             "url": f"https://{host}:{port}",

@@ -1206,7 +1206,18 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     ):
         phase_timeout = int(phase_timeout * 3)
 
-    t = threading.Thread(target=fn, name=f"phase::{phase_id}", daemon=True)
+    def _phase_fn():
+        # Each phase thread sets its own active-phase context so that http.py's
+        # idempotent-first policy uses the correct phase name (not a stale one
+        # from a previously executed phase, e.g. "discovery").
+        try:
+            from websecure.core.http import set_active_phase as _set_ap
+            _set_ap(phase_id)
+        except Exception:
+            pass
+        fn()
+
+    t = threading.Thread(target=_phase_fn, name=f"phase::{phase_id}", daemon=True)
     t.start()
 
     # Poll in 1s increments so Ctrl+C (_SCAN_CANCEL) is checked frequently
@@ -3818,7 +3829,7 @@ def run_offensive(ctx):
     # Manually inject results dict because SSRFScanner creates its own if not passed (and it doesn't take it in init)
     if getattr(ctx, "results", None) is not None:
         ssrf_s.results = ctx.results
-    ssrf_s.run()
+    ssrf_s.run(url)
     metrics["ssrf"] = 1
 
     return _mk_result("offensive", "ok", metrics)
