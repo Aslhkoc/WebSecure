@@ -1250,7 +1250,7 @@ class ExploitGraphBuilder:
         for finding in self._flatten(results):
             if not isinstance(finding, dict):
                 continue
-            raw_type  = str(finding.get("type", "")).lower()
+            raw_type  = str(finding.get("type") or finding.get("vuln_type", "")).lower()
             canonical = self._normalize(raw_type)
             severity  = finding.get("severity", "Info")
             url       = str(finding.get("url", ""))

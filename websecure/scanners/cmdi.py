@@ -918,6 +918,9 @@ class CMDIRCEChain:
                             "payload": payload,
                             "output_snippet": text[start:end].strip(),
                         }
-                except Exception:
+                except Exception as _exc:
+                    logger.debug(
+                        "[CMDIRCEChain] request error (payload=%r): %r", payload[:60], _exc
+                    )
                     continue
         return None
