@@ -5146,7 +5146,8 @@ def run_nuclei_scan(ctx) -> None:
         add_result("nuclei", {"status": "skipped", "reason": "nuclei binary not found"})
         _logger.warning(
             "[Nuclei] Binary bulunamadı. "
-            "tools/nuclei/nuclei.exe yoluna koyun veya PATH'e ekleyin."
+            "tools/nuclei/nuclei (Linux/macOS) veya tools/nuclei/nuclei.exe (Windows) "
+            "yoluna koyun ya da PATH'e ekleyin."
         )
         return
 

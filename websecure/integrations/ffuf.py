@@ -357,7 +357,7 @@ class FFUFWrapper(ToolIntegration):
         _temp_wl = None
         if not wordlist or not os.path.isfile(wordlist):
             fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_hdr_")
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(self._IP_BYPASS_VALUES))
             wordlist = _temp_wl
 
@@ -468,7 +468,7 @@ class FFUFWrapper(ToolIntegration):
         _temp_wl = None
         if not wordlist or not os.path.isfile(wordlist):
             fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_hdrname_")
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(self._SECURITY_HEADERS))
             wordlist = _temp_wl
 
@@ -814,7 +814,7 @@ class ParamDiscoveryPipeline:
         _temp_wl = None
         if not wordlist or not os.path.isfile(wordlist):
             fd, _temp_wl = tempfile.mkstemp(suffix=".txt", prefix="ws_params_")
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(_COMMON_PARAMS))
             wordlist = _temp_wl
 

@@ -1510,7 +1510,7 @@ def build_dirbust_headers(
 # ---------------------------------------------------------------------------
 
 # ================= SoftTLS Preflight (no try/except) =================
-import shutil as _shutil, subprocess as _subprocess, urllib.parse as _uparse
+import os as _os, shutil as _shutil, subprocess as _subprocess, urllib.parse as _uparse
 
 def _softtls__have(cmd: str) -> bool:
     return _shutil.which(cmd) is not None
@@ -1522,7 +1522,7 @@ def _softtls__curl_tls_ok(url: str, timeout_s: int) -> tuple[bool|None, str]:
         return (None, "")
     # -I: HEAD, -sS: silent, --max-time: timeout, -o /dev/null: drop body
     cp = _subprocess.run(
-        ["curl", "-I", "-sS", "--max-time", str(int(timeout_s)), url, "-o", "/dev/null"],
+        ["curl", "-I", "-sS", "--max-time", str(int(timeout_s)), url, "-o", _os.devnull],
         stdout=_subprocess.PIPE, stderr=_subprocess.PIPE, text=True, check=False
     )
     if cp.returncode == 0:

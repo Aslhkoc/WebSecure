@@ -559,7 +559,7 @@ def _get_resolve_canonical_base():
         if curl_bin:
             def _probe_with_curl(url: str) -> str | None:
                 args = [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout)), "-A", ua, url,
-                        "-w", "%{url_effective} %{http_code}\n", "-o", "/dev/null"]
+                        "-w", "%{url_effective} %{http_code}\n", "-o", os.devnull]
                 if isinstance(verify, bool) and verify is False:
                     args.insert(1, "--insecure")
                 elif isinstance(verify, str) and verify:

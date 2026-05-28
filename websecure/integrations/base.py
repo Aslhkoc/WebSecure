@@ -253,27 +253,32 @@ class ToolIntegration(ABC):
     # ------------------------------------------------------------------ #
 
     def _resolve_binary(self, name: str) -> None:
-        """Binary'yi önce tools/ dizininde, sonra PATH'ta ara."""
-        # 0. Tam yol verilmişse (ör. tools/httpx/httpx.exe) — direkt kullan
+        """Binary'yi önce tools/ dizininde, sonra PATH'ta ara (cross-platform)."""
+        # 0. Tam yol verilmişse — direkt kullan
         p = Path(name)
         if p.is_absolute() and p.exists():
             self._binary_path = str(p)
             return
 
-        # 1. Proje tools/ dizini — öncelikli (PATH'ta Python CLI'ları olabilir)
+        # 1. Proje tools/ dizini — platform_compat ile platform-native sıralama
         root = Path(__file__).resolve().parent.parent.parent
-        candidates = [
-            root / "tools" / name / f"{name}.exe",
-            root / "tools" / name / name,
-            root / "tools" / f"{name}.exe",
-            root / "tools" / name,
-        ]
+        try:
+            from websecure.core.platform_compat import binary_candidates as _bc
+            candidates = _bc(root, name)
+        except ImportError:
+            # Fallback: hem .exe hem bare name dene (her platformda çalışır)
+            candidates = [
+                root / "tools" / name / f"{name}.exe",
+                root / "tools" / name / name,
+                root / "tools" / f"{name}.exe",
+                root / "tools" / name,
+            ]
         for c in candidates:
             if c.exists():
                 self._binary_path = str(c)
                 return
 
-        # 2. PATH (son çare)
+        # 2. PATH (son çare — shutil.which cross-platform)
         found = shutil.which(name)
         if found:
             self._binary_path = found
