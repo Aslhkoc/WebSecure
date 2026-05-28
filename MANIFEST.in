@@ -1,0 +1,3 @@
+recursive-include websecure/config/profiles *.yml *.yaml
+recursive-include websecure/config/playbooks *.yml *.yaml
+include websecure/setup.py

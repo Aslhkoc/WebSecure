@@ -19,6 +19,14 @@ if __name__ == "__main__":
             exclude=["tests*", "docs*", "dist*", "build*"]
         ),
         include_package_data=True,
+        package_data={
+            "websecure": [
+                "config/profiles/*.yml",
+                "config/profiles/*.yaml",
+                "config/playbooks/*.yml",
+                "config/playbooks/*.yaml",
+            ],
+        },
         install_requires=[
             "regex>=2024.4.16",
             "requests>=2.32.0",
@@ -30,6 +38,7 @@ if __name__ == "__main__":
             "sslyze>=6.0.0",
             "jinja2>=3.1.0",
             "cvss>=3.2",
+            "pyyaml>=6.0",        # scan profiles + playbooks (ProfileLoader)
         ],
         entry_points={
             "console_scripts": [
