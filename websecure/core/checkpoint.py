@@ -151,7 +151,9 @@ class CheckpointState:
 
     def mark_task_done(self, task_hash: str) -> None:
         """Bir görevi tamamlandı olarak işaretle."""
-        if task_hash not in self.completed_tasks_set:
+        # P7 fix: completed_tasks_set creates a new frozenset on every call;
+        # direct list membership check avoids the allocation.
+        if task_hash not in self.completed_tasks:
             self.completed_tasks.append(task_hash)
             self.completed_count += 1
 
@@ -468,13 +470,18 @@ class CheckpointManager:
             if scan_id in self._registry:
                 return self._registry[scan_id]
 
-        # Disk araması
+        # Disk araması — lock dışında, I/O pahalı
         path = self._dir / f"{scan_id}{_CHECKPOINT_EXT}"
         if not path.exists():
             return None
 
         state = self._load_state(path)
         if state is None:
+            # P11 fix: existing file that fails to parse should be visible to operators.
+            logger.warning(
+                "[checkpoint] %s mevcut ama okunamadı / bozuk — get() None döndürüyor",
+                path.name,
+            )
             return None
 
         cp = ScanCheckpoint(
@@ -485,9 +492,13 @@ class CheckpointManager:
             serializer=self._serializer,
         )
         cp._state = state  # noqa: SLF001
+        # P12 fix: double-checked locking — re-acquire lock before writing to
+        # registry. If another thread already loaded the same scan_id while we
+        # were doing disk I/O, use theirs to avoid a dangling duplicate instance.
         with self._lock:
-            self._registry[scan_id] = cp
-        return cp
+            if scan_id not in self._registry:
+                self._registry[scan_id] = cp
+            return self._registry[scan_id]
 
     # ------------------------------------------------------------------
     # Resume
@@ -519,10 +530,16 @@ class CheckpointManager:
 
         state = cp.state
         injected = 0
+        # P7 fix: hasattr check was evaluated on every iteration; hoist it out.
+        # P9 fix: directly accessing _seen bypassed _order tracking, breaking
+        # LRU eviction in ScanDeduplicator. Append to _order as well.
+        has_seen = hasattr(deduplicator, "_seen")
+        has_order = hasattr(deduplicator, "_order")
         for task_hash in state.completed_tasks:
-            if hasattr(deduplicator, "_seen"):
-                # ScanDeduplicator._seen setine doğrudan ekle
+            if has_seen and task_hash not in deduplicator._seen:  # noqa: SLF001
                 deduplicator._seen.add(task_hash)  # noqa: SLF001
+                if has_order:
+                    deduplicator._order.append(task_hash)  # noqa: SLF001
                 injected += 1
 
         logger.info(
