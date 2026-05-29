@@ -2507,11 +2507,13 @@ def _run_scan_phases(
              except Exception as e:
                  _logger.error(f"CSRF failed: {e}")
 
-        # 7. Chain Reactor (Correlation)
+        # 7. Chain Reactor (Detection + Exploitation)
         if chain_reactor and isinstance(results, dict):
-             print("[•] Zincirleme Analizi (Chain Reactor)…")
+             _logger.info("[ChainReactor] Zincirleme analizi + exploit başlatılıyor…")
              try:
-                 chain_reactor.analyze_chains(results)
+                 # phase_chain_reactor: detection VE exploitation (credential dump, ATO, RCE)
+                 # analyze_chains sadece detection yapıyor — exploit pipeline çalışmıyordu (P3/P8)
+                 chain_reactor.phase_chain_reactor({"results": results, "session": session})
              except Exception as e:
                  _logger.error(f"Chain Reactor failed: {e}")
 

@@ -2305,7 +2305,8 @@ class ChainExploitRunner:
         xss_ato_pocs: Dict[str, Any] = {}
         try:
             from websecure.scanners.xss import XSSToATOChain
-            ato = XSSToATOChain.generate_poc(url, param, xss_payload)
+            # generate_poc is an instance method — must instantiate first
+            ato = XSSToATOChain().generate_poc(url, param, xss_payload)
             xss_ato_pocs = ato.get("pocs", {})
         except Exception as exc:
             _logger.debug(f"[ChainExploitRunner] XSSToATOChain integration: {exc!r}")
