@@ -1,12 +1,6 @@
-import os
-import re
-import socket
-import ssl
-import time
-import json
 import logging
-from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode, urlsplit
-from typing import Dict, Any, List, Optional, Union, Tuple, Mapping
+from urllib.parse import urlparse, urlunparse, urlsplit
+from typing import Dict, Any, List, Optional, Tuple, Mapping
 
 _logger = logging.getLogger(__name__)
 
@@ -26,26 +20,6 @@ def silence_insecure_request_warnings() -> None:
         _logger.debug(f"[core.utils.net] {type(_fix_e).__name__}: {_fix_e!r}")
 
 # ========================== URL & Scheme ==========================
-def _host_of_url(url: str) -> str:
-    return urlsplit(url).hostname or ""
-
-def _port_of_url(url: str) -> int:
-    s = urlsplit(url)
-    if s.port:
-        return s.port
-    return 443 if s.scheme == "https" else 80
-
-def _tcp_open(host: str, port: int, timeout: int) -> bool:
-    try:
-        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
-        sock = socket.socket(fam, socket.SOCK_STREAM)
-        sock.settimeout(max(1, int(timeout)))
-        code = sock.connect_ex((host, port))
-        sock.close()
-        return code == 0
-    except Exception as exc:
-        return False
-
 class SchemeDetectionResult:
     def __init__(self, scheme: str, final_url: str, reason: str):
         self.scheme = scheme
@@ -137,7 +111,6 @@ def build_response_head(status_code: int, reason: str, headers: Dict[str, str], 
     return "\r\n".join(res) + "\r\n"
 
 def normalize_url(url: str) -> str:
-    from urllib.parse import urlparse, urlunparse
     p = urlparse(url)
     return urlunparse(p)
 
@@ -150,7 +123,6 @@ def canonicalize_url(url: str) -> str:
 
 def same_origin(url_a: str, url_b: str) -> bool:
     try:
-        from urllib.parse import urlparse
         if not url_a or not url_b: return False
         pa = urlparse(url_a)
         pb = urlparse(url_b)
@@ -162,7 +134,6 @@ def same_origin(url_a: str, url_b: str) -> bool:
         return False
 
 def is_static_asset(url: str) -> bool:
-    from urllib.parse import urlparse
     path = (urlparse(url).path or "").lower()
     # Common static extensions
     exts = (
@@ -196,14 +167,10 @@ def run_content_discovery(url, cfg, results, timeout=900, debug=False, call_time
         
         run_discovery_extended(ctx)
     except Exception as e:
-        # Log error but don't crash main
-        if debug:
-            print(f"[run_content_discovery] Wrapper error: {e}")
-        pass
+        _logger.warning(f"[run_content_discovery] Wrapper error: {e!r}")
 
 def validate_url(url: str) -> Tuple[bool, Optional[str], Optional[str]]:
     try:
-        from urllib.parse import urlparse
         p = urlparse(url)
         if p.scheme and p.netloc:
             return True, url, p.scheme
