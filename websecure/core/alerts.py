@@ -1,5 +1,4 @@
 import logging
-import sys
 import threading
 import time
 
@@ -28,13 +27,16 @@ class AlertManager:
     def _play_pattern(pattern):
         """
         Executes a sequence of (frequency, duration) tuples.
+        freq=0 means silence for dur milliseconds.
         """
         if not winsound:
             return
-        
         for freq, dur in pattern:
-            AlertManager._beep(freq, dur)
-            time.sleep(0.05) # Small gap between notes
+            if freq == 0:
+                time.sleep(dur / 1000.0)
+            else:
+                AlertManager._beep(freq, dur)
+                time.sleep(0.05)
 
     @staticmethod
     def play_critical():
@@ -43,10 +45,9 @@ class AlertManager:
             if winsound:
                 for _ in range(3):
                     for f in range(1000, 2500, 100):
-                        winsound.Beep(f, 30)
+                        AlertManager._beep(f, 30)
                     for f in range(2500, 1000, -100):
-                        winsound.Beep(f, 30)
-        
+                        AlertManager._beep(f, 30)
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod

@@ -604,11 +604,13 @@ def add_result(bucket: str, item: Any) -> None:
         # --- Audio Alert Logic ---
         # Check severity (supports English and Turkish normalized severities)
         sev = str(safe_it.get("severity") or "").lower()
-        if any(s in sev for s in ["critical", "Critical"]):
+        if "critical" in sev:
             AlertManager.play_critical()
-        elif any(s in sev for s in ["high", "High", "yuksek"]):
+        elif "high" in sev or "yuksek" in sev:
             AlertManager.play_high()
-        if any(s in sev for s in ["low", "Low", "dusuk"]):
+        elif "medium" in sev or "orta" in sev:
+            AlertManager.play_medium()
+        elif "low" in sev or "dusuk" in sev:
             AlertManager.play_low()
 
         # --- Console Visual Alert ---
