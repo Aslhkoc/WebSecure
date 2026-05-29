@@ -94,18 +94,44 @@ def new_tor_identity() -> bool:
     """
     def _send_newnym(auth_cmd: bytes) -> bool:
         try:
-            s = socket.create_connection(("127.0.0.1", TOR_CONTROL_PORT), timeout=5)
-            s.sendall(auth_cmd + b"\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
-            resp = s.recv(1024)
-            s.close()
-            return b"250" in resp
+            # P3/P11 fix: original code called s.close() only on the happy path;
+            # any exception from s.recv() left the socket open. Use context manager.
+            with socket.create_connection(("127.0.0.1", TOR_CONTROL_PORT), timeout=5) as s:
+                s.sendall(auth_cmd + b"\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
+                resp = s.recv(1024)
+            # P7 fix: QUIT always responds with "250 closing connection", so the
+            # naive `b"250" in resp` returned True even when AUTH failed (515) and
+            # NEWNYM was rejected (514). Explicitly reject known error codes.
+            return b"250" in resp and not any(
+                err in resp for err in (b"514", b"515", b"552")
+            )
         except Exception as e:
             _logger.debug(f"[egress] NEWNYM sendall hatası: {e}")
             return False
 
+    # P8 fix: cb_reset() try/except block was copy-pasted identically into both
+    # success paths. Restructured to a single success exit point.
+    auth_label = ""
+
     # 1. Boş şifre dene
     if _send_newnym(b'AUTHENTICATE ""'):
-        _logger.info("[egress] Yeni Tor kimliği alındı (boş auth).")
+        auth_label = "boş auth"
+    else:
+        # 2. Cookie auth dene
+        cookie = _tor_cookie_auth()
+        if cookie:
+            if _send_newnym(f'AUTHENTICATE {cookie.hex()}'.encode()):
+                auth_label = "cookie auth"
+            else:
+                _logger.warning("[egress] Cookie auth da başarısız. Tor control port erişilemiyor.")
+        else:
+            _logger.warning(
+                "[egress] NEWNYM başarısız — Tor cookie dosyası bulunamadı. "
+                "torrc'ye 'CookieAuthentication 0' ekleyin veya control port şifresi ayarlayın."
+            )
+
+    if auth_label:
+        _logger.info(f"[egress] Yeni Tor kimliği alındı ({auth_label}).")
         time.sleep(2)
         try:
             from websecure.core.circuit_breaker import cb_reset as _cb_reset
@@ -113,26 +139,6 @@ def new_tor_identity() -> bool:
         except Exception as _fix_e:
             _logger.debug(f"[core.egress] {type(_fix_e).__name__}: {_fix_e!r}")
         return True
-
-    # 2. Cookie auth dene
-    cookie = _tor_cookie_auth()
-    if cookie:
-        cookie_hex = cookie.hex()
-        if _send_newnym(f'AUTHENTICATE {cookie_hex}'.encode()):
-            _logger.info("[egress] Yeni Tor kimliği alındı (cookie auth).")
-            time.sleep(2)
-            try:
-                from websecure.core.circuit_breaker import cb_reset as _cb_reset
-                _cb_reset()
-            except Exception as _fix_e:
-                _logger.debug(f"[core.egress] {type(_fix_e).__name__}: {_fix_e!r}")
-            return True
-        _logger.warning("[egress] Cookie auth da başarısız. Tor control port erişilemiyor.")
-    else:
-        _logger.warning(
-            "[egress] NEWNYM başarısız — Tor cookie dosyası bulunamadı. "
-            "torrc'ye 'CookieAuthentication 0' ekleyin veya control port şifresi ayarlayın."
-        )
     return False
 
 
@@ -198,6 +204,14 @@ def verify_anonymity(proxies: Dict[str, str], cfg: dict) -> Dict[str, Any]:
     if direct_ip and proxy_ip == direct_ip:
         result["real_ip_leaked"] = True
         result["issues"].append(f"UYARI: Gerçek IP sızdı! Proxy bypassed. IP: {direct_ip}")
+    elif direct_ip is None:
+        # P7 fix: when direct_ip could not be determined we have no baseline to
+        # compare against, so anonymity cannot actually be verified. The original
+        # code fell into the else branch and set anonymous=True regardless.
+        result["issues"].append(
+            "Gerçek IP alınamadı — anonimlik karşılaştırması yapılamıyor"
+        )
+        _logger.warning("[egress] Anonimlik doğrulanamadı: direkt IP tespiti başarısız.")
     else:
         result["anonymous"] = True
         _logger.info(f"[egress] Anonimlik doğrulandı. Çıkış IP: {proxy_ip}")
