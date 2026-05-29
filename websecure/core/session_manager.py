@@ -18,7 +18,7 @@ import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urljoin
 
 import requests
