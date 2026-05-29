@@ -224,16 +224,18 @@ class PriorityTaskQueue:
             return not self._heap
 
     def stats(self) -> Dict[str, int]:
+        # P12 fix: all fields read inside the lock; the original return was
+        # outside the with-block, exposing len/_total_in/_total_out to races.
         with self._lock:
             by_prio: Dict[int, int] = {}
             for t in self._heap:
                 by_prio[t.priority] = by_prio.get(t.priority, 0) + 1
-        return {
-            "queued":    len(self._heap),
-            "total_in":  self._total_in,
-            "total_out": self._total_out,
-            "by_priority": by_prio,
-        }
+            return {
+                "queued":      len(self._heap),
+                "total_in":    self._total_in,
+                "total_out":   self._total_out,
+                "by_priority": by_prio,
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -396,17 +398,26 @@ class ETACalculator:
         return time.monotonic() - self._started_at
 
     def snapshot(self) -> Dict[str, Any]:
-        eta = self.eta_seconds
-        elapsed = self.elapsed_seconds
+        # P12 fix: _total and _completed were read outside the lock after
+        # eta_seconds/progress_pct released it, leaving a window for concurrent
+        # tick() calls to produce an inconsistent snapshot.
+        with self._lock:
+            total     = self._total
+            completed = self._completed
+            remaining = max(0, total - completed)
+            avg       = statistics.median(self._task_times) if self._task_times else 0.0
+            eta       = remaining * avg
+            pct       = round(min(100.0, completed / total * 100), 1) if total > 0 else 0.0
+        elapsed = time.monotonic() - self._started_at
         return {
-            "total":        self._total,
-            "completed":    self._completed,
-            "remaining":    max(0, self._total - self._completed),
-            "progress_pct": self.progress_pct,
-            "avg_task_s":   round(self.avg_task_s, 3),
-            "eta_seconds":  round(eta, 1),
-            "eta_human":    _fmt_duration(eta),
-            "elapsed_s":    round(elapsed, 1),
+            "total":         total,
+            "completed":     completed,
+            "remaining":     remaining,
+            "progress_pct":  pct,
+            "avg_task_s":    round(avg, 3),
+            "eta_seconds":   round(eta, 1),
+            "eta_human":     _fmt_duration(eta),
+            "elapsed_s":     round(elapsed, 1),
             "elapsed_human": _fmt_duration(elapsed),
         }
 
@@ -588,16 +599,19 @@ class AdaptiveThreadPool:
             t0 = time.monotonic()
             try:
                 result = fn(*args, **kwargs)
-                elapsed = (time.monotonic() - t0) * 1000  # ms
-                self._ctrl.record(elapsed, is_error=False)
+                # P7 fix: reuse the same elapsed value for both ctrl and eta
+                # instead of calling time.monotonic() twice (second call was
+                # slightly later, after ctrl.record() overhead).
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                self._ctrl.record(elapsed_ms, is_error=False)
                 if self._eta:
-                    self._eta.tick((time.monotonic() - t0))
+                    self._eta.tick(elapsed_ms / 1000)
                 return result
             except Exception as exc:
-                elapsed = (time.monotonic() - t0) * 1000
-                self._ctrl.record(elapsed, is_error=True)
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                self._ctrl.record(elapsed_ms, is_error=True)
                 if self._eta:
-                    self._eta.tick((time.monotonic() - t0))
+                    self._eta.tick(elapsed_ms / 1000)
                 raise
             finally:
                 with self._lock:
@@ -650,10 +664,15 @@ class AdaptiveThreadPool:
             target = self._ctrl.current
             current_max = getattr(self._executor, "_max_workers", target)
             if abs(target - current_max) >= 2:
-                # Python TPE dinamik resize desteklemez; yeni executor aç
+                # Python TPE dinamik resize desteklemez; yeni executor aç.
+                # P7 fix: shutdown(wait=True) deadlocked when called from a task
+                # running on `old` — the task's Future is not DONE until _wrapped
+                # returns (after this finally block), so wait=True blocks forever.
+                # wait=False stops new submissions to the old executor while
+                # already-running tasks finish naturally.
                 old = self._executor
                 self._executor = ThreadPoolExecutor(max_workers=target)
-                old.shutdown(wait=True)
+                old.shutdown(wait=False)
                 _logger.debug(f"[AdaptivePool] Workers {current_max} -> {target}")
         finally:
             self._resize_lock.release()
