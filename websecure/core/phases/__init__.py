@@ -2608,8 +2608,10 @@ def _runner_verify_and_score(ctx) -> None:
             scan_id = str(getattr(ctx, "scan_id", "current"))
 
             # Within-scan: sadece ChainCorrelation — FingerprintCorrelation/Escalation aynı liste için anlamsız
-            chain_engine = get_correlation_engine()
-            chain_engine._strategies = [ChainCorrelation()]
+            # P12 fix: mutating _strategies on the global singleton stripped all other
+            # strategies for every subsequent caller (e.g. api/server.py). Use fork()
+            # to get a scoped copy instead of polluting the singleton.
+            chain_engine = get_correlation_engine().fork(strategies=[ChainCorrelation()])
             matches = chain_engine.correlate(
                 corr_findings, corr_findings,
                 scan1_id=scan_id, scan2_id=scan_id,

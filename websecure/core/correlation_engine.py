@@ -21,6 +21,7 @@ SOLID
 from __future__ import annotations
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -241,8 +242,10 @@ class ChainCorrelation(CorrelationStrategy):
             if group1 and group2:
                 # İlk çifti al
                 f1, f2 = group1[0], group2[0]
-                # Aynı bulgu olmasın
-                if f1.get("id") == f2.get("id"):
+                # P7 fix: id-based check fails when both findings have id=""
+                # (falsy/missing ids are common). Use object identity instead so
+                # a finding is never matched against itself regardless of its id.
+                if f1 is f2:
                     continue
                 # Hangi taramada olduğunu belirle
                 s1_id = f1.get("scan_id", scan1_id)
@@ -420,6 +423,27 @@ class CorrelationEngine:
             "matches": [m.to_dict() for m in matches],
         }
 
+    def fork(
+        self,
+        strategies: Optional[List[CorrelationStrategy]] = None,
+    ) -> "CorrelationEngine":
+        """
+        Return a NEW CorrelationEngine that shares the same DB connection but
+        uses a custom strategy list.
+
+        Use this instead of mutating ``engine._strategies`` directly — direct
+        mutation contaminates the global singleton and strips strategies for
+        every subsequent caller (P12 state leak).
+
+        Parametreler
+        ------------
+        strategies : override strategy list; None → copies the current list.
+        """
+        return CorrelationEngine(
+            strategies=list(strategies) if strategies is not None else list(self._strategies),
+            db=self._db,
+        )
+
     @staticmethod
     def _finding_to_dict(finding) -> Dict[str, Any]:
         """Finding dataclass -> dict."""
@@ -435,15 +459,22 @@ class CorrelationEngine:
 # ---------------------------------------------------------------------------
 
 _engine_instance: Optional[CorrelationEngine] = None
+_engine_lock = threading.Lock()
 
 
 def get_correlation_engine(db=None) -> CorrelationEngine:
     """Global CorrelationEngine singleton'ını döndür. DB sağlanmışsa güncelle."""
     global _engine_instance
+    # P12 fix: original code had no lock — two threads could both see None and
+    # create separate instances. Use double-checked locking.
     if _engine_instance is None:
-        _engine_instance = CorrelationEngine(db=db)
-    elif db is not None and _engine_instance._db is None:
-        _engine_instance._db = db
+        with _engine_lock:
+            if _engine_instance is None:
+                _engine_instance = CorrelationEngine(db=db)
+    if db is not None and _engine_instance._db is None:
+        with _engine_lock:
+            if _engine_instance._db is None:
+                _engine_instance._db = db
     return _engine_instance
 
 
