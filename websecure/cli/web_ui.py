@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import queue
 import threading
 import time
@@ -109,8 +108,6 @@ class DashboardState:
             self._status.update(kwargs)
             if kwargs.get("running") and self._start_time == 0:
                 self._start_time = time.monotonic()
-            if not kwargs.get("running", True):
-                pass
         self._broadcast({"type": "status", "data": self._get_status()})
 
     def _get_status(self) -> Dict[str, Any]:
@@ -559,40 +556,45 @@ class WebDashboard:
 # Scan callback fabrikası
 # ---------------------------------------------------------------------------
 
-def _make_scan_callback(state: "DashboardState") -> Optional[Callable[[str, dict], None]]:
+def _make_scan_callback(state: "DashboardState") -> Callable[[str, dict], None]:
     """
     WebDashboard için gerçek WebSecure scan callback'i oluşturur.
-    ScanRunner'ı arka plan thread'inde çalıştırır ve bulguları DashboardState'e aktarır.
+    Her hedefi ayrı subprocess olarak çalıştırır; tamamlanınca durum güncellenir.
     """
-    try:
-        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+    import subprocess
+    import sys
 
-        def _callback(target: str, options: dict) -> None:
-            state.update_status(running=True, target=target)
-            state.add_log(f"Tarama başlatıldı: {target}", "success")
-            try:
-                sr = _ScanRunner(target=target, config=options or {})
-                ctx = sr.run()
-                findings_flat: list = []
-                for bucket_items in (getattr(ctx, "results", None) or {}).values():
-                    if isinstance(bucket_items, list):
-                        findings_flat.extend(bucket_items)
-                for f in findings_flat:
-                    if isinstance(f, dict):
-                        state.add_finding(f)
+    def _callback(target: str, options: dict) -> None:
+        state.update_status(running=True, target=target)
+        state.add_log(f"Tarama başlatıldı: {target}", "success")
+        try:
+            cmd = [sys.executable, "-m", "websecure", target]
+            profile = options.get("profile")
+            if profile:
+                cmd += ["--profile", profile]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(options.get("timeout", 3600)),
+            )
+            if proc.returncode == 0:
+                state.add_log(f"Tarama tamamlandı: {target}", "success")
+            else:
                 state.add_log(
-                    f"Tarama tamamlandı: {target} — {len(findings_flat)} bulgu", "success"
+                    f"Tarama hatası (kod {proc.returncode}): {target}", "error"
                 )
-            except Exception as exc:
-                state.add_log(f"Tarama hatası: {exc}", "error")
-                logger.error(f"[WebUI] Tarama hatası: {exc!r}")
-            finally:
-                state.update_status(running=False)
+                if proc.stderr:
+                    state.add_log(proc.stderr.strip()[:500], "error")
+        except subprocess.TimeoutExpired:
+            state.add_log(f"Tarama zaman aşımına uğradı: {target}", "error")
+        except Exception as exc:
+            state.add_log(f"Tarama hatası: {exc}", "error")
+            logger.error(f"[WebUI] Tarama hatası: {exc!r}")
+        finally:
+            state.update_status(running=False)
 
-        return _callback
-    except ImportError:
-        logger.warning("[WebUI] ScanRunner import edilemedi — POST /api/scan devre dışı")
-        return None
+    return _callback
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +618,6 @@ def run_serve_cli(args: list) -> int:
     try:
         dashboard.start(open_browser=not ns.no_browser)
         print(f"  Dashboard: {dashboard.url}  (Ctrl+C ile durdur)")
-        import time
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
