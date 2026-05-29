@@ -25,8 +25,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode, urlparse
-
 from websecure.integrations.base import (
     ToolFinding,
     ToolIntegration,

@@ -24,7 +24,6 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 
 from websecure.integrations.base import (
     ToolFinding,

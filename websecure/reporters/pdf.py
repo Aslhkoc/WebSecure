@@ -6,7 +6,6 @@ Uses Jinja2 for HTML templating and WeasyPrint for HTML->PDF conversion.
 """
 from __future__ import annotations
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
