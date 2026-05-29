@@ -8,7 +8,7 @@ import ssl
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 from importlib.util import find_spec
 
@@ -365,8 +365,10 @@ class AsyncioEngine(RaceEngine):
             raise RuntimeError("aiohttp not available for asyncio engine")
 
         async def _main() -> Tuple[List[Tuple[int, int, str]], List[str], List[str]]:
-            # SSL context
-            if spec.verify_tls:
+            # SSL context — use caller-provided context if given
+            if base_ssl_ctx is not None:
+                ssl_ctx = base_ssl_ctx
+            elif spec.verify_tls:
                 ssl_ctx = ssl.create_default_context()
             else:
                 ssl_ctx = ssl.create_default_context()
