@@ -22,12 +22,10 @@ Usage in phases/__init__.py:
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
-import time
 from typing import Any, Dict, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 try:
     import requests
@@ -423,8 +421,6 @@ class AuthManager:
                 url = self._base_url + path if path else self._base_url
                 resp = self._session.get(url, timeout=10, allow_redirects=True)
                 if resp.status_code in (200, 201) and _looks_authenticated(resp.text or "", indicator):
-                    return True
-                if resp.status_code == 200 and indicator and indicator.lower() in (resp.text or "").lower():
                     return True
             except Exception:
                 continue
