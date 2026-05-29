@@ -25,17 +25,15 @@ from .net import (
 
 # --- helpers.py ---
 from .helpers import (
-    redact_sensitive,
     random_string,
-    slugify,
     apply_auth_context,
-    normalize_idn_host,
-    ttl_cache_set,
-    ttl_cache_get,
     sig_params,
     kw_filter,
     guess_host_from_url,
 )
+
+# redact_sensitive — canonical implementation lives in core.redaction
+from ..redaction import redact_sensitive
 
 # --- system.py ---
 from .system import (

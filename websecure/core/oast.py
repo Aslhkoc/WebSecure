@@ -95,26 +95,19 @@ def _aes_gcm_decrypt(key: bytes, data: bytes) -> bytes:
 
 # --- Dynamic Imports for Resilience ---
 httpx = import_module('httpx') if find_spec('httpx') is not None else None
-if find_spec("websecure.core.utils") is not None:
-    _utils_mod = import_module("websecure.core.utils")
-    apply_auth_context = getattr(_utils_mod, "apply_auth_context", None)
-    _replace_query_param = getattr(_utils_mod, "replace_query_param", None)
-    RateLimiter = getattr(_utils_mod, "RateLimiter", None)
-    build_dirbust_headers = getattr(_utils_mod, "build_dirbust_headers", None)
-else:
-    # Fallback / Standalone utils
-    def _replace_query_param(url, key, value):
-        from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-        p = urlsplit(url)
-        q = parse_qsl(p.query, keep_blank_values=True)
-        rep = False; out = []
-        for k, v in q:
-            if not rep and k == key:
-                out.append((k, value)); rep = True
-            else:
-                out.append((k, v))
-        if not rep: out.append((key, value))
-        return urlunsplit((p.scheme, p.netloc, p.path, urlencode(out), p.fragment))
+
+def _replace_query_param(url, key, value):
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    p = urlsplit(url)
+    q = parse_qsl(p.query, keep_blank_values=True)
+    rep = False; out = []
+    for k, v in q:
+        if not rep and k == key:
+            out.append((k, value)); rep = True
+        else:
+            out.append((k, v))
+    if not rep: out.append((key, value))
+    return urlunsplit((p.scheme, p.netloc, p.path, urlencode(out), p.fragment))
 
 # =========================== Token & Payload Generation ===========================
 
@@ -172,10 +165,7 @@ def replace_query_param(url: str, key: str, value: Optional[str]) -> str:
         q = [(k, v) for (k, v) in parse_qsl(pr.query, keep_blank_values=True) if k != key]
         return urlunsplit((pr.scheme, pr.netloc, pr.path, urlencode(q, doseq=True), pr.fragment))
     
-    if callable(_replace_query_param):
-        return _replace_query_param(url, key, value)
-        
-    return _replace_query_param(url, key, value) # Fallback
+    return _replace_query_param(url, key, value)
 
 def inject_query(url: str, key: str, value: Optional[str]) -> str:
     return replace_query_param(url, key, value)
