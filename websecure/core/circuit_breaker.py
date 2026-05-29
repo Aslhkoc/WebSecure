@@ -294,7 +294,6 @@ class ScanCircuitBreaker:
             _logger.warning(
                 "[CircuitBreaker] %s -> OPEN: %s", old.value.upper(), reason
             )
-            print(f"[CircuitBreaker] [STOP] OPEN — {reason}")
             # Emit to global reporting without importing reporting (avoids circular import)
             try:
                 from websecure.core.reporting import add_result as _ar
@@ -315,7 +314,6 @@ class ScanCircuitBreaker:
         elif new_state == CBState.HALF_OPEN:
             self._half_open_probes = 0
             _logger.info("[CircuitBreaker] OPEN -> HALF_OPEN: %s", reason)
-            print(f"[CircuitBreaker] [warn] HALF_OPEN — {reason}")
 
         elif new_state == CBState.CLOSED:
             self._consecutive_429    = 0
@@ -324,7 +322,6 @@ class ScanCircuitBreaker:
             self._open_reason        = ""
             self._opened_at          = None
             _logger.info("[CircuitBreaker] -> CLOSED: %s", reason)
-            print(f"[CircuitBreaker] [OK] CLOSED — {reason}")
 
 
 # ---------------------------------------------------------------------------

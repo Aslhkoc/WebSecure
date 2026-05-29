@@ -27,7 +27,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Dict, Generator, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Set, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -1067,7 +1067,7 @@ def make_pool(
     """AdaptiveThreadPool factory — kolay kullanım için."""
     deduplicator = ScanDeduplicator() if dedup else None
     calculator   = ETACalculator() if eta_total > 0 else None
-    if calculator and eta_total > 0:
+    if calculator:
         calculator.set_total(eta_total)
     return AdaptiveThreadPool(
         initial_workers=workers,
