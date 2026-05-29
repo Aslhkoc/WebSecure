@@ -152,6 +152,9 @@ class EndpointPrioritizer:
             pe = self._score(url, method_map or {})
             if pe is not None:
                 scored.append(pe)
+            else:
+                # P6 fix: failed URLs were silently dropped with no indication.
+                _logger.debug("[EndpointPrioritizer] URL skip (parse error): %r", url)
 
         scored.sort(key=lambda e: e.priority_score, reverse=True)
         return scored
@@ -213,14 +216,19 @@ class EndpointPrioritizer:
             reasons.append(f"extension:{ext}")
 
         # 6. High-value parameter names
+        # P7+P10 fix: original code incremented score for every occurrence of a
+        # param name (e.g. ?id=1&id=2 → +0.20 and duplicate reason entry), and
+        # only added a reason for the very first high-value param found — all
+        # subsequent ones were silently tracked but never reported.
+        # Fix: deduplicate by name; score and report each unique param once.
+        _seen_param_names: set = set()
         for pname, _ in params:
             pname_l = pname.lower()
-            if pname_l in _HIGH_VALUE_PARAMS:
+            if pname_l in _HIGH_VALUE_PARAMS and pname_l not in _seen_param_names:
+                _seen_param_names.add(pname_l)
                 score += 0.10
-                if pname_l not in high_val_params:
-                    high_val_params.append(pname_l)
-                if len(high_val_params) == 1:
-                    reasons.append(f"injection_param:{pname_l}")
+                high_val_params.append(pname_l)
+                reasons.append(f"injection_param:{pname_l}")
 
         # 7. Parameter richness (+0.05 per extra param, max +0.20)
         if len(params) > 1:
