@@ -28,7 +28,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -411,42 +411,52 @@ class CronScheduler:
 _scheduler_instance: Optional[CronScheduler] = None
 
 
-def _make_websecure_runner() -> Optional[Callable]:
+def _make_websecure_runner() -> Callable:
     """
     CLI için gerçek WebSecure tarama runner'ı oluşturur.
-    ScanRunner üzerinden tarama çalıştırır ve standart sonuç dict'i döndürür.
+    Her hedefi ayrı bir subprocess olarak çalıştırır; bu sayede paralel
+    daemon tick'leri sys.argv üzerinden çakışmaz.
     """
-    try:
-        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+    import subprocess
+    import sys
 
-        def _runner(target: str, options: dict) -> dict:
-            import time as _time
-            t0 = _time.monotonic()
-            try:
-                sr = _ScanRunner(target=target, config=options or {})
-                ctx = sr.run()
-                findings: list = []
-                for bucket_items in (getattr(ctx, "results", None) or {}).values():
-                    if isinstance(bucket_items, list):
-                        findings.extend(bucket_items)
-                return {
-                    "success": True,
-                    "finding_count": len(findings),
-                    "duration_s": round(_time.monotonic() - t0, 2),
-                }
-            except Exception as _exc:
-                logger.error(f"[Scheduler] Tarama runner hatası: {_exc!r}")
-                return {
-                    "success": False,
-                    "error": str(_exc),
-                    "finding_count": 0,
-                    "duration_s": round(_time.monotonic() - t0, 2),
-                }
+    def _runner(target: str, options: dict) -> dict:
+        import time as _time
+        t0 = _time.monotonic()
+        try:
+            cmd = [sys.executable, "-m", "websecure", target]
+            profile = options.get("profile")
+            if profile:
+                cmd += ["--profile", profile]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(options.get("timeout", 3600)),
+            )
+            return {
+                "success": proc.returncode == 0,
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+                "error": proc.stderr.strip() if proc.returncode != 0 else "",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "Tarama zaman aşımına uğradı",
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
+        except Exception as _exc:
+            logger.error(f"[Scheduler] Tarama runner hatası: {_exc!r}")
+            return {
+                "success": False,
+                "error": str(_exc),
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
 
-        return _runner
-    except ImportError:
-        logger.warning("[Scheduler] ScanRunner import edilemedi — runner yok")
-        return None
+    return _runner
 
 
 def get_scheduler(
@@ -527,12 +537,18 @@ def run_scheduler_cli(args: list) -> int:
             return 1
 
     elif ns.subcmd == "enable":
-        sched.enable(ns.id)
-        print(f"[[OK]] Etkinleştirildi: {ns.id}")
+        if sched.enable(ns.id):
+            print(f"[[OK]] Etkinleştirildi: {ns.id}")
+        else:
+            print(f"[!] Bulunamadı: {ns.id}")
+            return 1
 
     elif ns.subcmd == "disable":
-        sched.disable(ns.id)
-        print(f"[[OK]] Devre dışı: {ns.id}")
+        if sched.disable(ns.id):
+            print(f"[[OK]] Devre dışı: {ns.id}")
+        else:
+            print(f"[!] Bulunamadı: {ns.id}")
+            return 1
 
     elif ns.subcmd == "list":
         entries = sched.list_entries()
