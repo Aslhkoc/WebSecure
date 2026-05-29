@@ -27,7 +27,6 @@ SOLID
 from __future__ import annotations
 
 import json
-import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -321,6 +320,11 @@ class ConfigWizard:
                     cfg["notifications"]["pagerduty"] = {
                         "routing_key": TextQuestion("pd_key", "PagerDuty Routing Key", required=True).ask()
                     }
+                elif ch == "email":
+                    cfg["notifications"]["email"] = {
+                        "to": TextQuestion("email_to", "E-posta adresi", required=True).ask(),
+                    }
+                    print("    [i] SMTP ayarları için WS_SMTP_HOST/WS_SMTP_USER/WS_SMTP_PASS ortam değişkenlerini kullanın.")
                 elif ch == "webhook":
                     cfg["notifications"]["webhook"] = {
                         "url": TextQuestion("webhook_url", "Webhook URL", required=True).ask(),
@@ -421,6 +425,17 @@ class ConfigWizard:
 # CLI kısayol
 # ---------------------------------------------------------------------------
 
+def run_wizard(output_path: str = "config.json") -> bool:
+    """
+    Sihirbazı çalıştır; hedef URL girilip config kaydedildiyse True döner.
+
+    main.py tarafından `--wizard` flag ve argümansız interactive mod için kullanılır.
+    True dönüşü "hemen tara" sinyali — main.py kaydedilen config'i yükler ve devam eder.
+    """
+    cfg = ConfigWizard(output_path=output_path).run()
+    return bool(cfg.get("target"))
+
+
 def run_wizard_cli(args: list) -> int:
     """websecure init komutu."""
     import argparse
@@ -449,5 +464,6 @@ __all__ = [
     "IntQuestion",
     "MultiChoiceQuestion",
     "ConfigWizard",
+    "run_wizard",
     "run_wizard_cli",
 ]
