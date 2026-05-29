@@ -560,7 +560,6 @@ def run(
 import socket
 import ssl
 import logging
-import re
 import time
 import urllib.parse
 from typing import Any, Dict, List, Optional

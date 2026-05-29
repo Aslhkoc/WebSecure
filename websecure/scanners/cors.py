@@ -14,9 +14,8 @@ Adim 9 - Siniflar:
 from __future__ import annotations
 
 import logging
-import re
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
 

@@ -31,7 +31,6 @@ from urllib.parse import (
 import io
 
 from websecure.scanners.base import BaseScanner
-from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 

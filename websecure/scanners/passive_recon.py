@@ -5,8 +5,6 @@ import json
 import socket
 import logging
 import concurrent.futures
-import requests
-import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any, Set, Optional
 

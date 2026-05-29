@@ -30,7 +30,6 @@ try:
 except ImportError:
     _BS4_AVAILABLE = False
 
-from websecure.core.reporting import add_result
 from websecure.scanners.base import BaseScanner
 
 logger = logging.getLogger(__name__)

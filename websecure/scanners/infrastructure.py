@@ -8,14 +8,12 @@ Consolidated module for:
 from __future__ import annotations
 import re
 import socket
-import hashlib
 import ssl as pyssl
 import typing as t
 import logging
-import concurrent.futures as _fut
 from dataclasses import dataclass, field
 from datetime import datetime
-from urllib.parse import urlparse, urlsplit, urljoin
+from urllib.parse import urlparse
 from importlib.util import find_spec
 from importlib import import_module
 
@@ -31,7 +29,7 @@ except ImportError:
     _crypto_hashes = None  # type: ignore[assignment]
 
 import requests
-from websecure.core.http import hardened_session, verify_for_phase, classify_access_block
+from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result
 from websecure.scanners.base import BaseScanner
 

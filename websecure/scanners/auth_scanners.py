@@ -10,7 +10,6 @@ import time
 import json
 import base64
 import logging
-import copy
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List
 from urllib.parse import urljoin, urlparse
@@ -503,15 +502,10 @@ def run(target: str, session=None, results=None, debug=False, **kwargs):
 # ============================================================================
 # ADIM 6 — OAuth 2.0 / SAML / 2FA / Password Reset / PrivEsc / BOLA-IDOR
 # ============================================================================
-import hashlib
-import hmac
-import itertools
-import os
 import random
 import string
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from urllib.parse import (
     urlencode, urljoin, urlparse, urlunparse, parse_qs, parse_qsl
 )

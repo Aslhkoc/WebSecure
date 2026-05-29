@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
-from websecure.core.reporting import add_result
 from websecure.core.http import hardened_session as _hardened_session
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin
 
 from .base import BaseScanner
-from websecure.core.reporting import add_result
 from websecure.core.payloads import load_external_payloads
 
 try:

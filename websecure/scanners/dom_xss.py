@@ -18,7 +18,6 @@ import string
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
-from websecure.core.reporting import add_result
 from websecure.core.payloads import get_payloads
 from websecure.scanners.base import BaseScanner
 

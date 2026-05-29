@@ -9,11 +9,9 @@ Checks for:
 """
 from __future__ import annotations
 import re
-import random
-import string
 import logging
 from typing import Dict, Any, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import requests
 from websecure.core.reporting import add_result

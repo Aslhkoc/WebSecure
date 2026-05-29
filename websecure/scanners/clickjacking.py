@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 from websecure.scanners.base import BaseScanner
-from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 

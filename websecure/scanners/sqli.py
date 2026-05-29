@@ -11,7 +11,7 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
-from websecure.core.response_analyzer import ResponseBehaviorAnalyzer, SQLErrorDetector
+from websecure.core.response_analyzer import ResponseBehaviorAnalyzer
 from websecure.core.timing_analyzer import TimingAnalyzer
 
 logger = logging.getLogger(__name__)
