@@ -10,10 +10,9 @@ import logging
 import time
 import re
 import random
-import requests
 from email.header import decode_header
 from websecure.core.http import hardened_session
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -155,12 +154,15 @@ class EmailOtpProvider:
                 ctype = part.get_content_type()
                 if ctype in ("text/plain", "text/html"):
                     payload = part.get_payload(decode=True)
+                    if payload is None:
+                        continue
                     charset = part.get_content_charset() or "utf-8"
                     body += payload.decode(charset, "ignore") if isinstance(payload, bytes) else str(payload)
         else:
             payload = msg.get_payload(decode=True)
-            charset = msg.get_content_charset() or "utf-8"
-            body = payload.decode(charset, "ignore") if isinstance(payload, bytes) else str(payload)
+            if payload is not None:
+                charset = msg.get_content_charset() or "utf-8"
+                body = payload.decode(charset, "ignore") if isinstance(payload, bytes) else str(payload)
         return body
 
 
