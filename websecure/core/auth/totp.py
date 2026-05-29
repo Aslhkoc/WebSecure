@@ -34,10 +34,7 @@ class TOTP:
         try:
             return base64.b32decode(s)
         except Exception as exc:
-            import logging as _log
-            _log.getLogger(__name__).warning(
-                "[TOTP] Invalid Base32 secret — TOTP will not work: %s", exc
-            )
+            logger.warning("[TOTP] Invalid Base32 secret — TOTP will not work: %s", exc)
             return b""
 
     def generate(self, timestamp: Optional[float] = None) -> str:
