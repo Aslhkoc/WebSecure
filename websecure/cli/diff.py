@@ -68,15 +68,6 @@ def _fingerprint(finding: Dict[str, Any]) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-def _fp_with_severity(finding: Dict[str, Any]) -> str:
-    """title + url + severity dahil fingerprint (severity değişimi tespiti için)."""
-    key = "|".join([
-        (finding.get("title") or "unknown").lower(),
-        (finding.get("url") or "").lower(),
-        (finding.get("severity") or "info").lower(),
-    ])
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
-
 
 def _load_scan(path: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """
@@ -298,7 +289,7 @@ class DiffRenderer:
         print(sep)
 
         if diff.new_findings:
-            print("\n[Critical] Yeni Bulgular:")
+            print("\n[+] Yeni Bulgular:")
             for f in sorted(diff.new_findings,
                             key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
                             reverse=True):
@@ -336,8 +327,8 @@ class DiffRenderer:
         console.print(Panel(
             f"[bold]Scan 1:[/bold] {diff.scan1_path}\n"
             f"[bold]Scan 2:[/bold] {diff.scan2_path}\n\n"
-            f"[green]Yeni: {s['new']}[/green]  |  "
-            f"[red]Düzelen: {s['fixed']}[/red]  |  "
+            f"[red]Yeni: {s['new']}[/red]  |  "
+            f"[green]Düzelen: {s['fixed']}[/green]  |  "
             f"[yellow]Gerileme: {s['regressed']}[/yellow]  |  "
             f"Risk delta: [{delta_color}]{delta_str}[/{delta_color}]",
             title="WebSecure Diff",
@@ -355,7 +346,6 @@ class DiffRenderer:
                             key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
                             reverse=True):
                 sev = f.get("severity", "Info")
-                from rich.text import Text
                 t.add_row(
                     f"[{color}]{_SEVERITY_EMOJI.get(sev,'')} {sev}[/{color}]",
                     f.get("title", "?"),
@@ -363,7 +353,7 @@ class DiffRenderer:
                 )
             console.print(t)
 
-        _table("[Critical] Yeni Bulgular",      diff.new_findings,       "red")
+        _table("[+] Yeni Bulgular",      diff.new_findings,       "red")
         _table("[OK] Düzelen Bulgular",   diff.fixed_findings,     "green")
         _table("[!]  Kötüleşen Bulgular", diff.regressed_findings, "yellow")
 
@@ -399,7 +389,7 @@ class DiffRenderer:
             f"**Yeni Tarama:** `{diff.scan2_path}`\n",
             f"| Kategori | Sayı |",
             f"|---|---|",
-            f"| [Critical] Yeni Bulgular | {s['new']} |",
+            f"| [+] Yeni Bulgular | {s['new']} |",
             f"| [OK] Düzelen Bulgular | {s['fixed']} |",
             f"| [!] Kötüleşen | {s['regressed']} |",
             f"| Değişmeyen | {s['unchanged']} |",
@@ -420,7 +410,7 @@ class DiffRenderer:
                 url = f.get("url", "")
                 lines.append(f"| {_SEVERITY_EMOJI.get(sev,'')} {sev} | {title_f} | {url} |")
 
-        _section("[Critical] Yeni Bulgular",     diff.new_findings)
+        _section("[+] Yeni Bulgular",     diff.new_findings)
         _section("[OK] Düzelen Bulgular",  diff.fixed_findings)
         _section("[!] Kötüleşen",        diff.regressed_findings)
 
@@ -498,7 +488,7 @@ td{{padding:.6rem;border-bottom:1px solid #dee2e6}}
   <div class="stat"><span style="color:{delta_color}">{'+' if delta>0 else ''}{delta}</span>Risk Delta</div>
 </div>
 
-{f'''<h2>[Critical] Yeni Bulgular ({s['new']})</h2>
+{f'''<h2>[+] Yeni Bulgular ({s['new']})</h2>
 <table><tr><th>Önem</th><th>Başlık</th><th>URL</th></tr>
 {_rows(diff.new_findings, "danger")}</table>''' if diff.new_findings else ''}
 
