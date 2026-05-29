@@ -80,6 +80,12 @@ class ChunkedBodyBuilder:
         if isinstance(payload, str):
             payload = payload.encode("utf-8", errors="replace")
 
+        # P7 fix: random.randint(a, b) raises ValueError when a > b.
+        # waf_bypass.py reads _chunk_min/_chunk_max from session attrs — a mis-
+        # configured session with min > max would crash here. Swap if inverted.
+        if min_chunk > max_chunk:
+            min_chunk, max_chunk = max_chunk, min_chunk
+
         out = io.BytesIO()
         offset = 0
         while offset < len(payload):
@@ -440,7 +446,12 @@ class PathMutator:
         # Null-byte before extension
         last = path.split("/")[-1]
         if "." in last:
-            variants.append(path.replace(".", "%00.", 1))
+            # P7 fix: path.replace(".", "%00.", 1) replaced the first "." in the
+            # entire path string, not the extension dot in the last segment.
+            # For /api.v2/upload.php it produced /api%00.v2/upload.php instead of
+            # /api.v2/upload%00.php. Use rfind to target the last dot in the path.
+            last_dot = path.rfind(".")
+            variants.append(path[:last_dot] + "%00" + path[last_dot:])
 
         # Partial slash URL-encoding (%2F)
         slash_count = path.count("/")
@@ -485,6 +496,8 @@ class ParamFragmentor:
 
     def fragment(self, name: str, payload: str, n: int = 2) -> List[Tuple[str, str]]:
         """Split *payload* into *n* equal parts, each with the same *name* key."""
+        # P7 fix: n <= 0 caused ZeroDivisionError in len(payload) // n.
+        n = max(1, n)
         size   = max(1, len(payload) // n)
         parts: List[Tuple[str, str]] = []
         for i in range(0, len(payload), size):
