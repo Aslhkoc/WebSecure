@@ -155,12 +155,6 @@ def collect_all_wordlists(base_dirs: List[str] = None) -> Dict[str, object]:
     total_size = 0
 
     ALLOWED_EXTENSIONS = {'.txt', '.lst', '.fuzz', '.list', '.dict', '.csv', '.json'}
-    IGNORED_EXTENSIONS = {
-        '.py', '.pyc', '.md', '.zip', '.tar', '.gz', '.png', '.jpg',
-        '.jpeg', '.gif', '.svg', '.xml', '.xsl', '.sh', '.yml', '.yaml',
-        '.php', '.bin', '.exe', '.dll', '.git', '.gitignore', '.gitattributes',
-        '.rb', '.pl', '.go', '.c', '.h', '.cpp',
-    }
 
     for d in all_scan_dirs:
         p = pathlib.Path(d)
@@ -179,7 +173,7 @@ def collect_all_wordlists(base_dirs: List[str] = None) -> Dict[str, object]:
             if not suffix:
                 found_files.append(resolved)
                 total_size += f.stat().st_size
-            elif suffix in ALLOWED_EXTENSIONS and suffix not in IGNORED_EXTENSIONS:
+            elif suffix in ALLOWED_EXTENSIONS:
                 found_files.append(resolved)
                 total_size += f.stat().st_size
 
@@ -192,18 +186,13 @@ def collect_all_wordlists(base_dirs: List[str] = None) -> Dict[str, object]:
                 if os.path.isfile(full):
                     curated[category].append(full)
 
-    # PayloadAllTheThings fuzzing payloads
+    # PayloadAllTheThings fuzzing payloads — files already in found_files from first pass;
+    # walk again only to build the curated fuzzing index
     if patt_root:
         for root, dirs, files in os.walk(patt_root):
             for fname in files:
                 if fname.lower().endswith(".txt"):
-                    fp = os.path.join(root, fname)
-                    if fp not in seen:
-                        seen.add(fp)
-                        found_files.append(fp)
-                        total_size += os.path.getsize(fp)
-                        # Add to fuzzing curated list
-                        curated.setdefault("fuzzing", []).append(fp)
+                    curated.setdefault("fuzzing", []).append(os.path.join(root, fname))
 
     estimated_lines = total_size // 10
 
