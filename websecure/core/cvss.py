@@ -7,7 +7,7 @@ Maps finding types to base vectors, adjusts for context (auth, WAF).
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 _logger = logging.getLogger(__name__)
 
