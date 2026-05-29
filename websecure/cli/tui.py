@@ -16,7 +16,6 @@ SOLID
 from __future__ import annotations
 
 import logging
-import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -219,10 +218,7 @@ class RichTUI(BaseTUI):
 
     def __init__(self, refresh_rate: float = 0.5) -> None:
         from rich.console import Console
-        from rich.live import Live
         from rich.layout import Layout
-        from rich.panel import Panel
-        from rich.table import Table
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 
         self._console = Console()
@@ -243,6 +239,7 @@ class RichTUI(BaseTUI):
         # Rich bileşenler
         self._live: Optional[Any] = None
         self._layout = Layout()
+        self._render_loop_thread: Optional[threading.Thread] = None
 
         # Progress nesnesi (Layout dışında kullanılacak)
         self._progress = Progress(
@@ -283,7 +280,8 @@ class RichTUI(BaseTUI):
 
     def stop(self) -> None:
         self._running = False
-        time.sleep(self._refresh_rate * 2)
+        if self._render_loop_thread and self._render_loop_thread.is_alive():
+            self._render_loop_thread.join(timeout=self._refresh_rate * 4)
         if self._live:
             self._live.stop()
         self._print_final_summary()
@@ -346,7 +344,6 @@ class RichTUI(BaseTUI):
     def _update_layout(self) -> None:
         from rich.panel import Panel
         from rich.table import Table
-        from rich.text import Text
 
         with self._lock:
             findings = list(self._findings[-self._MAX_FINDINGS_DISPLAY:])
