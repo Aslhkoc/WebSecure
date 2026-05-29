@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-import importlib.util
+import importlib
 import threading
 from typing import Any, Dict, Optional
 
@@ -151,9 +151,15 @@ _IDENTITY_LOCK = threading.Lock()
 
 
 def current_identity(config: Optional[dict] = None) -> Dict[str, Any]:
-    """Return the current identity dict (thread-safe read)."""
+    """Return the current identity dict. Falls back to config proxy when not explicitly set."""
     with _IDENTITY_LOCK:
-        return dict(_CURRENT_IDENTITY)
+        if _CURRENT_IDENTITY:
+            return dict(_CURRENT_IDENTITY)
+    if config and isinstance(config, dict):
+        proxy = config.get("proxy") or {}
+        if isinstance(proxy, dict) and proxy.get("enabled") and proxy.get("url"):
+            return {"proxy_url": proxy["url"]}
+    return {}
 
 
 def set_identity(identity: Dict[str, Any]) -> None:

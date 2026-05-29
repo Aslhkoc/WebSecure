@@ -41,6 +41,7 @@ from .system import (
     setup_webdriver,
     ensure_dir,
     current_identity,
+    set_identity,
     _ws_import_any,
     _ws_maybe_import_any,
 )
