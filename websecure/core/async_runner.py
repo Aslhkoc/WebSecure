@@ -25,7 +25,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,6 @@ class _ThreadingFallbackAdapter:
 
     def _sync_request(self, task: AsyncScanTask) -> AsyncScanResult:
         import urllib.request
-        import urllib.error
         t0 = time.monotonic()
         try:
             req = urllib.request.Request(
@@ -256,7 +255,6 @@ class AsyncScanRunner:
         self._verify_ssl = verify_ssl
         self._analyzer = analyzer
         self._adapter: Optional[Any] = None
-        self._semaphore: Optional[asyncio.Semaphore] = None
 
     def _make_adapter(self) -> Any:
         if _HAS_AIOHTTP:
