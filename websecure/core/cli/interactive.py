@@ -12,13 +12,10 @@ All functions respect args.dry_run / args.batch (non-interactive mode).
 from __future__ import annotations
 
 import logging
-
 import os
 import subprocess
-import sys
 import time as _time
 from argparse import Namespace
-from typing import TYPE_CHECKING
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +88,7 @@ def setup_tor(cfg: dict, args: Namespace) -> None:
     print("  gercek IP ile baglanir.")
     print("")
 
-    _tor_ans = (input("  Tor ile anonim tarama yapmak ister misiniz? (E/h): ").strip().lower() or "e")
+    _tor_ans = _read("  Tor ile anonim tarama yapmak ister misiniz? (E/h): ", "e").lower()
 
     if _tor_ans.startswith("e"):
         print("  [*] Tor baglantisi kontrol ediliyor...")
@@ -169,18 +166,18 @@ def setup_auth(cfg: dict, args: Namespace) -> None:
 
     if _profile_valid:
         print(f"  [+] Config'de kayitli profil: {_auth_profiles_cfg[0].get('username')}")
-        _ans = input("  Bu profili kullanmak ister misiniz? (E/h): ").strip().lower() or "e"
+        _ans = _read("  Bu profili kullanmak ister misiniz? (E/h): ", "e").lower()
     else:
-        _ans = input("  Giris bilgileri girecek misiniz? (e/h): ").strip().lower()
+        _ans = _read("  Giris bilgileri girecek misiniz? (e/h): ", "h").lower()
 
     if _ans == "e":
         if not _profile_valid:
-            _login_url = input("  Login sayfasi URL (ornek: https://site.com/login): ").strip()
-            _username  = input("  Kullanici adi / e-posta (TEST hesabi kullanin!): ").strip()
-            _password  = input("  Sifre: ").strip()
-            _ufield    = input("  Username input name (Enter = username): ").strip() or "username"
-            _pfield    = input("  Password input name (Enter = password): ").strip() or "password"
-            _success   = input("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ").strip() or "dashboard"
+            _login_url = _read("  Login sayfasi URL (ornek: https://site.com/login): ", "")
+            _username  = _read("  Kullanici adi / e-posta (TEST hesabi kullanin!): ", "")
+            _password  = _read("  Sifre: ", "")
+            _ufield    = _read("  Username input name (Enter = username): ", "username")
+            _pfield    = _read("  Password input name (Enter = password): ", "password")
+            _success   = _read("  Giris sonrasi sayfada gecen kelime (Enter = dashboard): ", "dashboard")
 
             if _login_url and _username and _password:
                 _new_profile = {
