@@ -42,7 +42,7 @@ def read_2fa_config(config: Dict[str, Any] | None) -> TwoFAConfig:
         method=c.get("method") or c.get("provider") or os.getenv("OTP_METHOD", "none"),
         totp_secret=c.get("totp_secret") or os.getenv("TOTP_SECRET"),
         imap_host=c.get("imap_host") or os.getenv("IMAP_HOST"),
-        imap_port=int(c.get("imap_port", os.getenv("IMAP_PORT", 993))),
+        imap_port=int(c.get("imap_port") or os.getenv("IMAP_PORT") or 993),
         imap_use_ssl=(str(c.get("imap_use_ssl", "1")).lower() in ("1", "true")),
         imap_user=c.get("imap_user") or os.getenv("IMAP_USER"),
         imap_password=c.get("imap_password") or os.getenv("IMAP_PASS"),
@@ -102,18 +102,17 @@ class Null2FA(_Base2FA):
         return True
 
 def create_twofactor_provider(cfg: TwoFAConfig) -> TwoFactorProvider:
-    import logging as _log
     method = (cfg.method or "none").lower()
     if method == "totp":
         if cfg.totp_secret:
             return Totp2FA(cfg.totp_secret)
-        _log.getLogger(__name__).warning(
+        logger.warning(
             "[2FA] method='totp' configured but totp_secret is missing — 2FA bypassed"
         )
     elif method == "email":
         if cfg.imap_host and cfg.imap_user:
             return EmailOtp2FA(cfg)
-        _log.getLogger(__name__).warning(
+        logger.warning(
             "[2FA] method='email' configured but imap_host/imap_user missing — 2FA bypassed"
         )
     # SMS, Push placeholders can be added here
