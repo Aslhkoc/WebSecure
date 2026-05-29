@@ -115,7 +115,7 @@ class SQLMapWrapper(ToolIntegration):
             return True
         # SQLMap is often a Python script in the tools/ directory — check there too
         from pathlib import Path
-        from websecure.core.platform_compat import binary_candidates as _bc, binary_name as _bn
+        from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
         _script_candidates = [
             root / "tools" / "sqlmap" / "sqlmap.py",

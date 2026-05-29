@@ -254,7 +254,7 @@ class NmapWrapper(ToolIntegration):
         # 2. Yaygın kurulum konumları (Windows + Linux + macOS)
         import sys as _sys
         from pathlib import Path
-        from websecure.core.platform_compat import binary_candidates as _bc, binary_name as _bn
+        from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
 
         candidates_path: list = list(_bc(root, "nmap"))
