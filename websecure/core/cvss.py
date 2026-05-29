@@ -294,7 +294,10 @@ class CVSSScorer:
             try:
                 c = CVSS3(vector_str)
                 base_score = float(c.base_score)
-                severity_label = c.severities()[0] if c.severities() else _severity_label(base_score)
+                # P10 fix: c.severities()[0] returns the cvss library's own naming
+                # convention ("None" for 0.0, etc.) which differs from the rest of
+                # the codebase ("Info"). Use _severity_label() for consistent naming.
+                severity_label = _severity_label(base_score)
             except Exception as e:
                 _logger.debug(f"[CVSS] Calculation failed for {vector_str}: {e}")
 
@@ -333,7 +336,13 @@ class CVSSScorer:
             # finding was NOT confirmed via bypass. If waf_bypassed=True the exploit
             # already worked through the WAF → complexity is Low (attacker succeeded).
             waf_bypassed = bool(finding.get("waf_bypassed") or finding.get("adaptive_waf_bypass"))
-            if self.waf_detected and not waf_bypassed:
+            # P7 fix: a verified finding (confirmed exploitation) means the attacker
+            # demonstrably succeeded — AC was Low in practice. Raising AC to High
+            # because a WAF is present contradicts the confirmed finding and unfairly
+            # deflates the score. Only apply the WAF AC adjustment when the finding
+            # has NOT been verified (i.e., still theoretical against the WAF).
+            verified = bool(finding.get("verified"))
+            if self.waf_detected and not waf_bypassed and not verified:
                 if "/AC:L/" in vector:
                     vector = vector.replace("/AC:L/", "/AC:H/")
                 # AC:M is not standard CVSS 3.x but handle defensively
@@ -354,7 +363,10 @@ def _severity_label(score: float) -> str:
         return "Medium"
     elif score >= 0.1:
         return "Low"
-    return "Informational"
+    # P10 fix: was returning "Informational" but the entire codebase uses "Info"
+    # (html_dashboard, diff.py, markdown.py, cli/diff.py all key on "Info").
+    # "Informational" caused silent fallback-to-zero in severity rank lookups.
+    return "Info"
 
 
 def score_findings(findings: list, auth_required: bool = False,
