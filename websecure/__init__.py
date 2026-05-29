@@ -20,7 +20,7 @@ try:
     from websecure.db import (
         Scan, Finding, Tenant, Project, ScoreRecord,
         ScanRepository, FindingRepository, TenantRepository,
-        ProjectRepository, ScoreRepository,
+        ProjectRepository, FPRuleRepository, ScoreRepository,
     )
     _HAS_DB = True
 except Exception:
@@ -74,7 +74,7 @@ __all__ = [
     "get_db", "Database",
     "Scan", "Finding", "Tenant", "Project", "ScoreRecord",
     "ScanRepository", "FindingRepository", "TenantRepository",
-    "ProjectRepository", "ScoreRepository",
+    "ProjectRepository", "FPRuleRepository", "ScoreRepository",
     # Analytics
     "get_fp_learner", "FPLearner", "FPRule",
     "get_score_tracker", "ScoreTracker", "ScoreCalculator",

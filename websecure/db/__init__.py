@@ -39,12 +39,12 @@ from websecure.db.database import Database, get_db
 from websecure.db.repository import (
     Tenant, Project, Scan, Finding, FPRule, ScoreRecord,
     TenantRepository, ProjectRepository, ScanRepository,
-    FindingRepository, ScoreRepository,
+    FindingRepository, FPRuleRepository, ScoreRepository,
 )
 
 __all__ = [
     "Database", "get_db",
     "Tenant", "Project", "Scan", "Finding", "FPRule", "ScoreRecord",
     "TenantRepository", "ProjectRepository", "ScanRepository",
-    "FindingRepository", "ScoreRepository",
+    "FindingRepository", "FPRuleRepository", "ScoreRepository",
 ]

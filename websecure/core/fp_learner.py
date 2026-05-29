@@ -450,11 +450,16 @@ class FPLearner:
         if not self._use_db:
             return
         try:
-            from websecure.db.repository import FindingRepository
-            # Sadece logluyoruz; FP repository ayrı eklenebilir
-            logger.debug("[FPLearner] DB kayıt (FP tablo repo genişletilebilir).")
-        except Exception as _fix_e:
-            logger.debug(f"[core.fp_learner] {type(_fix_e).__name__}: {_fix_e!r}")
+            from websecure.db.repository import FPRuleRepository
+            from websecure.db.database import get_db
+            repo = FPRuleRepository(get_db())
+            existing = repo.get(rule.id)
+            if existing:
+                repo.update(rule)
+            else:
+                repo.create(rule)
+        except Exception as exc:
+            logger.debug(f"[FPLearner] DB kayıt atlandı: {exc}")
 
 
 # ---------------------------------------------------------------------------

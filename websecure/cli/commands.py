@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-_VERSION = "2.0.4-dev"
+_VERSION = "20.0.0"
 logger = logging.getLogger(__name__)
 
 

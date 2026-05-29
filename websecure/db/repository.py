@@ -484,6 +484,82 @@ class FindingRepository:
 
 
 # ---------------------------------------------------------------------------
+# FPRuleRepository
+# ---------------------------------------------------------------------------
+
+class FPRuleRepository:
+    def __init__(self, db: Optional[Database] = None) -> None:
+        self._db = db or get_db()
+
+    def create(self, rule: FPRule) -> FPRule:
+        with self._db.connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO fp_rules(
+                    id, tenant_id, title_pattern, url_pattern, severity, tool,
+                    confidence, hit_count, confirm_count, active, created_at, created_by)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (rule.id, rule.tenant_id, rule.title_pattern, rule.url_pattern,
+                 rule.severity, rule.tool, rule.confidence, rule.hit_count,
+                 rule.confirm_count, int(rule.active), rule.created_at, rule.created_by),
+            )
+        return rule
+
+    def get(self, rule_id: str) -> Optional[FPRule]:
+        with self._db.connection() as conn:
+            row = conn.execute("SELECT * FROM fp_rules WHERE id=?", (rule_id,)).fetchone()
+        return self._row_to_fprule(row) if row else None
+
+    def update(self, rule: FPRule) -> FPRule:
+        with self._db.connection() as conn:
+            conn.execute(
+                """UPDATE fp_rules SET confidence=?, hit_count=?, confirm_count=?,
+                   active=? WHERE id=?""",
+                (rule.confidence, rule.hit_count, rule.confirm_count,
+                 int(rule.active), rule.id),
+            )
+        return rule
+
+    def list_by_tenant(
+        self,
+        tenant_id: Optional[str] = None,
+        active_only: bool = True,
+    ) -> List[FPRule]:
+        query = "SELECT * FROM fp_rules WHERE 1=1"
+        params: List[Any] = []
+        if tenant_id:
+            query += " AND (tenant_id=? OR tenant_id IS NULL)"
+            params.append(tenant_id)
+        if active_only:
+            query += " AND active=1"
+        query += " ORDER BY confidence DESC"
+        with self._db.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._row_to_fprule(r) for r in rows]
+
+    def delete(self, rule_id: str) -> bool:
+        with self._db.connection() as conn:
+            c = conn.execute("DELETE FROM fp_rules WHERE id=?", (rule_id,))
+        return c.rowcount > 0
+
+    @staticmethod
+    def _row_to_fprule(row) -> FPRule:
+        return FPRule(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            title_pattern=row["title_pattern"],
+            url_pattern=row["url_pattern"],
+            severity=row["severity"],
+            tool=row["tool"],
+            confidence=row["confidence"],
+            hit_count=row["hit_count"],
+            confirm_count=row["confirm_count"],
+            active=bool(row["active"]),
+            created_at=row["created_at"],
+            created_by=row["created_by"],
+        )
+
+
+# ---------------------------------------------------------------------------
 # ScoreRepository
 # ---------------------------------------------------------------------------
 
@@ -558,5 +634,5 @@ class ScoreRepository:
 __all__ = [
     "Tenant", "Project", "Scan", "Finding", "FPRule", "ScoreRecord",
     "TenantRepository", "ProjectRepository", "ScanRepository",
-    "FindingRepository", "ScoreRepository",
+    "FindingRepository", "FPRuleRepository", "ScoreRepository",
 ]

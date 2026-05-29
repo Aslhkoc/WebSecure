@@ -97,11 +97,11 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    def _auth(self) -> Optional[str]:
+    def _auth(self, params: Optional[Dict[str, str]] = None) -> Optional[str]:
         """API key -> tenant_id. None -> auth başarısız."""
         key = (
             self.headers.get("X-API-Key", "")
-            or self._parse_url()[1].get("api_key", "")
+            or (params or self._parse_url()[1]).get("api_key", "")
         )
         if not key:
             return None
@@ -134,8 +134,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok", "version": "20.0.0"})
             return
 
-        # Auth gerekli
-        tenant_id = self._auth()
+        # Auth gerekli — params zaten parse edildi, tekrar parse etme
+        tenant_id = self._auth(params)
         if tenant_id is None and not self.api_server.no_auth:
             self._send_json(*_err(401, "API key gerekli (X-API-Key header)"))
             return
