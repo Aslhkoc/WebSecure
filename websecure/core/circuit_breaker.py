@@ -220,6 +220,15 @@ class ScanCircuitBreaker:
         with self._lock:
             if self._state != CBState.CLOSED:
                 self._transition(CBState.CLOSED, "manual reset after identity rotation")
+            else:
+                # P7 fix: when already CLOSED, _transition() is skipped so stale window
+                # entries and streak counters from the old identity are never cleared.
+                # A proactive rotation while CLOSED could leave 15 old 403s in a 20-entry
+                # window; the 5 good responses from the new identity would then trip the
+                # breaker based entirely on stale data.
+                self._consecutive_429    = 0
+                self._consecutive_errors = 0
+                self._window.clear()
 
     def get_trip_log(self) -> list[dict]:
         """Return all OPEN-state trip events recorded during this scan."""
@@ -229,14 +238,23 @@ class ScanCircuitBreaker:
     def status(self) -> dict:
         """Return a diagnostic snapshot (safe to call anytime)."""
         with self._lock:
-            forbidden = sum(1 for s in self._window if s == 403)
-            ratio     = (forbidden / len(self._window)) if self._window else 0.0
+            # P10 fix: _evaluate_thresholds() only fires when window is full
+            # (len >= window_size). Reporting a partial-window ratio made status()
+            # show e.g. 100% when only 1 of 1 early responses was 403, even though
+            # the breaker had not and would not trip on that data alone.
+            window_full = len(self._window) >= self._cfg.window_size
+            if window_full:
+                forbidden = sum(1 for s in self._window if s == 403)
+                ratio = forbidden / len(self._window)
+            else:
+                ratio = 0.0
             remaining = 0.0
             if self._state == CBState.OPEN and self._opened_at:
                 remaining = max(0.0, self._cfg.recovery_timeout - (time.time() - self._opened_at))
             return {
                 "state":               self._state.value,
                 "window_size":         len(self._window),
+                "window_full":         window_full,
                 "forbidden_ratio":     round(ratio, 3),
                 "consecutive_429":     self._consecutive_429,
                 "consecutive_errors":  self._consecutive_errors,
