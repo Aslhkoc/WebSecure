@@ -25,11 +25,10 @@ SOLID
 """
 from __future__ import annotations
 
-import os
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -86,26 +85,50 @@ _CLI_TREE: Dict[str, Dict] = {
     },
     "queue": {
         "subcommands": ["add","cancel","list","stats","clear","run"],
-        "flags": {
-            "add":    [("--priority","-p","Öncelik 1-5"), ("--label","Etiket")],
-            "list":   [("--status","Durum filtresi")],
-            "run":    [("--workers","-w","Worker sayısı")],
-        },
+        "flags": [
+            ("--priority", "-p", "Öncelik 1-5"),
+            ("--label",          "Etiket"),
+            ("--status",         "Durum filtresi"),
+            ("--workers",  "-w", "Worker sayısı"),
+        ],
         "choices": {
             "--status": ["pending","running","completed","failed","cancelled"],
         },
     },
     "schedule": {
         "subcommands": ["add","remove","enable","disable","list","run"],
-        "flags": {
-            "add": [("--label","Etiket"), ("--disabled","Devre dışı başlat")],
-        },
+        "flags": [
+            ("--label",    "Etiket"),
+            ("--disabled", "Devre dışı başlat"),
+        ],
         "choices": {},
     },
     "completion": {
         "flags": [],
         "choices": {},
         "positional": ["bash","zsh","fish"],
+    },
+    "api": {
+        "flags": [
+            ("--host",    "Dinlenecek adres"),
+            ("--port", "-p", "Port numarası"),
+            ("--no-auth", "API key doğrulamasını kapat"),
+            ("--no-db",   "DB bağlantısını kapat"),
+        ],
+        "choices": {},
+    },
+    "setup": {
+        "flags": [
+            ("--tool", "-t", "Kurulacak araç adı"),
+        ],
+        "choices": {},
+    },
+    "db": {
+        "flags": [
+            ("--limit", "Listeleme limiti"),
+        ],
+        "choices": {},
+        "positional": ["init","stats","vacuum","list-scans"],
     },
 }
 
@@ -233,12 +256,30 @@ _websecure_complete() {{
             local subcmds="add cancel list stats clear run"
             if [[ $cword -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "$subcmds" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "{cmd_flags.get('queue','')}" -- "$cur"))
             fi
             ;;
         schedule)
             local subcmds="add remove enable disable list run"
             if [[ $cword -eq 2 ]]; then
                 COMPREPLY=($(compgen -W "$subcmds" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "{cmd_flags.get('schedule','')}" -- "$cur"))
+            fi
+            ;;
+        api)
+            COMPREPLY=($(compgen -W "{cmd_flags.get('api','')}" -- "$cur"))
+            ;;
+        setup)
+            COMPREPLY=($(compgen -W "{cmd_flags.get('setup','')}" -- "$cur"))
+            ;;
+        db)
+            local subcmds="init stats vacuum list-scans"
+            if [[ $cword -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "$subcmds" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "{cmd_flags.get('db','')}" -- "$cur"))
             fi
             ;;
         completion)
@@ -285,6 +326,9 @@ class ZshCompletionGenerator(BaseCompletionGenerator):
                 "queue":      "Tarama kuyruğu yönet",
                 "schedule":   "Cron zamanlamaları yönet",
                 "completion": "Shell tamamlama betiği üret",
+                "api":        "REST API sunucusu başlat",
+                "setup":      "Dış araçları kur",
+                "db":         "Veritabanı yönetimi",
             }.get(cmd, cmd)
             cmds_block.append(f"    '{cmd}:{desc}'")
 
@@ -346,6 +390,21 @@ _websecure() {{
                 completion)
                     _values "shell" bash zsh fish
                     ;;
+                api)
+                    _arguments \\
+                        '--host[Dinlenecek adres]' \\
+                        '--port[Port numarası]' \\
+                        '--no-auth[API key doğrulamasını kapat]' \\
+                        '--no-db[DB bağlantısını kapat]'
+                    ;;
+                setup)
+                    _arguments '--tool[Kurulacak araç adı]'
+                    ;;
+                db)
+                    _arguments \\
+                        '1:işlem:(init stats vacuum list-scans)' \\
+                        '--limit[Listeleme limiti]'
+                    ;;
             esac
             ;;
     esac
@@ -389,6 +448,9 @@ class FishCompletionGenerator(BaseCompletionGenerator):
             "queue":      "Tarama kuyruğu yönet",
             "schedule":   "Cron zamanlamaları yönet",
             "completion": "Shell tamamlama betiği üret",
+            "api":        "REST API sunucusu başlat",
+            "setup":      "Dış araçları kur",
+            "db":         "Veritabanı yönetimi",
         }
 
         for cmd, desc in cmd_descs.items():
@@ -463,6 +525,29 @@ class FishCompletionGenerator(BaseCompletionGenerator):
             lines.append(
                 f'complete -c websecure -n "__fish_seen_subcommand_from completion" '
                 f'-a "{sh}"'
+            )
+
+        lines.append("")
+        lines.append("# api flags")
+        for flag, desc in [("--host","Bind adresi"), ("--port","Port"), ("--no-auth","Auth kapat"), ("--no-db","DB kapat")]:
+            lines.append(
+                f'complete -c websecure -n "__fish_seen_subcommand_from api" '
+                f'-l {flag[2:]} -d "{desc}"'
+            )
+
+        lines.append("")
+        lines.append("# setup flags")
+        lines.append(
+            'complete -c websecure -n "__fish_seen_subcommand_from setup" '
+            '-l tool -s t -d "Kurulacak araç adı"'
+        )
+
+        lines.append("")
+        lines.append("# db subcommands")
+        for sub in ["init","stats","vacuum","list-scans"]:
+            lines.append(
+                f'complete -c websecure -n "__fish_seen_subcommand_from db" '
+                f'-a "{sub}"'
             )
 
         return "\n".join(lines) + "\n"
