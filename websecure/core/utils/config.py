@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 from pathlib import Path
@@ -226,7 +225,7 @@ def ensure_wordlists(cfg: Dict[str, Any]) -> Dict[str, Any]:
         logging.debug(f"[Wordlists] Path resolved to: {wl['root']}")
     else:
         # Only warn if it really doesn't exist
-        print(f"[Wordlists] UYARI: Wordlist klasörü bulunamadı! (Aranan konumlar: {[str(c) for c in candidates]})")
+        logging.warning("[Wordlists] Wordlist klasörü bulunamadı. Aranan konumlar: %s", [str(c) for c in candidates])
         
     return cfg
 
