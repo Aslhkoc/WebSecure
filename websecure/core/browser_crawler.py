@@ -10,7 +10,6 @@ import json
 import logging
 import random as _random
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse
@@ -153,14 +152,14 @@ class BrowserCrawler:
         if not _PLAYWRIGHT_AVAILABLE:
             _logger.warning("[BrowserCrawler] Playwright unavailable, returning empty result")
             return BrowserCrawlResult(endpoints=[base_url])
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(self.crawl(base_url))
-            loop.close()
-            return result
+            return loop.run_until_complete(self.crawl(base_url))
         except Exception as e:
             _logger.error(f"[BrowserCrawler] Crawl failed: {e}")
             return BrowserCrawlResult(endpoints=[base_url])
+        finally:
+            loop.close()
 
     async def crawl(self, base_url: str) -> BrowserCrawlResult:
         """Main async crawl entry point."""
@@ -171,6 +170,8 @@ class BrowserCrawler:
         to_visit = [base_url]
         self._visited = set()
         self._result = BrowserCrawlResult()
+        self._api_requests = []
+        self._intercepted_requests = []
 
         # show_browser=True -> headless=False (görünür Chrome)
         use_headless = self.config.headless and not self.config.show_browser
@@ -523,14 +524,12 @@ class BrowserCrawler:
         for name, pattern in self._SECRET_PATTERNS.items():
             for match in re.finditer(pattern, content):
                 secret_val = match.group(0)
-                # Basic entropy/false-positive check
-                if len(secret_val) > 8:
-                    self._result.secrets_found.append({
-                        "type": name,
-                        "url": url,
-                        "value_preview": secret_val[:20] + "...",
-                        "severity": "High",
-                    })
+                self._result.secrets_found.append({
+                    "type": name,
+                    "url": url,
+                    "value_preview": secret_val[:20] + "...",
+                    "severity": "High",
+                })
 
 
 def should_use_browser_crawler(http_result: Dict) -> bool:
