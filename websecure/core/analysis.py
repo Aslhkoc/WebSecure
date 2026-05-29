@@ -16,26 +16,17 @@ import time
 import json
 import math
 import random
-import secrets
-import string
 import logging
 import base64
 import binascii
-import io
-import statistics
-import threading
-import contextlib
-import importlib.util
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Callable, Iterable, Protocol, runtime_checkable
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, urljoin, parse_qsl, urlsplit
+from urllib.parse import urlparse, urljoin, parse_qsl
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3 import Retry
 
 # Optional Dependencies
 try:
@@ -1013,7 +1004,7 @@ class CaptchaBypassMiddleware:
             "[CaptchaMiddleware] %s detected on %s (site_key=%s)",
             challenge.challenge_type, url, challenge.site_key,
         )
-        print(f"[CaptchaMiddleware] {challenge.challenge_type} detected — solving…")
+        _LOGGER_CC.info("[CaptchaMiddleware] %s detected — solving…", challenge.challenge_type)
 
         token = self._solve(challenge)
         if token is None:
@@ -1434,7 +1425,7 @@ def should_skip_payload_category(context: InputContext, category: str, tech_stac
                 # overlap: Empty -> SKIP SQLi.
                 # present: {mysql, mongodb} -> overlap: {mysql} -> ALLOW SQLi.
                 
-                reqs_for_cat = _ATTACK_TECH_REQ.get(category.lower())
+                reqs_for_cat = req_techs
                 if reqs_for_cat:
                      # Calculate overlap
                      overlap = present_dbs.intersection(reqs_for_cat)
