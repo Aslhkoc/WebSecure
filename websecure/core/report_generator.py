@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import pathlib
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)

@@ -28,7 +28,6 @@ from urllib.parse import (
 )
 
 # For multipart body construction
-import io
 
 from websecure.scanners.base import BaseScanner
 
