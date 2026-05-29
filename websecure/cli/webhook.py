@@ -373,26 +373,29 @@ class WebhookDispatcher:
         while True:
             item = self._queue.get()
             if item is None:  # poison pill
+                self._queue.task_done()
                 break
-            event, endpoints = item
-            for ep in endpoints:
-                if not ep.listens_to(event.event_type):
-                    continue
-                # Finding önem filtresi
-                if event.event_type == "finding":
-                    sev = event.payload.get("finding", {}).get("severity", "Info")
-                    if not ep.severity_ok(sev):
+            try:
+                event, endpoints = item
+                for ep in endpoints:
+                    if not ep.listens_to(event.event_type):
                         continue
-                try:
-                    ok = self._sender.send(event, ep)
-                    for cb in self._callbacks:
-                        try:
-                            cb(event, ok)
-                        except Exception as _fix_e:
-                            logger.debug(f"[cli.webhook] {type(_fix_e).__name__}: {_fix_e!r}")
-                except Exception as exc:
-                    logger.error(f"[Webhook] Worker hatası: {exc!r}", exc_info=True)
-            self._queue.task_done()
+                    # Finding önem filtresi
+                    if event.event_type == "finding":
+                        sev = event.payload.get("finding", {}).get("severity", "Info")
+                        if not ep.severity_ok(sev):
+                            continue
+                    try:
+                        ok = self._sender.send(event, ep)
+                        for cb in self._callbacks:
+                            try:
+                                cb(event, ok)
+                            except Exception as _fix_e:
+                                logger.debug(f"[cli.webhook] {type(_fix_e).__name__}: {_fix_e!r}")
+                    except Exception as exc:
+                        logger.error(f"[Webhook] Worker hatası: {exc!r}", exc_info=True)
+            finally:
+                self._queue.task_done()
 
 
 # ---------------------------------------------------------------------------
@@ -423,8 +426,7 @@ def configure_webhook(
     """
     dispatcher = get_dispatcher()
     dispatcher.add_endpoint(url, secret=secret, events=events, min_severity=min_severity)
-    if not dispatcher._running:
-        dispatcher.start()
+    dispatcher.start()  # guarded internally — safe to call unconditionally
     return dispatcher
 
 
