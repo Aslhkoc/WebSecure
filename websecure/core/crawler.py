@@ -578,7 +578,8 @@ class ParameterMiner:
         "date", "time", "fields", "include", "exclude", "expand", "depth",
         "version", "v", "pretty", "output", "scope", "client_id", "state",
         "grant_type", "response_type", "access_token", "refresh_token",
-        "username", "pass", "pwd", "secret", "apikey", "appid", "app_id",
+        # P8 fix: "username" was duplicated (also appears at the start of the list).
+        "pass", "pwd", "secret", "apikey", "appid", "app_id",
     ]
 
     def __init__(self, chunk_size: int = 15, threshold_bytes: int = 25):

@@ -17,6 +17,7 @@ from typing import Any, Deque, Dict, List, Optional, Pattern, Set, Tuple, Callab
 from urllib.parse import urljoin, urlparse, urldefrag, urlsplit, parse_qs
 from xml.etree import ElementTree as ET
 
+import socket
 import requests
 from requests import session
 
@@ -198,6 +199,12 @@ def _fetch_resp(session, url: str, timeout: int = 10):
         fake.content = cached.get("content", b"")
         fake.url = url
         fake.ok = bool(fake.status_code) and fake.status_code < 400
+        # P6/P11 fix: fake object lacked a json() method; _analyze_content calls
+        # resp.json() for application/json responses. Without it, the call raised
+        # AttributeError that was silently swallowed — JSON API keys never extracted
+        # from cached responses. Capture text in closure to avoid late-binding issues.
+        _cached_text = fake.text
+        fake.json = lambda: json.loads(_cached_text)
         return fake
 
     counters_inc("cache_misses", 1)
@@ -397,6 +404,9 @@ class WebCrawler:
                 "pages_crawled": int(data.get("pages_crawled") or 0),
             }
         except Exception as exc:
+            # P11 fix: exception was silently swallowed — a corrupted checkpoint
+            # file restarted the crawl from scratch with no indication of why.
+            logger.debug(f"[Crawler] Checkpoint load failed: {exc!r}")
             return None
 
     def start(self) -> Dict[str, Any]:
@@ -567,96 +577,78 @@ class WebCrawler:
                 if self.debug:
                     logger.debug(f"[JS-Miner] Regex error on {url}: {e}")
 
-            # Forms
-            if BeautifulSoup and "html" in content_type:
-                try:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    forms = soup.find_all("form")
-                    if forms:
-                        forms_data = []
-                        for f in forms:
-                            # Extract inputs
-                            inputs = []
-                            for tag in f.find_all(["input", "textarea", "select"]):
-                                if tag.get("name"):
-                                    inputs.append({
-                                        "name": tag.get("name"),
-                                        "type": tag.get("type", "text"),
-                                        "value": tag.get("value", "")
-                                    })
-                            
-                            forms_data.append({
-                                "action": f.get("action"),
-                                "method": f.get("method"),
-                                "inputs": inputs
-                            })
-
-
-
-                        # Flatten slightly for simple consumption
-                        self.results["forms_meta"].append({
-                            "url": url,
-                            "count": len(forms),
-                            "forms": forms_data
+        # P7 fix: form and loose-input extraction was inside the "javascript"
+        # content-type block above, so it only ran for .js files. HTML pages
+        # (text/html) never had their forms or inputs extracted. Moved outside
+        # to its own "html" content-type guard at the correct indentation level.
+        if BeautifulSoup and "html" in content_type:
+            try:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                forms = soup.find_all("form")
+                if forms:
+                    forms_data = []
+                    for f in forms:
+                        inputs = []
+                        for tag in f.find_all(["input", "textarea", "select"]):
+                            if tag.get("name"):
+                                inputs.append({
+                                    "name": tag.get("name"),
+                                    "type": tag.get("type", "text"),
+                                    "value": tag.get("value", "")
+                                })
+                        forms_data.append({
+                            "action": f.get("action"),
+                            "method": f.get("method"),
+                            "inputs": inputs
                         })
-                        
-                        # [DEBUG] Visible confirmation of discovered forms
-                        if len(forms) > 0:
-                            print(f"       +[Form Detected] {url} ({len(forms)} forms, {len([i for f in forms_data for i in f['inputs']])} inputs)")
-
-                        # [SMART ANALYZER] Analyze form inputs
-                        if analyze_form_inputs:
-                             # Flatten for efficiency
-
-                             all_inputs = [i for f in forms_data for i in f["inputs"]]
-                             if all_inputs:
-                                 analysis = analyze_form_inputs(all_inputs)
-                                 if "param_contexts" not in self.results:
-                                     self.results["param_contexts"] = {}
-                                 self.results["param_contexts"].update(analysis)
-                except Exception as e:
-                    if self.debug:
-                        logger.debug(f"Form parsing error on {url}: {e}")
-
+                    self.results["forms_meta"].append({
+                        "url": url,
+                        "count": len(forms),
+                        "forms": forms_data
+                    })
+                    if len(forms) > 0:
+                        print(f"       +[Form Detected] {url} ({len(forms)} forms, {len([i for f in forms_data for i in f['inputs']])} inputs)")
+                    if analyze_form_inputs:
+                        all_inputs = [i for f in forms_data for i in f["inputs"]]
+                        if all_inputs:
+                            analysis = analyze_form_inputs(all_inputs)
+                            if "param_contexts" not in self.results:
+                                self.results["param_contexts"] = {}
+                            self.results["param_contexts"].update(analysis)
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Form parsing error on {url}: {e}")
 
             # [SPA FIX] Detect loose inputs (Angular/React often lack dict-forms)
-            if BeautifulSoup:
-                try:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    inputs = soup.find_all("input")
-                    if inputs:
-                         # Collect loose inputs into a 'synthetic' form context
-                         loose_inputs = []
-                         for i in inputs:
-                             name = i.get("name") or i.get("id")
-                             if name:
-                                 loose_inputs.append({
-                                     "name": name,
-                                     "type": i.get("type", "text"),
-                                     "value": i.get("value", "")
-                                 })
-                         
-                         if loose_inputs:
-                             # Add names to param_candidates for query fuzzing
-                             self.results["param_candidates"].update(
-                                  [i["name"] for i in loose_inputs]
-                             )
-                             # CRITICAL: Create a synthetic form so XSS/SQLi scanners see these inputs!
-                             # We assume 'POST' to the same URL as a safe default for testing.
-                             self.results["forms_meta"].append({
-                                "url": url,
-                                "method": "POST",
-                                "action": url, # assume self-post for loose inputs
-                                "inputs": loose_inputs,
-                                "synthetic": True 
-                             })
-                             
-                             # Count these as detected surface
-                             self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
-                             print(f"       +[Loose/SPA Inputs] {url} ({len(loose_inputs)} inputs detected & queued for attack)")
-                except Exception as e:
-                    if self.debug:
-                        logger.debug(f"SPA input parsing error on {url}: {e}")
+            try:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                inputs = soup.find_all("input")
+                if inputs:
+                    loose_inputs = []
+                    for i in inputs:
+                        name = i.get("name") or i.get("id")
+                        if name:
+                            loose_inputs.append({
+                                "name": name,
+                                "type": i.get("type", "text"),
+                                "value": i.get("value", "")
+                            })
+                    if loose_inputs:
+                        self.results["param_candidates"].update(
+                            [i["name"] for i in loose_inputs]
+                        )
+                        self.results["forms_meta"].append({
+                            "url": url,
+                            "method": "POST",
+                            "action": url,
+                            "inputs": loose_inputs,
+                            "synthetic": True
+                        })
+                        self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
+                        print(f"       +[Loose/SPA Inputs] {url} ({len(loose_inputs)} inputs detected & queued for attack)")
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"SPA input parsing error on {url}: {e}")
 
         # [API FIX] Parse JSON keys as potential parameters
         if "json" in content_type:
@@ -1056,7 +1048,11 @@ def discover_dynamic_endpoints(
     if strategy:
         try:
             logger.info(f"[Browser] Using strategy: {type(strategy).__name__} Proxy={proxy}")
-            eps, arts = strategy.discover(start_url, headless, timeout_ms, max_pages, proxy=proxy)
+            # P9 fix: return_artifacts was never forwarded to strategy.discover(),
+            # so the Playwright strategy always ran with return_artifacts=False and
+            # returned None for artifacts — browser-discovered forms were silently lost.
+            eps, arts = strategy.discover(start_url, headless, timeout_ms, max_pages,
+                                          return_artifacts=return_artifacts, proxy=proxy)
             if eps: results.extend(eps)
             if arts: artifacts.update(arts)
         except Exception as e:
@@ -1069,11 +1065,9 @@ def discover_dynamic_endpoints(
 # MERGED FROM: websecure/core/discovery_helpers.py
 # DNS enrichment + service banner grabbing
 # ===========================================================================
-import socket
-from urllib.parse import urlparse
-import logging
-
-logger = logging.getLogger(__name__)
+# P8 fix: socket/urlparse/logging/logger were all re-imported and re-defined here
+# (lines 1072-1077 in the original) despite being imported at the top of the file.
+# Removed the duplicates; socket was moved to the top-level import block above.
 
 def discovery_enrich(url: str, results: dict, open_ports: dict = None, detailed: bool = False, debug: bool = False):
     """
