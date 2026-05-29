@@ -127,7 +127,6 @@ class ScanQueue:
         self._entries: Dict[str, QueueEntry] = {}
         self._lock = threading.Lock()
         self._running = False
-        self._active_workers = 0
         self._load()
 
     # ------------------------------------------------------------------
@@ -210,19 +209,23 @@ class ScanQueue:
     # Çalıştırma
     # ------------------------------------------------------------------
 
-    def run(self, blocking: bool = True) -> None:
+    def run(self, blocking: bool = True, max_workers: Optional[int] = None) -> None:
         """
         Kuyruktaki tüm bekleyen girişleri işle.
 
         Parametreler
         ------------
-        blocking : True -> tüm worker'lar bitene kadar bekle (CLI için)
+        blocking    : True -> tüm worker'lar bitene kadar bekle (CLI için)
+        max_workers : Geçici worker sınırı (None = mevcut ayar korunur)
         """
+        if max_workers is not None:
+            self._max_workers = max_workers
         self._running = True
         pending = self.list_entries(status=QueueStatus.PENDING)
 
         if not pending:
             logger.info("[Queue] Kuyrukta bekleyen giriş yok.")
+            self._running = False
             return
 
         logger.info(f"[Queue] {len(pending)} giriş işlenecek — {self._max_workers} worker")
@@ -352,42 +355,52 @@ class ScanQueue:
 _queue_instance: Optional[ScanQueue] = None
 
 
-def _make_websecure_runner() -> Optional[Callable]:
+def _make_websecure_runner() -> Callable:
     """
     CLI için gerçek WebSecure tarama runner'ı oluşturur.
-    ScanRunner üzerinden tarama çalıştırır ve standart sonuç dict'i döndürür.
+    Her hedefi ayrı bir subprocess olarak çalıştırır; bu sayede paralel
+    worker'lar sys.argv üzerinden çakışmaz.
     """
-    try:
-        from websecure.core.scan_runner import ScanRunner as _ScanRunner
+    import subprocess
+    import sys
 
-        def _runner(target: str, options: dict) -> dict:
-            import time as _time
-            t0 = _time.monotonic()
-            try:
-                sr = _ScanRunner(target=target, config=options or {})
-                ctx = sr.run()
-                findings: list = []
-                for bucket_items in (getattr(ctx, "results", None) or {}).values():
-                    if isinstance(bucket_items, list):
-                        findings.extend(bucket_items)
-                return {
-                    "success": True,
-                    "finding_count": len(findings),
-                    "duration_s": round(_time.monotonic() - t0, 2),
-                }
-            except Exception as _exc:
-                logger.error(f"[Queue] Tarama runner hatası: {_exc!r}")
-                return {
-                    "success": False,
-                    "error": str(_exc),
-                    "finding_count": 0,
-                    "duration_s": round(_time.monotonic() - t0, 2),
-                }
+    def _runner(target: str, options: dict) -> dict:
+        import time as _time
+        t0 = _time.monotonic()
+        try:
+            cmd = [sys.executable, "-m", "websecure", target]
+            profile = options.get("profile")
+            if profile:
+                cmd += ["--profile", profile]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(options.get("timeout", 3600)),
+            )
+            return {
+                "success": proc.returncode == 0,
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+                "error": proc.stderr.strip() if proc.returncode != 0 else "",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "Tarama zaman aşımına uğradı",
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
+        except Exception as _exc:
+            logger.error(f"[Queue] Tarama runner hatası: {_exc!r}")
+            return {
+                "success": False,
+                "error": str(_exc),
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
 
-        return _runner
-    except ImportError:
-        logger.warning("[Queue] ScanRunner import edilemedi — runner yok")
-        return None
+    return _runner
 
 
 def get_queue(runner: Optional[Callable] = None) -> ScanQueue:
@@ -484,14 +497,13 @@ def run_queue_cli(args: list) -> int:
         print(f"[[OK]] {removed} tamamlanan giriş temizlendi.")
 
     elif ns.subcmd == "run":
-        q._max_workers = ns.workers
         stats_before = q.stats()
         pending = stats_before["pending"]
         if pending == 0:
             print("[*] Kuyrukta bekleyen giriş yok.")
             return 0
         print(f"[*] {pending} giriş işleniyor — {ns.workers} worker...")
-        q.run(blocking=True)
+        q.run(blocking=True, max_workers=ns.workers)
         print(f"[[OK]] Tamamlandı.")
         for k, v in q.stats().items():
             print(f"  {k:<12}: {v}")
