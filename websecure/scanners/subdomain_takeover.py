@@ -15,7 +15,7 @@ import re
 import socket
 import subprocess
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
 

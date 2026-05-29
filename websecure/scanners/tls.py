@@ -2,7 +2,7 @@ from __future__ import annotations
 import ssl
 import socket
 import logging
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 from urllib.parse import urlparse
 
 from .infrastructure import check_ssl_certificate as _get_cert_details

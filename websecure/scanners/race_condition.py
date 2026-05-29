@@ -470,7 +470,7 @@ import string
 import threading
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from typing import Any, Dict, List, Optional, Tuple
 from websecure.scanners.base import BaseScanner
 from websecure.core.http import hardened_session as _hardened_session
@@ -879,7 +879,6 @@ class RaceConditionScanner(BaseScanner):
 # SessionFixationRaceProber, InventoryRaceProber, RaceDeepScanner
 # ============================================================================
 import asyncio
-import collections
 
 _deep_race_logger = logging.getLogger(__name__ + ".deep")
 

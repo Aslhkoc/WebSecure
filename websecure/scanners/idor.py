@@ -10,7 +10,7 @@ import hashlib as _hashlib
 import logging
 import re
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
 import requests as _requests

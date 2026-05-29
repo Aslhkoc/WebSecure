@@ -17,9 +17,8 @@ import logging
 import random
 import re
 import string
-import time
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from websecure.scanners.base import BaseScanner
 
