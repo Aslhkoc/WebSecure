@@ -3,7 +3,7 @@ import json
 import re
 import urllib.parse
 from urllib.parse import urljoin
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 # [WS3] Integration of AdvancedFormFuzzer logic
 def extract_all_forms(html_content: str, base_url: str) -> List[Dict[str, Any]]:

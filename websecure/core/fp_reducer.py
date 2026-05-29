@@ -25,8 +25,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import requests as _requests
-
 _logger = logging.getLogger(__name__)
 
 
