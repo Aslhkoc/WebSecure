@@ -55,7 +55,9 @@ def _score_to_sev(score: float) -> str:
         return "Medium"
     if score >= 1.0:
         return "Low"
-    return "Informational"
+    # P10 fix: was "Informational" — system-wide convention is "Info"
+    # (html_dashboard, diff.py, markdown.py all key on "Info").
+    return "Info"
 
 
 # ---------------------------------------------------------------------------
@@ -216,16 +218,19 @@ class EvidenceChainBuilder:
                 if rule_vuln.lower() not in type_a.lower():
                     continue
 
-                # Look for consequence evidence within this finding
-                consequence_evidence = self._find_consequence(finding_a, rule_consequence)
-                if not consequence_evidence:
+                # P8 fix: consequence_evidence was a dead variable — assigned as
+                # bool or dict but never read after the if-else. Removed and
+                # replaced with a direct condition on the return value.
+                _same_finding_consequence = self._find_consequence(
+                    finding_a, rule_consequence
+                )
+                if not _same_finding_consequence:
                     # Look in other findings for the consequence
                     consequence_finding = self._find_consequence_finding(
                         findings, idx_a, rule_consequence
                     )
                     if consequence_finding is None:
                         continue
-                    consequence_evidence = consequence_finding
                 else:
                     consequence_finding = finding_a
 
@@ -263,6 +268,20 @@ class EvidenceChainBuilder:
                         param=str(consequence_finding.get("parameter") or ""),
                         severity=str(consequence_finding.get("severity") or "High"),
                         evidence=str(consequence_finding.get("evidence") or "")[:200],
+                    ))
+                else:
+                    # P7 fix: when the consequence was confirmed INSIDE the root
+                    # finding (_same_finding_consequence=True), the original code
+                    # skipped the second step entirely — chain_score received no
+                    # escalation bonus. A finding that already proves exploitation
+                    # is MORE dangerous, not less. Add a synthetic step so the
+                    # chain escalation arithmetic applies.
+                    chain.add_step(ChainStep(
+                        vuln_type=rule_consequence,
+                        url=url_a,
+                        param="",
+                        severity=sev_a,
+                        evidence="[consequence confirmed within root finding]",
                     ))
 
                 chains.append(chain)
@@ -361,12 +380,22 @@ class EvidenceChainBuilder:
             if idx == root_idx:
                 continue
             ftype = (f.get("type") or "").lower()
+
+            # P7 fix: the generic `consequence in ftype` check ran BEFORE the
+            # specific keyword overrides. For "internal", ANY finding whose type
+            # contains the word "internal" (e.g. "Internal Server Error") matched,
+            # never reaching the SSRF-specific check below. Specific category
+            # guards now run first and use `continue` to skip the generic path.
+            if consequence == "internal":
+                if "ssrf" in ftype:
+                    return f
+                continue  # "internal" must match via SSRF only — skip generic
+            if consequence == "phishing":
+                if "redirect" in ftype or "open redirect" in ftype:
+                    return f
+                continue  # "phishing" must match via redirect only — skip generic
+
             if consequence in ftype:
-                return f
-            # Keyword matches for broad categories
-            if consequence == "internal" and "ssrf" in ftype:
-                return f
-            if consequence == "phishing" and ("redirect" in ftype or "open redirect" in ftype):
                 return f
         return None
 
