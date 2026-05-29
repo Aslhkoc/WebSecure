@@ -30,7 +30,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)

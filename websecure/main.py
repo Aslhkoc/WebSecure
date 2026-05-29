@@ -18,7 +18,7 @@ from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
 # run_business_logic_flows and run_race_conditions are loaded dynamically below (line ~884)
 import re as _re_urlnorm
-from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit, SplitResult as _SplitResult
+from urllib.parse import urlsplit as _urlsplit
 import argparse, json, time, socket, ssl
 
 def _opt_import(mod, func):
@@ -60,7 +60,6 @@ except ImportError as _pb_exc:
 import logging as _logging
 from urllib.parse import urlparse, urldefrag
 from time import sleep
-import asyncio
 import shutil
 import subprocess
 
@@ -68,9 +67,7 @@ import subprocess
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
-import zipfile as _zipfile
 import urllib.request as _urlreq
-import threading as _threading
 
 # Startup dependency helpers — implementation lives in core/startup.py
 from websecure.core.startup import (

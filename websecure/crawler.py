@@ -6,7 +6,6 @@ import json
 import logging
 import hashlib
 import threading
-import contextlib
 import tempfile
 import shutil
 import warnings as _bs4_warnings
@@ -15,14 +14,14 @@ from pathlib import Path
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Pattern, Set, Tuple, Callable, Iterable
-from urllib.parse import urljoin, urlparse, urldefrag, parse_qsl, urlunparse, urlsplit, parse_qs
+from urllib.parse import urljoin, urlparse, urldefrag, urlsplit, parse_qs
 from xml.etree import ElementTree as ET
 
 import requests
 from requests import session
 
 # WebSecure Imports
-from websecure.core.utils import allowed_http_methods, canonicalize_url, is_static_asset, same_origin
+from websecure.core.utils import canonicalize_url, same_origin
 from websecure.core.http import (
     verify_for_phase, HTTP_METRICS, instrument_requests_session, 
     set_trace_id, hardened_session
