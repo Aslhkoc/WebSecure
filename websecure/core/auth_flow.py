@@ -2,11 +2,15 @@ from __future__ import annotations
 from websecure.core.http import hardened_session
 import logging
 import re
+import time
+import json
+import imaplib
 from abc import ABC, abstractmethod
 from importlib.util import find_spec
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Pattern
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone
+from email.parser import BytesParser
 
 import requests
 
@@ -80,13 +84,6 @@ def _import_optional(module: str, names: Iterable[str]) -> List[Optional[Any]]:
             if out[i] is None and hasattr(mod, n):
                 out[i] = getattr(mod, n)
     return out
-
-read_captcha_config, solve_image_captcha_png_bytes, solve_recaptcha_v2_token = _import_optional(
-    "websecure.core.analysis", ["read_captcha_config", "solve_image_captcha_png_bytes", "solve_recaptcha_v2_token"]
-)
-read_2fa_config, get_otp_provider = _import_optional(
-    "websecure.core.auth", ["read_2fa_config", "create_twofactor_provider"]
-)
 
 # -----------------------------------------------------------------------------
 # Yardımcılar
@@ -902,11 +899,6 @@ def playwright_login(cfg: Dict[str, Any], session_path: str = "session.json") ->
 # [WS3-ANCHOR] Auto-Signup & Device Code helpers
 # -----------------------------------------------------------------------------
 
-import time
-import json
-import imaplib
-from email.parser import BytesParser
-
 class MailboxAdapter:
     """Basit MailHog veya IMAP arayüzü. Doğrulama linkini almak için kullanılır."""
     def __init__(self, cfg: Dict[str, Any]):
@@ -1070,12 +1062,6 @@ def perform_login(cfg: dict, session=None):
 # MERGED FROM: websecure/core/login_auditor.py
 # Login form bruteforce auditor
 # ===========================================================================
-
-import requests
-import time
-import logging
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger("websec")
 
