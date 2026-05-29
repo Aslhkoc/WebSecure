@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import inspect as _inspect
 import json
-import os
 import re
 import threading
 import time
@@ -216,7 +215,7 @@ class HProfileManager:
 # ---------------------------------------------------------------------------
 
 _HPM: HProfileManager | None = None
-_HPM_LOCK = threading.Lock()
+_HPM_LOCK = threading.RLock()
 
 
 def hpm_bootstrap_from_file(path: str) -> None:
