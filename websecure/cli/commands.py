@@ -12,6 +12,9 @@ serve       Web dashboard HTTP sunucusu
 queue       Tarama kuyruğu yönet (add/list/run/cancel/stats/clear)
 schedule    Cron zamanlamaları yönet (add/list/enable/disable/run)
 completion  Shell autocomplete betiği üret (bash/zsh/fish)
+api         REST API sunucusu başlat
+setup       Dış araçları kontrol et ve kur
+db          Veritabanı yönetimi (init/stats/vacuum/list-scans)
 
 Genel Flag'ler
 --------------
@@ -83,7 +86,7 @@ def _cmd_scan(ns: argparse.Namespace, cfg: Dict[str, Any]) -> int:
 
     TUI ve webhook entegrasyonu sağlar.
     """
-    from websecure.cli.tui import ScanTUI, TUIFinding
+    from websecure.cli.tui import ScanTUI
     from websecure.cli.webhook import configure_webhook, get_dispatcher
 
     target = ns.target or cfg.get("target", "")
@@ -114,37 +117,20 @@ def _cmd_scan(ns: argparse.Namespace, cfg: Dict[str, Any]) -> int:
         dispatcher.dispatch_scan_start(scan_id, target)
 
     start_t = time.monotonic()
-    finding_count = 0
     exit_code = 0
 
     try:
         # mevcut main.py entegrasyonu — argv üzerinden
         argv_backup = sys.argv[:]
+        # main.py yalnızca target (pozisyonel) ve --profile kabul eder.
+        # --proxy / --threads / --timeout / --resume main.py argparse'inde
+        # tanımsız: sys.argv'ye eklenmesi "unrecognized arguments" hatası
+        # verir ve tarama sys.exit(2) ile kesilir.
         new_argv = [sys.argv[0], target]
 
-        # Proxy
-        proxy = getattr(ns, "proxy", None) or cfg.get("proxy")
-        if proxy:
-            new_argv += ["--proxy", proxy]
-
-        # Profile
         profile = getattr(ns, "profile", None) or cfg.get("profile")
         if profile:
             new_argv += ["--profile", profile]
-
-        # Threads
-        threads = getattr(ns, "threads", None) or cfg.get("concurrency")
-        if threads:
-            new_argv += ["--threads", str(threads)]
-
-        # Timeout
-        timeout_val = getattr(ns, "timeout", None) or cfg.get("timeout")
-        if timeout_val:
-            new_argv += ["--timeout", str(timeout_val)]
-
-        # Resume
-        if getattr(ns, "resume", False):
-            new_argv.append("--resume")
 
         sys.argv = new_argv
 
@@ -171,7 +157,6 @@ def _cmd_scan(ns: argparse.Namespace, cfg: Dict[str, Any]) -> int:
         if webhook_url:
             dispatcher.dispatch_scan_complete(
                 scan_id, target,
-                finding_count=finding_count,
                 duration_s=duration,
             )
 
@@ -355,7 +340,6 @@ def _cmd_api(ns: argparse.Namespace) -> int:
         print(f"[+] REST API: http://{ns.host}:{ns.port}/api/v1/")
         print("    Durdurmak için Ctrl+C")
         try:
-            import time
             while server.is_running():
                 time.sleep(1)
         except KeyboardInterrupt:

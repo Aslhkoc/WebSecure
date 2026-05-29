@@ -326,8 +326,8 @@ class WebhookDispatcher:
         self,
         scan_id: str,
         target: str,
-        finding_count: int,
         duration_s: float,
+        finding_count: int = 0,
         severity_summary: Optional[Dict[str, int]] = None,
     ) -> None:
         event = WebhookEvent(
