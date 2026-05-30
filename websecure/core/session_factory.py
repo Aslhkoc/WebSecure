@@ -14,7 +14,9 @@ import importlib
 import importlib.util
 import logging
 import os
+import random
 import re
+import socket
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -112,16 +114,24 @@ def _parse_host_port_from_proxy(url: str) -> tuple[str, int]:
 def _tcp_port_open(host: str, port: int, timeout_s: float = 1.0) -> bool:
     if not host or port <= 0 or port > 65535:
         return False
-    import socket as _socket
-    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    try_set = getattr(s, "settimeout", None)
-    if try_set:
-        try_set(timeout_s)
-    rc = s.connect_ex((host, port))
-    try_close = getattr(s, "close", None)
-    if try_close:
-        try_close()
-    return rc == 0
+    # IPv6 literal'lerdeki köşeli parantezleri temizle: "[::1]" -> "::1"
+    h = host.strip()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    sock = None
+    try:
+        # create_connection adres ailesini (IPv4/IPv6) otomatik seçer ve
+        # DNS/bağlantı hatalarında OSError fırlatır (gaierror dahil).
+        sock = socket.create_connection((h, port), timeout=timeout_s)
+        return True
+    except OSError:
+        return False
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 def _proxy_alive(url: str) -> bool:
@@ -185,7 +195,6 @@ def _setup_session_from_config(config: dict):
     s = ensure_session(cfg)
 
     # User-Agent
-    import random as _r_ua
     _default_uas = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -193,7 +202,7 @@ def _setup_session_from_config(config: dict):
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
     ]
     ua_cfg = _pick_from_config(cfg, "user_agent", "")
-    ua = ua_cfg if isinstance(ua_cfg, str) and ua_cfg.strip() and "WebSec" not in ua_cfg else _r_ua.choice(_default_uas)
+    ua = ua_cfg if isinstance(ua_cfg, str) and ua_cfg.strip() and "WebSec" not in ua_cfg else random.choice(_default_uas)
     s.headers.update({"User-Agent": ua})
 
     # TLS verify
@@ -201,10 +210,12 @@ def _setup_session_from_config(config: dict):
     s.verify = _to_bool(verify_cfg, True)
 
     # --- WS3: Privacy Identity selection ---
+    # cfg geçilir ki current_identity'nin config-proxy fallback'i devreye girebilsin.
     try:
         from websecure.core.utils import current_identity
-        ident = current_identity()
+        ident = current_identity(cfg)
     except Exception as exc:
+        logger.debug(f"[session_factory] current_identity alınamadı: {exc!r}")
         ident = {}
     ident = ident if isinstance(ident, dict) else {}
 
