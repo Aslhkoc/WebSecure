@@ -6,6 +6,7 @@ main.py'den FAZ-EK kapsamında buraya taşındı.
 """
 from __future__ import annotations
 
+import os
 import re as _re_urlnorm
 import shutil
 import subprocess
@@ -56,7 +57,7 @@ def _ws3_curl_effective_url(url: str, timeout_s: float) -> str:
     if not curl_bin:
         return url
     cp = subprocess.run(
-        [curl_bin, "-I", "-L", "-m", str(int(timeout_s)), "-sS", "-o", "/dev/null", "-w", "%{url_effective}", url],
+        [curl_bin, "-I", "-L", "-m", str(int(timeout_s)), "-sS", "-o", os.devnull, "-w", "%{url_effective}", url],
         capture_output=True, text=True, check=False,
     )
     eff = (cp.stdout or "").strip()
@@ -92,7 +93,7 @@ def _detect_final_url_and_scheme_robust(raw_input_url: str, timeout_s: float = 6
         for u in candidates:
             cp = subprocess.run(
                 [curl_bin, "-I", "-L", "-sS", "--max-time", str(float(timeout_s)), u, "-w",
-                 "%{url_effective} %{http_code}", "-o", "/dev/null"],
+                 "%{url_effective} %{http_code}", "-o", os.devnull],
 
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
             )
