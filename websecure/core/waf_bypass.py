@@ -210,7 +210,7 @@ class WAFBypassAdapter(HTTPAdapter):
                     _pm_variants = _PM().mutate(path)
                     if _pm_variants:
                         path = random.choice(_pm_variants)
-                except (ImportError, Exception) as exc:
+                except Exception as exc:
                     logger.debug(f"[WAFBypass] PathMutator failed: {exc!r}")
 
             # Apply suffix if set (e.g. from random_path_suffix strategy)
@@ -401,7 +401,11 @@ class WAFBypassSession(requests.Session):
         self.jitter_range   = jitter_range
         self._rotate_every  = rotate_every   # rotate proxy after this many requests
         self._req_counter   = 0              # incremented by WAFBypassAdapter.send()
-        self._counter_lock  = __import__("threading").Lock()
+        self._counter_lock  = threading.Lock()
+        # Yanıt istatistikleri — __init__'te kur (lazy init thread-safe değildi:
+        # iki thread aynı anda hasattr kontrolünü geçip iki kilit yaratabilirdi).
+        self._response_stats: dict = {"blocked": 0, "allowed": 0, "total": 0}
+        self._stats_lock    = threading.Lock()
         # Pass self so adapter can read bypass flags from this session
         adapter = WAFBypassAdapter(session_ref=self)
         self.mount("https://", adapter)
@@ -430,10 +434,6 @@ class WAFBypassSession(requests.Session):
         Track WAF block signals (403, 406, 429, 503) vs successes (2xx/3xx).
         Used by get_bypass_effectiveness() to measure which strategies work.
         """
-        import threading as _threading
-        if not hasattr(self, "_response_stats"):
-            self._response_stats: dict = {"blocked": 0, "allowed": 0, "total": 0}
-            self._stats_lock = _threading.Lock()
         with self._stats_lock:
             self._response_stats["total"] += 1
             if status_code in (403, 406, 429, 503):
@@ -3103,6 +3103,7 @@ class WAFBypassScanner:
             self.session.headers["User-Agent"] = get_random_user_agent()
 
         self.results: Dict = (self._base.results if self._base else None) or (results if results is not None else {})
+        self._results_lock = threading.Lock()
         self.debug = debug
         self.logger = logging.getLogger("websecure.scanners.waf_bypass")
         if debug:
@@ -3122,7 +3123,7 @@ class WAFBypassScanner:
                 return
             except Exception as _fix_e:
                 logger.debug(f"[core.waf_bypass] {type(_fix_e).__name__}: {_fix_e!r}")
-        with threading.Lock():
+        with self._results_lock:
             self.results.setdefault(bucket, []).append(entry)
 
     # ------------------------------------------------------------------
