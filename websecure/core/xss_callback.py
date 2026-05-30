@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +81,14 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
     def _parse_body(self) -> Dict[str, str]:
-        length = int(self.headers.get("Content-Length", 0))
+        length = int(self.headers.get("Content-Length") or 0)
         if length:
             raw = self.rfile.read(length).decode("utf-8", "ignore")
             try:
                 return json.loads(raw)
             except Exception:
-                return dict(parse_qs(raw, keep_blank_values=True))
+                return {k: v[0] if isinstance(v, list) and v else ""
+                        for k, v in parse_qs(raw, keep_blank_values=True).items()}
         return {}
 
     def _send_ok(self):
@@ -259,7 +260,11 @@ class XSSCallbackServer:
             ev = self._pending.get(token)
         if ev and ev.wait(timeout=timeout):
             with self._lock:
-                return self._results.get(token)
+                result = self._results.pop(token, None)
+                self._pending.pop(token, None)
+            return result
+        with self._lock:
+            self._pending.pop(token, None)
         return None
 
     def all_results(self) -> List[Dict[str, str]]:
@@ -289,7 +294,6 @@ def parse_cookie_str(raw: str) -> Dict[str, str]:
 def parse_storage_str(raw: str) -> Dict[str, str]:
     """JSON.stringify(localStorage) → dict"""
     try:
-        from urllib.parse import unquote
         decoded = unquote(raw)
         obj = json.loads(decoded)
         return {str(k): str(v) for k, v in obj.items()} if isinstance(obj, dict) else {}

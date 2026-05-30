@@ -17,7 +17,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from websecure.db.database import Database, get_db
 
@@ -385,8 +385,8 @@ class FindingRepository:
         params: List[Any] = [scan_id]
         if not include_fp:
             query += " AND false_positive=0"
-        # P7 fix: alphabetical ORDER BY severity sorts Critical < High < Info < Low < Medium
-        # which is wrong. Use CASE expression for correct Critical→High→Medium→Low→Info order.
+        # Alfabetik sıra Critical<High<Info<Low<Medium şeklinde yanlış sıralar;
+        # CASE ile severity ağırlığı doğru Critical→High→Medium→Low→Info sıralaması için.
         query += (
             " ORDER BY CASE severity"
             " WHEN 'Critical' THEN 1"
@@ -433,7 +433,8 @@ class FindingRepository:
             ).fetchall()
         counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
         for row in rows:
-            counts[row["severity"]] = row["cnt"]
+            if row["severity"] in counts:
+                counts[row["severity"]] = row["cnt"]
         return counts
 
     def search(

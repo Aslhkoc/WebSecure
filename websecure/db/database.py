@@ -170,7 +170,6 @@ class Database:
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
         self._path = db_path or _DEFAULT_DB
-        self._local = threading.local()
         self._init_lock = threading.Lock()
         self._initialized = False
 
@@ -225,7 +224,8 @@ class Database:
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
         """
-        Thread-local bağlantı — auto-commit ve hata durumunda rollback.
+        Her çağrıda yeni bağlantı açar, blok çıkışında kapatır.
+        Auto-commit ve hata durumunda rollback.
 
         ```python
         with db.connection() as conn:
@@ -235,23 +235,21 @@ class Database:
         if not self._initialized:
             self.initialize()
 
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            self._local.conn = self._raw_conn()
-
-        conn = self._local.conn
+        conn = self._raw_conn()
         try:
             yield conn
             conn.commit()
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise
+        finally:
+            conn.close()
 
     def close(self) -> None:
-        """Thread-local bağlantıyı kapat."""
-        conn = getattr(self._local, "conn", None)
-        if conn:
-            conn.close()
-            self._local.conn = None
+        """Geriye dönük uyumluluk — bağlantı artık per-call açılıp kapatılıyor."""
 
     def vacuum(self) -> None:
         """Veritabanını optimize et."""
