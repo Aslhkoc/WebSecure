@@ -15,31 +15,23 @@ Adim 13 — Siniflar:
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 
 _logger = logging.getLogger(__name__)
 
 _SEV_EMOJI = {
-    "Critical": "[Critical]", "critical": "[Critical]",
-    "High": "[High]", "high": "[High]",
-    "Medium": "[Medium]", "medium": "[Medium]",
-    "Low": "[Info]", "low": "[Info]",
-    "Informational": "[o]", "info": "[o]",
-}
-
-_SEV_PD_PRIORITY = {
-    "Critical": "P1", "critical": "P1",
-    "High": "P2", "high": "P2",
-    "Medium": "P3", "medium": "P3",
-    "Low": "P4", "low": "P4",
-    "Informational": "P5", "info": "P5",
+    "critical": "[Critical]",
+    "high":     "[High]",
+    "medium":   "[Medium]",
+    "low":      "[Info]",
+    "info":     "[o]",
+    "informational": "[o]",
 }
 
 _TIMEOUT = 12
@@ -121,9 +113,10 @@ class NotificationConfig:
 # Severity filter helper
 # ---------------------------------------------------------------------------
 
-_SEV_RANK = {"Critical": 5, "critical": 5, "High": 4, "high": 4,
-              "Medium": 3, "medium": 3, "Low": 2, "low": 2,
-              "Informational": 1, "info": 1}
+_SEV_RANK = {
+    "critical": 5, "high": 4, "medium": 3,
+    "low": 2, "informational": 1, "info": 1,
+}
 
 
 def _sev_passes(finding: Dict, min_severity: str) -> bool:
@@ -176,10 +169,10 @@ class JIRANotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        priority_map = {"Critical": "Highest", "critical": "Highest",
-                        "High": "High", "high": "High",
-                        "Medium": "Medium", "medium": "Medium",
-                        "Low": "Low", "low": "Low"}
+        priority_map = {
+            "critical": "Highest", "high": "High",
+            "medium":   "Medium",  "low":  "Low",
+        }
         priority = priority_map.get(sev, "Medium")
 
         payload = {
@@ -287,10 +280,10 @@ class SlackNotifier(BaseNotifier):
 
         sev = _sev_lower(finding)
         emoji = _SEV_EMOJI.get(sev, "[o]")
-        color_map = {"Critical": "#FF0000", "critical": "#FF0000",
-                     "High": "#FF6600", "high": "#FF6600",
-                     "Medium": "#FFCC00", "medium": "#FFCC00",
-                     "Low": "#00AA00", "low": "#00AA00"}
+        color_map = {
+            "critical": "#FF0000", "high":   "#FF6600",
+            "medium":   "#FFCC00", "low":    "#00AA00",
+        }
         color = color_map.get(sev, "#AAAAAA")
         title = _finding_title(finding)
         fields_list = []
@@ -353,7 +346,7 @@ class TeamsNotifier(BaseNotifier):
         payload = {
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
-            "themeColor": "FF6600" if sev in ("High", "high", "Critical", "critical") else "FFCC00",
+            "themeColor": "FF6600" if sev in ("high", "critical") else "FFCC00",
             "summary": title[:128],
             "sections": [{
                 "activityTitle": title,
@@ -399,11 +392,11 @@ class PagerDutyNotifier(BaseNotifier):
             return False
 
         sev = _sev_lower(finding)
-        pd_severity_map = {"Critical": "critical", "critical": "critical",
-                           "High": "error", "high": "error",
-                           "Medium": "warning", "medium": "warning",
-                           "Low": "info", "low": "info",
-                           "Informational": "info", "info": "info"}
+        pd_severity_map = {
+            "critical": "critical", "high":          "error",
+            "medium":   "warning",  "low":           "info",
+            "informational": "info", "info":         "info",
+        }
 
         summary = _finding_title(finding)[:256]
         payload = {
@@ -494,7 +487,7 @@ class NotificationDispatcher:
         totals: Dict[str, int] = {}
         for finding in findings:
             if deduplicate:
-                key = f"{finding.get('type')}|{finding.get('url')}"
+                key = (finding.get("type") or "") + "|" + (finding.get("url") or "")
                 if key in seen:
                     continue
                 seen.add(key)
