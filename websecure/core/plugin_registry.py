@@ -11,7 +11,7 @@ import importlib.util
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Type, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 _logger = logging.getLogger(__name__)
 
@@ -83,6 +83,8 @@ class PluginRegistry:
                 continue
             try:
                 spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
+                if not spec or not spec.loader:
+                    continue
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 # Find classes that look like scanners
@@ -151,6 +153,11 @@ class PluginRegistry:
                 else:
                     # Register the module's 'run' function as a pseudo-plugin
                     run_fn = getattr(mod, "run", None)
+                    if not run_fn:
+                        _logger.debug(
+                            "[PluginRegistry] No class_name and no run() in %s — skipped",
+                            module_path,
+                        )
                     if run_fn:
                         # Create a lightweight wrapper class
                         scanner_name = module_path.split(".")[-1]
