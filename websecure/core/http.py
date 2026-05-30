@@ -5,9 +5,7 @@ import random
 import contextvars
 import threading
 import socket
-import ssl
 from typing import Dict, Optional
-from urllib.parse import urlsplit, urlunsplit
 
 _logger = logging.getLogger(__name__)
 
@@ -343,14 +341,11 @@ def _smart_request(self, method, url, **kwargs):
 
     return resp  # safe fallback (loop should always return or raise above)
 
-import contextvars
 import json
-import random
 import subprocess as _subp
-import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence ,Dict
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse as _urlparse
 from websecure.core.utils import (
     allowed_http_methods,
@@ -1466,12 +1461,15 @@ class HttpClient:
 
 # Tekil istemci (singleton)
 _http_singleton: Optional[HttpClient] = None
+_http_singleton_lock = threading.Lock()
 
 
 def get_http(cfg: Optional[Mapping[str, Any]] = None) -> HttpClient:
     global _http_singleton
     if _http_singleton is None:
-        _http_singleton = HttpClient(cfg)
+        with _http_singleton_lock:
+            if _http_singleton is None:
+                _http_singleton = HttpClient(cfg)
     return _http_singleton
 
 
@@ -1687,7 +1685,6 @@ def instrument_requests_session(session: requests.Session, cfg: Mapping[str, Any
     include_query = bool(lg.get("include_query", True))
 
     orig = getattr(session, "request")
-    import time as _t
 
     def _emit(event: dict) -> None:
         logging.getLogger("websec.http").info(json.dumps(event, ensure_ascii=False))
@@ -1695,7 +1692,7 @@ def instrument_requests_session(session: requests.Session, cfg: Mapping[str, Any
     def wrapped(method, url, **kw):
         if not _should_sample(sample_rate):
             return orig(method, url, **kw)
-        start = _t.time()
+        start = time.time()
         rid = kw.pop("req_id", None) or uuid.uuid4().hex
         tr = kw.pop("trace_id", None) or get_trace_id()
         headers = dict(kw.get("headers") or {})
@@ -1717,7 +1714,7 @@ def instrument_requests_session(session: requests.Session, cfg: Mapping[str, Any
         _emit(ev)
 
         resp = orig(method, url, **kw)
-        dur = int(((_t.time() - start) * 1000))
+        dur = int(((time.time() - start) * 1000))
         ev2 = {
             "ts": _now_iso(),
             "event": "http.response",
@@ -1886,7 +1883,9 @@ def _request_via_curl(
             hdrs[k.strip()] = v.strip()
 
     fake = _FakeResponseForCurl(url, status_code, hdrs, body_txt.encode("utf-8", "ignore"), http_version, elapsed)
-    return fake
+    unified = UnifiedResponse(fake, driver="requests")
+    unified.http_version = fake.http_version  # _to_http_version_from_requests raw.version'u okur, fake'de yok
+    return unified
 
 def build_xff_variants(ip: str = "127.0.0.1") -> list[dict[str, str]]:
     return [
@@ -2019,8 +2018,9 @@ class AntiBlockingHTTP:
 
     def _adjust_on_response(self, status: int, headers: Dict[str, Any]) -> None:
         if status == 429:
-            if self.respect_retry_after and "retry-after" in {k.lower(): v for k,v in headers.items()}:
-                ra = headers.get("Retry-After")
+            lower_headers = {k.lower(): v for k, v in headers.items()}
+            if self.respect_retry_after and "retry-after" in lower_headers:
+                ra = lower_headers["retry-after"]
                 if isinstance(ra, str) and ra.isdigit():
                     self._penalty = max(self._penalty, float(int(ra)))
             else:
