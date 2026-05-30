@@ -9,14 +9,13 @@ import logging
 import threading
 import time
 import uuid
-import urllib.request
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
-from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urlsplit, urlunsplit
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
+from urllib.parse import urlencode, urlparse, parse_qsl, urlsplit, urlunsplit
 import requests as _req
 
 # ---------------------------------------------------------------------------
@@ -93,7 +92,6 @@ def _aes_gcm_decrypt(key: bytes, data: bytes) -> bytes:
 httpx = import_module('httpx') if find_spec('httpx') is not None else None
 
 def _replace_query_param(url, key, value):
-    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
     p = urlsplit(url)
     q = parse_qsl(p.query, keep_blank_values=True)
     rep = False; out = []
@@ -482,14 +480,14 @@ class OASTClient:
 
 def poll_events_sync(client: IOSATClient, tokens: Sequence[str], timeout: Optional[int] = None) -> List[Dict[str, Any]]:
     def _run():
-        import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         coro = client.poll_async(tokens)
-        if timeout: coro = asyncio.wait_for(coro, timeout)
+        if timeout is not None:
+            coro = asyncio.wait_for(coro, timeout)
         try:
             return loop.run_until_complete(coro)
-        except Exception as exc:
+        except Exception:
             return []
         finally:
             loop.close()
@@ -610,7 +608,6 @@ def _inject_query_param(url, k, v):
 # ============================================================================
 # PERSISTENT OAST POLLING THREAD
 # ============================================================================
-import threading as _threading
 
 class OASTPollerThread:
     """
@@ -621,10 +618,10 @@ class OASTPollerThread:
     def __init__(self, client, poll_interval: float = 5.0):
         self._client = client
         self._poll_interval = poll_interval
-        self._stop_event = _threading.Event()
-        self._thread: Optional[_threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
         self._token_map: Dict[str, dict] = {}  # token -> finding dict ref
-        self._lock = _threading.Lock()
+        self._lock = threading.Lock()
         self._callbacks_received: List[dict] = []
 
     def register_token(self, token: str, finding_ref: dict) -> None:
@@ -636,7 +633,7 @@ class OASTPollerThread:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = _threading.Thread(target=self._poll_loop, daemon=True, name="OASTPoller")
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="OASTPoller")
         self._thread.start()
         _logger.info("[OAST] Polling thread started")
 
@@ -776,9 +773,7 @@ def get_oast_poller() -> Optional[OASTPollerThread]:
 # ===========================================================================
 # ADIM 10 — OAST / Out-of-Band: Multi-Protocol Channels & Advanced Features
 # ===========================================================================
-import base64 as _b64
 import socket as _socket
-import struct as _struct
 
 
 # ---------------------------------------------------------------------------
@@ -1273,21 +1268,21 @@ class OASTDataExfiltrator:
 
     def encode(self, data: bytes) -> str:
         if self.encoding == "base32":
-            return _b64.b32encode(data).decode("ascii").lower().rstrip("=")
+            return base64.b32encode(data).decode("ascii").lower().rstrip("=")
         elif self.encoding == "hex":
             return data.hex()
         else:
-            return _b64.b64encode(data).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
+            return base64.b64encode(data).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
 
     def decode(self, encoded: str) -> bytes:
         if self.encoding == "base32":
             padded = encoded.upper() + "=" * (-len(encoded) % 8)
-            return _b64.b32decode(padded)
+            return base64.b32decode(padded)
         elif self.encoding == "hex":
             return bytes.fromhex(encoded)
         else:
             padded = encoded.replace("-", "+").replace("_", "/") + "==="
-            return _b64.b64decode(padded[:len(padded) - len(padded) % 4])
+            return base64.b64decode(padded[:len(padded) - len(padded) % 4])
 
     def build_dns_exfil_queries(self, data: bytes, token: str) -> List[str]:
         """
