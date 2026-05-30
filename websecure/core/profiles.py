@@ -25,12 +25,13 @@ Built-in Profiller:
 from __future__ import annotations
 
 import logging
+import os
 import statistics
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -884,13 +885,13 @@ class ProfileLoader:
             return None
 
     def _find_profile_files(self):
-        import os
         search_dirs: List[Path] = [
             Path(__file__).parent.parent / "config" / "profiles",
             Path.home() / ".websecure" / "profiles",
         ]
-        if os.environ.get("WEBSECURE_PROFILE_DIR"):
-            search_dirs.append(Path(os.environ["WEBSECURE_PROFILE_DIR"]))
+        env_dir = os.environ.get("WEBSECURE_PROFILE_DIR")
+        if env_dir:
+            search_dirs.append(Path(env_dir))
         for d in self._extra_dirs:
             search_dirs.append(Path(d))
 
@@ -1004,8 +1005,6 @@ class AdaptiveProfileEngine:
         session: Any = None,
     ) -> AdaptiveMetrics:
         """Hedefe probe istekleri atarak temel metrikleri olcer."""
-        import requests  # noqa: PLC0415
-
         timings:  List[float] = []
         errors:   int = 0
         blocks:   int = 0
@@ -1041,11 +1040,8 @@ class AdaptiveProfileEngine:
             p95_ms = 0.0
         else:
             avg_ms = statistics.mean(timings)
-            p95_ms = (
-                sorted(timings)[int(len(timings) * 0.95) - 1]
-                if len(timings) >= 2
-                else timings[-1]
-            )
+            sorted_t = sorted(timings)
+            p95_ms = sorted_t[min(int(len(sorted_t) * 0.95), len(sorted_t) - 1)]
 
         # WAF tespiti (basit: block rate yuksekse WAF var)
         waf_detected = block_rate > 0.3
@@ -1125,7 +1121,7 @@ class AdaptiveProfileEngine:
             return "stealth"
         if metrics.waf_detected:
             return "bug_bounty"
-        if metrics.avg_response_ms < 200 and not metrics.waf_detected:
+        if metrics.avg_response_ms < 200:
             return "aggressive"
         return "stealth"
 
