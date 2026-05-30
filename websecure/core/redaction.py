@@ -32,7 +32,17 @@ _JWT_RE    = re.compile(r"\beyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\.[a-zA-Z
 _BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9_\-\.]{20,}\b", re.I)
 _HEX_RE    = re.compile(r"\b[0-9a-fA-F]{32,}\b")
 _EMAIL_RE  = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
-_RE_COOKIE = re.compile(r"(?i)(?:^|;\s*)([A-Za-z0-9_\-]{1,64})=([^;]+)")
+# Group(1) captures the separator + name + "=" so the replacement preserves ";\s*name="
+_RE_COOKIE = re.compile(r"((?:^|;\s*)[A-Za-z0-9_\-]{1,64}=)[^;]+", re.IGNORECASE)
+
+# Pre-compiled per-key patterns to avoid recompiling on every _redact_str() call
+_KEY_RE_PAIRS = [
+    (
+        re.compile(fr'("{re.escape(k)}"\s*:\s*")([^"]+)"', re.IGNORECASE),
+        re.compile(fr'({re.escape(k)})=([^\s;&]+)', re.IGNORECASE),
+    )
+    for k in REDACT_KEYS
+]
 
 
 # ---------------------------------------------------------------------------
@@ -48,10 +58,10 @@ def _redact_str(s: str) -> str:
     t = _BEARER_RE.sub("Bearer " + _MASK, t)
     t = _HEX_RE.sub(_MASK, t)
     t = _EMAIL_RE.sub(_MASK, t)
-    t = _RE_COOKIE.sub(lambda m: f"{m.group(1)}={_MASK}", t)
-    for k in REDACT_KEYS:
-        t = re.sub(fr'("{k}"\s*:\s*")([^"]+)"', fr'\1{_MASK}"', t, flags=re.IGNORECASE)
-        t = re.sub(fr'({k})=([^\s;&]+)', fr'\1=' + _MASK, t, flags=re.IGNORECASE)
+    t = _RE_COOKIE.sub(lambda m: m.group(1) + _MASK, t)
+    for json_re, eq_re in _KEY_RE_PAIRS:
+        t = json_re.sub(fr'\1{_MASK}"', t)
+        t = eq_re.sub(fr'\1=' + _MASK, t)
     return t
 
 
@@ -92,6 +102,8 @@ class RedactFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple) and record.args:
             record.args = tuple(redact_sensitive(a) for a in record.args)
+        elif isinstance(record.args, dict) and record.args:
+            record.args = {k: redact_sensitive(v) for k, v in record.args.items()}
         if isinstance(record.msg, str):
             record.msg = _redact_str(record.msg)
         return True
