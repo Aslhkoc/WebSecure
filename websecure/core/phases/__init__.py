@@ -4195,8 +4195,9 @@ def run_discovery_extended(ctx) -> None:
         # [WS3] Enhanced Form Parsing (User Logic Integration)
         # Force a fetch of base URL to parse dynamic inputs/forms if not done
         try:
-             from websecure.core.form_parser import extract_all_forms
+             from websecure.core.form_parser import extract_all_inputs
              t_html = ""
+             t_cookie = ""
              # Try to get HTML from crawler results if available, else fetch
              if isinstance(res, dict) and res.get("html"):
                   t_html = res.get("html")
@@ -4205,24 +4206,29 @@ def run_discovery_extended(ctx) -> None:
                   try:
                        rr = ctx.session.get(url, timeout=10)
                        t_html = rr.text
+                       t_cookie = "; ".join(
+                           f"{c.name}={c.value}" for c in getattr(rr, "cookies", [])
+                       )
                   except Exception as exc:
                       import logging as _lg
                       _lg.getLogger(__name__).debug(f"[Phases] Form fetch failed for {url}: {exc!r}")
-             
+
              if t_html:
-                  new_forms = extract_all_forms(t_html, url)
-                  # Merge into results['forms_meta']
+                  all_inputs = extract_all_inputs(t_html, url, cookie_header=t_cookie)
+                  new_forms = all_inputs.get("forms", [])
                   existing_forms = current_res.get("forms_meta", [])
-                  # Convert to list if it's a dict (old format?) usually list of pages
-                  # We'll append a "virtual page" for these forms
                   if new_forms:
                         _logger.info(f"[FormParser] Extracted {len(new_forms)} forms (including dynamic script inputs).")
-                        # Add as a generic page entry
                         existing_forms.append({
                              "url": url,
                              "forms": new_forms
                         })
                         current_res["forms_meta"] = existing_forms
+                  # Store additional extracted input vectors for scanners
+                  for _key in ("url_params", "json_fields", "cookies", "headers"):
+                        _vals = all_inputs.get(_key, [])
+                        if _vals:
+                             current_res.setdefault(_key, []).extend(_vals)
         except ImportError:
              _logger.warning("Could not import form_parser.")
         except Exception as e:

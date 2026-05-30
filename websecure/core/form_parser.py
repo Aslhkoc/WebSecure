@@ -3,7 +3,7 @@ import json
 import re
 import urllib.parse
 from urllib.parse import urljoin
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 # [WS3] Integration of AdvancedFormFuzzer logic
 def extract_all_forms(html_content: str, base_url: str) -> List[Dict[str, Any]]:
@@ -48,11 +48,11 @@ def extract_all_forms(html_content: str, base_url: str) -> List[Dict[str, Any]]:
                 })
         
         # <textarea ...>
-        for tm in re.finditer(r"<textarea(.*?)name=[\"']([^\"']+)[\"']", inner_html, re.IGNORECASE):
+        for tm in re.finditer(r"<textarea(.*?)name=[\"']([^\"']+)[\"']", inner_html, re.IGNORECASE | re.DOTALL):
             inputs.append({"name": tm.group(2), "type": "textarea"})
-            
+
         # <select ...>
-        for sm in re.finditer(r"<select(.*?)name=[\"']([^\"']+)[\"']", inner_html, re.IGNORECASE):
+        for sm in re.finditer(r"<select(.*?)name=[\"']([^\"']+)[\"']", inner_html, re.IGNORECASE | re.DOTALL):
             inputs.append({"name": sm.group(2), "type": "select"})
 
         if inputs:
@@ -194,13 +194,15 @@ def extract_json_fields(
     except (json.JSONDecodeError, TypeError):
         return []
 
-    def _flatten(node: Any, prefix: str) -> List[Dict[str, Any]]:
+    def _flatten(node: Any, prefix: str, cur_depth: int) -> List[Dict[str, Any]]:
+        if cur_depth > max_depth:
+            return []
         results: List[Dict[str, Any]] = []
         if isinstance(node, dict):
             for k, v in node.items():
                 full_key = f"{prefix}.{k}" if prefix else k
                 if isinstance(v, (dict, list)):
-                    results.extend(_flatten(v, full_key))
+                    results.extend(_flatten(v, full_key, cur_depth + 1))
                 else:
                     inp = {
                         "name":   full_key,
@@ -212,10 +214,10 @@ def extract_json_fields(
                     results.append(_classify_input(inp))
         elif isinstance(node, list):
             for i, item in enumerate(node[:10]):  # cap to first 10 items
-                results.extend(_flatten(item, f"{prefix}[{i}]"))
+                results.extend(_flatten(item, f"{prefix}[{i}]", cur_depth + 1))
         return results
 
-    return _flatten(obj, parent_key)
+    return _flatten(obj, parent_key, depth)
 
 
 # ---------------------------------------------------------------------------
