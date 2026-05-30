@@ -25,7 +25,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class WafSignalDetector:
     """
 
     @staticmethod
-    def detect(status_code: int, body: str = "", headers: Dict[str, str] = None) -> Tuple[bool, str]:
+    def detect(status_code: int, body: str = "", headers: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
         if status_code in _BLOCK_CODES:
             return True, f"HTTP {status_code} block code"
 
@@ -259,7 +259,7 @@ class AdaptiveRateController:
         elapsed_s: float,
         status_code: int,
         body: str = "",
-        headers: Dict[str, str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Record a response sample and trigger adaptation if needed."""
         is_blocked, reason = self._waf_detector.detect(status_code, body, headers or {})
