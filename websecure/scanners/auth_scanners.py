@@ -5,15 +5,19 @@ Consolidated module for all authentication and authorization scanners.
 (Merged from auth.py + auth_matrix.py)
 """
 from __future__ import annotations
-import re
-import time
-import json
 import base64
 import logging
+import random
+import re
+import string
+import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple, List
-from urllib.parse import urljoin, urlparse
 from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional
+from urllib.parse import (
+    parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse,
+)
 
 import requests
 from websecure.core.http import hardened_session
@@ -370,8 +374,7 @@ class AuthMatrixScanner(BaseScanner):
         })
 
         for finding in escalations:
-            # BUG FIX: was calling add_result() AND self.add() — self.add() already
-            # calls add_result() internally, causing every finding to be stored twice.
+            # self.add() calls add_result() internally — don't call add_result() separately
             self.add("offensive", finding)
 
         for item in missing_auth:
@@ -484,32 +487,16 @@ def run(target: str, session=None, results=None, debug=False, **kwargs):
     """
     Top-level entry point: runs AuthMatrixScanner + full AuthAdim6 chain
     (OAuth2, SAML, 2FA bypass, password-reset poisoning, privilege escalation, BOLA/IDOR).
-    AuthAdim6Scanner is instantiated after its class definition (end of file) via
-    a deferred call so that forward references resolve correctly.
     """
     # Phase 1 — Auth matrix (role × endpoint coverage)
     AuthMatrixScanner(session=session, results=results, debug=debug).run(target, **kwargs)
-
-    # Phase 2 — Full auth attack chain (OAuth2 deep, SAML, 2FA, password-reset,
-    #            privilege escalation, BOLA/IDOR).  Class defined later in this
-    #            module; use importlib self-reference to avoid forward-ref issues.
-    import importlib as _il
-    _mod = _il.import_module(__name__)
-    _adim6_cls = getattr(_mod, "AuthAdim6Scanner", None)
-    if _adim6_cls is not None:
-        _adim6_cls(session=session, results=results, debug=debug).run(target, **kwargs)
+    # Phase 2 — Full auth attack chain. AuthAdim6Scanner is defined later in the
+    # same module; Python resolves function-body names at call time, so no forward-ref issue.
+    AuthAdim6Scanner(session=session, results=results, debug=debug).run(target, **kwargs)
 
 # ============================================================================
 # ADIM 6 — OAuth 2.0 / SAML / 2FA / Password Reset / PrivEsc / BOLA-IDOR
 # ============================================================================
-import random
-import string
-import time
-import uuid
-from urllib.parse import (
-    urlencode, urljoin, urlparse, urlunparse, parse_qs, parse_qsl
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -536,7 +523,6 @@ def _random_str(n: int = 8) -> str:
 
 
 def _response_similarity(r1, r2) -> float:
-    from difflib import SequenceMatcher
     t1 = (r1.text if hasattr(r1, "text") else "")[:2000]
     t2 = (r2.text if hasattr(r2, "text") else "")[:2000]
     return SequenceMatcher(None, t1, t2).ratio()
@@ -827,7 +813,6 @@ class OAuth2AttackSurface(BaseScanner):
     def _check_implicit_flow(self, endpoint: str) -> Optional[Dict]:
         """Test if the authorization endpoint accepts response_type=token (implicit flow)."""
         try:
-            test_url = endpoint
             parsed = urlparse(endpoint)
             qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
             qs["response_type"] = "token"
@@ -1763,7 +1748,7 @@ class BOLAIDORChain(BaseScanner):
         for fuzz_id in test_ids:
             if fuzz_id <= 0:
                 continue
-            fuzz_url = endpoint[:m.start(1)] + str(fuzz_id) + endpoint[m.end(1) - 1 if endpoint[m.end(1)-1:m.end(1)] in ('/', '?') else m.end(1):]
+            fuzz_url = endpoint[:m.start(1)] + str(fuzz_id) + endpoint[m.end(1):]
             try:
                 # With attacker token (different user)
                 if attacker_hdrs:
