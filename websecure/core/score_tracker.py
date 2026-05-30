@@ -20,26 +20,17 @@ SOLID
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
+import math
 import threading
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Severity -> CVSS ağırlığı
-# ---------------------------------------------------------------------------
-
-_CVSS_WEIGHTS: Dict[str, float] = {
-    "critical": 9.0,
-    "high":     7.0,
-    "medium":   5.0,
-    "low":      2.0,
-    "info":     0.0,
-}
 
 # Skor hesaplama sabitleri
 _BASE_SCORE = 100.0
@@ -221,12 +212,10 @@ class ScoreCalculator:
         )
         # Logaritmik baskılama — çok sayıda düşük bulguda aşırı düşüş önlenir
         if penalty > 0:
-            import math
             penalty = penalty * (1 - 0.3 * math.log10(1 + penalty / 10))
 
         score = max(0.0, _BASE_SCORE - min(penalty, _MAX_PENALTY))
 
-        import datetime as _dt
         return ScoreSnapshot(
             scan_id=scan_id,
             target=target,
@@ -346,7 +335,7 @@ class ScoreTracker:
         with self._lock:
             snaps = [s for s in self._history if s.target == target]
 
-        snaps = snaps[-limit:]
+        snaps = sorted(snaps, key=lambda s: s.recorded_at)[-limit:]
 
         if not snaps:
             return TrendResult(target=target, snapshots=[])
@@ -448,7 +437,9 @@ class ScoreTracker:
     def _save(self) -> None:
         try:
             self._json_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._json_path.with_suffix(".tmp")
+            tmp = self._json_path.with_name(
+                f"{self._json_path.stem}_{uuid.uuid4().hex[:8]}.tmp"
+            )
             with self._lock:
                 data = [s.to_dict() for s in self._history]
             tmp.write_text(
@@ -508,7 +499,7 @@ class ScoreTracker:
             )
             repo.record(rec)
         except Exception as exc:
-            logger.debug(f"[ScoreTracker] DB kayıt atlandı: {exc}")
+            logger.warning(f"[ScoreTracker] DB kayıt atlandı: {exc!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +507,7 @@ class ScoreTracker:
 # ---------------------------------------------------------------------------
 
 _tracker_instance: Optional[ScoreTracker] = None
+_singleton_lock = threading.Lock()
 
 
 def get_score_tracker(db=None) -> ScoreTracker:
@@ -524,18 +516,19 @@ def get_score_tracker(db=None) -> ScoreTracker:
     db parametresi verilirse ve singleton henüz DB'siz ise DB güncellenir.
     """
     global _tracker_instance
-    if _tracker_instance is None:
-        # DB verilmezse otomatik olarak get_db() dene
-        if db is None:
-            try:
-                from websecure.db import get_db
-                db = get_db()
-            except Exception as _fix_e:
-                logger.debug(f"[core.score_tracker] {type(_fix_e).__name__}: {_fix_e!r}")
-        _tracker_instance = ScoreTracker(db=db)
-    elif db is not None and _tracker_instance._db is None:
-        # Mevcut singleton'a DB bağla
-        _tracker_instance._db = db
+    with _singleton_lock:
+        if _tracker_instance is None:
+            # DB verilmezse otomatik olarak get_db() dene
+            if db is None:
+                try:
+                    from websecure.db import get_db
+                    db = get_db()
+                except Exception as _fix_e:
+                    logger.debug(f"[core.score_tracker] {type(_fix_e).__name__}: {_fix_e!r}")
+            _tracker_instance = ScoreTracker(db=db)
+        elif db is not None and _tracker_instance._db is None:
+            # Mevcut singleton'a DB bağla
+            _tracker_instance._db = db
     return _tracker_instance
 
 
