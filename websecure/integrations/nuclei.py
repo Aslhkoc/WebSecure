@@ -16,9 +16,11 @@ Nuclei vulnerability scanner — full integration.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -437,28 +439,31 @@ class NucleiWrapper(ToolIntegration):
             )
 
             # Child process kaydı (faz yönetici sinyal gönderirse temizlenir)
+            _unreg = None
             try:
-                from websecure.core.phases import register_child_proc
+                from websecure.core.phases import register_child_proc, unregister_child_proc
                 register_child_proc(proc)
+                _unreg = unregister_child_proc
             except Exception as _fix_e:
                 logger.debug(f"[integrations.nuclei] {type(_fix_e).__name__}: {_fix_e!r}")
 
+            timed_out = False
+            stderr_b = b""
             try:
                 _, stderr_b = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
+                timed_out = True
                 proc.kill()
                 proc.communicate()
-                logger.warning(f"[Nuclei] Tarama {timeout}s içinde bitmedi — durduruldu")
-                return []
+                logger.warning(
+                    f"[Nuclei] Tarama {timeout}s içinde bitmedi — kısmi sonuçlar kullanılıyor"
+                )
             finally:
-                try:
-                    from websecure.core.phases import unregister_child_proc
-                    unregister_child_proc(proc)
-                except Exception as _fix_e:
-                    logger.debug(f"[integrations.nuclei] {type(_fix_e).__name__}: {_fix_e!r}")
+                if _unreg:
+                    _unreg(proc)
 
-            # rc=0 → bulgu yok, rc=1 → bulgu var; diğerleri hata
-            if proc.returncode not in (0, 1):
+            # rc=0 → bulgu yok, rc=1 → bulgu var; diğerleri hata (timeout'ta atla)
+            if not timed_out and proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:500]
                 logger.warning(
                     f"[Nuclei] Hatalı çıkış kodu {proc.returncode} — "
@@ -526,6 +531,9 @@ class NucleiWrapper(ToolIntegration):
         else:
             output_flags = ["-jle", output_file]
 
+        # Stealth'te istek başına daha uzun timeout — tek sefer ayarla
+        _req_timeout = "15" if profile == "stealth" else "10"
+
         cmd: List[str] = [
             self.binary,
             "-u", target,
@@ -535,14 +543,10 @@ class NucleiWrapper(ToolIntegration):
             "-rate-limit", str(rate_limit),
             "-c", str(concurrency),                 # template concurrency
             "-severity", severity,
-            "-timeout", "10",                       # istek başına timeout (saniye)
+            "-timeout", _req_timeout,               # istek başına timeout (saniye)
             "-retries", "1",
             "-mhe", "50",                           # max host errors
         ]
-
-        # Stealth'te ekstra gizlilik
-        if profile == "stealth":
-            cmd += ["-timeout", "15"]
 
         # Şablon seçimi: custom dizin veya tag bazlı
         if templates and Path(templates).exists():
@@ -572,10 +576,6 @@ class NucleiWrapper(ToolIntegration):
         if proxy:
             _proxy = proxy.replace("socks5h://", "socks5://")
             cmd.extend(["-proxy", _proxy])
-
-        # Agresif modda: headless browser şablonları (v3)
-        if profile == "aggressive" and v3:
-            pass  # -headless ayrı Chromium gerektirir, varsayılan kapalı
 
         if extra_args:
             cmd.extend(extra_args)
@@ -716,7 +716,6 @@ class NucleiWrapper(ToolIntegration):
 
 def _strip_ansi(text: str) -> str:
     """ANSI renk/biçim kaçış kodlarını ve nuclei log prefix'lerini temizler."""
-    import re
     # ANSI escape: \x1b[...m
     text = re.sub(r"\x1b\[[0-9;]*[mGKHFABCDEJ]", "", text)
     # nuclei v3 log prefix: [INF] [WRN] [ERR] [DBG]
@@ -732,7 +731,6 @@ def _strip_ansi(text: str) -> str:
 
 def _finding_fingerprint(finding: Dict[str, Any]) -> str:
     """Bulgu için benzersiz string anahtarı (dedup için)."""
-    import hashlib
     key = f"{finding.get('template_id','')}{finding.get('url','')}{finding.get('severity','')}"
     return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
 
@@ -851,7 +849,7 @@ def run_nuclei_with_correlation(
                     tags=ev.get("tags", []) if isinstance(ev, dict) else [],
                     raw=f,
                 )
-                norm._report.add_findings([tf])
+                norm.ingest_findings([tf])
             norm.save(sarif_output)
         except Exception as exc:
             logger.debug(f"[Nuclei] SARIF yazma hatası: {exc!r}")

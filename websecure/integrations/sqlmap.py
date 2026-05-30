@@ -1,13 +1,20 @@
 import csv
-import re
-import requests
-import time
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
-from typing import Dict, Any, Optional, List
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None  # type: ignore[assignment]
 
 from websecure.integrations.base import (
     ToolFinding,
@@ -30,9 +37,11 @@ class SQLMapClient:
 
     def _req(self, method: str, path: str, json_data: Dict = None) -> Dict:
         """Internal helper for Making API requests."""
+        if _requests is None:
+            return {}
         url = f"{self.api_url}{path}"
         try:
-            resp = requests.request(method, url, json=json_data, timeout=5)
+            resp = _requests.request(method, url, json=json_data, timeout=5)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -91,10 +100,12 @@ class SQLMapClient:
     @staticmethod
     def is_alive(api_url="http://127.0.0.1:8775") -> bool:
         """Fast check if API server is up."""
+        if _requests is None:
+            return False
         try:
-            requests.get(f"{api_url}/admin/list", timeout=3)
+            _requests.get(f"{api_url}/admin/list", timeout=3)
             return True
-        except Exception as exc:
+        except Exception:
             return False
 
 class SQLMapWrapper(ToolIntegration):
@@ -107,14 +118,12 @@ class SQLMapWrapper(ToolIntegration):
         return "sqlmap"
 
     def __init__(self, binary_path: str = "sqlmap"):
-        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
-        self._binary_name = binary_path
+        super().__init__(binary_path)
 
     def is_available(self) -> bool:
         if shutil.which(self.binary) is not None:
             return True
         # SQLMap is often a Python script in the tools/ directory — check there too
-        from pathlib import Path
         from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
         _script_candidates = [
@@ -174,26 +183,8 @@ class SQLMapWrapper(ToolIntegration):
         Parsing results from stdout/csv is implemented basically.
         """
         if not self.is_available():
-            # Try to find if not in path
-            from pathlib import Path
-            from websecure.core.platform_compat import binary_candidates as _bc
-            root = Path(__file__).resolve().parent.parent.parent
-            _scan_candidates = [
-                root / "tools" / "sqlmap" / "sqlmap.py",
-                root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py",
-            ] + list(_bc(root, "sqlmap"))
-            found = False
-            for _cand in _scan_candidates:
-                if _cand.exists():
-                    self._binary_path = str(_cand)
-                    found = True
-                    break
-
-            if not found:
-                logger.warning("SQLMap binary not found.")
-                return []
-
-        import tempfile
+            logger.warning("SQLMap binary not found.")
+            return []
 
         out_dir = tempfile.mkdtemp()
         fd, csv_path = tempfile.mkstemp(suffix=".csv")
@@ -210,7 +201,6 @@ class SQLMapWrapper(ToolIntegration):
                 logger.warning("[SQLMap] Binary path boş — atlanıyor")
                 return []
             if self.binary.endswith(".py"):
-                import sys
                 cmd = [sys.executable, self.binary]
             else:
                 cmd = [self.binary]
@@ -244,6 +234,13 @@ class SQLMapWrapper(ToolIntegration):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            _unreg = None
+            try:
+                from websecure.core.phases import register_child_proc, unregister_child_proc
+                register_child_proc(proc)
+                _unreg = unregister_child_proc
+            except Exception:
+                pass
             try:
                 stdout_b, stderr_b = proc.communicate(timeout=_run_timeout)
             except subprocess.TimeoutExpired:
@@ -253,6 +250,9 @@ class SQLMapWrapper(ToolIntegration):
                     "[SQLMap] Zaman aşımı (%ds) — kısmi sonuçlar ayrıştırılıyor", _run_timeout
                 )
                 stdout_b, stderr_b = b"", b""
+            finally:
+                if _unreg:
+                    _unreg(proc)
             stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
             stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
 

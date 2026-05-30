@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from websecure.integrations.base import (
-    FindingCorrelator,
     ToolFinding,
     ToolResult,
     ToolSeverity,
@@ -344,6 +343,10 @@ class SARIFNormalizer:
         self._tool_counts[result.tool] = added
         return added
 
+    def ingest_findings(self, findings: List[ToolFinding]) -> int:
+        """ToolFinding listesini doğrudan SARIF raporuna ekle."""
+        return self._report.add_findings(findings)
+
     def ingest_native(
         self,
         findings: List[Dict[str, Any]],
@@ -371,7 +374,7 @@ class SARIFNormalizer:
 def _make_rule_id(tool: str, title: str) -> str:
     """Araç ve başlıktan deterministik kural ID'si üret."""
     key = f"{tool}:{title}".lower()
-    short = hashlib.md5(key.encode()).hexdigest()[:8]  # noqa: S324
+    short = hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()[:8]
     # Normalize title to lowercase before building safe_title so the rule ID
     # is consistent regardless of the original casing (e.g. "XSS" vs "xss").
     safe_title = "".join(c if c.isalnum() else "_" for c in title.lower()[:30])
@@ -383,6 +386,9 @@ def _native_to_tool_finding(data: Dict[str, Any], tool: str) -> ToolFinding:
     ev = data.get("evidence") or {}
     if isinstance(ev, str):
         ev_text = ev
+        ev = {}
+    elif not isinstance(ev, dict):
+        ev_text = str(ev)
         ev = {}
     else:
         ev_text = ev.get("text", "")
