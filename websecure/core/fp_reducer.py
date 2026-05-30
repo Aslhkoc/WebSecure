@@ -188,7 +188,7 @@ class ReproducibilityVerifier:
             except Exception as exc:
                 evidence_chain.append(f"trial_{i+1}: error ({exc!r})")
 
-        hit_rate = successes / total
+        hit_rate = successes / total if total > 0 else 0.0
         # Stability penalty: if intermittent (some hit, some miss), reduce confidence
         stability = 1.0 if (successes == total or successes == 0) else max(0.70, hit_rate)
         confidence = round(hit_rate * stability, 3)
@@ -269,13 +269,9 @@ class FalsePositiveReducer:
         )
 
         if verification.is_confirmed:
-            self._registry.register(key)
+            self._registry.register(verification.finding_key)
 
         return verification
-
-    def is_globally_seen(self, vuln_type: str, url: str, param: str, payload: str) -> bool:
-        key = ReproducibilityVerifier._make_key(vuln_type, url, param, payload)
-        return self._registry.is_seen(key)
 
     def stats(self) -> Dict[str, Any]:
         return {
