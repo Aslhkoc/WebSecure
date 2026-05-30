@@ -213,14 +213,19 @@ class TimingAnalyzer:
 
         injected_url = inject_fn(url, param, payload)
         threshold = max(baseline.dynamic_threshold, expected_delay)
+        # Gerçek istek timeout'u. Bir Timeout oluştuğunda sunucu en az bu kadar
+        # beklemiştir; sentinel olarak bu değer kullanılır (timeout param'ı değil),
+        # aksi halde threshold > timeout olan yavaş sunucularda gerçek timing
+        # sinyali eşiğin altında görünüp atlanır.
+        probe_timeout = threshold + expected_delay + 5
 
         # Phase 2: first-pass
         t0 = time.time()
         try:
-            self.session.get(injected_url, timeout=threshold + expected_delay + 5)
+            self.session.get(injected_url, timeout=probe_timeout)
             elapsed = time.time() - t0
         except _requests.exceptions.Timeout:
-            elapsed = float(timeout)
+            elapsed = probe_timeout
         except Exception as exc:
             _logger.debug(f"[TA] First-pass probe error {injected_url}: {exc!r}")
             return None
@@ -229,9 +234,10 @@ class TimingAnalyzer:
             return None  # fast return — no timing signal at all
 
         # Phase 3: cross-validation
+        # Buraya geldiysek elapsed >= threshold garanti, yani ilk deneme bir hit'tir.
         probe_times: List[float] = [elapsed]
         benign_times: List[float] = []
-        hits = 1 if elapsed >= threshold else 0
+        hits = 1
 
         for trial in range(self._CV_TRIALS - 1):
             # Interleave: benign request before each trial
@@ -250,10 +256,10 @@ class TimingAnalyzer:
             # Timed trial
             t0 = time.time()
             try:
-                self.session.get(injected_url, timeout=threshold + expected_delay + 5)
+                self.session.get(injected_url, timeout=probe_timeout)
                 t_elapsed = time.time() - t0
             except _requests.exceptions.Timeout:
-                t_elapsed = float(timeout)
+                t_elapsed = probe_timeout
             except Exception:
                 continue
 
@@ -305,16 +311,18 @@ class TimingAnalyzer:
             return None
 
         threshold = max(baseline.dynamic_threshold, expected_delay)
+        # Bkz. probe(): Timeout sentinel'i gerçek istek timeout'u olmalı.
+        probe_timeout = threshold + expected_delay + 5
 
         def _post_probe() -> float:
             t0 = time.time()
             try:
                 data = dict(form_data)
                 data[param] = payload
-                self.session.post(url, data=data, timeout=threshold + expected_delay + 5)
+                self.session.post(url, data=data, timeout=probe_timeout)
                 return time.time() - t0
             except _requests.exceptions.Timeout:
-                return float(timeout)
+                return probe_timeout
             except Exception:
                 return 0.0
 
@@ -405,7 +413,7 @@ class TimingAnalyzer:
 
         # Gap between probe mean and benign mean relative to threshold
         gap = (mean_probe - mean_benign) / max(threshold, 1.0)
-        gap_score = min(gap, 1.0)
+        gap_score = max(0.0, min(gap, 1.0))
 
         # Consistency bonus: if all probes are consistently above threshold
         consistency = 1.0 if hits == trials else hit_ratio
