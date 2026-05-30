@@ -20,14 +20,16 @@ SOLID
 """
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 import logging
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse as _urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -201,17 +203,16 @@ class FPLearner:
         # Title'ı esnek eşleştirme için normalize et
         title_pattern = re.escape(title[:80]) if title else ""
 
-        import datetime as _dt
         rule = FPRule(
             id=hashlib.sha256(
-                f"{title_pattern}{url_pattern}{sev}{tool}".encode()
+                f"{title_pattern}|{url_pattern}|{sev}|{tool}".encode()
             ).hexdigest()[:16],
             title_pattern=title_pattern,
             url_pattern=url_pattern,
             severity=sev,
             tool=tool,
             tenant_id=tenant_id,
-            created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            created_at=_dt.datetime.now(_dt.timezone.utc).isoformat() + "Z",
         )
 
         with self._lock:
@@ -293,12 +294,13 @@ class FPLearner:
                 and (tenant_id is None or r.tenant_id is None or r.tenant_id == tenant_id)
             ]
 
+        hit_rules: List[FPRule] = []
         for finding in findings:
             is_fp = False
             for rule in active_rules:
                 if rule.matches(finding):
                     is_fp = True
-                    rule.hit_count += 1
+                    hit_rules.append(rule)
                     logger.debug(
                         f"[FPLearner] FP atlandı: '{finding.get('title', '?')}'  "
                         f"kural={rule.id}"
@@ -308,6 +310,11 @@ class FPLearner:
                 fp_count += 1
             else:
                 clean.append(finding)
+
+        if hit_rules:
+            with self._lock:
+                for rule in hit_rules:
+                    rule.hit_count += 1
 
         if fp_count:
             logger.info(f"[FPLearner] {fp_count}/{len(findings)} bulgu FP olarak filtrelendi.")
@@ -392,8 +399,7 @@ class FPLearner:
         if not url:
             return ""
         try:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
+            parsed = _urlparse(url)
             domain = re.escape(parsed.netloc)
             path = re.escape(parsed.path.rstrip("/"))
             return f"{domain}{path}" if domain else path
@@ -467,13 +473,16 @@ class FPLearner:
 # ---------------------------------------------------------------------------
 
 _learner_instance: Optional[FPLearner] = None
+_learner_singleton_lock = threading.Lock()
 
 
 def get_fp_learner() -> FPLearner:
-    """Global FPLearner singleton'ını döndür."""
+    """Global FPLearner singleton'ını döndür (thread-safe double-checked locking)."""
     global _learner_instance
     if _learner_instance is None:
-        _learner_instance = FPLearner()
+        with _learner_singleton_lock:
+            if _learner_instance is None:
+                _learner_instance = FPLearner()
     return _learner_instance
 
 
