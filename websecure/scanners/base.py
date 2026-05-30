@@ -13,22 +13,22 @@ import requests as _requests
 from ..core.http import hardened_session
 from ..core.reporting import add_result, redact_sensitive
 from ..core.payloads import get_payloads
-from ..core.analysis import InputContext
 
 # Turkish → English severity normalization (lowercase keys for case-insensitive lookup)
+# Canonical values MUST match what the DB layer and reporting use: "Info" not "Informational"
 _SEVERITY_NORMALIZE_MAP: Dict[str, str] = {
     "critical": "Critical",
     "high": "High",
     "medium": "Medium",
     "low": "Low",
-    "informational": "Informational",
-    "info": "Informational",
+    "informational": "Info",
+    "info": "Info",
     # Turkish variants
     "kritik": "Critical",
     "yüksek": "High",
     "orta": "Medium",
     "düşük": "Low",
-    "bilgi": "Informational",
+    "bilgi": "Info",
 }
 
 
@@ -70,7 +70,7 @@ class BaseScanner:
         if debug:
             self.logger.setLevel(logging.DEBUG)
 
-        # Fix 1: FalsePositiveReducer — lazy-loaded per scanner instance
+        # FalsePositiveReducer — lazy-loaded per scanner instance to avoid circular import
         try:
             from ..core.fp_reducer import FalsePositiveReducer as _FPR
             self._fpr = _FPR(self.session)
@@ -143,7 +143,7 @@ class BaseScanner:
     @staticmethod
     def _normalize_severity(sev: str) -> str:
         """Normalize severity string, including Turkish variants."""
-        return _SEVERITY_NORMALIZE_MAP.get((sev or "").lower().strip(), sev or "Informational")
+        return _SEVERITY_NORMALIZE_MAP.get((sev or "").lower().strip(), sev or "Info")
 
     def _apply_cvss_severity(self, entry: Dict, hint_severity: str = "") -> Dict:
         """
@@ -177,7 +177,7 @@ class BaseScanner:
                 cvss_severity = _levels[min(idx + 1, len(_levels) - 1)]
 
             entry["severity"] = cvss_severity
-            entry["cvss_score"] = scored.get("cvss_score", cvss_score)
+            entry["cvss_score"] = cvss_score
             entry["cvss_vector"] = scored.get("cvss_vector", "")
             entry["hint_severity"] = self._normalize_severity(hint_severity)
             entry.setdefault("remediation", scored.get("remediation", ""))
@@ -257,7 +257,7 @@ class BaseScanner:
         detection_method: str = "error_based",
     ) -> bool:
         """
-        Fix 1: FP-reduction pipeline gate.
+        FP-reduction pipeline gate.
         Re-runs probe_fn N times per detection_method threshold.
         Returns True if confirmed (safe to report), False if suppressed.
         Falls back to True when FPR is unavailable so scanners never silently drop findings.
@@ -281,7 +281,7 @@ class BaseScanner:
 
     def _should_skip_param(self, param_name: str, attack_category: str, value: str = "") -> bool:
         """
-        Fix 2+3: Context-aware param filter.
+        Context-aware param filter.
         Returns True when this param is irrelevant for the given attack category
         (e.g. a CSRF token for SQLi, or a redirect param for NoSQLi).
         Applies tech-stack filtering: if MongoDB detected, SQLi is skipped.
@@ -305,7 +305,7 @@ class BaseScanner:
         current_body: str,
     ) -> float:
         """
-        Fix 4: Anomaly scoring for blind injection detection.
+        Anomaly scoring for blind injection detection.
         Compares response length, timing, and body similarity against baseline.
         Returns score 0.0–1.0; >0.5 = likely significant response change.
         """
@@ -494,15 +494,12 @@ class BaseScanner:
         if method == "GET" or (param in dict(parse_qsl(urlparse(url).query))):
             parsed = urlparse(url)
             curr_params = dict(parse_qsl(parsed.query))
-            if param in curr_params:
-                curr_params[param] = payload
-                new_query = urlencode(curr_params)
-                req_kwargs["url"] = urlunparse((
-                    parsed.scheme, parsed.netloc, parsed.path,
-                    parsed.params, new_query, parsed.fragment,
-                ))
-            else:
-                req_kwargs["url"] = url
+            curr_params[param] = payload          # add or replace — always inject
+            new_query = urlencode(curr_params)
+            req_kwargs["url"] = urlunparse((
+                parsed.scheme, parsed.netloc, parsed.path,
+                parsed.params, new_query, parsed.fragment,
+            ))
         else:
             req_kwargs["url"] = url
 
