@@ -28,6 +28,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from urllib.parse import urlencode, parse_qs, urlparse, urlunparse
 
 import requests as _requests
 
@@ -121,6 +122,7 @@ class SQLErrorDetector:
 
     # Each entry: db_label -> list of compiled patterns
     _PATTERNS: Dict[str, List[re.Pattern]] = {}
+    _compile_lock: threading.Lock = threading.Lock()
 
     _RAW: Dict[str, List[str]] = {
         "MySQL": [
@@ -240,8 +242,11 @@ class SQLErrorDetector:
     def _ensure_compiled(cls) -> None:
         if cls._PATTERNS:
             return
-        for db, raws in cls._RAW.items():
-            cls._PATTERNS[db] = [re.compile(r, re.I) for r in raws]
+        with cls._compile_lock:
+            if cls._PATTERNS:  # double-check under lock
+                return
+            for db, raws in cls._RAW.items():
+                cls._PATTERNS[db] = [re.compile(r, re.I) for r in raws]
 
     # SQL/DB error patterns only appear near the start of responses; cap to avoid ReDoS
     _MAX_BODY_SCAN = 65_536  # 64 KB
@@ -351,14 +356,18 @@ class FrameworkErrorDetector:
     }
 
     _PATTERNS: Dict[str, List[re.Pattern]] = {}
+    _compile_lock: threading.Lock = threading.Lock()
     _MAX_BODY_SCAN = 65_536  # 64 KB — bound regex engine input to prevent ReDoS
 
     @classmethod
     def _ensure_compiled(cls) -> None:
         if cls._PATTERNS:
             return
-        for fw, raws in cls._RAW.items():
-            cls._PATTERNS[fw] = [re.compile(r, re.I | re.S) for r in raws]
+        with cls._compile_lock:
+            if cls._PATTERNS:  # double-check under lock
+                return
+            for fw, raws in cls._RAW.items():
+                cls._PATTERNS[fw] = [re.compile(r, re.I | re.S) for r in raws]
 
     @classmethod
     def extract_fingerprints(cls, body: str) -> Set[str]:
@@ -596,7 +605,6 @@ class ResponseBehaviorAnalyzer:
         Quick error reflection check: inject payload, return (found, matches).
         Does NOT compare to baseline — for fast pre-screening.
         """
-        from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
         parsed = urlparse(url)
         params = parse_qs(parsed.query, keep_blank_values=True)
         params[param] = [payload]
@@ -604,7 +612,8 @@ class ResponseBehaviorAnalyzer:
         try:
             resp = self.session.get(injected_url, timeout=timeout)
             body = resp.text or ""
-        except Exception:
+        except Exception as exc:
+            _logger.debug("[RBA] is_error_reflected request failed for %s: %r", url, exc)
             return False, []
 
         db_hits = SQLErrorDetector.detect(body)
