@@ -21,9 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import requests as _requests
+from typing import Any, Dict, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -32,10 +30,9 @@ _logger = logging.getLogger(__name__)
 # Signature definitions
 # ---------------------------------------------------------------------------
 
-# Format: (tech_label, confidence_increment, match_region)
-# match_region: "headers" | "body" | "cookies" | "url"
-_HEADER_SIGS: List[Tuple[str, float, str, str]] = [
-    # (header_name_lower, pattern, tech_label, confidence)
+# Format: (header_name_lower, pattern, tech_label, confidence)
+# pattern == "" ise sadece header'ın varlığı yeterli sayılır.
+_HEADER_SIGS: List[Tuple[str, str, str, float]] = [
     ("server",           r"Apache",              "Apache",      0.80),
     ("server",           r"nginx",               "Nginx",       0.80),
     ("server",           r"Microsoft-IIS",       "IIS",         0.90),
@@ -333,8 +330,6 @@ class TechFingerprinter:
     def _detect_waf(self, profile: TechProfile, hdrs: Dict[str, str]) -> None:
         for hdr_name, pattern, waf in self._WAF_SIGS:
             val = hdrs.get(hdr_name, "")
-            if not val and hdr_name in hdrs:
-                val = hdrs[hdr_name]
             if pattern == "" and hdr_name in hdrs:
                 profile.waf = waf
                 self._add_tech(profile, f"WAF:{waf}", 0.90)
