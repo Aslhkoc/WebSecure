@@ -4,11 +4,11 @@ import os
 import pathlib
 import re
 import json
-import html
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Iterable, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlsplit, urlunsplit
 from pathlib import Path
 from collections import defaultdict
@@ -1155,7 +1155,7 @@ def _render_markdown_report_inline(results: Dict) -> str:
 
     # WS3 Egress Karnesi
     egress = (meta.get('egress') or {}) if isinstance(meta, dict) else {}
-    lines: list[str] = []
+    lines: List[str] = []
     if egress:
         lines.append('## Egress Karnesi')
         lines.append('')
@@ -1171,7 +1171,6 @@ def _render_markdown_report_inline(results: Dict) -> str:
         counts[_norm_sev_tr(i.get("severity"))] = counts.get(_norm_sev_tr(i.get("severity")), 0) + 1
 
     # Start
-    lines: List[str] = []
     lines.append(render_auth_coverage_md())
     lines.append("# WebSec Report")
     lines.append("")
@@ -1366,9 +1365,6 @@ def _json_dump(path: str, obj: Any) -> str:
 
 
 # -------------------- Üst seviye API --------------------
-
-
-import hashlib
 
 
 def _finding_id(it: Dict[str, Any]) -> str:
@@ -1938,15 +1934,6 @@ def _try_load_config() -> Dict:
     # Öncelik: core.utils.load_config (varsa)
     from importlib.util import find_spec as _ilu_find_spec
     from importlib import import_module as _ilu_import_module
-    from importlib.machinery import ModuleSpec as _ilu_ModuleSpec
-    from pathlib import Path
-    import json as _json
-
-    def _spec_origin(spec: _ilu_ModuleSpec) -> Optional[str]:
-        return spec.origin
-
-    def _is_local_path(path: str) -> bool:
-        return Path(path).is_absolute() and Path(path).exists()
 
     if _ilu_find_spec("websecure.core.utils") is not None:
         mod = _ilu_import_module("websecure.core.utils")
@@ -1961,7 +1948,7 @@ def _try_load_config() -> Dict:
     if p.exists() and p.is_file():
         txt = p.read_text(encoding="utf-8", errors="ignore").strip()
         if txt.startswith("{") or txt.startswith("["):
-            return _json.loads(txt)
+            return json.loads(txt)
 
     # Son çare: minimal varsayılan
     return {"reporting": {"formats": ["md"], "output_dir": "output"}}
@@ -2026,14 +2013,11 @@ def _severity_rank(s: str) -> int:
         "medium": 2,
         "high": 3,
         "critical": 4,
-        # backward compat Turkish
-        "Informational": 0, "Low": 1, "Medium": 2, "High": 3, "Critical": 4,
     }
     return order.get(s, 0)
 
 
 def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
-    import os, json
 
     ci = (cfg.get("ci") or {})
     fail_on = (ci.get("fail_on") or {})
@@ -2045,7 +2029,8 @@ def _apply_ci_gates(cfg: Dict, results: Dict, out_dir: str) -> None:
     if new_only:
         delta_path = os.path.join(out_dir, "delta.json")
         if os.path.exists(delta_path) and os.path.isfile(delta_path):
-            txt = open(delta_path, "r", encoding="utf-8").read().strip()
+            with open(delta_path, "r", encoding="utf-8") as _f:
+                txt = _f.read().strip()
             # Basit doğrulama: JSON gibi görünmüyorsa filtre uygulama
             if txt.startswith("{") or txt.startswith("["):
                 d = json.loads(txt)
@@ -2312,8 +2297,8 @@ def to_junit(results: Dict, suite_name: str = "websec") -> str:
     import xml.sax.saxutils as sx
     items = _iter_findings(results)
     total = len(items)
-    errors = sum(1 for i in items if str(i.get("severity", "")).lower() in ("Critical", "High", "critical", "high"))
-    failures = sum(1 for i in items if str(i.get("severity", "")).lower() in ("Medium", "medium"))
+    errors = sum(1 for i in items if str(i.get("severity", "")).lower() in ("critical", "high"))
+    failures = sum(1 for i in items if str(i.get("severity", "")).lower() == "medium")
     skipped = 0
     parts = []
     parts.append(
@@ -2324,9 +2309,9 @@ def to_junit(results: Dict, suite_name: str = "websec") -> str:
         msg = sx.escape(str(i.get("description") or i.get("title") or ""))
         sev = str(i.get("severity", "")).lower()
         parts.append(f"  <testcase classname='{classname}' name='{name}'>")
-        if sev in ("Critical", "High", "critical", "high"):
+        if sev in ("critical", "high"):
             parts.append(f"    <error message='{name}'><![CDATA[{msg}]]></error>")
-        elif sev in ("Medium", "medium"):
+        elif sev == "medium":
             parts.append(f"    <failure message='{name}'><![CDATA[{msg}]]></failure>")
         parts.append("  </testcase>")
     parts.append("</testsuite>")
@@ -2578,7 +2563,6 @@ def _render_exploit_playbook(items: List[Dict]) -> str:
     krit = sorted(krit, key=lambda x: (-_sev_rank(x.get('severity')), -float(x.get('score') or 0)))
     lines = []
     lines.append("## Exploit Playbook (PoC ve Adımlar)")
-    import json as _json  # safe use
     for idx, it in enumerate(krit, 1):
         t = str(it.get('type') or 'GEN').upper()
         sev = _norm_sev_en(it.get('severity'))
@@ -3323,7 +3307,7 @@ def _pull_metrics(ctx) -> dict:
 
 # ===========================================================================
 # CVSS scoring -> websecure/core/cvss.py'e taşındı
-from websecure.core.cvss import CVSSScorer, score_findings, _severity_label
+from websecure.core.cvss import score_findings
 
 # ===========================================================================
 # HTML Dashboard -> websecure/reporters/html_dashboard.py'e taşındı
