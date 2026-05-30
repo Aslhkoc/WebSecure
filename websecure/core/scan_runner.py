@@ -657,8 +657,8 @@ def post_scan_persist(
             }
             logger.info(
                 f"[scan_runner] Exploitation: "
-                f"{exploitation_results['summary']['successful']}/"
-                f"{exploitation_results['summary']['total']} başarılı"
+                f"{exploitation_results['exploit_summary']['successful']}/"
+                f"{exploitation_results['exploit_summary']['total_exploited']} başarılı"
             )
     except Exception as exc:
         logger.debug(f"[scan_runner] Exploitation pipeline atlandı: {exc}")

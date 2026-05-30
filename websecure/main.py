@@ -2290,8 +2290,9 @@ def _run_scan_phases(
                     )
                     mark("exploit_orchestrator", t_ex)
                     if _exp_res and callable(globals().get("add_result")):
-                        add_result("exploitation", {"results": _exp_res, "total": len(_exp_res) if isinstance(_exp_res, list) else 1})
-                    _n_ex = len(_exp_res) if isinstance(_exp_res, list) else 0
+                        _exp_summary = _exp_res.get("exploit_summary", {})
+                        add_result("exploitation", {"results": _exp_res, "total": _exp_summary.get("total_exploited", 0)})
+                    _n_ex = _exp_res.get("exploit_summary", {}).get("total_exploited", 0) if isinstance(_exp_res, dict) else 0
                     print(f"[+] Exploit Orchestrator tamamlandı: {_n_ex} senaryo")
             except ImportError:
                 _logger.debug("[ExploitOrchestrator] Modül bulunamadı, atlandı.")
