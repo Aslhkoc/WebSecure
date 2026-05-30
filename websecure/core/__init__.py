@@ -11,6 +11,24 @@ import logging as _logging
 _logger = _logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Exception hiyerarşisi — tüm core ve scanner modülleri buradan import eder
+# ---------------------------------------------------------------------------
+from websecure.core.exceptions import (  # noqa: E402
+    WebSecureError,
+    ScanError,
+    ProbeError,
+    BaselineError,
+    PayloadError,
+    NetworkError,
+    ConnectionRefusedError,
+    RequestTimeoutError,
+    SSLHandshakeError,
+    ParseError,
+    ConfigError,
+    wrap_requests_error,
+)
+
+# ---------------------------------------------------------------------------
 # Step 20 — Kalıcılık & Analitik (lazy import)
 # ---------------------------------------------------------------------------
 try:
@@ -50,6 +68,12 @@ except Exception as _e:
     post_scan_persist = filter_false_positives = None  # type: ignore[assignment,misc]
 
 __all__ = [
+    # Exception hiyerarşisi
+    "WebSecureError",
+    "ScanError", "ProbeError", "BaselineError", "PayloadError",
+    "NetworkError", "ConnectionRefusedError", "RequestTimeoutError", "SSLHandshakeError",
+    "ParseError", "ConfigError",
+    "wrap_requests_error",
     # FP Öğrenme
     "get_fp_learner", "FPLearner", "FPRule",
     # Skor Takibi

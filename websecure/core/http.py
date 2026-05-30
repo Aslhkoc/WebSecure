@@ -23,6 +23,11 @@ try:
 except ImportError:
     WAFBypassAdapter = None
 
+try:
+    from websecure.core.exceptions import wrap_requests_error as _wrap_requests_error
+except ImportError:
+    _wrap_requests_error = None  # type: ignore[assignment]
+
 
 
 def _emit_egress_degraded(feature: str, reason: str, details: dict | None = None) -> None:
@@ -332,6 +337,8 @@ def _smart_request(self, method, url, **kwargs):
                 continue
 
             _logger.debug(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
+            if _wrap_requests_error is not None:
+                raise _wrap_requests_error(e, url=url) from e
             raise e
 
     return resp  # safe fallback (loop should always return or raise above)

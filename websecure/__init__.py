@@ -13,6 +13,24 @@ from websecure.core.utils import setup_logging
 from websecure.scanners.base import BaseScanner
 
 # ---------------------------------------------------------------------------
+# Exception hiyerarşisi — public API
+# ---------------------------------------------------------------------------
+from websecure.core.exceptions import (
+    WebSecureError,
+    ScanError,
+    ProbeError,
+    BaselineError,
+    PayloadError,
+    NetworkError,
+    ConnectionRefusedError,
+    RequestTimeoutError,
+    SSLHandshakeError,
+    ParseError,
+    ConfigError,
+    wrap_requests_error,
+)
+
+# ---------------------------------------------------------------------------
 # Step 20 — Kalıcılık, Analitik, Mimari (lazy / graceful degradation)
 # ---------------------------------------------------------------------------
 try:
@@ -70,6 +88,12 @@ __all__ = [
     "__version__",
     "setup_logging",
     "BaseScanner",
+    # Exceptions
+    "WebSecureError",
+    "ScanError", "ProbeError", "BaselineError", "PayloadError",
+    "NetworkError", "ConnectionRefusedError", "RequestTimeoutError", "SSLHandshakeError",
+    "ParseError", "ConfigError",
+    "wrap_requests_error",
     # DB
     "get_db", "Database",
     "Scan", "Finding", "Tenant", "Project", "ScoreRecord",

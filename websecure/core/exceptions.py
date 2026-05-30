@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Optional
 
+try:
+    import requests as _requests_lib
+except ImportError:  # requests opsiyonel; wrap_requests_error guard'ı var
+    _requests_lib = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Root
@@ -113,23 +118,27 @@ def wrap_requests_error(
 ) -> NetworkError:
     """
     requests / urllib3 exception'ını uygun NetworkError alt sınıfına çevirir.
-    Her zaman bir WebSecureError döndürür — çağıran kod sınıfı bilinir.
+    Her zaman bir NetworkError döndürür — çağıran kod exception türünü bilir.
+    requests yüklü değilse generic NetworkError döner (sözleşme bozulmaz).
     """
-    import requests as _req
-
-    if isinstance(exc, _req.exceptions.SSLError):
-        return SSLHandshakeError(
-            str(exc), url=url, param=param, payload=payload, original_exc=exc
-        )
-    if isinstance(exc, (_req.exceptions.Timeout, _req.exceptions.ConnectTimeout, _req.exceptions.ReadTimeout)):
-        return RequestTimeoutError(
-            str(exc), url=url, param=param, payload=payload, original_exc=exc
-        )
-    if isinstance(exc, _req.exceptions.ConnectionError):
-        return ConnectionRefusedError(
-            str(exc), url=url, param=param, payload=payload, original_exc=exc
-        )
-    # Genel requests hatası -> NetworkError
+    if _requests_lib is not None:
+        if isinstance(exc, _requests_lib.exceptions.SSLError):
+            return SSLHandshakeError(
+                str(exc), url=url, param=param, payload=payload, original_exc=exc
+            )
+        if isinstance(exc, (
+            _requests_lib.exceptions.Timeout,
+            _requests_lib.exceptions.ConnectTimeout,
+            _requests_lib.exceptions.ReadTimeout,
+        )):
+            return RequestTimeoutError(
+                str(exc), url=url, param=param, payload=payload, original_exc=exc
+            )
+        if isinstance(exc, _requests_lib.exceptions.ConnectionError):
+            return ConnectionRefusedError(
+                str(exc), url=url, param=param, payload=payload, original_exc=exc
+            )
+    # Genel hata ya da requests yoksa -> NetworkError
     return NetworkError(
         str(exc), url=url, param=param, payload=payload, original_exc=exc
     )
