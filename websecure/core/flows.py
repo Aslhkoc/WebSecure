@@ -84,20 +84,6 @@ def _assertions(resp, text: str, asserts):
                 fails.append({"regex": pat})
     return fails
 
-def _mk_finding_from_step(flow_name: str, step_item: dict, role: str, base_url: str) -> dict:
-    url = step_item.get("url") or ""
-    return {
-        "url": url,
-        "location": "",
-        "param": "",
-        "type": "BUSINESS_LOGIC",
-        "severity": "Medium",
-        "reason": f"Flow '{flow_name}' adım {step_item.get('step')} beklenti hatası",
-        "method": step_item.get("method","GET"),
-        "payload": "",
-        "authenticated": (role or "").lower() != "anon",
-    }
-
 # Basit şablonlayıcı: {{var}} değişkenlerini state içinden doldur
 _VAR_RE = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 
@@ -204,10 +190,6 @@ def _ws_normalize_url(base_url: str, url: str) -> str:
 
 # Orijinal isim korunarak override edilir (imza aynı tutuldu)
 def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], results: Mapping[str, Any], *, debug: bool = False) -> int:  # type: ignore[override]
-    _sv = globals().get("_store_values")
-    _as = globals().get("_assertions")
-
-    # add_result global assumed available via module-level init; no inner fallback required.
 
     bl = (cfg.get("business_logic") or {})
     flows = bl.get("flows") or []
@@ -226,14 +208,15 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
 
         for idx, step in enumerate(steps, 1):
             method = str(step.get("method", "GET")).upper()
-            url = _ws_normalize_url(base_url, str(step.get("url") or "/"))
-            headers = dict(step.get("headers") or {})
+            url = _ws_normalize_url(base_url, _tpl(str(step.get("url") or "/"), ctx_store))
+            headers = {k: _tpl(str(v), ctx_store) for k, v in (step.get("headers") or {}).items()}
 
             body = step.get("body")
-            if isinstance(body, str) and isinstance(ctx_store, dict):
-                for k, v in ctx_store.items():
-                    body = body.replace(f"{{{{{k}}}}}", str(v))
+            if isinstance(body, str):
+                body = _tpl(body, ctx_store)
             json_obj = step.get("json")
+            if isinstance(json_obj, dict):
+                json_obj = {k: _tpl(str(v), ctx_store) for k, v in json_obj.items()}
 
             timeout_s = float(step.get("timeout", bl.get("timeout", 20)))
             verify_tls = bool(step.get("verify_tls", bl.get("verify_tls", True)))
@@ -249,9 +232,8 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
                 text = r.text
                 r_headers = getattr(r, "headers", {}) or {}
 
-            if callable(_sv):
-                _sv(text, r_headers, step.get("store") or step.get("extract") or [], ctx_store)
-            failures = _as(types.SimpleNamespace(status_code=status), text, step.get("expect") or []) if callable(_as) else []
+            _store_values(text, r_headers, step.get("store") or step.get("extract") or [], ctx_store)
+            failures = _assertions(types.SimpleNamespace(status_code=status), text, step.get("expect") or [])
             if failures:
                 ok_so_far = False
                 add_result("vulnerability", {"source": "bizlogic_flow_step", "flow": fname, "step": idx, "url": url, "status": status, "failures": failures})
@@ -284,20 +266,8 @@ def run_idempotency_checks(
     Idempotency checks from config.business_logic.idempotency.checks.
     Returns the number of anomalies found.
     """
-    # response_fingerprint / idempotency_anomaly helpers
-    _rfp: Any = None
-    _idem_anom: Any = None
-    if _iul.find_spec("websecure.core.detect") is not None:
-        try:
-            _d = importlib.import_module("websecure.core.detect")
-            _rfp = getattr(_d, "response_fingerprint", None)
-            _idem_anom = getattr(_d, "idempotency_anomaly", None)
-        except Exception as _fix_e:
-            _logger.debug(f"[core.flows] {type(_fix_e).__name__}: {_fix_e!r}")
-    if not callable(_rfp):
-        def _rfp(txt: str) -> str: return str(hash(txt))  # type: ignore[misc]
-    if not callable(_idem_anom):
-        def _idem_anom(fps: list) -> bool: return len(set(fps)) > 1  # type: ignore[misc]
+    def _rfp(txt: str) -> str: return str(hash(txt))
+    def _idem_anom(fps: list) -> bool: return len(set(fps)) > 1
 
     bl = (cfg.get("business_logic") or {})
     idem = (bl.get("idempotency") or {})
