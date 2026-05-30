@@ -178,23 +178,24 @@ class DalfoxWrapper(ToolIntegration):
             logger.info(f"[dalfox] URL taranıyor -> {url}")
             _timeout_df = max(60, self.timeout_s * 30)
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            _register_cp = _unregister_cp = None
             try:
                 from websecure.core.phases import register_child_proc, unregister_child_proc
-                register_child_proc(proc)
+                _register_cp, _unregister_cp = register_child_proc, unregister_child_proc
             except Exception as _fix_e:
                 logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
+            if _register_cp:
+                _register_cp(proc)
             try:
                 _, stderr_b = proc.communicate(timeout=_timeout_df)
             except subprocess.TimeoutExpired:
-                proc.kill(); proc.communicate()
+                proc.kill()
+                proc.communicate()
                 logger.warning(f"[dalfox] Timeout ({_timeout_df}s)")
                 stderr_b = b""
             finally:
-                try:
-                    from websecure.core.phases import unregister_child_proc
-                    unregister_child_proc(proc)
-                except Exception as _fix_e:
-                    logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
+                if _unregister_cp:
+                    _unregister_cp(proc)
 
             if proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
@@ -215,12 +216,6 @@ class DalfoxWrapper(ToolIntegration):
                 extra={"dalfox_findings": [vars(df) for df in dalfox_findings]},
             )
 
-        except subprocess.TimeoutExpired:
-            logger.warning("[dalfox] Zaman aşımı")
-            return ToolResult(
-                tool=self.tool_name, target=url, status=ToolStatus.TIMEOUT,
-                duration_s=time.monotonic() - start,
-            )
         except Exception as exc:
             logger.error(f"[dalfox] Hata: {exc!r}", exc_info=True)
             return ToolResult(
@@ -333,12 +328,22 @@ class DalfoxWrapper(ToolIntegration):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
+            _unregister_cp = None
+            try:
+                from websecure.core.phases import register_child_proc, unregister_child_proc
+                register_child_proc(proc)
+                _unregister_cp = unregister_child_proc
+            except Exception as _fix_e:
+                logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
             try:
                 _, stderr_b = proc.communicate(timeout=_pipe_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
                 logger.warning(f"[dalfox] pipe zaman aşımı ({_pipe_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
+            finally:
+                if _unregister_cp:
+                    _unregister_cp(proc)
 
             dalfox_findings = self._parse_output(out_file)
             findings = self._to_tool_findings(dalfox_findings)
@@ -487,7 +492,7 @@ class DalfoxWrapper(ToolIntegration):
                 cwe_ids=[df.cwe] if df.cwe else ["CWE-79"],
                 confidence="high",
                 verified=True,
-                tags=["xss", df.xss_type.lower(), "dalfox-verified"],
+                tags=[t for t in ["xss", df.xss_type.lower(), "dalfox-verified"] if t],
                 raw=df.raw,
             ))
 

@@ -16,10 +16,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
@@ -135,8 +137,7 @@ class AmassWrapper(ToolIntegration):
         start = time.monotonic()
 
         # Amass v5 -oA flag'i ile prefix-based dosya üretir: prefix.json, prefix.txt
-        import uuid as _uuid
-        out_prefix = os.path.join(tempfile.gettempdir(), f"ws_amass_{_uuid.uuid4().hex[:12]}")
+        out_prefix = os.path.join(tempfile.gettempdir(), f"ws_amass_{uuid.uuid4().hex[:12]}")
         out_json = out_prefix + ".json"
 
         try:
@@ -217,6 +218,7 @@ class AmassWrapper(ToolIntegration):
             if self.wordlist and Path(self.wordlist).exists():
                 cmd.extend(["-w", self.wordlist])   # -wl → -w (v5 flag adı)
 
+        rf_file: Optional[str] = None
         if self.resolvers:
             # -rf dosya yolu bekliyor; IP listesini geçici dosyaya yaz
             fd_r, rf_file = tempfile.mkstemp(suffix=".txt", prefix="ws_amass_rf_")
@@ -224,8 +226,12 @@ class AmassWrapper(ToolIntegration):
                 with os.fdopen(fd_r, "w") as _f:
                     _f.write("\n".join(self.resolvers))
                 cmd.extend(["-rf", rf_file])
-            except Exception:
-                os.close(fd_r)
+            except Exception as exc:
+                logger.debug(f"[Amass] Resolver dosyası oluşturulamadı: {exc!r}")
+                try:
+                    os.close(fd_r)
+                except OSError:
+                    pass
 
         # -max-dns-queries v5'te yok — kaldırıldı
 
@@ -248,6 +254,12 @@ class AmassWrapper(ToolIntegration):
             if proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
                 logger.warning(f"[Amass] enum çıkış kodu {proc.returncode}: {stderr_out}")
+        finally:
+            if rf_file:
+                try:
+                    os.unlink(rf_file)
+                except OSError:
+                    pass
 
         return self._parse_json_output(out_prefix + ".json")
 
@@ -652,19 +664,17 @@ class InteractshIntegration(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
-                stderr_b = b""
+                _, stderr_b = proc.communicate()
 
             # Kayıtlı domain'i stderr'den çıkart
             domain = ""
             stderr_text = (stderr_b or b"").decode("utf-8", "ignore")
-            import re as _re
             for pattern in (
                 r"([a-z0-9]+\.oast\.[a-z]+)",
                 r"([a-z0-9]+\.interact\.sh)",
                 r"([a-z0-9]{8,}\.[a-z0-9]+\.[a-z]{2,})",
             ):
-                m = _re.search(pattern, stderr_text, _re.I)
+                m = re.search(pattern, stderr_text, re.I)
                 if m:
                     domain = m.group(1)
                     break

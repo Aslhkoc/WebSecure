@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -155,9 +156,11 @@ class ToolResult:
     def finding_count(self) -> int:
         return len(self.findings)
 
+    @property
     def critical_count(self) -> int:
         return sum(1 for f in self.findings if f.severity == ToolSeverity.CRITICAL)
 
+    @property
     def high_count(self) -> int:
         return sum(1 for f in self.findings if f.severity == ToolSeverity.HIGH)
 
@@ -357,6 +360,7 @@ class ToolRegistry:
     """
 
     _instance: Optional["ToolRegistry"] = None
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(self) -> None:
         self._tools: Dict[str, ToolIntegration] = {}
@@ -364,7 +368,9 @@ class ToolRegistry:
     @classmethod
     def instance(cls) -> "ToolRegistry":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def register(self, tool: ToolIntegration) -> None:
