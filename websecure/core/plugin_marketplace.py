@@ -35,6 +35,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import datetime
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
@@ -312,13 +313,12 @@ class PluginMarketplace:
         meta = PluginLoader.load_meta(dest)
         if not meta:
             # plugin.json yoksa minimal meta oluştur
-            import datetime as _dt
             meta = PluginMeta(
                 name=name,
                 path=str(dest),
                 source="git",
                 source_url=repo_url,
-                installed_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+                installed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             )
             (dest / "plugin.json").write_text(
                 json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
@@ -358,7 +358,8 @@ class PluginMarketplace:
             meta = self._registry.get(plugin_name)
             if meta:
                 meta.enabled = True
-        self._save_registry()
+        if meta is not None:
+            self._save_registry()
         return meta is not None
 
     def disable(self, plugin_name: str) -> bool:
@@ -366,7 +367,8 @@ class PluginMarketplace:
             meta = self._registry.get(plugin_name)
             if meta:
                 meta.enabled = False
-        self._save_registry()
+        if meta is not None:
+            self._save_registry()
         return meta is not None
 
     def uninstall(self, plugin_name: str) -> bool:
@@ -377,7 +379,8 @@ class PluginMarketplace:
             if dest.exists():
                 shutil.rmtree(str(dest), ignore_errors=True)
         # Önbellekten kaldır
-        self._instances.pop(plugin_name, None)
+        with self._lock:
+            self._instances.pop(plugin_name, None)
         self._save_registry()
         return meta is not None
 
@@ -412,7 +415,8 @@ class PluginMarketplace:
         --------
         List[Dict] — bulgular (boş liste hata durumunda)
         """
-        meta = self._registry.get(plugin_name)
+        with self._lock:
+            meta = self._registry.get(plugin_name)
         if not meta:
             logger.error(f"[Marketplace] Plugin bulunamadı: {plugin_name}")
             return []
@@ -445,7 +449,7 @@ class PluginMarketplace:
         options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Aktif tüm plugin'leri çalıştır."""
-        results: Dict[str, List[Dict]] = {}
+        results: Dict[str, List[Dict[str, Any]]] = {}
         for meta in self.list_plugins(enabled_only=True):
             results[meta.name] = self.run(meta.name, target, options)
         return results
@@ -456,13 +460,15 @@ class PluginMarketplace:
         meta: PluginMeta,
     ) -> Optional[Type[BasePlugin]]:
         """Plugin sınıfını yükle veya önbellekten al."""
-        if plugin_name in self._instances:
-            return self._instances[plugin_name]
+        with self._lock:
+            if plugin_name in self._instances:
+                return self._instances[plugin_name]
 
         plugin_dir = Path(meta.path)
         cls = PluginLoader.load_from_dir(plugin_dir)
         if cls:
-            self._instances[plugin_name] = cls
+            with self._lock:
+                self._instances[plugin_name] = cls
         return cls
 
     # ------------------------------------------------------------------
