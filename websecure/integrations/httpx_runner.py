@@ -18,10 +18,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,8 +54,6 @@ _SECURITY_SEVERITY_BY_STATUS = {
 # ---------------------------------------------------------------------------
 # ProbeResult — tek URL prob sonucu
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass, field
 
 @dataclass
 class ProbeResult:
@@ -129,7 +129,6 @@ class HttpxWrapper(ToolIntegration):
 
         result = False
         try:
-            import re as _re
             proc = subprocess.run(
                 [self.binary, "-version"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -140,7 +139,7 @@ class HttpxWrapper(ToolIntegration):
             # Python httpx CLI outputs "usage: python -m httpx" or similar
             if "python" in out_lower or ("usage:" in out_lower and "url" in out_lower):
                 result = False
-            elif _re.search(r"v?\d+\.\d+", out):
+            elif re.search(r"v?\d+\.\d+", out):
                 # Go httpx emits a version like "vX.Y.Z" or "Current Version: vX.Y.Z"
                 result = True
             else:
@@ -261,17 +260,26 @@ class HttpxWrapper(ToolIntegration):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
+            _unreg = None
+            try:
+                from websecure.core.phases import register_child_proc, unregister_child_proc
+                register_child_proc(proc)
+                _unreg = unregister_child_proc
+            except Exception:
+                pass
             try:
                 _, stderr_b = proc.communicate(timeout=_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
                 logger.warning(f"[httpx] Zaman aşımı ({_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
-                stderr_b = b""
             else:
                 if proc.returncode not in (0, 1):
                     stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
                     logger.warning(f"[httpx] Çıkış kodu {proc.returncode}: {stderr_out}")
+            finally:
+                if _unreg:
+                    _unreg(proc)
 
             probe_results = self._parse_output(out_file)
             findings = self._build_findings(probe_results)

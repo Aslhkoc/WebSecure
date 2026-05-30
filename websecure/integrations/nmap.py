@@ -25,10 +25,12 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.integrations.base import (
@@ -236,8 +238,7 @@ class NmapWrapper(ToolIntegration):
     _HIGH_RISK_PORTS = {21, 22, 23, 25, 110, 143, 3306, 5432, 5900, 6379, 27017, 1433, 3389}
 
     def __init__(self, binary_path: str = "nmap"):
-        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
-        self._binary_name = binary_path
+        super().__init__(binary_path)
         self._find_binary()
 
     @property
@@ -252,13 +253,11 @@ class NmapWrapper(ToolIntegration):
             return
 
         # 2. Yaygın kurulum konumları (Windows + Linux + macOS)
-        import sys as _sys
-        from pathlib import Path
         from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
 
         candidates_path: list = list(_bc(root, "nmap"))
-        if _sys.platform == "win32":
+        if _is_windows():
             # Windows standard install locations (use env vars where possible)
             pf   = os.environ.get("ProgramFiles",       r"C:\Program Files")
             pf86 = os.environ.get("ProgramFiles(x86)",  r"C:\Program Files (x86)")
@@ -302,10 +301,10 @@ class NmapWrapper(ToolIntegration):
         logger.warning("[Nmap] Nmap bulunamadı — nmap.org'dan indir veya PATH'e ekle.")
 
     def is_available(self) -> bool:
-        if hasattr(self, "_binary_path") and self._binary_path and os.path.exists(self._binary_path):
+        if self._binary_path and os.path.exists(self._binary_path):
             return True
         self._find_binary()
-        return hasattr(self, "_binary_path") and bool(self._binary_path) and os.path.exists(self._binary_path)
+        return bool(self._binary_path) and os.path.exists(self._binary_path)
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — scan target and return ToolResult."""

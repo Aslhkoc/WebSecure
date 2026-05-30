@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -202,9 +203,11 @@ class KatanaWrapper(ToolIntegration):
             )
 
             # Child process kaydı (signal handler desteği)
+            _unreg = None
             try:
-                from websecure.core.phases import register_child_proc
+                from websecure.core.phases import register_child_proc, unregister_child_proc
                 register_child_proc(proc)
+                _unreg = unregister_child_proc
             except Exception as _fix_e:
                 logger.debug(f"[integrations.katana] {type(_fix_e).__name__}: {_fix_e!r}")
 
@@ -224,11 +227,8 @@ class KatanaWrapper(ToolIntegration):
                 except Exception:
                     pass
             finally:
-                try:
-                    from websecure.core.phases import unregister_child_proc
-                    unregister_child_proc(proc)
-                except Exception as _fix_e:
-                    logger.debug(f"[integrations.katana] {type(_fix_e).__name__}: {_fix_e!r}")
+                if _unreg:
+                    _unreg(proc)
 
             if not timed_out and proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:400]
@@ -360,8 +360,7 @@ class KatanaWrapper(ToolIntegration):
                 check=False,
             )
             help_text = (proc.stdout or proc.stderr or b"").decode("utf-8", "ignore")
-            import re as _re
-            for m in _re.finditer(r"\s(-{1,2}[\w-]+)", help_text):
+            for m in re.finditer(r"\s(-{1,2}[\w-]+)", help_text):
                 supported.add(m.group(1))
         except Exception as exc:
             logger.debug(f"[katana] Flag discovery failed: {exc!r}")
