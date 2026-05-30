@@ -55,8 +55,8 @@ class ToolManager:
         try:
             from websecure.integrations.sqlmap import SQLMapClient
             self.sqlmap_client = SQLMapClient()
-        except ImportError:
-            pass
+        except ImportError as exc:
+            logger.debug(f"[ToolManager] SQLMapClient yüklenemedi: {exc!r}")
         return self.sqlmap_client
 
 
@@ -194,6 +194,7 @@ class ToolManager:
         try:
             # Check if port 8775 is already in use
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1.0)  # firewall SYN-drop'ta süresiz bloklanmayı önle
                 if s.connect_ex(('127.0.0.1', 8775)) == 0:
                     print("[!]  Port 8775 zaten dolu. SQLMap API zaten çalışıyor olabilir.")
                     return True
@@ -210,16 +211,16 @@ class ToolManager:
             for _ in range(10):
                 time.sleep(1)
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
                     if s.connect_ex(('127.0.0.1', 8775)) == 0:
                         # Extra Check: Use Client
-                         cli = self.get_sqlmap_client()
-                         if cli and cli.is_alive():
-                             print("[OK] SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
-                         else:
-                             print("[OK] SQLMap API Portu Açık (Servis Yanıt Veriyor)")
-                         
-                         print("   (Program bu servisi otomatik kullanacaktır.)")
-                         return True
+                        cli = self.get_sqlmap_client()
+                        if cli and cli.is_alive():
+                            print("[OK] SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
+                        else:
+                            print("[OK] SQLMap API Portu Açık (Servis Yanıt Veriyor)")
+                        print("   (Program bu servisi otomatik kullanacaktır.)")
+                        return True
             
             print("[X] SQLMap API başlatılamadı (Timeout).")
             return False
