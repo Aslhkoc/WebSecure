@@ -20,7 +20,6 @@ import platform
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import Optional
 
 __all__ = [
     "exe_suffix",
@@ -203,8 +202,8 @@ def extract_binary_from_archive(
                     f = tf.extractfile(member)
                     if f:
                         dest_path.write_bytes(f.read())
-                    _make_executable(dest_path)
-                    return True
+                        _make_executable(dest_path)
+                        return True
         except Exception:
             return False
 
