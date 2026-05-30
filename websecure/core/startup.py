@@ -525,9 +525,10 @@ def setup_all(cfg: dict | None = None) -> dict[str, bool]:
 
 def run_all_startup_checks(cfg: dict) -> dict[str, bool]:
     """
-    Scan başlamadan önce kritik bağımlılıkları kontrol et.
-    Sadece nuclei + interactsh kontrol edilir (ağır indirmeler engellenmez).
-    Tam kurulum için websecure --setup kullanın.
+    Scan başlamadan önce kritik bağımlılıkları kontrol et:
+    playwright (DOM XSS), curl_cffi (TLS taklidi), nuclei ve interactsh (OAST).
+    Eksik olanlar otomatik kurulmaya çalışılır; başarısızlık scan'i durdurmaz.
+    Tam/ağır kurulum (tüm Go araçları) için websecure --setup kullanın.
     """
     return {
         "playwright": ensure_playwright_chromium(),
