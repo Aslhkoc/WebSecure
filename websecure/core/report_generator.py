@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ def export_sarif(results: Dict[str, Any], out_path: str) -> None:
         return
     except ImportError:
         pass
+    except Exception as exc:
+        logger.warning(f"[report_generator] SARIF integration hatası, fallback kullanılıyor: {exc!r}")
 
     # Fallback: minimal SARIF 2.1.0
     run: Dict[str, Any] = {
@@ -111,6 +113,8 @@ def export_junit(
         return
     except ImportError:
         pass
+    except Exception as exc:
+        logger.warning(f"[report_generator] JUnit integration hatası, fallback kullanılıyor: {exc!r}")
 
     # Fallback: own minimal impl
     items: List[Dict] = []
@@ -134,9 +138,12 @@ def export_junit(
         lines.append("  </testcase>")
     lines.append("</testsuite>")
 
-    with open(out_path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-    logger.info(f"[report_generator] JUnit XML raporu yazıldı (fallback): {out_path}")
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+        logger.info(f"[report_generator] JUnit XML raporu yazıldı (fallback): {out_path}")
+    except OSError as exc:
+        logger.error(f"[report_generator] JUnit fallback dosyası yazılamadı ({out_path!r}): {exc!r}")
 
 
 # ---------------------------------------------------------------------------
