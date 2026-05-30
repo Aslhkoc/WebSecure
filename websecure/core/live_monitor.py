@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict
 
 _logger = logging.getLogger(__name__)
@@ -83,8 +84,7 @@ class LiveMonitor:
             self._has_rich = False
 
     def _ts(self) -> str:
-        import time as _t
-        return _t.strftime("%H:%M:%S")
+        return time.strftime("%H:%M:%S")
 
     def _print(self, line: str) -> None:
         if self._has_rich:
@@ -239,13 +239,16 @@ class LiveMonitor:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 _live_monitor: "LiveMonitor | None" = None
+_live_monitor_lock = threading.Lock()
 
 
 def get_live_monitor(verbose: bool = True) -> LiveMonitor:
-    """Global LiveMonitor singleton'ını döner, gerekirse oluşturur."""
+    """Global LiveMonitor singleton'ını döner, gerekirse oluşturur (thread-safe)."""
     global _live_monitor
     if _live_monitor is None:
-        _live_monitor = LiveMonitor(verbose=verbose)
+        with _live_monitor_lock:
+            if _live_monitor is None:
+                _live_monitor = LiveMonitor(verbose=verbose)
     return _live_monitor
 
 
@@ -257,8 +260,7 @@ def console_alert(bucket: str, item: Dict[str, Any]) -> None:
     """Print a real-time 'Kill Cam' style alert to the terminal."""
     sev = str(item.get("severity") or "Info").lower()
 
-    important = ["critical", "Critical", "high", "High", "yuksek", "medium", "Medium"]
-    if not any(s in sev for s in important):
+    if not any(s in sev for s in ("critical", "high", "yuksek", "medium")):
         return
 
     RED    = "\033[91m"
@@ -267,9 +269,7 @@ def console_alert(bucket: str, item: Dict[str, Any]) -> None:
     BOLD   = "\033[1m"
 
     color = YELLOW
-    if "critical" in sev or "Critical" in sev:
-        color = RED
-    elif "high" in sev or "High" in sev:
+    if "critical" in sev or "high" in sev:
         color = RED
 
     icon = "[!]"
