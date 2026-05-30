@@ -6,14 +6,16 @@ Fuzzing tool wrappers.
 """
 import json
 import logging
+import os
 import random
 import shutil
 import string
 import subprocess
+import sys
 import tempfile
 import time
-import os
-from typing import List, Dict, Optional, Any
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import requests as _requests
@@ -37,6 +39,19 @@ from websecure.integrations.base import (
 logger = logging.getLogger(__name__)
 
 
+def _run_proc_tracked(
+    cmd: List[str], **kw
+) -> Tuple[subprocess.Popen, Optional[Callable]]:
+    """Popen + scan-cancellation registration. Returns (proc, unregister_fn|None)."""
+    proc = subprocess.Popen(cmd, **kw)
+    try:
+        from websecure.core.phases import register_child_proc, unregister_child_proc
+        register_child_proc(proc)
+        return proc, unregister_child_proc
+    except Exception:
+        return proc, None
+
+
 class FFUFWrapper(ToolIntegration):
     """
     Wrapper for FFUF (Fuzz Faster U Fool).
@@ -48,16 +63,14 @@ class FFUFWrapper(ToolIntegration):
         return "ffuf"
 
     def __init__(self, binary_path: str = "ffuf", session=None):
-        super().__init__(binary_path)  # pass binary_path so self.binary resolves correctly
-        self._binary_name = binary_path
-        self._session = session  # Optional SmartSession for baseline probing
+        super().__init__(binary_path)
+        self._session = session
         self._check_binary()
 
     def _check_binary(self):
         if shutil.which(self.binary):
             return
 
-        from pathlib import Path
         from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
         for _cand in _bc(root, "ffuf"):
@@ -69,9 +82,10 @@ class FFUFWrapper(ToolIntegration):
 
     def is_available(self) -> bool:
         if self.binary.endswith(".py"):
-            import sys
             return shutil.which(sys.executable) is not None and os.path.exists(self.binary)
-        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+        return shutil.which(self.binary) is not None or (
+            self._binary_path is not None and Path(self._binary_path).exists()
+        )
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — directory/endpoint discovery on target."""
@@ -176,9 +190,7 @@ class FFUFWrapper(ToolIntegration):
         os.close(fd)
 
         try:
-            cmd = []
             if self.binary.endswith(".py"):
-                import sys
                 cmd = [sys.executable, self.binary]
             else:
                 cmd = [self.binary]
@@ -213,10 +225,8 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.info(f"Starting FFUF scan on {url}")
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            process, _unreg = _run_proc_tracked(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             try:
                 _, stderr_b = process.communicate(timeout=600)
@@ -227,6 +237,9 @@ class FFUFWrapper(ToolIntegration):
             else:
                 if process.returncode != 0 and stderr_b:
                     logger.debug(f"FFUF stderr: {stderr_b.decode('utf-8', 'ignore')[:300]}")
+            finally:
+                if _unreg:
+                    _unreg(process)
 
             findings = self._parse_json_output(temp_output)
 
@@ -420,10 +433,8 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.debug(f"[FFUF] Header fuzzing: {header_name} on {url}")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            proc, _unreg = _run_proc_tracked(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             try:
                 proc.communicate(timeout=120)
@@ -431,6 +442,9 @@ class FFUFWrapper(ToolIntegration):
                 proc.kill()
                 proc.communicate()
                 logger.warning(f"[FFUF] Header fuzz timed out for header={header_name}")
+            finally:
+                if _unreg:
+                    _unreg(proc)
 
             raw = self._parse_json_output(temp_output)
             results = []
@@ -490,10 +504,8 @@ class FFUFWrapper(ToolIntegration):
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
 
             logger.debug(f"[FFUF] Header name fuzzing on {url}")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            proc, _unreg = _run_proc_tracked(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             try:
                 proc.communicate(timeout=120)
@@ -501,6 +513,9 @@ class FFUFWrapper(ToolIntegration):
                 proc.kill()
                 proc.communicate()
                 logger.warning("[FFUF] Header name fuzz timed out (120s)")
+            finally:
+                if _unreg:
+                    _unreg(proc)
 
             raw = self._parse_json_output(temp_output)
             for item in raw:
@@ -535,14 +550,12 @@ class FeroxbusterWrapper(ToolIntegration):
         return "feroxbuster"
 
     def __init__(self):
-        super().__init__("feroxbuster")  # pass binary name so self.binary resolves correctly
-        self._binary_name = "feroxbuster"
+        super().__init__("feroxbuster")
         self._find_binary()
 
     def _find_binary(self):
         if shutil.which(self.binary):
             return
-        from pathlib import Path
         from websecure.core.platform_compat import binary_candidates as _bc
         root = Path(__file__).resolve().parent.parent.parent
         for _cand in _bc(root, "feroxbuster"):
@@ -551,7 +564,9 @@ class FeroxbusterWrapper(ToolIntegration):
                 return
 
     def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None or os.path.exists(self.binary)
+        return shutil.which(self.binary) is not None or (
+            self._binary_path is not None and Path(self._binary_path).exists()
+        )
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — recursive directory brute-force."""
@@ -591,7 +606,6 @@ class FeroxbusterWrapper(ToolIntegration):
 
     @staticmethod
     def _default_wordlist() -> Optional[str]:
-        from pathlib import Path
         p = Path(__file__).resolve().parent.parent / "wordlists" / "dirs.txt"
         return str(p) if p.exists() else None
 
@@ -619,10 +633,8 @@ class FeroxbusterWrapper(ToolIntegration):
                 cmd.extend(extra_args)
 
             logger.info(f"[Feroxbuster] Başlatılıyor → {target} (wordlist={effective_wordlist})")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+            proc, _unreg = _run_proc_tracked(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
             )
             try:
                 _, stderr_b = proc.communicate(timeout=600)
@@ -632,6 +644,9 @@ class FeroxbusterWrapper(ToolIntegration):
                 proc.kill()
                 proc.communicate()
                 logger.warning("[Feroxbuster] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
+            finally:
+                if _unreg:
+                    _unreg(proc)
 
             results = []
             if os.path.exists(temp_output):
