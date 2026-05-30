@@ -30,12 +30,13 @@ import json
 import logging
 import re
 import subprocess
+import threading
 import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _PKG_ROOT = Path(__file__).resolve().parent.parent.parent
-_WORDLIST_DIR = _PKG_ROOT / "websecure" / "wordlists"
 _DATA_DIR = _PKG_ROOT / "websecure" / "data"
 _SCORE_DB_PATH = Path.home() / ".websecure" / "payload_scores.json"
 _CVE_PAYLOAD_PATH = _DATA_DIR / "cve_payloads.json"
@@ -828,7 +828,8 @@ class PayloadScorer:
 
         Döndürür
         --------
-        List[Tuple[str, float]] — (payload, score) çiftleri
+        List[Tuple[str, float]] — (payload_hash, score) çiftleri.
+        Ham payload saklanmaz; key = sha256(payload)[:16].
         """
         cat_key_prefix = f"{category}:"
         results: List[Tuple[str, float]] = []
@@ -1377,7 +1378,6 @@ class WordlistUpdater:
     ) -> Dict[str, Any]:
         """HTTP üzerinden tek dosya indir."""
         try:
-            import urllib.request
             target_dir.mkdir(parents=True, exist_ok=True)
             filename = url.rsplit("/", 1)[-1] or f"{name}.txt"
             dest = target_dir / filename
@@ -1497,7 +1497,11 @@ class PayloadEngine:
         cms = self.fingerprinter.detect(tags)
         if cms:
             cms_payloads = get_cms_payloads(cms, category, limit=50)
-            all_payloads = list({*all_payloads, *cms_payloads})
+            _cms_seen: Set[str] = set(all_payloads)
+            for _p in cms_payloads:
+                if _p not in _cms_seen:
+                    _cms_seen.add(_p)
+                    all_payloads.append(_p)
             logger.debug(f"[PayloadEngine] CMS={cms}  +{len(cms_payloads)} özel payload")
 
         # 3. CVE payload'ları ekle
@@ -1615,7 +1619,7 @@ class PayloadEngine:
 # ---------------------------------------------------------------------------
 
 _engine_instance: Optional[PayloadEngine] = None
-_engine_lock = __import__("threading").Lock()
+_engine_lock = threading.Lock()
 
 
 def get_engine() -> PayloadEngine:
