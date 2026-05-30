@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 
@@ -29,6 +30,14 @@ def _escape(s):
 # Without this, a single finding with a full 50 KB HTTP response body inflates
 # the embedded JS literal to several MB and causes browser parse failures.
 # ---------------------------------------------------------------------------
+# Severity normalizer: input is always lowercased before lookup
+_HTML_SEV_NORM: dict = {
+    "critical": "Critical",
+    "high":     "High",
+    "medium":   "Medium",
+    "low":      "Low",
+}
+
 _LARGE_DETAIL_KEYS = {
     "response", "raw_response", "body", "html", "content",
     "page_source", "source", "html_content", "page", "text",
@@ -69,39 +78,36 @@ def _cap_detail(d, max_str: int = 1500, max_large: int = 400):
 # ---------------------------------------------------------------------------
 def _parse_nmap_ssl_cert(text: str) -> dict:
     """Parse nmap ssl-cert NSE script output into a cert dict for ssl_html."""
-    import re as _re
-    from datetime import datetime as _dt
-
     cert: dict = {}
     for line in text.splitlines():
         line = line.strip()
         lower = line.lower()
 
         if lower.startswith("subject:"):
-            m = _re.search(r"commonName\s*=\s*([^/,\n]+)", line, _re.I)
+            m = re.search(r"commonName\s*=\s*([^/,\n]+)", line, re.I)
             if m:
                 cert["subject_CN"] = m.group(1).strip()
 
         elif lower.startswith("issuer:"):
-            m = _re.search(r"commonName\s*=\s*([^/,\n]+)", line, _re.I)
+            m = re.search(r"commonName\s*=\s*([^/,\n]+)", line, re.I)
             if m:
                 cert["issuer_CN"] = m.group(1).strip()
-            m2 = _re.search(r"organizationName\s*=\s*([^/,\n]+)", line, _re.I)
+            m2 = re.search(r"organizationName\s*=\s*([^/,\n]+)", line, re.I)
             if m2:
                 cert["issuer_O"] = m2.group(1).strip()
 
-        elif _re.match(r"not valid before\s*:", line, _re.I):
+        elif re.match(r"not valid before\s*:", line, re.I):
             ts = line.split(":", 1)[1].strip()
             cert["not_before"] = ts
 
-        elif _re.match(r"not valid after\s*:", line, _re.I):
+        elif re.match(r"not valid after\s*:", line, re.I):
             ts = line.split(":", 1)[1].strip()
             cert["not_after"] = ts
             try:
-                exp = _dt.fromisoformat(
+                exp = datetime.fromisoformat(
                     ts.rstrip("Z").replace(" ", "T").split("+")[0]
                 )
-                cert["days_remaining"] = (_dt.now().date() - exp.date()).days * -1
+                cert["days_remaining"] = (datetime.now().date() - exp.date()).days * -1
             except Exception as _fix_e:
                 _logger.debug(f"[reporters.html_dashboard] {type(_fix_e).__name__}: {_fix_e!r}")
 
@@ -111,12 +117,12 @@ def _parse_nmap_ssl_cert(text: str) -> dict:
         elif lower.startswith("sha-256:") or lower.startswith("sha256:"):
             cert.setdefault("fingerprint", line.split(":", 1)[1].strip())
 
-        elif _re.match(r"subject alt(ernative)? name", line, _re.I):
+        elif re.match(r"subject alt(ernative)? name", line, re.I):
             san_raw = line.split(":", 1)[1].strip() if ":" in line else ""
             san_list = [
                 s.strip().split(":")[-1]
                 for s in san_raw.split(",")
-                if _re.match(r"\s*(DNS|IP)\s*:", s, _re.I)
+                if re.match(r"\s*(DNS|IP)\s*:", s, re.I)
             ]
             if san_list:
                 cert["san"] = san_list
@@ -193,11 +199,7 @@ def render_html_dashboard(results: dict) -> str:
             else:
                 f_type = item.get("type") or item.get("title") or item.get("message") or "Generic"
             _raw_sev = (item.get("severity") or "Info").lower()
-            _sev_map = {"critical": "Critical", "Critical": "Critical",
-                        "high": "High", "High": "High",
-                        "medium": "Medium", "Medium": "Medium",
-                        "low": "Low", "Low": "Low"}
-            f_sev = _sev_map.get(_raw_sev, "Info")
+            f_sev = _HTML_SEV_NORM.get(_raw_sev, "Info")
 
             # Skip status/meta-only items
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
@@ -868,7 +870,6 @@ def render_html_dashboard(results: dict) -> str:
     # nmap_data is already normalised a few hundred lines above.
     # -------------------------------------------------------------------
     if not cert and isinstance(nmap_data, list):
-        import re as _re_ssl
         for _np in nmap_data:
             if not isinstance(_np, dict):
                 continue
@@ -883,7 +884,7 @@ def render_html_dashboard(results: dict) -> str:
             # Augment with TLS version from ssl-enum-ciphers (first TLSvX.Y line)
             _enum_text = _scripts.get("ssl-enum-ciphers") or ""
             for _el in _enum_text.splitlines():
-                if _re_ssl.match(r"\s*TLSv[0-9.]+\s*:", _el):
+                if re.match(r"\s*TLSv[0-9.]+\s*:", _el):
                     cert.setdefault("tls_version", _el.strip().rstrip(":"))
                     break
             break  # use first port that has ssl-cert (usually 443)

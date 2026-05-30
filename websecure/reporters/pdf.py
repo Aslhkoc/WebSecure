@@ -7,6 +7,7 @@ Uses Jinja2 for HTML templating and WeasyPrint for HTML->PDF conversion.
 from __future__ import annotations
 import logging
 from datetime import datetime
+from html import escape as _h
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -162,12 +163,22 @@ class PDFReporter:
         tls_data = next((t for t in tls_list if isinstance(t, dict) and "certificate" in t), {})
 
         # Auth matrix
-        matrix_data = results.get("auth_matrix", [{}])
-        auth_matrix = matrix_data[0] if matrix_data else {}
+        _am_raw = results.get("auth_matrix")
+        if isinstance(_am_raw, list):
+            auth_matrix = _am_raw[0] if _am_raw else {}
+        elif isinstance(_am_raw, dict):
+            auth_matrix = _am_raw
+        else:
+            auth_matrix = {}
 
         # JS analysis
-        js_data = results.get("js_analysis", [{}])
-        js_info = js_data[0] if js_data else {}
+        _js_raw = results.get("js_analysis")
+        if isinstance(_js_raw, list):
+            js_info = _js_raw[0] if _js_raw else {}
+        elif isinstance(_js_raw, dict):
+            js_info = _js_raw
+        else:
+            js_info = {}
 
         # Discovered files
         discovered_files = results.get("files_discovered", [])
@@ -220,15 +231,15 @@ class PDFReporter:
             findings_html += f"""
             <div style="border-left:4px solid {color};padding:12px;margin:12px 0;background:#fafafa">
               <div style="display:flex;justify-content:space-between">
-                <strong>{f.get('type','Unknown')}</strong>
-                <span style="background:{color};color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em">{sev}{cvss_str}</span>
+                <strong>{_h(f.get('type','Unknown'))}</strong>
+                <span style="background:{color};color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em">{_h(sev)}{_h(cvss_str)}</span>
               </div>
               <div style="margin-top:6px;color:#555;font-size:0.9em">
-                <strong>URL:</strong> <code>{f.get('url','')}</code>
-                {"<br><strong>Parameter:</strong> <code>"+f.get('parameter','')+"</code>" if f.get('parameter') else ""}
-                {"<br><strong>Evidence:</strong> "+str(f.get('evidence',''))[:200] if f.get('evidence') else ""}
-                {"<br><strong>Payload:</strong> <code>"+str(f.get('payload',''))[:100]+"</code>" if f.get('payload') else ""}
-                {"<br><br><strong>Remediation:</strong> "+remediation if remediation else ""}
+                <strong>URL:</strong> <code>{_h(f.get('url',''))}</code>
+                {"<br><strong>Parameter:</strong> <code>"+_h(f.get('parameter',''))+"</code>" if f.get('parameter') else ""}
+                {"<br><strong>Evidence:</strong> "+_h(str(f.get('evidence',''))[:200]) if f.get('evidence') else ""}
+                {"<br><strong>Payload:</strong> <code>"+_h(str(f.get('payload',''))[:100])+"</code>" if f.get('payload') else ""}
+                {"<br><br><strong>Remediation:</strong> "+_h(remediation) if remediation else ""}
               </div>
             </div>"""
 
@@ -239,7 +250,7 @@ class PDFReporter:
         counts = d["severity_counts"]
         return f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>WebSecure Report - {d['target']}</title>
+<head><meta charset="UTF-8"><title>WebSecure Report - {_h(d['target'])}</title>
 <style>
   body{{font-family:Arial,sans-serif;margin:0;padding:20px;color:#333}}
   h1{{color:#1a1a2e}} h2{{color:#16213e;border-bottom:2px solid #0f3460;padding-bottom:6px}}

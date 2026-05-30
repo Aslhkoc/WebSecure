@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
-import re
 import json
 import logging
-from datetime import datetime
-from typing import Dict, List, Any
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def _sev_rank(s: str | None) -> int:
     m = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
     try:
         return m.get(_norm_sev_en(s or ""), 0)
-    except Exception as exc:
+    except Exception:
         return 0
 
 def _dedupe_findings(items: List[Dict]) -> List[Dict]:
@@ -102,11 +103,6 @@ def _dedupe_findings(items: List[Dict]) -> List[Dict]:
 
     return list(bykey.values())
 
-
-def _collect_http_proofs(results: Dict) -> Dict[str, Any]:
-    # Placeholder for logic if needed, currently mostly unused in basic MD report
-    # but kept for compatibility
-    return {}
 
 def _coerce_final(results: Dict) -> List[Dict]:
     fin = results.get("final")
@@ -277,7 +273,7 @@ def _esc_md(s: str) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now().replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 # --- Main Render Function ---
 
@@ -295,9 +291,6 @@ def render(results: Dict) -> str:
     if isinstance(meta, list): meta = next((x for x in meta if isinstance(x, dict)), {})
     target = (meta.get("target") if isinstance(meta, dict) else "") or ""
     when = _now_iso()
-
-    def esc_md(s: str) -> str:
-        return (str(s) or "").replace("|", "\\|").replace("`", "\\`").replace("*", "\\*")
 
     # Counts
     counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
@@ -331,11 +324,11 @@ def render(results: Dict) -> str:
     lines.append("|:-:|:-:|---|---|---|:-:|")
     for idx, i in enumerate(items, 1):
         sev = _sev_with_icon(i.get("severity"))
-        vtype = esc_md(i.get("type") or "Finding")
+        vtype = _esc_md(i.get("type") or "Finding")
         # Show original (clean) target URL — strip injected payload if present
-        url = esc_md(i.get("url") or "")
-        param = esc_md(i.get("param") or i.get("parameter") or "")
-        conf = esc_md(i.get("confidence") or "—")
+        url = _esc_md(i.get("url") or "")
+        param = _esc_md(i.get("param") or i.get("parameter") or "")
+        conf = _esc_md(i.get("confidence") or "—")
         lines.append(f"| {idx} | {sev} | {vtype} | {url} | {param} | {conf} |")
 
     # Details
@@ -362,7 +355,6 @@ def render(results: Dict) -> str:
         payload = it.get("payload") or ""
         param = it.get("param") or it.get("parameter") or ""
         if payload and param and target_url:
-            from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
             try:
                 _p = urlparse(target_url)
                 _params = dict(parse_qsl(_p.query))
