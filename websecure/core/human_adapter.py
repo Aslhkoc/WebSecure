@@ -24,7 +24,7 @@ import logging
 import random
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -421,9 +421,11 @@ class RequestContextTracker:
         """Extract origin (scheme + host) from URL."""
         try:
             parsed = urlparse(url)
+            if not parsed.netloc:
+                return ""
             return f"{parsed.scheme}://{parsed.netloc}"
         except Exception:
-            return url
+            return ""
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +725,11 @@ class HumanLikeAdapter:
             body_preview = response.text[:4096]
         except Exception:
             body_preview = ""
+
+        resp_headers = dict(getattr(response, "headers", {}) or {})
+        if self._evader._is_rate_limited(response.status_code, resp_headers):
+            _logger.debug(f"[HumanLikeAdapter] Rate-limit detected for {url}, applying backoff.")
+            self._rate_limiter.before_request(url)
 
         if self._evader.check_response(body_preview, response.status_code):
             self._handle_detection(response)
@@ -1098,8 +1105,8 @@ class AdaptiveAttackEngine:
             lambda p: p.replace("'", "\\'").replace(" ", "/**/"),
             lambda p: "".join(f"\\u{ord(c):04x}" if ord(c) > 31 else c for c in p),
         ]
-        base_payloads = ["' OR '1'='1", "<script>alert(1)</script>", "../../etc/passwd"]
-        base = next((p for p in base_payloads if p not in tried), base_payloads[0])
+        bank = AdaptiveAttackEngine._get_payload_bank(vuln_type)
+        base = next((p for p in bank if p not in tried), bank[0] if bank else "' OR '1'='1")
         encode_fn = random.choice(encodings)
         return encode_fn(base)
 
