@@ -106,7 +106,7 @@ def _estimate_minutes(config: dict, profile: str) -> tuple[int, int]:
     sec = base_sec + disc_over + off_over
     lo = int(max(1, round((sec / 60.0) * 0.8)))
     hi = int(max(1, round((sec / 60.0) * 1.4)))
-    if hi < lo:
+    if hi <= lo:
         hi = lo + 1
     return (lo, hi)
 
@@ -384,10 +384,6 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
                 print(f"    {i}) {name}")
 
         print("-" * 60)
-        valid_nums = {e[0] for e in MENU_ENTRIES} | {
-            str(len(MENU_ENTRIES) + i + 1) for i in range(len(extra_profiles))
-        }
-
         sel = (_prompt("Seciminiz [1-7, varsayilan=1]: ", "1") or "1").strip()
 
         # YAML profil secimi
@@ -401,7 +397,10 @@ def _offer_scan_profile_and_confirm(cfg: dict) -> tuple[str, dict]:
                         from websecure.core.profiles import apply_profile
                         cfg = apply_profile(profile_id, cfg)
                     except Exception as _fix_e:
-                        _logger.debug(f"[core.scan_profile] {type(_fix_e).__name__}: {_fix_e!r}")
+                        _logger.warning(
+                            "[scan_profile] YAML profil '%s' uygulanamadi: %r",
+                            profile_id, _fix_e,
+                        )
                     return profile_id, cfg
         except (ValueError, TypeError) as _fix_e:
             _logger.debug(f"[core.scan_profile] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -519,7 +518,11 @@ def apply_profile_by_name(name: str, cfg: dict) -> dict:
         from websecure.core.profiles import apply_profile
         return apply_profile(name, cfg)
     except Exception as exc:
-        _logger.warning(f"[scan_profile] ProfileRegistry hatasi: {exc!r}. Fallback.")
+        fallback = "aggressive" if name == "aggressive" else "stealth"
+        _logger.warning(
+            "[scan_profile] ProfileRegistry '%s' uygulanamadi: %r. '%s' fallback uygulanıyor.",
+            name, exc, fallback,
+        )
         if name == "aggressive":
             return _apply_aggressive_profile(cfg)
         return _apply_stealth_profile(cfg)
