@@ -128,6 +128,11 @@ class WAFPayloadClassifier:
         results: Dict[str, bool] = {}
         types_to_test = probe_types or list(_PROBE_SETS.keys())
 
+        # Fallback oturumu döngü dışında BİR kez kur — her payload'da yeni
+        # session+TCP/TLS handshake açmak bağlantı yeniden kullanımını öldürür.
+        sess = session or _hardened_session({})
+        _fallback_headers = {"User-Agent": "Mozilla/5.0 (compatible; probe/1.0)"}
+
         for probe_type in types_to_test:
             payloads = _PROBE_SETS.get(probe_type, [])[:2]
             blocked_count = 0
@@ -135,11 +140,11 @@ class WAFPayloadClassifier:
                 url = base_url.rstrip("/") + "/" + payload.lstrip("?/")
                 try:
                     if session:
-                        r = session.get(url, timeout=self.timeout, allow_redirects=True)
+                        r = sess.get(url, timeout=self.timeout, allow_redirects=True)
                     else:
-                        r = _hardened_session({}).get(
+                        r = sess.get(
                             url, timeout=self.timeout, verify=False,
-                            headers={"User-Agent": "Mozilla/5.0 (compatible; probe/1.0)"},
+                            headers=_fallback_headers,
                         )
                     if r.status_code in (400, 403, 406, 429, 503):
                         blocked_count += 1
@@ -178,15 +183,21 @@ class WAFRateLimitAnalyzer:
         statuses: List[int] = []
         probe_url = url.rstrip("/") + "?_waf_rl=1"
 
+        # Burst için tek bir oturum kullan — aksi halde her istek yeni bağlantı
+        # açar, gerçek "hızlı ardışık istek" senaryosu oluşmaz ve bağlantı-başına
+        # rate-limit tetiklenmez.
+        sess = session or _hardened_session({})
+        _fallback_headers = {"User-Agent": "Mozilla/5.0"}
+
         for i in range(1, self.max_requests + 1):
             t0 = time.perf_counter()
             try:
                 if session:
-                    r = session.get(probe_url, timeout=self.timeout)
+                    r = sess.get(probe_url, timeout=self.timeout)
                 else:
-                    r = _hardened_session({}).get(
+                    r = sess.get(
                         probe_url, timeout=self.timeout, verify=False,
-                        headers={"User-Agent": "Mozilla/5.0"},
+                        headers=_fallback_headers,
                     )
                 elapsed_ms = (time.perf_counter() - t0) * 1000
                 times.append(elapsed_ms)
@@ -246,7 +257,6 @@ class WAFFingerprinter:
             profile = WAFDetector(timeout=self.timeout).detect(url, session=session)
         except Exception as e:
             _logger.debug(f"[WAFFingerprint] WAFDetector unavailable: {e}")
-            from dataclasses import dataclass as _dc
             profile = type("_P", (), {
                 "vendor": "unknown", "confidence": 0.0,
                 "detected": False, "bypass_strategies": [],
