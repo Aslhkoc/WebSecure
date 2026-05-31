@@ -245,8 +245,7 @@ def _load_xxe_targets() -> list:
     seen = set(_XXE_TARGETS_CORE)
     ext = []
     for line in load_external_payloads("xxe"):
-        import re as _re
-        for m in _re.finditer(r'(?:SYSTEM\s+"([^"]+)"|href="([^"]+)")', line):
+        for m in re.finditer(r'(?:SYSTEM\s+"([^"]+)"|href="([^"]+)")', line):
             uri = m.group(1) or m.group(2)
             if uri and uri not in seen:
                 seen.add(uri)

@@ -7,6 +7,7 @@ Attack surfaces: URL params, POST form data, JSON body, HTTP headers, cookies.
 """
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import logging
 import random as _random
 import re
@@ -362,9 +363,8 @@ class SSTIScanner(BaseScanner):
           4. Submit form with plain string `str(product)` to rule out pure reflection
           5. Return True only when step 3 passes AND step 4 fails
         """
-        import random as _random_local
-        a = _random_local.randint(17, 97)
-        b = _random_local.randint(17, 97)
+        a = _random.randint(17, 97)
+        b = _random.randint(17, 97)
         product = a * b
 
         for tmpl in (f"{{{{{a}*{b}}}}}", f"${{{a}*{b}}}", f"#{{{a}*{b}}}"):
@@ -388,8 +388,6 @@ class SSTIScanner(BaseScanner):
         then runs canary confirmation only on the first hit (serial).
         Dramatically faster on high-latency targets.
         """
-        import concurrent.futures as _cf
-
         def _probe(item: Tuple[str, str]) -> Optional[Tuple[str, str, str]]:
             payload, expected_re = item
             new_params = dict(params)
@@ -489,8 +487,6 @@ class SSTIScanner(BaseScanner):
         Parallel Tier1 header probe — sends all polyglot payloads concurrently,
         confirms on the first hit. Mirrors _tier1_probe() for URL params.
         """
-        import concurrent.futures as _cf
-
         def _probe_header(item: Tuple[str, str]) -> Optional[Tuple[str, str, str]]:
             payload, expected_re = item
             body = self._request_with_header(url, header_name, payload)
@@ -782,6 +778,7 @@ class SSTIAutoExploiter:
                         "output": text[start:end].strip(),
                         "rce_confirmed": True,
                     }
-            except Exception:
+            except Exception as exc:
+                _logger.debug("[SSTI] Exploit payload error %s param=%s: %r", url, param, exc)
                 continue
         return None
