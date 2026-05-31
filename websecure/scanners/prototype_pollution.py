@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.http import hardened_session
+from websecure.core.payloads import load_external_payloads as _load_pp_payloads
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +514,16 @@ def run(
 
     # -- 2. Query-string injection -------------------------------------------
     if not scan_results:
+        # Built-in templates + wordlist-loaded QS payloads
+        _wl_qs: List[str] = []
+        try:
+            _wl_qs = [
+                p for p in _load_pp_payloads("prototype_pollution")
+                if "=" in p and not p.startswith(("{", "<", "O:", "!!", "\\", '"', "&", "BAh", "rO0", "aced", "#"))
+            ]
+        except Exception as exc:
+            logger.debug("[ProtoPollution] wordlist load error: %s", exc)
+
         for test_url in _qs_payloads(url, canary):
             try:
                 resp = session.get(test_url, timeout=10, allow_redirects=True)
@@ -524,6 +535,22 @@ def run(
                     break
             except Exception as exc:
                 logger.debug("[ProtoPollution] QS error: %s", exc)
+
+        # Wordlist-extended QS probing
+        if not scan_results and _wl_qs:
+            sep = "&" if "?" in url else "?"
+            for qs_param in _wl_qs[:30]:
+                test_url = url + sep + urllib.parse.quote(qs_param, safe="=[].")
+                try:
+                    resp = session.get(test_url, timeout=10, allow_redirects=True)
+                    if _canary_in_response(resp, canary):
+                        scan_results.append(_build_finding(
+                            "Query-string parameter (wordlist)", test_url, test_url, canary
+                        ))
+                        logger.info("[ProtoPollution] QS wordlist hit: %s", test_url)
+                        break
+                except Exception as exc:
+                    logger.debug("[ProtoPollution] QS wordlist error: %s", exc)
 
     # -- 3. Deep-merge probe (JSON PATCH) -----------------------------------
     deep_payload = {

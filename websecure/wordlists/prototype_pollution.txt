@@ -124,11 +124,7 @@ $.extend(true, {}, JSON.parse('{"__proto__": {"polluted": "yes"}}'))
 $.extend(true, {}, {"__proto__": {"polluted": "yes"}})
 $.extend({}, {"__proto__": {"polluted": "yes"}})
 
-# ── YAML POLLUTION ──
-__proto__:
-  polluted: yes
-constructor:
-  prototype:
-    polluted: yes
-a:
-  __proto__:
+# NOTE: Multi-line YAML pollution payloads are not included here because
+# _read_lines() processes one line at a time and multi-line entries would
+# be split into meaningless fragments. JSON equivalents above cover the same
+# attack surface for _read_lines()-based loading.

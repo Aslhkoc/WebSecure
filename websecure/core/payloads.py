@@ -152,6 +152,9 @@ _DEFAULTS = {
         "jwt":                  ["jwt_secrets.txt"],
         # Advanced SQLi
         "polyglot_sqli":        ["sqli.txt"],
+        # Subdomain / path discovery
+        "subdomains":           ["subdomains.txt"],
+        "api_paths":            ["api_paths.txt"],
     },
 }
 
@@ -422,6 +425,21 @@ ALLOWED_CATEGORIES = {
     "gql",
     "http_smuggling",
     "smuggling",
+    # Discovery / fuzzing
+    "dirs",
+    "files",
+    "params",
+    "values",
+    "fuzz",
+    "wordlist",
+    "common",
+    # Auth
+    "passwords",
+    "jwt_secrets",
+    "jwt",
+    # Subdomain / path
+    "subdomains",
+    "api_paths",
 }
 
 _PAYLOAD_CACHE: dict[tuple[str, str | None, tuple[str, ...] | None], list[str]] = {}

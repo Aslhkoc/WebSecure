@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.payloads import load_external_payloads as _load_smuggling_payloads
 
 logger = logging.getLogger(__name__)
 
@@ -703,12 +704,27 @@ class H2TESmugglingProber(BaseScanner):
     """
     name = "h2_te_smuggling"
 
-    _TE_OBFUSCATIONS = [
+    _TE_OBFUSCATIONS_BASE = [
         "chunked", "Chunked", "CHUNKED",
         "chunked, identity", "identity, chunked",
         "chunked\r\n\t",
         "x-custom-encoding, chunked",
     ]
+
+    @classmethod
+    def _get_te_obfuscations(cls) -> List[str]:
+        """Return TE obfuscation values: built-in list extended with http_smuggling.txt entries."""
+        extra: List[str] = []
+        try:
+            for line in _load_smuggling_payloads("http_smuggling"):
+                # Extract TE header value lines: "Transfer-Encoding: X" → X
+                if line.startswith("Transfer-Encoding:") and "chunked" in line.lower():
+                    val = line.split(":", 1)[1].strip()
+                    if val and val not in cls._TE_OBFUSCATIONS_BASE:
+                        extra.append(val)
+        except Exception:
+            pass
+        return cls._TE_OBFUSCATIONS_BASE + extra
 
     def run(self, target: str, **kwargs) -> List[Dict]:
         results: List[Dict] = []
@@ -718,7 +734,7 @@ class H2TESmugglingProber(BaseScanner):
         use_tls = parsed.scheme == "https"
         path    = parsed.path or "/"
 
-        for te_val in self._TE_OBFUSCATIONS:
+        for te_val in self._get_te_obfuscations():
             finding = self._probe(host, port, use_tls, path, te_val)
             if finding:
                 results.append(finding)

@@ -1,0 +1,6 @@
+# Learned Payloads — WebSecure Runtime Cache
+# Bu dosya çalışma zamanında FalsePositiveReducer ve fp_learner.py tarafından
+# otomatik doldurulur. Başlangıçta boştur.
+# Yeni confirmed payload'lar buraya eklenir ve sonraki taramalarda öncelikli
+# olarak denenir.
+# Manuel düzenleme: Her satır bir payload (# ile başlayan satırlar yorum).

