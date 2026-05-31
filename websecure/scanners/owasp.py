@@ -1,21 +1,17 @@
 ﻿from __future__ import annotations
 from importlib.util import find_spec as _find_spec
-from importlib import import_module as _import_module
 from websecure.core.reporting import add_result
-import requests
 import logging
-from urllib.parse import urlparse, urljoin
-
-_logger = logging.getLogger(__name__)
 import random
 import time
 from typing import Dict, Any, Optional, List, Tuple
-import os as _os
+from urllib.parse import urlparse
 import json as _json
 import shlex as _shlex
 import shutil as _shutil
 import subprocess as _subprocess
-from typing import Iterable as _Iterable
+
+_logger = logging.getLogger(__name__)
 
 # NOT: injection fonksiyonları bu modülde tekrar ETMİYOR.
 # Gerekirse main zaten scanners.injection üzerinden çağırıyor.
@@ -82,12 +78,8 @@ def _cacheable_headers(h: Dict[str, str]) -> Tuple[bool, List[str]]:
 def _reflects(text: str, needle: str) -> bool:
     return needle.lower() in (text or "").lower()
 
-def _absurl(base: str, path: str) -> str:
-    b = base.rstrip("/") + "/"
-    return urljoin(b, path.lstrip("/"))
-
 # ----------------- A01: Broken Access Control -----------------
-def check_broken_access_control(url: str, open_ports, results: Dict, session, debug: bool = False):
+def check_broken_access_control(url: str, results: Dict, session, debug: bool = False):
     """
     Hafif/gürültüsü az heuristikler:
       - /admin, /dashboard, /config erişilebilir mi?
@@ -482,7 +474,7 @@ def run(url: str = "", session=None, config: Dict[str, Any] | None = None, debug
 
     results: Dict[str, Any] = {"target": url}
     # Çekirdek kontroller
-    check_broken_access_control(url, None, results, session, debug=debug)
+    check_broken_access_control(url, results, session, debug=debug)
     check_sensitive_data_exposure(url, results, session, debug=debug)
     check_authentication(url, results, session, debug=debug)
     # Cache ve backup kontrolleri
@@ -684,7 +676,7 @@ def run_nuclei_signatures(
         try:
             obj = _json.loads(line)
         except _json.JSONDecodeError as exc:
-            logger.debug("[OWASPScanner] Nuclei output JSON parse error: %s", exc)
+            _logger.debug("[OWASPScanner] Nuclei output JSON parse error: %s", exc)
             continue
         if not isinstance(obj, dict):
             continue
@@ -739,7 +731,7 @@ def run_owasp_and_nuclei(
     main.py bu fonksiyonu çağırırsa istenen “OWASP sonrası Nuclei” entegrasyonu gerçekleşir.
     (Susturma yok—hata olursa yükselir ve üst seviyede görünür.)
     """
-    check_broken_access_control(url, open_ports or [], results, session, debug=debug)
+    check_broken_access_control(url, results, session, debug=debug)
     check_sensitive_data_exposure(url, results, session, debug=debug)
     check_authentication(url, results, session, debug=debug)
     check_cache_poisoning_and_host_header(url, results, session, debug=debug)
