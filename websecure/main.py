@@ -13,7 +13,10 @@ if _pkg_root not in sys.path:
 
 from websecure.core.http import verify_for_phase
 import inspect
-from websecure.core.auth_flow import run_auto_signup, run_device_code_flow, smart_login
+from websecure.core.auth_flow import (
+    run_auto_signup, run_device_code_flow, smart_login,
+    run_auth_flow, install_auth_retry_adapter,
+)
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
 # run_business_logic_flows and run_race_conditions are loaded dynamically below (line ~884)
@@ -79,7 +82,7 @@ from websecure.core.startup import (
 
 
 from websecure.core.utils import ensure_wordlists as _ensure_wl
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
 import time as _t
 import sys as _sys, os as _os
 
@@ -88,29 +91,7 @@ _logger = _logging.getLogger(__name__)
 _req_mod = _im.import_module('requests') if _iul.find_spec('requests') is not None else None
 requests = _req_mod  # alias; may be None
 
-# [UI] MSF-Style Banner (inlined from banner.py)
-import random as _banner_random, platform as _banner_platform
-_BANNER_VERSION = "2.0.4-dev"
-_BANNER_CODENAME = "GhostProtocol"
-_BANNERS = [r"""
-  ######  ####### ###    ## ####### ####### ######  ##      ######  ## ########
- ##  #### ##      ####   ## ##      ##      ##   ## ##     ##    ## ##    ##
- ##   ### #####   ## ##  ## ####### #####   ######  ##     ##    ## ##    ##
- ##  #### ##      ##  ## ##      ## ##      ##      ##     ##    ## ##    ##
-  ######  ####### ##   #### ####### ####### ##      ######  ######  ##    ##
-
-                      [ SYSTEM: COMPROMISED ]
-               [ TARGET: ACQUIRED | VECTOR: LETHAL ]
-"""]
-
-def print_banner(modules_count: int = 0) -> None:
-    print(_banner_random.choice(_BANNERS))
-    print(f"       =[ WebSecure v{_BANNER_VERSION} [{_BANNER_CODENAME}]")
-    print(f"       =[ Modules: {modules_count} loaded")
-    print(f"       =[ OS: {_banner_platform.system()} {_banner_platform.release()}")
-    print("")
-    
-    # [WS3] Dynamic Wordlist Report
+# [WS3] Dynamic Wordlist Report (asıl banner _print_banner() içinde basılır)
 try:
     from websecure.core.utils import collect_all_wordlists
     _wd = collect_all_wordlists()
@@ -139,40 +120,11 @@ except ImportError:
     _logger.warning("[Main] Failed to import request_smuggling, jwt, or nosqli.")
 
 
-# [WS3] Offensive Scanner Wrappers (Bridge)
-def offensive_request_smuggling(url, session, **kwargs):
-    if request_smuggling:
-        try:
-            request_smuggling.run(url, session=session)
-        except Exception as e:
-            _logger.error(f"Request Smuggling failed: {e}")
-
-def offensive_mass_assignment(url, session, **kwargs):
-    if mass_assignment:
-        try:
-            res = mass_assignment.run(url, session=session)
-            if res and isinstance(res, list):
-                if callable(globals().get("add_result")):
-                    for r in res:
-                         add_result("vulnerability", r)
-        except Exception as e:
-            _logger.error(f"Mass Assignment failed: {e}")
-
-def offensive_jwt(url, session, **kwargs):
-    if jwt:
-        try:
-            jwt.run(url, session=session)
-        except Exception as e:
-            _logger.error(f"JWT Scan failed: {e}")
-
-def offensive_nosqli(url, session, **kwargs):
-    if nosqli:
-        try:
-            nosqli.run(url, session=session)
-        except Exception as e:
-            _logger.error(f"NoSQLi Scan failed: {e}")
-
-
+# [WS3] Offensive Scanner Wrappers — aşağıda (_bind_offensive ile) tanımlanır.
+# Buradaki eski wrapper tanımları kaldırıldı: ileride
+# offensive_request_smuggling/mass_assignment/jwt/nosqli sembolleri
+# _bind_offensive() ile modülün run() fonksiyonuna yeniden bağlanıyordu;
+# bu blok ölü koddu (hiç çağrılmadan üzerine yazılıyordu).
 
 
 _BOUNDARY_EXC = tuple([
@@ -307,24 +259,6 @@ def _session_priming(session, base_url, cfg):
     if hdr_token:
         session.headers.update({"X-CSRF-Token": hdr_token})
 
-
-if _ws_spec('doctest') is not None:
-    from doctest import debug  # optional
-else:
-    debug = None
-
-if _ws_spec('discovered') is not None:
-    import discovered  # optional
-else:
-    discovered = None
-if _ws_spec('starlette') is not None:
-    from starlette import endpoints  # optional
-else:
-    endpoints = None
-if _ws_spec('urllib3.util') is not None:
-    from urllib3.util import url  # optional
-else:
-    url = None
 
 _discover_func = None
 
@@ -615,37 +549,8 @@ else:
 
 
 # --- TLS ---
-_tls_spec = _ws_spec("websecure.scanners.tls")
-if _tls_spec is not None:
-    _tls_mod = _im.import_module('websecure.scanners.tls')
-    _check = getattr(_tls_mod, "check_ssl_certificate", None)
-    if callable(_check):
-        check_ssl_certificate = _check
-    else:
-        def check_ssl_certificate(*a, **k):
-            return {
-                "host": None,
-                "subject_CN": None,
-                "not_before": None,
-                "not_after": None,
-                "days_remaining": None,
-                "tls_version": None,
-                "problems": ["tls_module_missing"],
-            }
-else:
-    def check_ssl_certificate(*a, **k):
-        return {
-            "host": None,
-            "subject_CN": None,
-            "not_before": None,
-            "not_after": None,
-            "days_remaining": None,
-            "tls_version": None,
-            "problems": ["tls_module_missing"],
-        }
-
-    # [WS3] Fallback check_ssl_certificate is defined here
-    pass
+# TLS sertifika/protokol analizi faz planında (phase_tls -> scanners.tls) yapılır.
+# Eski main seviyesi check_ssl_certificate wrapper'ı ölü koddu (hiç çağrılmıyordu), kaldırıldı.
 
 # --- Raporlama / sonuç kovaları ---
 _reporting_mod = None
@@ -734,7 +639,6 @@ for _m in [
 
 
 # --- Crawler ---
-# --- Crawler ---
 _crawl_mod = _im.import_module('websecure.crawler') if _ws_spec('websecure.crawler') is not None else None
 if _crawl_mod is None:
     # Fallback: try relative from core or root if simple import fails
@@ -744,21 +648,27 @@ if _crawl_mod is None:
     except ImportError:
          print("[!] UYARI: Crawler modülü (websecure.crawler) yüklenemedi!")
 
-crawl_website = getattr(_crawl_mod, 'crawl_website', None) if _crawl_mod else None
 WebCrawler = getattr(_crawl_mod, 'WebCrawler', None) if _crawl_mod else None
 CrawlerConfig = getattr(_crawl_mod, 'CrawlerConfig', None) if _crawl_mod else None
-
-if crawl_website is None:
-    def crawl_website(*a, **k):
-        return None
+# crawl_website kaldırıldı: websecure.crawler bu sembolü export etmiyor ve main'de
+# hiç çağrılmıyordu (statik crawl WebCrawler.start(), dinamik discover_dynamic_endpoints ile yapılır).
 
 # --- Güvenlik başlıkları ---
-_infra_mod = _im.import_module('websecure.scanners.infrastructure') if _ws_spec('websecure.scanners.infrastructure') is not None else None
-scan_security_headers = getattr(_infra_mod, 'get_security_headers', None) if _infra_mod else None
+# Güvenlik başlıkları faz planında (phase_sec_headers -> scanners.infrastructure) işlenir.
+# Eski scan_security_headers binding'i main'de hiç kullanılmıyordu (ölü), kaldırıldı.
 
 # --- GraphQL ---
 _gql_mod = _im.import_module('websecure.scanners.graphql') if _ws_spec('websecure.scanners.graphql') is not None else None
-GraphQLScanner = getattr(_gql_mod, 'GraphQLScanner', None) if _gql_mod else None
+_gql_run = getattr(_gql_mod, 'run', None) if _gql_mod else None
+# graphql_scan: legacy main-seviyesi GraphQL bloğu (aşağıda ~2160) bu global'i bekliyordu
+# ama hiçbir yerde tanımlı değildi (kopuk wiring). scanners.graphql.run(target, ...) tek
+# hedef alır; endpoint listesi üzerinde dönen ince bir adaptöre bağlandı.
+if callable(_gql_run):
+    def graphql_scan(session=None, endpoints=None, results=None, debug=False, **_k):
+        for _ep in list(endpoints or [])[:10]:
+            if isinstance(_ep, str):
+                _gql_run(_ep, session=session, results=results, debug=debug)
+        return None
 # --- SSRF/XXE ---
 _ssrf_mod = _im.import_module('websecure.scanners.ssrf_xxe') if _ws_spec('websecure.scanners.ssrf_xxe') is not None else None
 ssrf_xxe_scan = getattr(_ssrf_mod, 'scan', None) if _ssrf_mod else None
@@ -805,18 +715,13 @@ if _ws_spec("websecure.scanners.ws_fuzz") is None:
         return None
 
 # --- Authorization ---
-# --- Authorization ---
 _authz = _im.import_module("websecure.scanners.auth_scanners") if _ws_spec(
     "websecure.scanners.auth_scanners") is not None else None
 RoleContext = getattr(_authz, 'RoleContext', None) if _authz else None
 RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
-# In auth.py, the function is check_idor or compare_roles? 
-# Wait, main expects 'run'. But auth.py has 'compare_roles' and 'check_idor'.
-# I need to verify what 'authorization_run' is expected to do.
-# Looking at auth.py again, it has no 'run' function exposed at top level?
-# Line 106 says "formerly authorization.py". 
-# Usually scanners have a 'run' entry point. 
-# I will bind 'authorization_run' to a wrapper that calls compare_roles + check_idor.
+# auth_scanners.py top-level 'run' yerine compare_roles() + check_idor() sunar.
+# authorization_run, ikisini auth_ctx.build_sessions() çoklu-oturum çıktısı üzerinde
+# çağıran bir köprü wrapper'a bağlanır.
 def _auth_wrapper(url, session, debug=False, auth_ctx=None):
     findings = []
     if not auth_ctx or not hasattr(auth_ctx, "build_sessions"):
@@ -1065,40 +970,10 @@ def _has_hsts(results: dict) -> bool:
     return False
 
 
-def _auth_cov_note(kind: str) -> None:
-    k = (kind or "").lower()
-    if "waf" in k:
-        note_auth_outcome("WAF");
-        return
-    if "rate" in k:
-        note_auth_outcome("RateLimit");
-        return
-    note_auth_outcome("Auth")
-
-
-def _public_surface_seeds(base_url: str) -> list[str]:
-    base = base_url.rstrip("/")
-    candidates = [
-        "/robots.txt", "/sitemap.xml",
-        "/api/public", "/api/health", "/api/status",
-        "/guest", "/login", "/auth/login", "/auth/status",
-        "/_next/data/index.json", "/static/app.js",
-    ]
-    return [base + p for p in candidates]
-
-# --- Raporlama Entegrasyonu ---
-if _iul.find_spec("websecure.core.reporting") is not None:
-    _rmod = _im.import_module("websecure.core.reporting")
-    _phase_rec = getattr(_rmod, "_phase_rec", None)
-elif _iul.find_spec('reporting') is not None:
-    from websecure.core.reporting import (
-    configure_logging,
-    perform_reporting,
-    add_session,
-    verify_and_score
-)
-else:
-    _phase_rec = None
+# Not: _auth_cov_note ve _public_surface_seeds kaldırıldı — ikisi de hiç çağrılmayan
+# ölü yardımcılardı. (Eski _phase_rec köprü bloğu da kaldırıldı: _phase_rec main içinde
+# hiç okunmuyordu ve elif dalı 'reporting' kontrol edip yanlışlıkla websecure.core.reporting'i
+# import ediyordu — kopuk mantık.)
 
 
 # --- Parametre imza filtresi yardımcıları — websecure.core.utils'ten al ---
@@ -1127,56 +1002,9 @@ except (ImportError, AttributeError):
             return ""
 
 
-def _passive_js_analyze(session: requests.Session, js_urls: list[str], results: dict) -> None:
-    """Hafif JS pasif analiz: potansiyel anahtar izleri toplar (best-effort, istisnasız)."""
-    keys: list[dict] = []
-    curl_bin = shutil.which("curl")
-
-    if not isinstance(js_urls, (list, tuple)) or not js_urls:
-        return
-
-    if curl_bin:
-        # curl ile istisnasız içerik alma
-        for u in js_urls:
-            if not isinstance(u, str) or not u.strip():
-                continue
-            # yalnızca http/https şemaları
-            pr = urlparse(u)
-            if pr.scheme not in ("http", "https"):
-                continue
-
-            # -L (redirect), --max-time 5s, -sS sessiz, -w kodu yaz, içerik stdout'a düşer
-            # not: check=False -> istisna yok; returncode üzerinden karar
-            cp = subprocess.run(
-                [curl_bin, "-L", "--max-time", "5", "-sS", u, "-w", "\n%{http_code}\n"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            if cp.returncode != 0:
-                continue
-            out = cp.stdout or ""
-            if not out:
-                continue
-            *body_lines, last = out.splitlines()
-            # Son satır HTTP kodu; geri kalanı gövde
-            try_code = last.strip()
-            http_code = int(try_code) if try_code.isdigit() else 0
-            body = "\n".join(body_lines)
-            if 200 <= http_code < 400 and body:
-                lbody = body.lower()
-                # Basit anahtar ipuçları
-                if ("apikey" in lbody) or ("mapbox" in lbody) or ("google_maps" in lbody) or ("AIza" in body):
-                    keys.append({"url": u, "hint": "key_like"})
-    else:
-        # curl yoksa sessizce atlamayalım: sonuçlara nedenini yazalım
-        results.setdefault("artifacts", {}).setdefault("notes", []).append(
-            {"component": "js_passive", "note": "curl_missing; js anahtar taraması atlandı"}
-        )
-
-    if keys:
-        results.setdefault("artifacts", {}).setdefault("js_keys", []).extend(keys)
+# Not: _passive_js_analyze kaldırıldı — hiç çağrılmayan ölü yardımcıydı.
+# JS anahtar/secret taraması crawler.harvest_js_keys() ve passive_recon/js_analyzer
+# scanner'ları tarafından yapılır.
 
 
 # ------------------ Ana akış ------------------
@@ -1187,26 +1015,39 @@ from websecure.core.egress import (
 )
 
 def _safe_call(func, *args, call_timeout: float | None = None, **kwargs):
+    """Bir fonksiyonu ayrı bir thread'de, isteğe bağlı zaman aşımıyla çalıştırır.
 
+    Dönüş: (ok: bool, result_or_error). Zaman aşımında ("timeout") veya istisnada
+    (hata mesajı) ok=False döner.
 
+    Not: Eskiden `with ThreadPoolExecutor() as ex:` kullanılıyordu; context manager
+    çıkışta shutdown(wait=True) çağırdığı için zaman aşımı dönüşü bile takılan görev
+    bitene kadar BLOKLANIYORDU — yani call_timeout fiilen etkisizdi. Artık executor
+    elle yönetiliyor ve zaman aşımında shutdown(wait=False) ile çağıran serbest bırakılıyor
+    (yetim thread arka planda en iyi çabayla biter).
+    """
     if not callable(func):
         return False, "not_callable"
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(func, *args, **kwargs)
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(func, *args, **kwargs)
+    try:
         if call_timeout is None or call_timeout <= 0:
-            while not fut.done():
-                _t.sleep(0.01)
+            exc = fut.exception()  # görev bitene kadar bloklar
         else:
-            t0 = _t.time()
-            while not fut.done():
-                if (_t.time() - t0) > call_timeout:
-                    fut.cancel()
-                    return False, "timeout"
-                _t.sleep(0.01)
-        exc = fut.exception()
+            try:
+                exc = fut.exception(timeout=call_timeout)
+            except _FuturesTimeout:
+                fut.cancel()
+                ex.shutdown(wait=False)  # çağırana bloklamadan dön
+                return False, "timeout"
         if exc is not None:
             return False, str(exc)
         return True, fut.result()
+    finally:
+        # Görev bittiyse temiz kapat; bitmediyse (timeout dışı erken dönüşlerde)
+        # yine bloklamadan kapat.
+        ex.shutdown(wait=False)
 
 
 def _normalize_webdriver_cfg(cfg: dict) -> dict:
@@ -1540,7 +1381,7 @@ def main() -> None:
     try:
         from websecure.core.phases import _install_sigint_handler  # noqa: PLC0415
         _install_sigint_handler()
-    except (ImportError, Exception) as _fix_e:
+    except Exception as _fix_e:
         _logger.debug(f"[main] {type(_fix_e).__name__}: {_fix_e!r}")
 
     _ = _ensure_wl(cfg)
@@ -2432,7 +2273,10 @@ def _run_scan_phases(
         print("fuzzing başlıyor…")
         t = mark("fuzzing")
 
-        auth_ctx = None
+        # Akış düzeltmesi: auth_ctx burada None'a sıfırlanıyordu; bu, 1891'de kurulan
+        # ve offensive taramalarda kullanılan kimlik bağlamını fuzzing ve (aşağıdaki) OAST
+        # için kaybettiriyordu. Kimlikli taramalarda fuzz/OAST'ın da auth bağlamını
+        # taşıması için sıfırlama kaldırıldı.
 
         fuzz_fn = fuzz_endpoint if callable(globals().get("fuzz_endpoint")) else None
         sig_params = set(inspect.signature(fuzz_fn).parameters.keys()) if callable(fuzz_fn) else set()
@@ -2717,7 +2561,7 @@ if __name__ == "__main__":
     # Success Alert
     try:
         AlertManager.play_success()
-    except (AttributeError, OSError, Exception) as exc:
+    except Exception as exc:
         _logger.debug(f"[main] AlertManager.play_success hatası: {exc!r}")
 
     # Keep window open
