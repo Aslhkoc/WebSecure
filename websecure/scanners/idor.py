@@ -6,6 +6,7 @@ Dual-role comparison (high confidence) + sequential enumeration (medium confiden
 """
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import hashlib as _hashlib
 import logging
 import re
@@ -127,8 +128,6 @@ class IDORScanner(BaseScanner):
         Pre-fetches the original body ONCE and reuses it across all loops.
         Parallelises test-ID fetches via ThreadPoolExecutor.
         """
-        import concurrent.futures as _cf
-
         parsed = urlparse(url)
         params = parse_qsl(parsed.query)
 

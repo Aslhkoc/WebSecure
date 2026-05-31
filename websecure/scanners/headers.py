@@ -7,7 +7,7 @@ This file remains to support dynamic imports from config 'modules': ['headers'].
 """
 
 from __future__ import annotations
-from .infrastructure import get_security_headers, analyze_response_headers, HeaderScanner
+from .infrastructure import get_security_headers
 
 
 def scan(target: str, session=None, **kwargs):

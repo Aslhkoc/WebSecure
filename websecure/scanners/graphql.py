@@ -925,9 +925,9 @@ class GraphQLScanner(BaseScanner):
         return list(set(found))
 
 
-def run(target: str, session=None, **kwargs):
-    scanner = GraphQLScanner(session)
-    scanner.run(target, **kwargs)
+def run(target: str, session=None, results: dict = None, debug: bool = False, **kwargs):
+    scanner = GraphQLScanner(session=session, results=results or {}, debug=debug)
+    return scanner.run(target, **kwargs)
 
 
 
@@ -936,9 +936,8 @@ def run(target: str, session=None, **kwargs):
 # GraphQL helpers: JWT utils, batching, APQ, authz diff matrix, suggestion parser
 # ===========================================================================
 import base64
-import time
 import hashlib as _hl
-from typing import Iterator, Mapping
+from typing import Iterator
 
 # ---------------------------------------------------------------------------
 # Basit auth yardımcıları (cookie + header snapshot/drop)
@@ -1137,7 +1136,7 @@ def _try_mutate_roles(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _set_exp(payload: Dict[str, Any], delta_seconds: int) -> Dict[str, Any]:
     p = json.loads(json.dumps(payload))  # deep copy
-    p["exp"] = int(time.time()) + delta_seconds
+    p["exp"] = int(_t.time()) + delta_seconds
     return p
 
 
