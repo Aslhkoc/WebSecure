@@ -153,7 +153,6 @@ def _strip_fragment(u: str) -> str:
 
 class _LRUCache:
     def __init__(self, max_entries: int = 512, ttl_seconds: int = 900):
-        self.template_counts: Dict[str, int] = {}
         self.max = int(max_entries)
         self.ttl = int(ttl_seconds)
         self._data: OrderedDict[str, tuple[float, dict]] = OrderedDict()
@@ -584,71 +583,76 @@ class WebCrawler:
         if BeautifulSoup and "html" in content_type:
             try:
                 soup = BeautifulSoup(resp.text, "html.parser")
-                forms = soup.find_all("form")
-                if forms:
-                    forms_data = []
-                    for f in forms:
-                        inputs = []
-                        for tag in f.find_all(["input", "textarea", "select"]):
-                            if tag.get("name"):
-                                inputs.append({
-                                    "name": tag.get("name"),
-                                    "type": tag.get("type", "text"),
-                                    "value": tag.get("value", "")
-                                })
-                        forms_data.append({
-                            "action": f.get("action"),
-                            "method": f.get("method"),
-                            "inputs": inputs
-                        })
-                    self.results["forms_meta"].append({
-                        "url": url,
-                        "count": len(forms),
-                        "forms": forms_data
-                    })
-                    if len(forms) > 0:
-                        print(f"       +[Form Detected] {url} ({len(forms)} forms, {len([i for f in forms_data for i in f['inputs']])} inputs)")
-                    if analyze_form_inputs:
-                        all_inputs = [i for f in forms_data for i in f["inputs"]]
-                        if all_inputs:
-                            analysis = analyze_form_inputs(all_inputs)
-                            if "param_contexts" not in self.results:
-                                self.results["param_contexts"] = {}
-                            self.results["param_contexts"].update(analysis)
             except Exception as e:
+                soup = None
                 if self.debug:
-                    logger.debug(f"Form parsing error on {url}: {e}")
-
-            # [SPA FIX] Detect loose inputs (Angular/React often lack dict-forms)
-            try:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                inputs = soup.find_all("input")
-                if inputs:
-                    loose_inputs = []
-                    for i in inputs:
-                        name = i.get("name") or i.get("id")
-                        if name:
-                            loose_inputs.append({
-                                "name": name,
-                                "type": i.get("type", "text"),
-                                "value": i.get("value", "")
+                    logger.debug(f"HTML parse error on {url}: {e}")
+            if soup is not None:
+                try:
+                    forms = soup.find_all("form")
+                    if forms:
+                        forms_data = []
+                        for f in forms:
+                            inputs = []
+                            for tag in f.find_all(["input", "textarea", "select"]):
+                                if tag.get("name"):
+                                    inputs.append({
+                                        "name": tag.get("name"),
+                                        "type": tag.get("type", "text"),
+                                        "value": tag.get("value", "")
+                                    })
+                            forms_data.append({
+                                "action": f.get("action"),
+                                "method": f.get("method"),
+                                "inputs": inputs
                             })
-                    if loose_inputs:
-                        self.results["param_candidates"].update(
-                            [i["name"] for i in loose_inputs]
-                        )
                         self.results["forms_meta"].append({
                             "url": url,
-                            "method": "POST",
-                            "action": url,
-                            "inputs": loose_inputs,
-                            "synthetic": True
+                            "count": len(forms),
+                            "forms": forms_data
                         })
-                        self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
-                        print(f"       +[Loose/SPA Inputs] {url} ({len(loose_inputs)} inputs detected & queued for attack)")
-            except Exception as e:
-                if self.debug:
-                    logger.debug(f"SPA input parsing error on {url}: {e}")
+                        if len(forms) > 0:
+                            print(f"       +[Form Detected] {url} ({len(forms)} forms, {len([i for f in forms_data for i in f['inputs']])} inputs)")
+                        if analyze_form_inputs:
+                            all_inputs = [i for f in forms_data for i in f["inputs"]]
+                            if all_inputs:
+                                analysis = analyze_form_inputs(all_inputs)
+                                if "param_contexts" not in self.results:
+                                    self.results["param_contexts"] = {}
+                                self.results["param_contexts"].update(analysis)
+                except Exception as e:
+                    if self.debug:
+                        logger.debug(f"Form parsing error on {url}: {e}")
+
+                # [SPA FIX] Detect loose inputs (Angular/React often lack dict-forms)
+                try:
+                    inputs = soup.find_all("input")
+                    if inputs:
+                        loose_inputs = []
+                        for i in inputs:
+                            name = i.get("name") or i.get("id")
+                            if name:
+                                loose_inputs.append({
+                                    "name": name,
+                                    "type": i.get("type", "text"),
+                                    "value": i.get("value", "")
+                                })
+                        if loose_inputs:
+                            self.results["param_candidates"].update(
+                                [i["name"] for i in loose_inputs]
+                            )
+                            self.results["forms_meta"].append({
+                                "url": url,
+                                "method": "POST",
+                                "action": url,
+                                "inputs": loose_inputs,
+                                "synthetic": True
+                            })
+                            self.results["endpoint_counts"][url] = self.results["endpoint_counts"].get(url, 0) + len(inputs)
+                            print(f"       +[Loose/SPA Inputs] {url} ({len(loose_inputs)} inputs detected & queued for attack)")
+                except Exception as e:
+                    if self.debug:
+                        logger.debug(f"SPA input parsing error on {url}: {e}")
 
         # [API FIX] Parse JSON keys as potential parameters
         if "json" in content_type:
@@ -733,9 +737,10 @@ def _parse_sitemap_xml(session, url: str, base_url: str, limit: int = 500):
                 if len(urls) >= limit: break
         return urls
     except Exception as exc:
+        logger.debug(f"[Crawler] Sitemap parse error for {url}: {exc!r}")
         return []
 
-def harvest_js_keys(session, cfg: dict, urls: list[str], source_tag: str | None = None) -> list[dict]:
+def harvest_js_keys(session, cfg: Optional[dict], urls: list[str], source_tag: str | None = None) -> list[dict]:
     out = []
     seen = set()
     for u in (urls or []):
@@ -832,14 +837,6 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                 page.on("request", on_request)
                 
                 _enqueue(start_url)
-                
-                # [FIX]: Immediate navigation for visual feedback
-                if len(queue) > 0:
-                    try:
-                        logger.info(f"[Playwright] Initial navigation to {start_url}")
-                        page.goto(start_url, timeout=timeout_ms)
-                    except Exception as e:
-                        logger.warning(f"Initial nav failed: {e}")
 
                 while queue and len(visited) < max_pages:
                     target = queue.pop(0)
@@ -895,7 +892,6 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
 
                     except Exception as e:
                         logger.debug(f"[Playwright] Page error {target}: {e}")
-                        pass
                 browser.close()
         except Exception as e:
             logger.error(f"[Playwright] Strategy failed: {e}", exc_info=True)
@@ -1003,10 +999,7 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                 except Exception as exc:
                     logger.debug(f"[crawler] {type(exc).__name__}: {exc!r}")
             if tmp_profile and os.path.exists(tmp_profile):
-                try:
-                    shutil.rmtree(tmp_profile, ignore_errors=True)
-                except Exception as exc:
-                    pass
+                shutil.rmtree(tmp_profile, ignore_errors=True)
 
         return endpoints, None
 
