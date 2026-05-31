@@ -149,18 +149,18 @@ class NoSQLiScanner(BaseScanner):
             qs = parse_qsl(parsed.query)
 
             if qs:
-                self._fuzz_url_params(ep, qs, bucket)
+                self._fuzz_url_params(ep, qs)
 
             lower = ep.lower()
             if any(x in lower for x in ("api", "auth", "login", "signin", "user", "v1", "v2", "account")):
-                self._fuzz_json_body(ep, bucket)
+                self._fuzz_json_body(ep)
 
         # Form field injection
         for form in forms:
             action = form.get("action") or url
             method = (form.get("method") or "POST").upper()
             inputs = form.get("inputs") or []
-            self._fuzz_form(action, method, inputs, bucket)
+            self._fuzz_form(action, method, inputs)
 
         # JS injection phase — with time budget to prevent hang
         self._run_js_injection_phase(endpoints)
@@ -170,7 +170,7 @@ class NoSQLiScanner(BaseScanner):
     # Form field fuzzing (issue 5 fix)
     # -------------------------------------------------------------------------
 
-    def _fuzz_form(self, action: str, method: str, inputs: List[Dict], bucket: str):
+    def _fuzz_form(self, action: str, method: str, inputs: List[Dict]):
         """Inject NoSQLi payloads into each HTML form field."""
         skipped_types = {"submit", "button", "image", "reset", "file", "hidden", "checkbox", "radio"}
         fuzzable = [i for i in inputs if i.get("type", "text") not in skipped_types and i.get("name")]
@@ -288,7 +288,7 @@ class NoSQLiScanner(BaseScanner):
     # URL parameter fuzzing
     # -------------------------------------------------------------------------
 
-    def _fuzz_url_params(self, url: str, qs: List[Tuple], bucket: str):
+    def _fuzz_url_params(self, url: str, qs: List[Tuple]):
         parsed = urlparse(url)
         base_resp = self.fetch_baseline(url, timeout=5)
         if not base_resp:
@@ -373,7 +373,7 @@ class NoSQLiScanner(BaseScanner):
     # JSON body fuzzing
     # -------------------------------------------------------------------------
 
-    def _fuzz_json_body(self, url: str, bucket: str):
+    def _fuzz_json_body(self, url: str):
         baseline = {"username": "testuser", "password": "testpass"}
         base_resp = None
         try:
