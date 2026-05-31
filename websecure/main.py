@@ -20,7 +20,6 @@ from websecure.core.auth_flow import (
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
 # run_business_logic_flows and run_race_conditions are loaded dynamically below (line ~884)
-from urllib.parse import urlsplit as _urlsplit
 import argparse, json, time, socket, ssl
 
 def _opt_import(mod, func):
@@ -34,12 +33,10 @@ def _opt_import(mod, func):
 from websecure.core.phases import build_plan, run_plan_if_needed
 from websecure.crawler import discovery_enrich
 from websecure.core.alerts import AlertManager
-from websecure.core.reporting import (
-    verify_and_score,
-    configure_logging,
-    perform_reporting,
-    add_session
-)
+# Not: configure_logging/perform_reporting/add_result/redact_sensitive/get_bucket_results/
+# note_auth_outcome aşağıdaki _reporting_mod bloğunda (getattr + fallback) bağlanır.
+# Burada sadece orada yeniden-bağlanmayan verify_and_score import edilir.
+from websecure.core.reporting import verify_and_score
 
 # Plan B — Nessus-style response behaviour analysis components
 try:
@@ -207,14 +204,7 @@ if __package__ is None or __package__ == "":
 
 
 # FAZ-EK: URL normalizasyon -> core/url_utils.py'e taşındı
-from websecure.core.url_utils import (
-    _ws3_is_ipv6_literal,
-    _ws3_looks_like_host,
-    _ws3_fix_scheme_and_netloc,
-    _ws3_normalize_input_url,
-    _ws3_curl_effective_url,
-    _detect_final_url_and_scheme_robust,
-)
+from websecure.core.url_utils import _detect_final_url_and_scheme_robust
 
 
 def _session_priming(session, base_url, cfg):
@@ -225,30 +215,11 @@ def _session_priming(session, base_url, cfg):
     url = (base_url or "").strip() or "http://localhost"
 
 
-    p = _urlsplit(url if "://" in url else "http://" + url)
-    host = p.hostname or (p.netloc or "").split("/")[0]
-
-    https_open = False
-    if host:
-        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
-        s = socket.socket(fam, socket.SOCK_STREAM)
-        s.settimeout(5)
-        code = s.connect_ex((host, 443))
-        s.close()
-        https_open = (code == 0)
-
-    http_cfg = dict((cfg or {}).get("http") or {})
-    tls_cfg = dict((cfg or {}).get("tls") or {})
-    verify_flag = getattr(session, "verify", True)
-
     u = url if "://" in url else ("http://" + url)
 
-    if bool(http_cfg.get("insecure_skip_verify", False)):
-        verify_flag = False
-    elif https_open and bool(tls_cfg.get("soft_fail", True)):
-
-        verify_flag = False
-
+    # Doğrulama kararı merkezî verify_for_phase() ile verilir. Eski yerel verify_flag
+    # hesabı (host:443 TCP probe ile https_open + insecure_skip_verify/soft_fail) hiç
+    # kullanılmıyordu — verify_for_phase bunu zaten içeride ele alıyor — ölü koddu, kaldırıldı.
     r = session.get(u, timeout=6, allow_redirects=True,
                     verify=verify_for_phase(cfg, 'egress', u))
 
@@ -357,31 +328,17 @@ else:
 
 
 
-if _ws_spec("websecure.core.utils") is not None:
-    from websecure.core.utils import (
-        current_identity,
-        apply_detected_scheme,
-        load_config,
-        apply_active_profile,
-        run_content_discovery,
-        setup_logging,
-        setup_webdriver,
-        silence_insecure_request_warnings,
-        validate_url,
-    )
-elif _ws_spec("utils") is not None:
-    from utils import (
-        current_identity,
-        apply_detected_scheme,
-        load_config,
-        run_content_discovery,
-        setup_logging,
-        setup_webdriver,
-        silence_insecure_request_warnings,
-        validate_url,
-    )
-else:
-    raise ImportError("Neither 'core.utils' nor 'utils' is importable")
+if _ws_spec("websecure.core.utils") is None:
+    raise ImportError("Zorunlu modül 'websecure.core.utils' import edilemiyor")
+from websecure.core.utils import (
+    current_identity,
+    load_config,
+    apply_active_profile,
+    setup_logging,
+    setup_webdriver,
+    silence_insecure_request_warnings,
+    validate_url,
+)
 
 _det_spec = _ws_spec("websecure.core.detect")
 if _det_spec is not None:
@@ -431,12 +388,8 @@ else:
         return "unknown"
 
 
-_plan_spec = _ws_spec("websecure.core.phases")
-if _plan_spec is not None:
-    _phases = _im.import_module("websecure.core.phases")
-    build_plan = getattr(_phases, "build_plan", None)
-else:
-    build_plan = None
+# build_plan üstte (satır 34) websecure.core.phases'ten hard-import edildi;
+# eski koşullu yeniden-fetch bloğu redundant'tı (kaldırıldı).
 
 
 # === Dinamik kanonik çözümleyici (core.utils.resolve_canonical_base) ===
@@ -698,10 +651,11 @@ offensive_request_smuggling = _bind_offensive("websecure.scanners.request_smuggl
 offensive_mass_assignment = _bind_offensive("websecure.scanners.mass_assignment", "offensive_mass_assignment")
 offensive_jwt = _bind_offensive("websecure.scanners.jwt", "offensive_jwt")
 offensive_nosqli = _bind_offensive("websecure.scanners.nosqli", "offensive_nosqli")
-offensive_ws_fuzz = _bind_offensive("websecure.scanners.ws_fuzz", "offensive_ws_fuzz")
-
-# ws_fuzz modülü yoksa, ek saldırı taramalarını tetikleyen anlamlı bir fallback sağla
-if _ws_spec("websecure.scanners.ws_fuzz") is None:
+# ws_fuzz modülü varsa run()'a bağla; yoksa ek saldırı taramalarını tetikleyen
+# anlamlı bir fallback sağla (if/else: tek bağlama, redefinition yok).
+if _ws_spec("websecure.scanners.ws_fuzz") is not None:
+    offensive_ws_fuzz = _bind_offensive("websecure.scanners.ws_fuzz", "offensive_ws_fuzz")
+else:
     def offensive_ws_fuzz(url, session=None, debug=False, auth_ctx=None):
         _call_scanner_if_available("websecure.scanners.authorization", url, session=session, debug=debug, auth_ctx=auth_ctx)
         _call_scanner_if_available("websecure.scanners.file_upload", url, session=session, debug=debug, auth_ctx=auth_ctx)
@@ -790,10 +744,7 @@ file_upload_scan = getattr(_fu_mod, "run", None) if _fu_mod else None
 # ------------------ Tarama yoğunluğu (Agresif/Normal) teklifi ------------------
 # FAZ-EK: Profil seçme/uygulama helpers -> core/scan_profile.py'e taşındı
 from websecure.core.scan_profile import (
-    _estimate_minutes,
-    _apply_normal_profile,
     _offer_scan_profile_and_confirm,
-    _pick_from_config,
     _choose_mode_from_config,
 )
 
@@ -801,9 +752,6 @@ from websecure.core.scan_profile import (
 # FAZ-EK: Proxy/session helpers + ensure_session -> core/session_factory.py'e taşındı
 from websecure.core.session_factory import (
     ensure_session,
-    _parse_host_port_from_proxy,
-    _tcp_port_open,
-    _proxy_alive,
     _setup_session_from_config,
 )
 
@@ -1339,7 +1287,6 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
     else:
         profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
         from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile  # noqa: PLC0415
-        from websecure.core.utils import apply_active_profile  # noqa: PLC0415
         if profile in ("stealth",):
             cfg = _apply_stealth_profile(cfg)
         else:
@@ -1357,7 +1304,6 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
             print(f"[WARN] Saldırı modu seçildi ancak profil ‘{profile}’. ‘AGGRESSIVE’ olarak zorlanıyor.")
         profile = "aggressive"
         from websecure.core.scan_profile import _apply_aggressive_profile  # noqa: PLC0415
-        from websecure.core.utils import apply_active_profile  # noqa: PLC0415
         cfg = _apply_aggressive_profile(cfg)
         cfg = apply_active_profile(cfg)
 
@@ -1483,9 +1429,8 @@ def _run_scan_phases(
         if callable(globals().get("prime_session")):
             _ = prime_session(session, url, cfg, logger=logger)
 
-        _install = globals().get("install_auth_retry_adapter")
-        if callable(_install):
-            _install(session, cfg)
+        if callable(install_auth_retry_adapter):
+            install_auth_retry_adapter(session, cfg)
 
         results.setdefault("phase_timings", {})
 
@@ -1498,9 +1443,8 @@ def _run_scan_phases(
             add_result("meta", {"scan_profile": profile})
 
         auth_ok = False
-        _run_auth_flow = globals().get("run_auth_flow")
-        if callable(_run_auth_flow):
-            auth_ok = bool(_run_auth_flow(session, cfg, driver=driver, base_url=url, debug=debug))
+        if callable(run_auth_flow):
+            auth_ok = bool(run_auth_flow(session, cfg, driver=driver, base_url=url, debug=debug))
 
         def _auth_is_configured(_cfg: dict) -> bool:
             a = (_cfg.get('auth') or {}) if isinstance(_cfg, dict) else {}
