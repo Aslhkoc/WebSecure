@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 import logging
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -333,7 +332,7 @@ class MassAssignmentScanner(BaseScanner):
 # Module-level adapter (backward-compatible)
 # ---------------------------------------------------------------------------
 
-def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
+def run(url: str, session=None, results: dict = None, debug: bool = False, **kwargs) -> List[Dict]:
     if session is None:
         try:
             from websecure.core.http import hardened_session as _hs
@@ -343,7 +342,7 @@ def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
             session = _req.Session()
     scanner = MassAssignmentScanner(
         session=session,
-        results={},
+        results=results if results is not None else {},
         debug=debug,
     )
     endpoints = kwargs.get("endpoints") or []
