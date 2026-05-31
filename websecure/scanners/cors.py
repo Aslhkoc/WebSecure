@@ -23,16 +23,6 @@ logger = logging.getLogger(__name__)
 
 _EVIL_ORIGIN = "https://evil-wsp.invalid"
 
-_ORIGIN_BYPASS_VARIANTS = [
-    "https://evil-wsp.invalid",
-    "null",
-    "https://evil-wsp.invalid.target.example.com",
-    "https://target.example.com.evil-wsp.invalid",
-    "https://target.example.com%60.evil-wsp.invalid",
-    "https://evil-wsp.invalid\ttarget",
-    "https://\r\nevil-wsp.invalid",
-]
-
 _SENSITIVE_ENDPOINTS = [
     "/api/me", "/api/user", "/api/profile", "/api/account",
     "/api/v1/user", "/api/v1/me", "/api/admin", "/dashboard",
@@ -550,7 +540,6 @@ class CORSXSSChainDetector(BaseScanner):
             resp = self.session.get(target, headers={"Origin": evil_origin}, timeout=8)
             acao = resp.headers.get("Access-Control-Allow-Origin", "")
             acac = resp.headers.get("Access-Control-Allow-Credentials", "").lower()
-            csp  = resp.headers.get("Content-Security-Policy", "")
             if acao == evil_origin or acao == "*":
                 cors_evidence = {
                     "ACAO": acao,
@@ -647,13 +636,12 @@ class CORSScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 all_results.extend(prober.run(target, **kwargs))
             except Exception as exc:
                 logger.warning("[CORSScanner] %s: %s", prober.name, exc)
         return all_results
 
 
-def run(url: str, session=None, debug: bool = False, **kwargs) -> List[Dict]:
-    scanner = CORSScanner(session=session, debug=debug)
+def run(url: str, session=None, results: dict = None, debug: bool = False, **kwargs) -> List[Dict]:
+    scanner = CORSScanner(session=session, results=results or {}, debug=debug)
     return scanner.run(url, **kwargs)
