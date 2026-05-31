@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import string
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -13,7 +14,6 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
-from websecure.core.response_analyzer import ResponseBehaviorAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -431,8 +431,6 @@ class XSSScanner(BaseScanner):
         Payload'ın response'da nasıl yansıdığını analiz et.
         Returns: {"reflected": bool, "encoded": bool, "executable": bool, "confidence": str}
         """
-        import html as _html
-
         result: Dict = {
             "reflected": False,
             "encoded": False,
@@ -445,7 +443,7 @@ class XSSScanner(BaseScanner):
 
         if payload not in response_text:
             # Entity-encoded reflection kontrolü
-            encoded_form = _html.escape(payload)
+            encoded_form = html.escape(payload)
             if encoded_form != payload and encoded_form in response_text:
                 result["reflected"] = True
                 result["encoded"] = True
@@ -633,8 +631,7 @@ class XSSScanner(BaseScanner):
                 return None
 
             # Payload XSS-capable chars içermiyorsa (base32/random string echo) FP'dir
-            import re as _re
-            if not _re.search(r'[<>\'\"=\(\)\{\}\$`;]', actual):
+            if not re.search(r'[<>\'\"=\(\)\{\}\$`;]', actual):
                 return None  # Sadece alfanümerik string yansıması — gerçek XSS değil
 
             if reflection["encoded"]:
@@ -754,7 +751,6 @@ class XSSScanner(BaseScanner):
         if "window.__xss_confirmed" not in confirm_payload:
             confirm_payload = '<img src=x onerror="window.__xss_confirmed=1">'
 
-        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
         parsed = urlparse(url)
         params = dict(parse_qsl(parsed.query))
         params[param_name] = confirm_payload
@@ -1684,7 +1680,6 @@ class XSSToATOChain:
     @staticmethod
     def _inject_payload(url: str, param: str, payload: str) -> str:
         """Payload'u URL parametresine enjekte et."""
-        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
         parsed = urlparse(url)
         params = dict(parse_qsl(parsed.query))
         if param and param in params:
@@ -1724,8 +1719,7 @@ class XSSToATOChain:
         """Selenium driver ile sayfayı aç."""
         try:
             driver.get(url)
-            import time as _t
-            _t.sleep(3)
+            time.sleep(3)
             return True
         except Exception as e:
             logger.debug(f"[ATO] Selenium başarısız: {e!r}")
@@ -1734,11 +1728,11 @@ class XSSToATOChain:
     def _try_requests(self, url: str) -> bool:
         """Requests ile URL'ye istek at (server-side render için)."""
         try:
-            import requests as _req
-            _getter = self._session.get if self._session is not None else _req.Session().get
+            _getter = self._session.get if self._session is not None else _requests.Session().get
             _getter(url, timeout=5, verify=False)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("[XSS/ATO] _try_requests error: %r", exc)
             return False
 
     @staticmethod
@@ -1747,12 +1741,10 @@ class XSSToATOChain:
         if not sess.cookies or not sess.origin_url:
             return sess
         try:
-            import requests as _req
-            from urllib.parse import urlparse
             origin = urlparse(sess.origin_url)
             base = f"{origin.scheme}://{origin.netloc}"
             # Use a fresh session with ONLY the stolen cookies (not the scan session)
-            with _req.Session() as _s:
+            with _requests.Session() as _s:
                 r = _s.get(
                     base, cookies=sess.cookies,
                     timeout=5, verify=False, allow_redirects=True,

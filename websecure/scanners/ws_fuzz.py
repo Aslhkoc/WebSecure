@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import math
 import os
 import re
 import socket
@@ -359,19 +358,15 @@ class WebSocketFuzzer(BaseScanner):
                 # origin is None = no Origin header sent — not a bypass, skip
                 if origin is not None and origin in ("null", "https://evil.com", "https://attacker.com"):
                     sev = "High" if origin and "evil" in origin else "Medium"
-                    self.add(bucket, self.create_finding(
+                    finding = self.create_finding(
                         type="WebSocket — Origin Policy Not Enforced",
                         url=ws_url,
                         severity=sev,
                         details=f"Connection accepted with Origin: {origin!r} — CSRF over WebSocket possible",
                         evidence={"origin": str(origin), "response_snippet": (resp or "")[:200]},
-                    ))
-                    add_result("offensive", self.create_finding(
-                        type="WebSocket — Origin Policy Not Enforced",
-                        url=ws_url,
-                        severity=sev,
-                        details=f"Connection accepted with Origin: {origin!r}",
-                    ))
+                    )
+                    self.add(bucket, finding)
+                    add_result("offensive", finding)
             except (OSError, ssl.SSLError) as exc:
                 logger.debug(f"[WSFuzz] Origin bypass test error for origin={origin!r}: {exc!r}")
             finally:
@@ -427,19 +422,15 @@ class WebSocketFuzzer(BaseScanner):
                 resp = conn.recv(2.0)
                 if resp and len(resp) > 30:
                     if _SENSITIVE_RESPONSE_PATTERNS.search(resp):
-                        self.add(bucket, self.create_finding(
+                        finding = self.create_finding(
                             type="WebSocket — Unauthenticated Data Exposure",
                             url=ws_url,
                             severity="High",
                             details="WebSocket returns user/sensitive data fields without authentication",
                             evidence={"probe": probe, "response": resp[:300]},
-                        ))
-                        add_result("offensive", self.create_finding(
-                            type="WebSocket — Unauthenticated Data Exposure",
-                            url=ws_url,
-                            severity="High",
-                            details="Sensitive fields returned without auth token",
-                        ))
+                        )
+                        self.add(bucket, finding)
+                        add_result("offensive", finding)
                         break
         except (OSError, ssl.SSLError) as exc:
             logger.debug(f"[WSFuzz] Unauthenticated access test error for {ws_url!r}: {exc!r}")
