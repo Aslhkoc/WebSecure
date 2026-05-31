@@ -123,7 +123,7 @@ class CmdiScanner(BaseScanner):
         confirmed_urls = {
             f.get("url", "")
             for f in (self.results or {}).get("offensive", [])
-            if "Command Injection" in f.get("vuln_type", "")
+            if "Command Injection" in f.get("type", "")
         }
         for url in urls[:5]:
             if url not in confirmed_urls:
@@ -178,9 +178,9 @@ class CmdiScanner(BaseScanner):
             self._scan_oob_cmdi(url, params, param_name)
 
         # Additional injection surfaces
-        self._scan_post_body(url, params, baseline_text, time_threshold)
-        self._scan_json_body(url, params, baseline_text, time_threshold)
-        self._scan_headers_cmdi(url, baseline_text, time_threshold)
+        self._scan_post_body(url, params, baseline_text)
+        self._scan_json_body(url, params, baseline_text)
+        self._scan_headers_cmdi(url, baseline_text)
 
         return found
 
@@ -284,7 +284,7 @@ class CmdiScanner(BaseScanner):
 
     def _scan_post_body(
         self, url: str, params: list,
-        baseline_text: str, time_threshold: float,
+        baseline_text: str,
     ) -> None:
         """Inject CMDI payloads into POST form body."""
         base = {k: v for k, v in params}
@@ -292,10 +292,8 @@ class CmdiScanner(BaseScanner):
             for payload, technique in _CMDI_PAYLOADS_CORE:
                 data = dict(base)
                 data[key] = data[key] + payload
-                t0 = time.time()
                 try:
                     resp = self.session.post(url, data=data, timeout=REQUEST_TIMEOUT)
-                    elapsed = time.time() - t0
                 except _requests.exceptions.RequestException:
                     continue
                 text = resp.text or ""
@@ -310,7 +308,7 @@ class CmdiScanner(BaseScanner):
 
     def _scan_json_body(
         self, url: str, params: list,
-        baseline_text: str, time_threshold: float,
+        baseline_text: str,
     ) -> None:
         """Inject CMDI payloads into JSON body (REST API surface)."""
         base = {k: v for k, v in params}
@@ -318,14 +316,12 @@ class CmdiScanner(BaseScanner):
             for payload, technique in _CMDI_PAYLOADS_CORE[:6]:  # top payloads only
                 data = dict(base)
                 data[key] = data[key] + payload
-                t0 = time.time()
                 try:
                     resp = self.session.post(
                         url, json=data,
                         headers={"Content-Type": "application/json"},
                         timeout=REQUEST_TIMEOUT,
                     )
-                    elapsed = time.time() - t0
                 except _requests.exceptions.RequestException:
                     continue
                 text = resp.text or ""
@@ -340,18 +336,16 @@ class CmdiScanner(BaseScanner):
 
     def _scan_headers_cmdi(
         self, url: str,
-        baseline_text: str, time_threshold: float,
+        baseline_text: str,
     ) -> None:
         """Inject CMDI payloads into HTTP headers (X-Forwarded-For, Referer, User-Agent…)."""
         for header in self._CMDI_HEADERS:
             for payload, technique in _CMDI_PAYLOADS_CORE[:8]:
-                t0 = time.time()
                 try:
                     resp = self.session.get(
                         url, headers={header: "127.0.0.1" + payload},
                         timeout=REQUEST_TIMEOUT,
                     )
-                    elapsed = time.time() - t0
                 except _requests.exceptions.RequestException:
                     continue
                 text = resp.text or ""
@@ -453,6 +447,9 @@ class CMDiOOBDNSProber(BaseScanner):
     name = "cmdi_oob_dns"
 
     def run(self, target: str, **kwargs) -> None:
+        import random as _rnd
+        import string as _str
+
         oast_domain = kwargs.get("oast_domain") or (self.results or {}).get("oast_domain")
         canary_domain = oast_domain if oast_domain else "burpcollaborator.net"
         severity = "Critical" if oast_domain else "High"
@@ -463,7 +460,6 @@ class CMDiOOBDNSProber(BaseScanner):
             return
 
         for param_name, _ in params:
-            import random as _rnd, string as _str
             token = "".join(_rnd.choices(_str.ascii_lowercase, k=6))
             probe_host = f"{token}.{canary_domain}" if oast_domain else canary_domain
 
@@ -764,8 +760,6 @@ class CMDiCommandSeparatorFuzzer(BaseScanner):
         ("| whoami",     "win_pipe_whoami"),
         ("&& whoami",    "win_and_whoami"),
     ]
-
-    _WIN_INDICATORS = ["SYSTEM", "NT AUTHORITY", "DESKTOP-", "WIN-"]
 
     _SUCCESS_PATTERNS: List[Tuple[str, str]] = [
         (r"uid=\d+\(",                             "Critical"),
