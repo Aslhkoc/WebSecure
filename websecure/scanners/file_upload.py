@@ -17,11 +17,15 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import random
 import re
 import string
+import struct
+import time
+import urllib.parse
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -567,14 +571,10 @@ def run(
     )
 
     # Phase 2: Adim 8 advanced attacks (polyglot, ImageTragick) — always run
-    import importlib as _il
-    _mod = _il.import_module(__name__)
-    _adim8_cls = getattr(_mod, "FileUploadAdim8Scanner", None)
-    if _adim8_cls is not None:
-        try:
-            _adim8_cls(session=_session, results=_results, debug=debug).run(_url or _base_url, **kwargs)
-        except Exception as _exc:
-            logger.debug("[file_upload.run] FileUploadAdim8Scanner failed: %r", _exc)
+    try:
+        FileUploadAdim8Scanner(session=_session, results=_results, debug=debug).run(_url or _base_url, **kwargs)
+    except Exception as _exc:
+        logger.debug("[file_upload.run] FileUploadAdim8Scanner failed: %r", _exc)
 
     return [
         item for item in _results.get("offensive", [])
@@ -586,17 +586,6 @@ def run(
 # ============================================================================
 # ADIM 8 — Polyglot File Upload + ImageTragick (SOLID Siniflar)
 # ============================================================================
-import io
-import os
-import random
-import re
-import string
-import struct
-import time
-import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
-import logging
-from websecure.scanners.base import BaseScanner
 
 _fu_logger = logging.getLogger(__name__ + ".adim8")
 
@@ -919,7 +908,6 @@ class FileUploadAdim8Scanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 res = prober.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:

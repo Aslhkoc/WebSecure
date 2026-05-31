@@ -162,12 +162,8 @@ def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) 
     # CachePoisoningChain, LogPoisoningChain, CRLFResponseSplittingProber,
     # CRLFCookieInjectionProber, CRLFXSSProber) — connected here to avoid orphan
     try:
-        import importlib as _il
-        _mod = _il.import_module(__name__)
-        _crlf_cls = getattr(_mod, "CRLFScanner", None)
-        if _crlf_cls is not None:
-            adv_results = _crlf_cls(session=session, debug=debug).run(url)
-            results.extend(adv_results)
+        adv_results = CRLFScanner(session=session, debug=debug).run(url)
+        results.extend(adv_results)
     except Exception as exc:
         logger.debug("[CRLF] CRLFScanner advanced phase failed: %s", exc)
 
@@ -369,7 +365,7 @@ class LogPoisoningChain:
                 session.get(url, headers={"User-Agent": webshell}, timeout=timeout, allow_redirects=False)
             except Exception as _fix_e:
                 logger.debug(f"[scanners.crlf_injection] {type(_fix_e).__name__}: {_fix_e!r}")
-            lfi = self._try_lfi_confirm(url, session, uid, timeout)
+            lfi = self._try_lfi_confirm(url, session, timeout)
             if lfi:
                 return {
                     "vuln_type": "Log Poisoning via Header Injection",
@@ -383,7 +379,7 @@ class LogPoisoningChain:
                 }
         return None
 
-    def _try_lfi_confirm(self, base_url: str, session, uid: str, timeout: int) -> Optional[Dict]:
+    def _try_lfi_confirm(self, base_url: str, session, timeout: int) -> Optional[Dict]:
         lfi_params = ["file", "page", "include", "path", "log", "f"]
         parsed     = urllib.parse.urlparse(base_url)
         for log_path in self._LFI_PATHS:

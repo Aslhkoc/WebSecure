@@ -204,7 +204,6 @@ class DOMXSSScanner(BaseScanner):
             _diverse = list(dict.fromkeys(_diverse))  # deduplicate preserving order
 
             found = None
-            payload = _diverse[0]
             for payload in _diverse:
                 new_params = dict(params)
                 new_params[param_name] = payload
@@ -410,7 +409,6 @@ _CANARY_ENCODED_VARIANTS = [
     _MONKEY_CANARY,                                     # raw
     "%5F%5FWEBSECURE%5FDOMXSS%5F789%5F%5F",            # URL-encoded
     "&#95;&#95;WEBSECURE&#95;DOMXSS&#95;789&#95;&#95;",  # HTML entities
-    r"__WEBSECURE_DOMXSS_789__",  # JS unicode
 ]
 
 # JavaScript injected as init script to override dangerous sinks
@@ -956,7 +954,6 @@ class StoredXSSCorrelator:
             _logger.warning("[StoredXSSCorrelator] Playwright not available — skipping")
             return []
         try:
-            import asyncio
             loop = asyncio.new_event_loop()
             result = loop.run_until_complete(
                 self._async_correlate(write_endpoints, read_endpoints, session)

@@ -93,15 +93,6 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
     # 1. Analyze Cookies (SameSite)
     # ---------------------------
     # We check the cookie jar for the domain
-    domain = urlparse(url).hostname
-    if domain and session.cookies:
-        for cookie in session.cookies:
-            if domain in (cookie.domain or ""):
-                # Requests cookie objects might not expose SameSite attribute easily 
-                # depending on the cookiejar backend. We generally rely on Set-Cookie header analysis
-                # which is done in owasp.py. But here we can re-verify if needed.
-                pass 
-
     # 2. Analyze Forms & API Endpoints
     # ----------------
     # [WS3] Enhanced: Look for crawler metadata first (Playwright forms)
@@ -164,16 +155,6 @@ def check_csrf_protection(url: str, session, results: Dict[str, Any], debug: boo
                 "evidence": {"form_snippet": form.get("raw")}
             })
             
-    # [WS3] Generic Header Check on Base URL (SPA)
-    # Some SPAs send CSRF tokens in headers (X-XSRF-TOKEN). If the site sets a cookie XSRF-TOKEN, it must match header.
-    if session.cookies:
-        xsrf_cookie = next((c for c in session.cookies if "xsrf" in c.name.lower() or "csrf" in c.name.lower()), None)
-        if xsrf_cookie:
-            # Check if we can find a matching header logic in JS files? Too deep.
-            # Just Info note.
-            pass
-
-
     # 3. Login CSRF Check
     # -------------------
     # If the page has a login form, check if it has CSRF protection.
