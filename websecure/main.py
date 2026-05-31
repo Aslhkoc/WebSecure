@@ -20,7 +20,6 @@ from websecure.core.auth_flow import (
 from importlib.util import find_spec as _find_spec
 from importlib import import_module as _import_module
 # run_business_logic_flows and run_race_conditions are loaded dynamically below (line ~884)
-import re as _re_urlnorm
 from urllib.parse import urlsplit as _urlsplit
 import argparse, json, time, socket, ssl
 
@@ -50,7 +49,7 @@ try:
     from websecure.core.rate_controller import AdaptiveRateController as _AdaptiveRateController
     from websecure.core.evidence_chain import EvidenceChainBuilder as _EvidenceChainBuilder
     _PLAN_B_AVAILABLE = True
-except ImportError as _pb_exc:
+except ImportError:
     _PLAN_B_AVAILABLE = False
     _TechFingerprinter = None
     _EndpointPrioritizer = None
@@ -70,7 +69,6 @@ import subprocess
 from pathlib import Path as _P
 import importlib as _im
 import importlib.util as _iul
-import urllib.request as _urlreq
 
 # Startup dependency helpers — implementation lives in core/startup.py
 from websecure.core.startup import (
@@ -83,7 +81,6 @@ from websecure.core.startup import (
 
 from websecure.core.utils import ensure_wordlists as _ensure_wl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
-import time as _t
 import sys as _sys, os as _os
 
 _logger = _logging.getLogger(__name__)
@@ -190,7 +187,7 @@ def _ws_spec(name: str):
         return _ws_imp_util.find_spec(name)
     except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
         return None
-    except _BOUNDARY_EXC as e:
+    except _BOUNDARY_EXC:
         _logger.error('phase error [main]', exc_info=True)
         return None
 
@@ -458,8 +455,8 @@ def _get_resolve_canonical_base():
             return func
 
     # Minimal fallback (modül bulunamazsa en azından erişim deneyelim)
-    import subprocess
-    import shutil
+    # subprocess/shutil modül seviyesinde zaten import edili (üst blok); lokal
+    # redundant importlar kaldırıldı.
     def _fallback(target, session, timeout=6, try_www=True):
         t = (target or "").strip()
         if not t:
@@ -1677,20 +1674,20 @@ def _run_scan_phases(
                 print("\n" + "="*65)
                 print(" [KILL CAM] SESSION CAPTURED (BROWSER) ")
                 print("="*65)
-                print(f" [+] Strategy: WebDriver Injection")
+                print(" [+] Strategy: WebDriver Injection")
                 print(f" [+] Origin:   {url}")
-                print(f" [+] Cookies:  Synced to Session")
+                print(" [+] Cookies:  Synced to Session")
                 print("="*65 + "\n")
             elif evt == "auth.requests_login" and data.get("ok"):
                 print("\n" + "="*65)
                 print(" [KILL CAM] SESSION CAPTURED (API) ")
                 print("="*65)
-                print(f" [+] Strategy: API/Form Login")
-                print(f" [+] Status:   Authorized")
+                print(" [+] Strategy: API/Form Login")
+                print(" [+] Status:   Authorized")
                 print("="*65 + "\n")
             elif evt == "auth.final":
                  if data.get("authenticated"):
-                     print(f"[+] Auth Flow Complete: Authenticated = TRUE")
+                     print("[+] Auth Flow Complete: Authenticated = TRUE")
                  else:
                      pass # Silent failure to allow fallback
 
@@ -1828,7 +1825,7 @@ def _run_scan_phases(
         if _PLAN_B_AVAILABLE and _EndpointPrioritizer is not None and len(endpoints) > 1:
             try:
                 # Fix 5: Build method_map from forms_meta so POST endpoints score higher
-                _method_map: Dict[str, list] = {}
+                _method_map: dict[str, list] = {}
                 for _fm in results.get("forms_meta", []) or []:
                     _fm_action = _fm.get("action") or ""
                     _fm_method = (_fm.get("method") or "GET").upper()
@@ -2478,7 +2475,7 @@ if __name__ == "__main__":
                             # Inject target into argv so main() parses it
                             _sys.argv.append(_wiz_tgt)
                             print(f"[Wizard] Hedef yüklendi: {_wiz_tgt}")
-                            print(f"[Wizard] Otomatik başlatılıyor...")
+                            print("[Wizard] Otomatik başlatılıyor...")
                             time.sleep(1.5)
                 except Exception as _e:
                     print(f"[!] Config okuma hatası: {_e}")
