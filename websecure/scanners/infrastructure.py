@@ -6,14 +6,16 @@ Consolidated module for:
 - TLS/SSL Configuration & Policy Analysis (formerly tls.py)
 """
 from __future__ import annotations
+import random
 import re
 import socket
 import ssl as pyssl
+import string
 import typing as t
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from urllib.parse import urlparse
+from datetime import datetime, timezone
+from urllib.parse import urlparse, parse_qsl
 from importlib.util import find_spec
 from importlib import import_module
 
@@ -545,8 +547,6 @@ class HeaderScanner(BaseScanner):
 
     def _test_cache_poisoning(self, url: str) -> t.List[HeaderFinding]:
         findings = []
-        import random
-        import string
         # Use a unique canary per scan run to avoid cross-test pollution
         canary = "wscache" + "".join(random.choices(string.ascii_lowercase, k=6)) + ".internal"
         parsed = urlparse(url)
@@ -938,10 +938,6 @@ class PySSLCertChecker:
         details = {}
         if der:
             details = _extract_cert_details(der)
-            # Validasyon başarılı varsayımı (detay alabildik)
-            if not problems: 
-                # Sorun listesi boş değilse bile sertifika aldıysak validasyonu ayrıca kontrol edelim
-                pass 
         else:
              problems.append("Could not retrieve certificate details.")
 
@@ -967,7 +963,6 @@ class PySSLCertChecker:
         days = 0
         if na:
             try:
-                from datetime import timezone
                 dt_na = datetime.fromisoformat(na)
                 if dt_na.tzinfo is None:
                     dt_na = dt_na.replace(tzinfo=timezone.utc)

