@@ -22,7 +22,7 @@ import re
 from concurrent.futures import TimeoutError as _FuturesTimeout
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import requests as _requests
 
@@ -224,7 +224,7 @@ class OpenRedirectScanner(BaseScanner):
     def run(self, target: str, **kwargs) -> None:
         """BaseScanner interface — delegates to scan()."""
         urls = kwargs.get("urls") or kwargs.get("endpoints") or []
-        findings = self.scan(target, urls=urls)
+        self.scan(target, urls=urls)
         # Advanced prober — protocol-relative, JS-URI, unicode, IDN payloads
         adv = AdvancedRedirectProber(session=self.session, results=self.results)
         adv.run(target, **kwargs)
@@ -232,9 +232,6 @@ class OpenRedirectScanner(BaseScanner):
         try:
             adim8 = OpenRedirectAdim8Scanner(session=self.session, results=self.results)
             adim8.run(target, **kwargs)
-        except NameError:
-            # OpenRedirectAdim8Scanner defined later in file — forward reference safe at call time
-            pass
         except Exception as exc:
             logger.debug("[OpenRedirect] Adim8 chain error: %s", exc)
 
@@ -519,11 +516,7 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None,
 # ADIM 8 — Open Redirect Zincirleri (SOLID Siniflar)
 # OpenRedirectOAuthTheftChain, OpenRedirectSSRFChain, OpenRedirectAdim8Scanner
 # ============================================================================
-import logging
-import re
 import urllib.parse
-from typing import Any, Dict, List, Optional
-from websecure.scanners.base import BaseScanner
 
 _or_logger = logging.getLogger(__name__ + ".adim8")
 
@@ -540,12 +533,6 @@ _SSRF_INTERNAL = [
     "http://127.0.0.1/",
     "http://127.0.0.1:8080/",
     "http://localhost/",
-]
-
-_REDIRECT_PARAMS = [
-    "redirect", "redirect_url", "redirect_uri", "return", "return_url",
-    "next", "url", "goto", "dest", "destination", "forward", "target",
-    "callback", "ref", "from", "location",
 ]
 
 _OAUTH_THEFT_PAYLOADS = [
@@ -759,7 +746,6 @@ class OpenRedirectAdim8Scanner(BaseScanner):
         ]
         for chain in chains:
             try:
-                chain.target = target
                 res = chain.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:
