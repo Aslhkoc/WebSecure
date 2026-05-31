@@ -23,7 +23,6 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeoutError
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urljoin, urlencode
 
 import requests
 
@@ -807,8 +806,6 @@ class SessionScanner(BaseScanner):
 
         for finding in all_findings:
             add_result("session", finding)
-            if finding.get("severity") in ("Critical", "High", "Medium"):
-                add_result("offensive", finding)
 
         logger.info(f"[SessionScanner] Toplam {len(all_findings)} bulgu — {target}")
         return all_findings

@@ -36,9 +36,13 @@ import string
 import threading
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+from websecure.scanners.base import BaseScanner
+from websecure.core.http import hardened_session as _hardened_session
 
 logger = logging.getLogger(__name__)
 
@@ -107,20 +111,6 @@ def _build_raw_request(
     header_block = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
     request_line = f"{method.upper()} {path} HTTP/1.1\r\n"
     return (request_line + header_block + "\r\n\r\n").encode() + body
-
-
-def _send_and_receive(sock, payload_head: bytes, payload_last: bytes) -> Tuple[int, str]:
-    """
-    Send *payload_head*, then *payload_last* (last-byte sync pattern).
-    Returns (status_code, body_excerpt) matching the declared return type.
-    """
-    try:
-        sock.sendall(payload_head)
-        sock.sendall(payload_last)
-        return _read_response(sock)
-    except Exception as exc:
-        logger.debug("[Race] _send_and_receive error: %s", exc)
-        return 0, ""
 
 
 def _read_response(sock: socket.socket, timeout: float = 5.0) -> Tuple[int, str]:
@@ -441,19 +431,12 @@ def run(
         except Exception as exc:
             logger.debug("[Race] probe %s error: %s", name, exc)
 
-    # ADIM 7 + Deep scanner classes — RaceConditionScanner and RaceDeepScanner
-    # These are defined later in the file and provide gate-technique, auth-bypass,
-    # double-spend, HTTP/2 concurrent, TOCTOU, session-fixation and inventory probers.
-    import importlib as _il
-    _mod = _il.import_module(__name__)
-    for _scanner_cls_name in ("RaceConditionScanner", "RaceDeepScanner"):
-        _cls = getattr(_mod, _scanner_cls_name, None)
-        if _cls is not None:
-            try:
-                findings_extra = _cls(session=session, debug=debug).run(url)
-                results.extend(findings_extra)
-            except Exception as exc:
-                logger.debug("[Race] %s failed: %s", _scanner_cls_name, exc)
+    for _scanner_cls in (RaceConditionScanner, RaceDeepScanner):
+        try:
+            findings_extra = _scanner_cls(session=session, debug=debug).run(url)
+            results.extend(findings_extra)
+        except Exception as exc:
+            logger.debug("[Race] %s failed: %s", _scanner_cls.__name__, exc)
 
     return results
 
@@ -462,18 +445,6 @@ def run(
 # GateTechniqueExploiter, RaceAuthBypassProber, RaceDoubleSpendProber
 # RaceRegistrationProber, RaceConditionScanner (orchestrator)
 # ============================================================================
-import logging
-import random
-import socket
-import ssl
-import string
-import threading
-import time
-import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
-from typing import Any, Dict, List, Optional, Tuple
-from websecure.scanners.base import BaseScanner
-from websecure.core.http import hardened_session as _hardened_session
 
 _race_logger = logging.getLogger(__name__ + ".adim7")
 
@@ -865,7 +836,6 @@ class RaceConditionScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 res = prober.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:
@@ -878,7 +848,6 @@ class RaceConditionScanner(BaseScanner):
 # HTTP2ConcurrentStreamProber, TOCTOUProber,
 # SessionFixationRaceProber, InventoryRaceProber, RaceDeepScanner
 # ============================================================================
-import asyncio
 
 _deep_race_logger = logging.getLogger(__name__ + ".deep")
 
@@ -1598,7 +1567,6 @@ class RaceDeepScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 res = prober.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:

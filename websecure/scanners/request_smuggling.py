@@ -34,6 +34,8 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from websecure.scanners.base import BaseScanner
+
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
@@ -95,6 +97,7 @@ def _status_code(raw: bytes) -> Optional[int]:
         line = raw.split(b"\r\n", 1)[0]
         return int(line.split(b" ", 2)[1])
     except Exception as exc:
+        logger.debug("[Smuggling] status code parse error: %s", exc)
         return None
 
 
@@ -557,13 +560,6 @@ def run(
 # ============================================================================
 # ADIM 7 — HTTP/2 Smuggling + h2c Upgrade (SOLID Siniflar)
 # ============================================================================
-import socket
-import ssl
-import logging
-import time
-import urllib.parse
-from typing import Any, Dict, List, Optional
-from websecure.scanners.base import BaseScanner
 
 _smug_logger = logging.getLogger(__name__ + ".adim7")
 
@@ -596,21 +592,6 @@ def _recv_all(sock: socket.socket, timeout: float = 2.0) -> bytes:
     except (socket.timeout, OSError) as _fix_e:
         logger.debug(f"[scanners.request_smuggling] {type(_fix_e).__name__}: {_fix_e!r}")
     return data
-
-
-# ---------------------------------------------------------------------------
-# HTTP/2 Preface + minimal HEADERS frame builder (no hpack — simplified)
-# ---------------------------------------------------------------------------
-_H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-
-def _h2_settings_frame() -> bytes:
-    """SETTINGS frame with default values."""
-    # Length=0, type=0x4, flags=0x0, stream_id=0
-    return b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
-
-def _h2_settings_ack() -> bytes:
-    """SETTINGS ACK frame."""
-    return b"\x00\x00\x00\x04\x01\x00\x00\x00\x00"
 
 
 # ===========================================================================
@@ -883,7 +864,6 @@ class RequestSmugglingScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 res = prober.run(target, **kwargs)
                 all_results.extend(res)
             except Exception as exc:
