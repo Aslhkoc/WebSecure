@@ -91,7 +91,8 @@ def _resolve_cname(domain: str) -> Optional[str]:
         ).decode(errors="replace")
         m = re.search(r"canonical name\s*=\s*(\S+)", out, re.I)
         return m.group(1).rstrip(".") if m else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("[subdomain_takeover] _resolve_cname nslookup fallback error: %r", exc)
         return None
 
 
@@ -107,7 +108,8 @@ def _http_get_body(url: str, session, timeout: int = 8) -> Tuple[int, str]:
     try:
         r = session.get(url, timeout=timeout, allow_redirects=True)
         return r.status_code, (r.text or "")[:3000]
-    except Exception:
+    except Exception as exc:
+        logger.debug("[subdomain_takeover] _http_get_body error for %s: %r", url, exc)
         return 0, ""
 
 
@@ -194,7 +196,6 @@ class SubdomainTakeoverScanner(BaseScanner):
 
     def run(self, target: str, **kwargs) -> List[Dict]:
         checker = CNAMEDanglingChecker(session=self.session, results=self.results)
-        checker.target = target
         return checker.run(target, **kwargs)
 
 

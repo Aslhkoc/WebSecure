@@ -1,10 +1,16 @@
 from __future__ import annotations
-import ssl
-import socket
+import datetime
 import logging
-from typing import Dict, List, Any
+import re
+import socket
+import ssl
+import subprocess
+import time
+import urllib.parse
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from websecure.scanners.base import BaseScanner
 from .infrastructure import check_ssl_certificate as _get_cert_details
 
 _logger = logging.getLogger(__name__)
@@ -124,8 +130,7 @@ def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs
     port = base_info.get("port", 443)
 
     if not host:
-        from urllib.parse import urlparse as _up
-        parsed = _up(url)
+        parsed = urlparse(url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if not host:
@@ -215,13 +220,6 @@ run = scan_tls
 # TLSBEASTPoodleProber, TLSCRIMEBREACHProber, TLSROBOTProber,
 # HTTP2HTTP3Checker, CDNMisconfigProber, TLSAdim9Scanner
 # ============================================================================
-import logging
-import socket
-import ssl
-import time
-import urllib.parse
-from typing import Any, Dict, List, Optional
-from websecure.scanners.base import BaseScanner
 
 _tls_logger = logging.getLogger(__name__ + ".adim9")
 
@@ -671,7 +669,6 @@ class TLSAdim9Scanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 all_results.extend(prober.run(target, **kwargs))
             except Exception as exc:
                 _tls_logger.warning("[TLSAdim9] %s: %s", prober.name, exc)
@@ -683,10 +680,6 @@ class TLSAdim9Scanner(BaseScanner):
 # WeakCipherSuiteProber, HSTSMissingProber, TLSProtocolDowngradeProber,
 # CertificateValidationProber, TLSCompressionProber, TLSDeepScanner
 # ============================================================================
-import datetime
-import re
-import subprocess
-
 
 _deep_logger = logging.getLogger(__name__ + ".deep")
 
@@ -1423,7 +1416,6 @@ class TLSDeepScanner(BaseScanner):
         ]
         for prober in probers:
             try:
-                prober.target = target
                 all_results.extend(prober.run(target, **kwargs))
             except Exception as exc:
                 _deep_logger.warning("[TLSDeep] %s failed: %s", prober.name, exc)
@@ -1460,8 +1452,7 @@ def _run_sslyze(target: str) -> List[Dict]:
     except ImportError:
         return []
 
-    import urllib.parse as _up
-    parsed = _up.urlparse(target)
+    parsed = urlparse(target)
     host = parsed.hostname or target
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if port == 80:

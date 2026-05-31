@@ -12,9 +12,9 @@ Bulunan subdomainler phases.py'deki 'subdomains' bucket'ına yazılır.
 from __future__ import annotations
 
 import concurrent.futures
-import json
 import logging
 import os
+import random
 import re
 import shutil
 import socket
@@ -135,8 +135,7 @@ class DNSBruteForce:
         words = self._load_words()
         found: List[Dict[str, Any]] = []
 
-        import random as _rand
-        _canary = f"nonexistent-canary-{_rand.randint(100000, 999999)}.{domain}"
+        _canary = f"nonexistent-canary-{random.randint(100000, 999999)}.{domain}"
         _wildcard_ip = _resolve(_canary)
 
         def check(word: str):
@@ -218,7 +217,7 @@ class SubfinderWrapper:
         finally:
             try:
                 os.remove(tmp)
-            except Exception as exc:
+            except OSError:
                 pass
 
 
