@@ -73,11 +73,6 @@ _DBLCLICK_RE = re.compile(
     re.IGNORECASE,
 )
 
-_SENSITIVE_DBLCLICK_RE = re.compile(
-    r"ondblclick\s*=\s*[\"'][^\"']*(?:payment|pay|delete|remove|transfer|send|admin|confirm|submit|purchase|checkout)[^\"']*[\"']",
-    re.IGNORECASE,
-)
-
 _FRAME_BUST_JS_RE = re.compile(
     r"(top\s*[!=]=\s*self|self\s*[!=]=\s*top|top\.location|parent\.location|"
     r"window\.top\s*[!=]=\s*window\.self|frameElement)",
@@ -148,10 +143,14 @@ def _parse_frame_ancestors(csp: Optional[str]) -> Optional[str]:
 
 def _cookies_samesite_none(resp) -> bool:
     """Return True if any Set-Cookie header uses SameSite=None."""
-    for value in resp.headers.getlist("Set-Cookie") if hasattr(resp.headers, "getlist") else []:
-        if "samesite=none" in value.lower():
-            return True
-    # requests combines multiple Set-Cookie into one header sometimes
+    # urllib3 raw response exposes duplicate headers individually via getlist()
+    # requests' CaseInsensitiveDict does not support getlist(), so use raw
+    try:
+        raw_cookies = resp.raw.headers.getlist("set-cookie")
+        if raw_cookies:
+            return any("samesite=none" in v.lower() for v in raw_cookies)
+    except Exception:
+        pass
     sc = resp.headers.get("Set-Cookie", "")
     return "samesite=none" in sc.lower()
 

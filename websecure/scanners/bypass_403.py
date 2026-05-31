@@ -88,7 +88,7 @@ def _path_variants(path: str) -> List[str]:
         # trailing slash difference
         f"/{seg}",
         f"/{seg}/",
-        f"/{seg}/.",
+        f"/{seg}?/",
         # path parameters
         f"/{seg};bypass",
         f"/{seg};.bypass",
@@ -420,7 +420,7 @@ class VerbTamperingBypass(BaseScanner):
                             "severity": "High",
                             "description": (
                                 f"HTTP method '{method}' returned {status} on path '{path}' "
-                                f"that blocked {method} GET with {baseline_status}.{note}"
+                                f"that blocked GET with {baseline_status}.{note}"
                             ),
                             "evidence": {
                                 "original_path": path,

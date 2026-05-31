@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,12 +26,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Shared constants
 # ---------------------------------------------------------------------------
-
-# Fields that typically carry numeric business values
-_NUMERIC_FIELD_PATTERNS = re.compile(
-    r"\b(quantity|qty|amount|price|total|count|age|discount|cost|value|num|number|rate|units)\b",
-    re.IGNORECASE,
-)
 
 # Common API paths for user/account update
 _PROFILE_UPDATE_PATHS = [
@@ -51,31 +44,6 @@ _RESET_PATHS = [
     "/forgot-password", "/password-reset", "/api/forgot-password",
     "/api/password-reset", "/account/recover",
 ]
-
-# Checkout / workflow step path patterns
-_CHECKOUT_STEP_PATHS = [
-    "/checkout/shipping",
-    "/checkout/payment",
-    "/checkout/confirm",
-    "/checkout/complete",
-    "/order/confirm",
-    "/order/complete",
-]
-
-_REGISTRATION_STEP_PATHS = [
-    "/register/start",
-    "/register/verify",
-    "/register/complete",
-    "/signup/start",
-    "/signup/verify",
-]
-
-_PASSWORD_RESET_STEP_PATHS = [
-    "/password-reset/request",
-    "/password-reset/confirm",
-    "/password-reset/complete",
-]
-
 
 def _join_url(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
