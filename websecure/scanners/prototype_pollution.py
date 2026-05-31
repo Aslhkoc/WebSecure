@@ -509,26 +509,21 @@ def run(
             except Exception as exc:
                 logger.debug("[ProtoPollution] JSON %s error: %s", method, exc)
         if scan_results:
-            break  # Stop after first confirmed finding
-
-    if scan_results:
-        return scan_results
+            break  # Stop after first confirmed JSON finding
 
     # -- 2. Query-string injection -------------------------------------------
-    for test_url in _qs_payloads(url, canary):
-        try:
-            resp = session.get(test_url, timeout=10, allow_redirects=True)
-            if _canary_in_response(resp, canary):
-                scan_results.append(_build_finding(
-                    "Query-string parameter", test_url, test_url, canary
-                ))
-                logger.info("[ProtoPollution] QS hit: %s", test_url)
-                break
-        except Exception as exc:
-            logger.debug("[ProtoPollution] QS error: %s", exc)
-
-    if scan_results:
-        return scan_results
+    if not scan_results:
+        for test_url in _qs_payloads(url, canary):
+            try:
+                resp = session.get(test_url, timeout=10, allow_redirects=True)
+                if _canary_in_response(resp, canary):
+                    scan_results.append(_build_finding(
+                        "Query-string parameter", test_url, test_url, canary
+                    ))
+                    logger.info("[ProtoPollution] QS hit: %s", test_url)
+                    break
+            except Exception as exc:
+                logger.debug("[ProtoPollution] QS error: %s", exc)
 
     # -- 3. Deep-merge probe (JSON PATCH) -----------------------------------
     deep_payload = {
@@ -553,9 +548,10 @@ def run(
         logger.debug("[ProtoPollution] PATCH probe error: %s", exc)
 
     # -- 4. Server-side PP prober -------------------------------------------
-    sspp = ServerSidePPProber(session=session, results=_results, debug=debug)
+    sspp_results: Dict[str, Any] = {}
+    sspp = ServerSidePPProber(session=session, results=sspp_results, debug=debug)
     sspp.run(url)
-    for finding in (_results.get("offensive") or []):
+    for finding in (sspp_results.get("offensive") or []):
         if finding not in scan_results:
             scan_results.append(finding)
 

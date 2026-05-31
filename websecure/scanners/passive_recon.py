@@ -125,6 +125,10 @@ class PassiveJSScanner(BaseScanner):
         entropy = -sum((secret.count(c)/len(secret)) * math.log2(secret.count(c)/len(secret)) for c in set(secret))
         return entropy < 3.5
 
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        js_urls = kwargs.get("js_urls") or [target]
+        return self.scan(js_urls)
+
     def _find_endpoints(self, content: str) -> List[str]:
         """Extract relative and absolute URLs/paths from JS content."""
         found = set()
@@ -158,6 +162,9 @@ class ContentDiscoveryScanner(BaseScanner):
         
         return findings
 
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        return self.scan(target)
+
     def _check_robots(self, base_url: str) -> List[Dict]:
         findings = []
         robots_url = urljoin(base_url, "/robots.txt")
@@ -185,7 +192,7 @@ class ContentDiscoveryScanner(BaseScanner):
                 # Check for subdomains in robots.txt
                 subs = self._extract_subdomains(resp.text, base_url)
                 if subs:
-                    print(f"[+] Alt Sistemler (Robots.txt): {', '.join(subs)}")
+                    logger.info("[PassiveRecon] Alt Sistemler (Robots.txt): %s", ', '.join(subs))
                     findings.append(self.create_finding(
                         type="Subsystems Identified (Robots)",
                         url=robots_url,
@@ -216,7 +223,7 @@ class ContentDiscoveryScanner(BaseScanner):
                  # Check for subdomains in sitemap
                  subs = self._extract_subdomains(resp.text, base_url)
                  if subs:
-                    print(f"[+] Alt Sistemler (Sitemap): {', '.join(subs)}")
+                    logger.info("[PassiveRecon] Alt Sistemler (Sitemap): %s", ', '.join(subs))
                     findings.append(self.create_finding(
                         type="Subsystems Identified (Sitemap)",
                         url=sitemap_url,
@@ -364,6 +371,9 @@ class APISchemaDiscovery(BaseScanner):
 
         return findings
 
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        return self.scan(target)
+
     def _extract_endpoints(self, schema: Dict, origin: str) -> List[str]:
         """Parse OpenAPI 2/3 schema, return fully qualified parameterized URLs."""
         paths = schema.get("paths") or {}
@@ -424,6 +434,10 @@ class ShodanScanner(BaseScanner):
 
     def _key(self) -> Optional[str]:
         return os.environ.get("SHODAN_API_KEY") or (self.results or {}).get("shodan_api_key")
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        domain = kwargs.get("domain") or urlparse(target).hostname or target
+        return self.scan(domain)
 
     def scan(self, domain: str) -> List[Dict[str, Any]]:
         key = self._key()
@@ -514,6 +528,10 @@ class GitHubDorkScanner(BaseScanner):
             h["Authorization"] = f"token {token}"
         return h
 
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        domain = kwargs.get("domain") or urlparse(target).hostname or target
+        return self.scan(domain)
+
     def scan(self, domain: str) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []
         org = domain.split(".")[0]
@@ -561,6 +579,11 @@ class WaybackScanner(BaseScanner):
     results['endpoints'] havuzuna eklenir.
     """
     _CDX = "https://web.archive.org/cdx/search/cdx"
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        domain = kwargs.get("domain") or urlparse(target).hostname or target
+        return self.scan(domain)
+
     _INTERESTING_RE = re.compile(
         r"(?:/admin|/api|/backup|/config|/debug|/dev|/export|/hidden|/internal|"
         r"/login|/manage|/panel|/secret|/staging|/swagger|/token|/upload|"
@@ -651,6 +674,10 @@ class S3BucketScanner(BaseScanner):
         "s3.us-west-2.amazonaws.com",
         "s3.eu-west-1.amazonaws.com",
     ]
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        domain = kwargs.get("domain") or urlparse(target).hostname or target
+        return self.scan(domain)
 
     def _gen_names(self, domain: str) -> List[str]:
         base = domain.split(".")[0]           # example
@@ -757,6 +784,9 @@ class CloudDetector(BaseScanner):
     HTTP response header'larını analiz ederek hedef sistemin hangi cloud
     altyapısında çalıştığını tespit eder. Subdomain takeover riski de değerlendirilir.
     """
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        return self.scan(target)
+
     _HEADER_SIGS: Dict[str, List[str]] = {
         "AWS / EC2":        ["x-amzn-requestid", "x-amz-id-2", "x-amz-request-id"],
         "AWS S3":           ["x-amz-bucket-region", "x-amz-delete-marker", "x-amz-version-id"],
@@ -864,6 +894,10 @@ class EmailHarvester(BaseScanner):
 
     def _hunter_key(self) -> Optional[str]:
         return os.environ.get("HUNTER_API_KEY") or (self.results or {}).get("hunter_api_key")
+
+    def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
+        domain = kwargs.get("domain") or urlparse(target).hostname or target
+        return self.scan(target, domain)
 
     def scan(self, target_url: str, domain: str) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []

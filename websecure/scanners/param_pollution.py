@@ -17,14 +17,12 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import (
     parse_qsl,
     urlencode,
-    urljoin,
     urlparse,
     urlunparse,
-    quote,
 )
 
 # For multipart body construction
@@ -53,8 +51,6 @@ _MERGED_RE = re.compile(r"wsp_FIRST[,\s+]+wsp_LAST|wsp_LAST[,\s+]+wsp_FIRST", re
 
 # Payload categories for WAF bypass
 _XSS_PAYLOAD = "<script>alert(1)</script>"
-_SQLI_PAYLOAD = "1 OR 1=1"
-_PATH_PAYLOAD = "../../etc/passwd"
 
 # Field patterns that indicate sensitive parameters
 _SENSITIVE_PARAM_RE = re.compile(
@@ -62,9 +58,6 @@ _SENSITIVE_PARAM_RE = re.compile(
     r"query|q|search|page|file|path|redirect|url|next|return|amount|price)",
     re.IGNORECASE,
 )
-
-# Array notation patterns
-_ARRAY_BRACKET_RE = re.compile(r"^(.+)\[\d*\]$")
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -82,12 +75,6 @@ def _extract_params(url: str) -> List[Tuple[str, str]]:
     return parse_qsl(parsed.query, keep_blank_values=True)
 
 
-def _inject_query(url: str, params: List[Tuple[str, str]]) -> str:
-    """Replace the query string of *url* with *params*."""
-    parsed = urlparse(url)
-    return urlunparse(parsed._replace(query=urlencode(params)))
-
-
 def _has_canary(body: str, canary: str) -> bool:
     return canary.lower() in body.lower()
 
@@ -102,10 +89,6 @@ def _detect_waf(resp) -> bool:
         if _WAF_HEADER_RE.search(server):
             return True
     return False
-
-
-def _build_url(base: str, path: str) -> str:
-    return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
 
 
 def _safe_text(resp) -> str:
@@ -1195,8 +1178,8 @@ class ContentTypeSwitchingProber(BaseScanner):
 
         for name, orig_value in post_params:
             canary = _canary()
-            form_result = self._send_form(target, name, orig_value, canary)
-            json_result = self._send_json(target, name, orig_value, canary)
+            form_result = self._send_form(target, name, canary)
+            json_result = self._send_json(target, name, canary)
 
             form_reflected = form_result is not None and _has_canary(_safe_text(form_result), canary)
             json_reflected = json_result is not None and _has_canary(_safe_text(json_result), canary)
@@ -1260,7 +1243,7 @@ class ContentTypeSwitchingProber(BaseScanner):
 
         return findings
 
-    def _send_form(self, url: str, name: str, orig_value: str, canary: str):
+    def _send_form(self, url: str, name: str, canary: str):
         """Send POST with application/x-www-form-urlencoded and return response or None."""
         body = urlencode([(name, canary)])
         try:
@@ -1276,7 +1259,7 @@ class ContentTypeSwitchingProber(BaseScanner):
             logger.debug("[ContentTypeSwitch] form send error: %r", exc)
             return None
 
-    def _send_json(self, url: str, name: str, orig_value: str, canary: str):
+    def _send_json(self, url: str, name: str, canary: str):
         """Send POST with application/json and return response or None."""
         payload = json.dumps({name: canary})
         try:
@@ -1294,7 +1277,7 @@ class ContentTypeSwitchingProber(BaseScanner):
 
 
 # ===========================================================================
-# 7. ParamPollutionScanner — Orchestrator
+# 6. ParamPollutionScanner — Orchestrator
 # ===========================================================================
 
 class ParamPollutionScanner(BaseScanner):
