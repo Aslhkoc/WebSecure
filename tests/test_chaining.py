@@ -35,10 +35,16 @@ def _make_results(**buckets):
 
 
 def _run_and_get_bucket(results: dict) -> list:
-    """analyze_chains çalıştırır, chain_reactor bucket'ını döner."""
+    """analyze_chains çalıştırır, tespit edilen zincir bulgularını döner.
+
+    Zincirler 'vulnerability' bucket'ına raporlanır (dashboard/raporlar oradan
+    okur — ayrı bir 'chain_reactor' bucket'ı yoktur). chain_id'si olan kayıtlar
+    zincirdir; ham bulgular bucket'a eklenmez, bu yüzden filtre güvenlidir.
+    """
     reporting.reset()
     analyze_chains(results)
-    bucket = reporting.get_bucket_results().get("chain_reactor", [])
+    bucket = [f for f in reporting.get_bucket_results().get("vulnerability", [])
+              if f.get("chain_id")]
     reporting.reset()
     return bucket
 
@@ -376,7 +382,8 @@ class TestChainReactorBehavior(unittest.TestCase):
         )
         reporting.reset()
         analyze_chains(results)
-        bucket = reporting.get_bucket_results().get("chain_reactor", [])
+        bucket = [f for f in reporting.get_bucket_results().get("vulnerability", [])
+                  if f.get("chain_id")]
         reporting.reset()
 
         # CSRF yoksa xss_csrf_* zincirleri tetiklenmemeli
