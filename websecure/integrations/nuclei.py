@@ -265,7 +265,8 @@ class NucleiWrapper(ToolIntegration):
 
     def _find_project_templates(self) -> Optional[str]:
         """Proje içi özel Nuclei şablon dizinini arar."""
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         for candidate in [
             root / "templates" / "nuclei",
             root / "tools" / "nuclei-templates",

@@ -32,6 +32,12 @@ def validate_config(cfg: dict, schema_path: Optional[str] = None) -> List[str]:
         candidates: List[Path] = []
         if schema_path:
             candidates.append(Path(schema_path))
+        # Frozen (.exe) / cross-platform: paths katmanı üzerinden çöz
+        try:
+            from websecure.core.paths import config_schema_file as _schema_file
+            candidates.append(_schema_file())
+        except Exception:
+            pass
         # Default: project root (two levels up from websecure/core/utils/)
         candidates.append(Path(__file__).parent.parent.parent.parent / "config.schema.json")
         candidates.append(Path(__file__).parent.parent.parent / "config.schema.json")
@@ -110,6 +116,14 @@ def _resolve_config_path(path: str) -> Path:
     candidate = project_root / path
     if candidate.exists():
         return candidate
+    # Frozen (.exe) / kullanıcı override (CWD, user_data_dir, bundle): paths üzerinden çöz
+    try:
+        from websecure.core.paths import config_file as _config_file
+        resolved = _config_file()
+        if resolved.exists():
+            return resolved
+    except Exception:
+        pass
     return p  # bulunamadıysa orijinali döndür, caller handle eder
 
 

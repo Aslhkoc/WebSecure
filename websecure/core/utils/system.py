@@ -44,9 +44,9 @@ def _chrome_service():
     except Exception as e:
         logging.warning(f"[WebDriver] WDM başarısız: {e}")
 
-    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     from websecure.core.platform_compat import binary_name as _bn
-    local = os.path.join(root_dir, "drivers", _bn("chromedriver"))
+    from websecure.core.paths import drivers_dir as _drivers_dir
+    local = str(_drivers_dir() / _bn("chromedriver"))
     if os.path.exists(local):
         logging.info(f"[WebDriver] Yerel driver: {local}")
         return Service(executable_path=local)

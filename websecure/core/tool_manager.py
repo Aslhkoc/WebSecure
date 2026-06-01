@@ -44,8 +44,9 @@ class ToolManager:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.project_root = Path(__file__).resolve().parent.parent.parent
-        self.tools_dir = self.project_root / "tools"
+        from websecure.core import paths as _paths
+        self.project_root = _paths.writable_root()
+        self.tools_dir = _paths.tools_dir()
         self.sqlmap_process = None
         self.sqlmap_client = None
 

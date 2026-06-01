@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -125,7 +124,8 @@ class SQLMapWrapper(ToolIntegration):
             return True
         # SQLMap is often a Python script in the tools/ directory — check there too
         from websecure.core.platform_compat import binary_candidates as _bc
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         _script_candidates = [
             root / "tools" / "sqlmap" / "sqlmap.py",
             root / "tools" / "sqlmapproject-sqlmap-4a40101" / "sqlmap.py",

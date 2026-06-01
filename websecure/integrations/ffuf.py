@@ -72,7 +72,8 @@ class FFUFWrapper(ToolIntegration):
             return
 
         from websecure.core.platform_compat import binary_candidates as _bc
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         for _cand in _bc(root, "ffuf"):
             if _cand.exists():
                 self._binary_path = str(_cand)
@@ -557,7 +558,8 @@ class FeroxbusterWrapper(ToolIntegration):
         if shutil.which(self.binary):
             return
         from websecure.core.platform_compat import binary_candidates as _bc
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         for _cand in _bc(root, "feroxbuster"):
             if _cand.exists():
                 self._binary_path = str(_cand)

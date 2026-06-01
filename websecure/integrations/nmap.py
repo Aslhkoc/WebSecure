@@ -30,7 +30,6 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from websecure.integrations.base import (
@@ -254,7 +253,8 @@ class NmapWrapper(ToolIntegration):
 
         # 2. Yaygın kurulum konumları (Windows + Linux + macOS)
         from websecure.core.platform_compat import binary_candidates as _bc
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
 
         candidates_path: list = list(_bc(root, "nmap"))
         if _is_windows():

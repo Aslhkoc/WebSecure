@@ -264,7 +264,8 @@ class ToolIntegration(ABC):
             return
 
         # 1. Proje tools/ dizini — platform_compat ile platform-native sıralama
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         try:
             from websecure.core.platform_compat import binary_candidates as _bc
             candidates = _bc(root, name)

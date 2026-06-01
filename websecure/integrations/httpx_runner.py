@@ -96,7 +96,8 @@ class HttpxWrapper(ToolIntegration):
     ) -> None:
         # PATH'ta Python httpx olabilir — tools/ klasöründeki Go httpx'i önceliklendir
         if not binary_path:
-            _root = Path(__file__).resolve().parent.parent.parent
+            from websecure.core.paths import writable_root as _ws_root
+            _root = _ws_root()
             for _candidate in [
                 _root / "tools" / "httpx" / "httpx.exe",
                 _root / "tools" / "httpx" / "httpx",

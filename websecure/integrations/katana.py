@@ -104,7 +104,8 @@ class KatanaWrapper(ToolIntegration):
         """Binary yolunu çöz: PATH → tools/ klasörü."""
         if shutil.which(self.binary):
             return
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         for candidate in [
             root / "tools" / "katana" / "katana.exe",
             root / "tools" / "katana" / "katana",

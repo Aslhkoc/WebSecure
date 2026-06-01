@@ -30,8 +30,11 @@ from websecure.core.platform_compat import (
     github_release_info as _platform_info,
     extract_binary_from_archive as _extract_binary,
 )
+from websecure.core import paths as _paths
 
-_ROOT = Path(__file__).resolve().parent.parent.parent  # project root
+# Yazılabilir tools/drivers kökü. Kaynak modda proje köküdür (eski davranış);
+# dondurulmuş .exe içinde kullanıcı veri dizinine (user_data_dir) yönlenir.
+_ROOT = _paths.writable_root()
 
 
 # ---------------------------------------------------------------------------

@@ -584,7 +584,8 @@ class InteractshIntegration(ToolIntegration):
     ) -> None:
         # Binary keşif: önce tools/, sonra drivers/, son olarak PATH
         if not binary_path:
-            _root = Path(__file__).resolve().parent.parent.parent
+            from websecure.core.paths import writable_root as _ws_root
+            _root = _ws_root()
             for _candidate in [
                 _root / "tools" / "interactsh" / "interactsh-client.exe",
                 _root / "tools" / "interactsh" / "interactsh-client",

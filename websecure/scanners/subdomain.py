@@ -175,9 +175,9 @@ class SubfinderWrapper:
     def _find_binary(self):
         if shutil.which(self.binary):
             return
-        from pathlib import Path
         from websecure.core.platform_compat import binary_candidates as _bc
-        root = Path(__file__).resolve().parent.parent.parent
+        from websecure.core.paths import writable_root as _ws_root
+        root = _ws_root()
         for _cand in _bc(root, "subfinder"):
             if _cand.exists():
                 self.binary = str(_cand)
@@ -268,9 +268,9 @@ except ImportError:
         def _find_binary(self):
             if shutil.which(self.binary):
                 return
-            from pathlib import Path
             from websecure.core.platform_compat import binary_candidates as _bc
-            root = Path(__file__).resolve().parent.parent.parent
+            from websecure.core.paths import writable_root as _ws_root
+            root = _ws_root()
             for _cand in _bc(root, "amass"):
                 if _cand.exists():
                     self.binary = str(_cand)
