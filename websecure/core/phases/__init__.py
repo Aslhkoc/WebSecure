@@ -5343,7 +5343,12 @@ def run_reporting_and_integration(ctx) -> None:
     # Always-on SARIF + JUnit — CI/CD pipeline'ı için yapılandırmadan bağımsız üret
     _rep_cfg = (cfg.get("reporting") or {}) if isinstance(cfg, dict) else {}
     _formats = list(_rep_cfg.get("formats") or [])
-    _out_dir = str(_rep_cfg.get("output_dir") or cfg.get("output_dir") or "output")
+    try:
+        from websecure.core import paths as _ws_paths
+        _default_out = str(_ws_paths.output_dir()) if _ws_paths.is_frozen() else "output"
+    except Exception:
+        _default_out = "output"
+    _out_dir = str(_rep_cfg.get("output_dir") or cfg.get("output_dir") or _default_out)
     try:
         import os as _os
         _os.makedirs(_out_dir, exist_ok=True)

@@ -1751,13 +1751,38 @@ def instrument_requests_session(session: requests.Session, cfg: Mapping[str, Any
 
 
 
+def _resolve_curl_bin(val: str) -> str:
+    """curl-impersonate bin_map değerini platform/konum bağımsız çöz.
+
+    - Ayraç içermeyen değerler (ör. 'curl_chrome120') PATH araması için aynen döner.
+    - Windows dışında '.exe' uzantılı yol → PATH'teki 'curl'e düşer.
+    - './tools/...' gibi göreli yollar yazılabilir köke göre (frozen-safe) çözülür.
+    """
+    if not val or ("/" not in val and "\\" not in val):
+        return val
+    import sys
+    if not sys.platform.startswith("win") and val.lower().endswith(".exe"):
+        return "curl"
+    from pathlib import Path as _P
+    if not _P(val).is_absolute():
+        try:
+            from websecure.core.paths import writable_root as _wr
+            cleaned = val[2:] if val.startswith("./") else val
+            cand = _wr() / cleaned
+            if cand.exists():
+                return str(cand)
+        except Exception:
+            pass
+    return val
+
+
 def _bin_map_from_cfg(cfg: Mapping[str, Any] | None, profile: str) -> str:
     c = dict(cfg or {})
     imp = (c.get("privacy") or {}).get("impersonation") or {}
     p = str(profile or "chrome_120").lower()
     mp = imp.get("bin_map") or {}
     if isinstance(mp, dict) and p in mp:
-        return str(mp[p])
+        return _resolve_curl_bin(str(mp[p]))
     # built-in defaults
     default = {
         "chrome_120": "curl_chrome120",

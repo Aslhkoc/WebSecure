@@ -163,7 +163,12 @@ def _cmd_scan(ns: argparse.Namespace, cfg: Dict[str, Any]) -> int:
         tui.stop()
 
         # Çıktı dosyası
-        output_dir = getattr(ns, "output", None) or cfg.get("output_dir", "./websecure_reports")
+        try:
+            from websecure.core import paths as _ws_paths
+            _default_out = str(_ws_paths.output_dir()) if _ws_paths.is_frozen() else "./websecure_reports"
+        except Exception:
+            _default_out = "./websecure_reports"
+        output_dir = getattr(ns, "output", None) or cfg.get("output_dir", _default_out)
         if output_dir:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             tui.log(f"Çıktı: {output_dir}", "info")

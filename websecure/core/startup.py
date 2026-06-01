@@ -10,7 +10,7 @@ Each function is self-contained, prints progress, and returns bool.
 Auto-install coverage:
   Go binaries  : nuclei, httpx, katana, subfinder, dalfox, ffuf,
                  feroxbuster, amass, interactsh-client
-  System tools : nmap (OS package manager instructions)
+  System tools : nmap (OS package manager instructions), sqlmap (git clone)
   Python deps  : playwright, curl_cffi
 """
 from __future__ import annotations
@@ -261,6 +261,9 @@ def ensure_playwright_chromium() -> bool:
     try:
         from playwright.sync_api import sync_playwright  # noqa: F401
     except ImportError:
+        if _paths.is_frozen():
+            print("[!] Playwright bu .exe build'inde paketlenmedi. DOM XSS taraması devre dışı.")
+            return False
         print("[!] Playwright kurulu değil. Kuruluyor: pip install playwright")
         try:
             subprocess.run(
@@ -278,6 +281,11 @@ def ensure_playwright_chromium() -> bool:
             browser.close()
         return True
     except Exception:
+        if _paths.is_frozen():
+            print("[*] Playwright chromium tarayıcısı bulunamadı.")
+            print("    Kurmak için bir kez (ayrı Python ile): playwright install chromium")
+            print("[!] DOM XSS doğrulaması bu taramada devre dışı.")
+            return False
         print("[*] Playwright chromium binary bulunamadı. Kuruluyor…")
         try:
             subprocess.run(
@@ -298,6 +306,9 @@ def ensure_curl_cffi() -> bool:
         from curl_cffi import requests as _  # noqa: F401
         return True
     except ImportError:
+        if _paths.is_frozen():
+            print("[*] curl_cffi bu .exe build'inde yok; requests/tls-client fallback kullanılacak.")
+            return False
         print("[*] curl_cffi kuruluyor (TLS parmak izi gizleme)…")
         try:
             subprocess.run(
@@ -436,6 +447,39 @@ def ensure_amass() -> bool:
     return _ensure_go_binary("amass")
 
 
+def ensure_sqlmap() -> bool:
+    """sqlmap (Python projesi) — PATH'te yoksa tools/sqlmap'e git clone ile getirir.
+
+    tools_dir() yazılabilir konuma indirir (donmuş .exe dahil tüm platformlar).
+    git yoksa veya clone başarısızsa zarifçe devre dışı kalır — SQLi otomatik
+    exploit opsiyoneldir; manuel/dahili SQLi taraması yine çalışır.
+    """
+    if shutil.which("sqlmap"):
+        return True
+    dest = _paths.tools_dir() / "sqlmap"
+    if (dest / "sqlmap.py").exists():
+        return True
+    if not shutil.which("git"):
+        print("[!] sqlmap yok ve git bulunamadı. SQLi otomatik exploit (sqlmap) devre dışı.")
+        print(f"    Elle kur: git clone --depth 1 https://github.com/sqlmapproject/sqlmap {dest}")
+        return False
+    print("[*] sqlmap indiriliyor (git clone)…")
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1",
+             "https://github.com/sqlmapproject/sqlmap", str(dest)],
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+    except Exception as exc:
+        print(f"[!] sqlmap indirilemedi: {exc}")
+        return False
+    if (dest / "sqlmap.py").exists():
+        print(f"[+] sqlmap kuruldu → {dest}")
+        return True
+    print("[!] sqlmap clone tamamlanamadı.")
+    return False
+
+
 # ---------------------------------------------------------------------------
 # setup_all — tek komutla her şeyi kur
 # ---------------------------------------------------------------------------
@@ -493,6 +537,14 @@ def setup_all(cfg: dict | None = None) -> dict[str, bool]:
     status = "✓" if ok else "!"
     print(f"  [{'nmap':<14}] {status}  Ağ port tarama")
     results["nmap"] = ok
+
+    # --- sqlmap (Python, git clone) ------------------------------------------
+    sys.stdout.write(f"  [{'sqlmap':<14}] kontrol ediliyor…\r")
+    sys.stdout.flush()
+    ok = ensure_sqlmap()
+    status = "✓" if ok else "!"
+    print(f"  [{'sqlmap':<14}] {status}  SQLi otomatik exploit (sqlmap)")
+    results["sqlmap"] = ok
 
     # --- Python bağımlılıkları -----------------------------------------------
     for fn, label in [
