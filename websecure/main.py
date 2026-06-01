@@ -366,9 +366,8 @@ if _det_spec is not None:
                     return 'captcha_block'
                 return 'auth_required'
             return 'unknown'
-    _prime = getattr(_det, 'prime_session', None)
-    if callable(_prime):
-        prime_session = _prime  # mevcut (core.http)’teki varsa üzerine yazar
+    # Not: 'prime_session' detect modülünden alınmaya çalışılıyordu ama detect.py yok
+    # ve hiçbir yerde tanımlı değil; ölü atama kaldırıldı.
 else:
     def classify_access_block(status: int, headers: dict, body: str) -> str:  # minimal heuristic, istisnasız
         get_hdr = headers.get if isinstance(headers, dict) or hasattr(headers, "get") else (lambda k, d=None: d)
@@ -1447,8 +1446,9 @@ def _run_scan_phases(
         _enforce_egress_policy(cfg)
         _egress_health_check(session, cfg, results)
 
-        if callable(globals().get("prime_session")):
-            _ = prime_session(session, url, cfg, logger=logger)
+        # Not: eski 'prime_session' çağrısı kaldırıldı — bu sembol hiçbir yerde
+        # tanımlanmıyordu (detect.py yok, core.http'de de yok) → globals().get hep None,
+        # blok hiç çalışmıyordu. Aktif oturum priming'i _session_priming() (aşağıda) yapar.
 
         if callable(install_auth_retry_adapter):
             install_auth_retry_adapter(session, cfg)
