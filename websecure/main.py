@@ -262,8 +262,7 @@ else:
 
         # İç iş: browser işi (istisna atmadan bırakılır, Future.exception ile gözlemlenir)
         def _job() -> tuple[list[str], dict]:
-            # WebDriver ayağa kaldır
-            from websecure.core.utils import setup_webdriver  # mevcut modülden kullan
+            # WebDriver ayağa kaldır (setup_webdriver modül seviyesinde import edili)
 
             # [Fix] Respect headless parameter passed from caller (which comes from config)
             drv = setup_webdriver(headless=headless)
@@ -957,7 +956,6 @@ except (ImportError, AttributeError):
 
     def _guess_host_from_url(url: str) -> str:
         try:
-            from urllib.parse import urlparse
             return urlparse(url).hostname or ""
         except (ValueError, AttributeError):
             return ""
@@ -2423,9 +2421,9 @@ if __name__ == "__main__":
     # [WS3] Interactive Mode (Wizard)
     if len(_sys.argv) < 2:
         try:
-            from websecure.cli.wizard import run_wizard
+            from websecure.cli.wizard import run_wizard as _run_wizard
             # Run wizard and if it returns True (Run Now selected)
-            if run_wizard():
+            if _run_wizard():
                 # We need to simulate CLI args for main() to be happy
                 # Load the config we just saved to get the target
                 try:
@@ -2450,26 +2448,23 @@ if __name__ == "__main__":
 
     # [WS3] External Tool Management
     try:
-        from websecure.core.tool_manager import ToolManager
+        from websecure.core.tool_manager import ToolManager as _ToolManager
         # Load temporary config just for this decision
         import json
         _tm_cfg = {}
         if os.path.exists("config.json"):
-            with open("config.json", "r", encoding="utf-8") as f:
-                _tm_cfg = json.load(f)
+            with open("config.json", "r", encoding="utf-8") as _cfg_f:
+                _tm_cfg = json.load(_cfg_f)
 
-        tm = ToolManager(_tm_cfg)
+        _tm = _ToolManager(_tm_cfg)
         # Only ask if interactive and not configured
         if "--interactive" in sys.argv:
-            updates = tm.ask_user_interactive()
-            # If changed, we might want to update config, but for now just pass environment?
-            # Actually, main() loads config again.
-            pass
+            _tm.ask_user_interactive()
 
         # Ensure SQLMap API is started if enabled in config
         if (_tm_cfg.get("offensive", {}).get("sqlmap", {}).get("enabled")) or \
            (_tm_cfg.get("tools", {}).get("sqlmap", {}).get("enabled")):
-            tm.start_sqlmap_api()
+            _tm.start_sqlmap_api()
 
     except Exception as e:
         print(f"[!] Tool Manager Error: {e}")
