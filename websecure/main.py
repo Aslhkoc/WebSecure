@@ -210,6 +210,7 @@ if not globals().get("__package__"):
 
 
 # FAZ-EK: URL normalizasyon -> core/url_utils.py'e taşındı
+# noinspection PyProtectedMember
 from websecure.core.url_utils import _detect_final_url_and_scheme_robust
 
 
@@ -641,6 +642,7 @@ if run_owasp_and_nuclei is None:
 
 # FAZ 4.2: _call_scanner_if_available ve _bind_offensive core/scan_runner.py'e taşındı.
 # Geriye dönük uyumluluk için buradan re-export edilir.
+# noinspection PyProtectedMember
 from websecure.core.scan_runner import (
     _call_scanner_if_available,
     _bind_offensive,
@@ -752,6 +754,7 @@ file_upload_scan = getattr(_fu_mod, "run", None) if _fu_mod else None
 
 # ------------------ Tarama yoğunluğu (Agresif/Normal) teklifi ------------------
 # FAZ-EK: Profil seçme/uygulama helpers -> core/scan_profile.py'e taşındı
+# noinspection PyProtectedMember
 from websecure.core.scan_profile import (
     _offer_scan_profile_and_confirm,
     _choose_mode_from_config,
@@ -759,6 +762,7 @@ from websecure.core.scan_profile import (
 
 
 # FAZ-EK: Proxy/session helpers + ensure_session -> core/session_factory.py'e taşındı
+# noinspection PyProtectedMember
 from websecure.core.session_factory import (
     ensure_session,
     _setup_session_from_config,
@@ -966,6 +970,7 @@ except (ImportError, AttributeError):
 
 # ------------------ Ana akış ------------------
 # FAZ-EK: Egress policy helpers -> core/egress.py'e taşındı
+# noinspection PyProtectedMember
 from websecure.core.egress import (
     _enforce_egress_policy,
     _egress_health_check,
@@ -1299,6 +1304,7 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
         profile, cfg = _offer_scan_profile_and_confirm(cfg)
     else:
         profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
+        # noinspection PyProtectedMember
         from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile  # noqa: PLC0415
         if profile in ("stealth",):
             cfg = _apply_stealth_profile(cfg)
@@ -1316,6 +1322,7 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
         if profile not in ("aggressive", "deep"):
             print(f"[WARN] Saldırı modu seçildi ancak profil ‘{profile}’. ‘AGGRESSIVE’ olarak zorlanıyor.")
         profile = "aggressive"
+        # noinspection PyProtectedMember
         from websecure.core.scan_profile import _apply_aggressive_profile  # noqa: PLC0415
         cfg = _apply_aggressive_profile(cfg)
         cfg = apply_active_profile(cfg)
@@ -1335,6 +1342,7 @@ def main() -> None:
 
     # Ctrl+C handler
     try:
+        # noinspection PyProtectedMember
         from websecure.core.phases import _install_sigint_handler  # noqa: PLC0415
         _install_sigint_handler()
     except Exception as _fix_e:
