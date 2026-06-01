@@ -252,6 +252,8 @@ else:
 
     # Basit, sağlam ve bağımsız dinamik keşif (Selenium tabanlı)
     # Not: try/except yok; hata yakalama Future.exception() ile üst katmanda yapılır.
+    # record_dir/prefer: gerçek (crawler) imzasıyla uyum için var; bu fallback kullanmaz.
+    # noinspection PyUnusedLocal
     def discover_dynamic_endpoints(start_url: str,
                                    headless: bool = True,
                                    timeout_ms: int = 15000,
@@ -679,6 +681,7 @@ RoleProfile = getattr(_authz, 'RoleProfile', None) if _authz else None
 # çağıran bir köprü wrapper'a bağlanır.
 
 
+# noinspection PyUnusedLocal
 def _auth_wrapper(url, session, debug=False, auth_ctx=None):
     findings = []
     if not auth_ctx or not hasattr(auth_ctx, "build_sessions"):
@@ -2219,7 +2222,6 @@ def _run_scan_phases(
 
         out = perform_reporting(session, cfg, report_payload)
         written = (out or {}).get("written", {})
-        ok = written.get("md") or written.get("json")
 
         if driver is not None:
             getattr(driver, 'quit', lambda: None)()
@@ -2487,6 +2489,7 @@ if __name__ == "__main__":
             try:
                 import websecure.core.reporting as _rep_safe
                 # Merge bucket results (findings added during scan) into the payload
+                # noinspection PyBroadException
                 try:
                     from websecure.core.reporting import get_bucket_results
                     _bucket_data = get_bucket_results()
