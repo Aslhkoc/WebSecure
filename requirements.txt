@@ -1,0 +1,40 @@
+# WebSecure — Python bağımlılıkları
+# Kurulum:
+#   pip install -r requirements.txt
+#   python install.py        # binary araçları (nuclei/ffuf/...) + Playwright tarayıcısını da kurar
+#   python -m websecure --setup   # harici araçları indirir/kontrol eder
+
+# --- Zorunlu temel ---
+requests>=2.32.0
+beautifulsoup4>=4.12.2
+lxml>=5.2.2
+tldextract>=5.1.2
+cryptography>=42.0.0
+jinja2>=3.0.0
+cvss>=3.2
+regex>=2024.4.16
+PyYAML>=6.0
+jsonschema>=4.0
+
+# --- WAF bypass / TLS parmak izi taklidi (Cloudflare vb. için kritik) ---
+curl-cffi>=0.6.0
+tls-client>=1.0.1
+cloudscraper>=1.2.71
+
+# --- Proxy desteği ---
+PySocks>=1.7.1
+
+# --- Performans / HTTP/2 ---
+python-Levenshtein>=0.25.0
+httpx[http2]>=0.27.0
+
+# --- Terminal UI / ilerleme çubuğu ---
+rich>=13.0
+
+# --- Opsiyonel: DOM XSS (Playwright). Ayrıca tarayıcı indirir:
+#     playwright install chromium
+playwright>=1.46.0
+
+# --- Opsiyonel: PDF raporu. Windows'ta GTK/Pango sistem kütüphaneleri gerekir;
+#     yoksa HTML raporu otomatik kullanılır.
+weasyprint>=61.0

@@ -46,7 +46,7 @@ except ImportError:
 
 try:
     from sentence_transformers import SentenceTransformer, util as st_util
-except ImportError:
+except Exception:  # ImportError + torch/CUDA OSError vb. — ML opsiyonel, asla çökmesin
     SentenceTransformer = None
     st_util = None
 
