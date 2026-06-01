@@ -200,7 +200,7 @@ def _ws_has(*names: str) -> bool:
     return _ws_import_any(*names) is not None
 
 
-if __package__ is None or __package__ == "":
+if not globals().get("__package__"):
     _pkg_dir = _os.path.dirname(_os.path.abspath(__file__))
     _parent = _os.path.dirname(_pkg_dir)
     if _parent not in _sys.path:
@@ -880,7 +880,7 @@ def _has_hsts(results: dict) -> bool:
     def _norm(x) -> str:
         return (str(x).strip().lower()) if x is not None else ""
 
-    POSITIVE = {"mevcut", "present", "enabled", "ok", "yes", "true", "var", "on"}
+    positive = {"mevcut", "present", "enabled", "ok", "yes", "true", "var", "on"}
 
     if not isinstance(results, dict):
         return False
@@ -896,29 +896,28 @@ def _has_hsts(results: dict) -> bool:
                 h = _norm(it.get("header"))
                 st_raw = it.get("status")
                 st = _norm(st_raw)
-                if h == "strict-transport-security" and (st in POSITIVE or (isinstance(st_raw, bool) and st_raw)):
+                if h == "strict-transport-security" and (st in positive or (isinstance(st_raw, bool) and st_raw)):
                     return True
             elif isinstance(it, (list, tuple)) and len(it) >= 2:
                 h = _norm(it[0])
                 st_raw = it[1]
                 st = _norm(st_raw)
-                if h == "strict-transport-security" and (st in POSITIVE or (isinstance(st_raw, bool) and st_raw)):
+                if h == "strict-transport-security" and (st in positive or (isinstance(st_raw, bool) and st_raw)):
                     return True
         return False
 
     # Sözlük biçimi: {"Strict-Transport-Security": "Mevcut"/True/...}
     if isinstance(sh, dict):
-        h = _norm("Strict-Transport-Security")
         val = sh.get("Strict-Transport-Security") or sh.get("strict-transport-security")
         if val is not None:
             st = _norm(val)
-            if st in POSITIVE or (isinstance(val, bool) and val):
+            if st in positive or (isinstance(val, bool) and val):
                 return True
         # Bazı raporlarda {"header": {"status": ...}} şeklinde olabilir
         node = sh.get("header") if isinstance(sh.get("header"), dict) else None
         if node and _norm(node.get("name")) == "strict-transport-security":
             v = node.get("status")
-            return (isinstance(v, bool) and v) or (_norm(v) in POSITIVE)
+            return (isinstance(v, bool) and v) or (_norm(v) in positive)
         return False
 
     return False
