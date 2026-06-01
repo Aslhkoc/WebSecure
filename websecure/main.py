@@ -234,6 +234,7 @@ def _session_priming(session, base_url, cfg):
 
 
 _discover_func = None
+_mod = None  # if/elif'lerin ikisi de çalışmazsa _mod tanımlı kalsın (PyCharm undefined uyarısı)
 
 if _find_spec("websecure.crawler") is not None:
     _mod = _import_module("websecure.crawler")
@@ -589,10 +590,9 @@ for _m in [
 # --- Crawler ---
 _crawl_mod = _im.import_module('websecure.crawler') if _ws_spec('websecure.crawler') is not None else None
 if _crawl_mod is None:
-    # Fallback: try relative from core or root if simple import fails
+    # Fallback: doğrudan import dene (ara _wc değişkeni kaldırıldı)
     try:
-        import websecure.crawler as _wc
-        _crawl_mod = _wc
+        import websecure.crawler as _crawl_mod
     except ImportError:
         print("[!] UYARI: Crawler modülü (websecure.crawler) yüklenemedi!")
 
@@ -623,7 +623,7 @@ _ssrf_mod = _im.import_module('websecure.scanners.ssrf_xxe') if _ws_spec(
     'websecure.scanners.ssrf_xxe') is not None else None
 ssrf_xxe_scan = getattr(_ssrf_mod, 'scan', None) if _ssrf_mod else None
 if ssrf_xxe_scan is None:
-    def ssrf_xxe_scan(*a, **k):
+    def ssrf_xxe_scan(*_a, **_k):
         return None
 
 # --- OWASP / Nuclei (yeni entegrasyon) ---
@@ -635,7 +635,7 @@ elif _ws_spec('owasp') is not None:
 
 run_owasp_and_nuclei = getattr(_owasp_mod, 'run_owasp_and_nuclei', None) if _owasp_mod else None
 if run_owasp_and_nuclei is None:
-    def run_owasp_and_nuclei(*a, **k):
+    def run_owasp_and_nuclei(*_a, **_k):
         return {}
 
 
@@ -700,7 +700,7 @@ authorization_run = _auth_wrapper
 # auth.py has probe_auth_only
 probe_auth_only = getattr(_authz, 'probe_auth_only', None) if _authz else None
 if probe_auth_only is None:
-    def probe_auth_only(*a, **k):
+    def probe_auth_only(*_a, **_k):
         return None
 
 # --- Fuzzing / OAST ---
@@ -710,13 +710,13 @@ fuzz_endpoint = getattr(_pf, 'fuzz_endpoint', None) if _pf else None
 guess_additional_params = getattr(_pf, 'guess_additional_params', None) if _pf else None
 
 if discover_params_from_crawl is None:
-    def discover_params_from_crawl(*a, **k):
+    def discover_params_from_crawl(*_a, **_k):
         return {"query": [], "body": [], "json": []}
 if guess_additional_params is None:
-    def guess_additional_params(d, *a, **k):
+    def guess_additional_params(d, *_a, **_k):
         return d
 if fuzz_endpoint is None:
-    def fuzz_endpoint(*a, **k):
+    def fuzz_endpoint(*_a, **_k):
         return None
 
 _oast = _im.import_module("websecure.core.oast") if _ws_spec("websecure.core.oast") is not None else None
@@ -725,10 +725,10 @@ run_oast_on_target = getattr(_oast, 'run_oast_on_target', None) if _oast else No
 
 if OASTClient is None:
     class OASTClient:
-        def __init__(self, *a, **k):
+        def __init__(self, *_a, **_k):
             pass
 if run_oast_on_target is None:
-    def run_oast_on_target(*a, **k):
+    def run_oast_on_target(*_a, **_k):
         return []
 
 # --- Business Logic & Advanced Scanners ---
@@ -1056,10 +1056,8 @@ def _normalize_webdriver_cfg(cfg: dict) -> dict:
 
     out["webdriver"]["headless"] = bool(headless)
 
-    bin_path = None
     if isinstance(tls_wd, dict) and isinstance(tls_wd.get("binary"), str) and tls_wd.get("binary").strip():
-        bin_path = tls_wd.get("binary").strip()
-        out["webdriver"]["binary"] = bin_path
+        out["webdriver"]["binary"] = tls_wd.get("binary").strip()
 
     out["webdriver"]["allow_bad_tls"] = False
 
