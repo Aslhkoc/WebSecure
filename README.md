@@ -23,7 +23,8 @@ Smuggling, Race Condition ve daha fazlası).
 |----|-------|------------|
 | Windows | `websecure.exe` | `websecure.exe --help` (veya çift tıkla) |
 | Linux | `websecure-linux` | `chmod +x websecure-linux && ./websecure-linux --help` |
-| macOS | `websecure-macos` | `chmod +x websecure-macos && ./websecure-macos --help` |
+| macOS (Apple Silicon) | `websecure-macos-arm64` | `chmod +x websecure-macos-arm64 && ./websecure-macos-arm64 --help` |
+| macOS (Intel) | `websecure-macos-intel` | `chmod +x websecure-macos-intel && ./websecure-macos-intel --help` |
 
 İlk çalıştırmada harici araçlar (nuclei, ffuf, sqlmap…) otomatik olarak
 kullanıcı veri dizinine indirilir:

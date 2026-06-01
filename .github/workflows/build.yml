@@ -25,8 +25,11 @@ jobs:
           - os: ubuntu-latest
             artifact: websecure-linux
             built: dist/websecure
-          - os: macos-latest
-            artifact: websecure-macos
+          - os: macos-latest        # Apple Silicon (arm64)
+            artifact: websecure-macos-arm64
+            built: dist/websecure
+          - os: macos-13            # Intel (x86_64)
+            artifact: websecure-macos-intel
             built: dist/websecure
     runs-on: ${{ matrix.os }}
     steps:
