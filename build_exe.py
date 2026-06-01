@@ -32,6 +32,13 @@ def _ensure_pyinstaller() -> bool:
 
 
 def main() -> None:
+    # CI / Windows cp1252 konsolunda Türkçe/Unicode print'ler (ş, ı, →) çökmesin.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     if not SPEC.exists():
         print(f"[!] Spec bulunamadı: {SPEC}")
         sys.exit(1)
