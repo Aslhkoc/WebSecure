@@ -137,7 +137,11 @@ class WAFPayloadClassifier:
             payloads = _PROBE_SETS.get(probe_type, [])[:2]
             blocked_count = 0
             for payload in payloads:
-                url = base_url.rstrip("/") + "/" + payload.lstrip("?/")
+                # Sorgu (?…) ve yol (/…) semantiğini koru: payload'lar zaten
+                # dogru on-eki tasiyor. lstrip("?/") ile path segmentine
+                # duzlestirmek query payload'larini sorgu-inceleyen WAF
+                # kurallarindan gizliyordu → fingerprint'te false-negative.
+                url = base_url.rstrip("/") + payload
                 try:
                     if session:
                         r = sess.get(url, timeout=self.timeout, allow_redirects=True)

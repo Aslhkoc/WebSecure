@@ -343,8 +343,8 @@ class EncodingChain:
 
     Example::
 
-        EncodingChain().apply("<script>", ["html_entity", "url"])
-        # -> "%26%2360%3Bscript%26%2362%3B"
+        EncodingChain().apply("a", ["html_entity", "url"])
+        # "a" -> "&#97;" -> "%26%2397%3B"   (every char is encoded at each layer)
     """
 
     _TECHNIQUES = frozenset([

@@ -8,7 +8,7 @@ import logging
 import string
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -348,7 +348,7 @@ class WAFBypassAdapter(HTTPAdapter):
                     request.body if isinstance(request.body, str)
                     else request.body.decode("utf-8", "replace")
                 )
-                techniques = getattr(self._session_ref, "_evasion_chain_techniques", ["url", "html"])
+                techniques = getattr(self._session_ref, "_evasion_chain_techniques", ["url", "html_entity"])
                 request.body = EncodingChain().apply(body_s, techniques).encode("utf-8")
                 if "Content-Length" in request.headers:
                     request.headers["Content-Length"] = str(len(request.body))
@@ -472,8 +472,6 @@ class WAFBypassSession(requests.Session):
 # BYPASS STRATEGY ENGINE
 # Applies detected WAF's recommended bypass strategies to requests
 # ============================================================================
-import urllib.parse as _urlparse
-
 class BypassStrategyEngine:
     """
     Applies WAF-specific bypass strategies to a requests.Session.
@@ -706,7 +704,9 @@ def _s_encoding_chain(session):
     layers to the request body to evade WAF signature matching.
     """
     session._evasion_encoding_chain = True
-    session._evasion_chain_techniques = ["url", "html"]
+    # NOTE: technique names must match EncodingChain._apply_one in evasion.py.
+    # "html" is NOT a valid technique (silently passes through) — use "html_entity".
+    session._evasion_chain_techniques = ["url", "html_entity"]
 
 
 _DEFAULT_BYPASS_STRATEGIES = [
@@ -1465,10 +1465,6 @@ class ResidentialProxyPool:
 # Tor circuit management + EgressManager (Tor + proxy pool unified)
 # ===========================================================================
 import socket
-import time
-import threading
-import logging
-from typing import Optional, TYPE_CHECKING
 
 _logger = logging.getLogger(__name__)
 
@@ -1572,14 +1568,12 @@ def init_tor_control(cfg: dict = None):
 
 def rotate_tor_identity() -> bool:
     """Helper to rotate identity if global controller is init."""
-    global _global_tor
     if _global_tor:
         return _global_tor.renew_identity()
     return False
 
 def start_auto_rotation(interval: int = 120):
     """Starts the auto-rotation loop on the global Tor controller."""
-    global _global_tor
     if _global_tor:
         _global_tor.start_rotation_loop(interval)
         return True
@@ -2189,7 +2183,6 @@ def detect_waf(url: str, session=None, timeout: int = 10) -> WAFProfile:
 # ADIM 11 — WAF Bypass: ML Scorer, Adaptive Mutation, HTTP/2 Multiplexing
 # ===========================================================================
 from collections import defaultdict
-import math
 
 
 # ---------------------------------------------------------------------------
