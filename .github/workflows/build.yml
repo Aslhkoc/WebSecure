@@ -1,8 +1,13 @@
 name: build
 
-# Cross-platform standalone binary üretimi (Windows / Linux / macOS).
-# - Tag push (v*)         → 3 OS binary'sini build edip GitHub Release'e ekler.
+# Cross-platform standalone binary üretimi (Windows / Linux / macOS arm64 + Intel).
+# - Tag push (v*)            → binary'leri build edip GitHub Release'e ekler.
 # - Elle (workflow_dispatch) → sadece build + artifact (release yok).
+#
+# Tasarım: güvenilir 3 platform (win/linux/mac-arm64) 'release' job'ını besler ve
+# HEMEN yayınlanır. macOS Intel (macos-13) runner'ı kıt/yavaş olabildiğinden AYRI,
+# release'i BLOKLAMAYAN bir job'tur; başarılı olursa 'release-intel' onu aynı
+# release'e ekler, olmazsa release yine de 3 binary ile yayınlanır.
 
 on:
   push:
@@ -10,7 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # Release oluşturmak için
+  contents: write
 
 jobs:
   build:
@@ -28,43 +33,61 @@ jobs:
           - os: macos-latest        # Apple Silicon (arm64)
             artifact: websecure-macos-arm64
             built: dist/websecure
-          - os: macos-13            # Intel (x86_64)
-            artifact: websecure-macos-intel
-            built: dist/websecure
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      # Yalnızca exe'ye GÖMÜLEN bağımlılıklar + PyInstaller kurulur.
-      # playwright/weasyprint/torch spec'te HARİÇ tutulduğu için CI'da kurulmaz
-      # (hız + güvenilirlik); ilgili özellikler runtime'da iner / zarif degrade eder.
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller requests beautifulsoup4 lxml tldextract cryptography jinja2 cvss regex PyYAML jsonschema curl-cffi tls-client cloudscraper PySocks python-Levenshtein "httpx[http2]" rich
-
       - name: Build standalone binary
         run: python build_exe.py
-
       - name: Stage artifact
         shell: bash
         run: |
           mkdir -p out
           cp "${{ matrix.built }}" "out/${{ matrix.artifact }}"
-
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: out/${{ matrix.artifact }}
           if-no-files-found: error
 
+  # macOS Intel — opsiyonel, release'i bloklamaz (runner kuyruğu uzun olabilir).
+  build-macos-intel:
+    name: build (macos-13 / Intel)
+    runs-on: macos-13
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests beautifulsoup4 lxml tldextract cryptography jinja2 cvss regex PyYAML jsonschema curl-cffi tls-client cloudscraper PySocks python-Levenshtein "httpx[http2]" rich
+      - name: Build standalone binary
+        run: python build_exe.py
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          cp dist/websecure "out/websecure-macos-intel"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: websecure-macos-intel
+          path: out/websecure-macos-intel
+          if-no-files-found: error
+
+  # Çekirdek 3 platform hazır olunca release'i yayınla (Intel'i BEKLEMEZ).
   release:
     name: publish release
-    needs: build
+    needs: [build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -74,10 +97,28 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-
-      - name: Create GitHub Release
+      - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
+
+  # Intel binary başarıyla build edildiyse aynı release'e ekle (gecikse de sorun değil).
+  release-intel:
+    name: attach macOS Intel
+    needs: [build-macos-intel]
+    if: ${{ needs.build-macos-intel.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: websecure-macos-intel
+          path: artifacts
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          fail_on_unmatched_files: false
