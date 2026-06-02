@@ -7,13 +7,16 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Callable, List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
+
+if TYPE_CHECKING:  # forward-ref only; no runtime import (avoids cycle)
+    from websecure.core.xss_callback import CapturedSession
 
 logger = logging.getLogger(__name__)
 

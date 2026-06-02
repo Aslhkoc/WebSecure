@@ -8,6 +8,7 @@ import hmac
 import hashlib
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
+from difflib import SequenceMatcher
 from .base import BaseScanner
 
 try:
@@ -30,6 +31,21 @@ _AUTH_ERROR_KEYWORDS = frozenset([
     "authentication failed", "token expired", "not authorized", "access denied",
     "please login", "must be logged in",
 ])
+
+
+def _response_similarity(r1, r2) -> float:
+    """İki yanıtın gövde benzerlik oranı (0..1)."""
+    t1 = (r1.text if hasattr(r1, "text") else "")[:2000]
+    t2 = (r2.text if hasattr(r2, "text") else "")[:2000]
+    return SequenceMatcher(None, t1, t2).ratio()
+
+
+def _is_auth_error(resp) -> bool:
+    """Yanıt auth-hatası gibi mi (401/403 ya da bilinen işaretler)."""
+    if getattr(resp, "status_code", None) in (401, 403):
+        return True
+    lower = (resp.text if hasattr(resp, "text") else "").lower()[:500]
+    return any(k in lower for k in _AUTH_ERROR_KEYWORDS)
 
 
 class JWTScanner(BaseScanner):

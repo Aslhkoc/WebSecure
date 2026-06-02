@@ -5669,7 +5669,7 @@ def __ensure_triple_plan(plan):
 
 def __run_plan_adapt(run_plan_fn, plan, ctx, cfg):
     try:
-        params = list(__ins.signature(run_plan_fn).parameters.keys())
+        params = list(_ins.signature(run_plan_fn).parameters.keys())
     except _BOUNDARY_EXC as e:
         _logger.error('phase error [scan_modes]', exc_info=True)
         _report_phase_error('scan_modes', 'scan_modes.py', e)

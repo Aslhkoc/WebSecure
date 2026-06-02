@@ -2579,7 +2579,7 @@ def _render_exploit_playbook(items: List[Dict]) -> str:
             lines.append("- Not: Sadece kimlikli kullanıcıya açık uç.")
         sim = it.get('similar_params')
         if sim is not None:
-            lines.append(f"- Benzer Parametreler: `{_json.dumps(sim, ensure_ascii=False)}`")
+            lines.append(f"- Benzer Parametreler: `{json.dumps(sim, ensure_ascii=False)}`")
         pls = it.get('payloads')
         if isinstance(pls, list) and pls:
             sample = pls[:3]

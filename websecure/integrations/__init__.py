@@ -44,6 +44,10 @@ merge_tool_results_to_sarif(results.values(), output_path="report.sarif.json")
 """
 from __future__ import annotations
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Base sınıflar (her zaman kullanılabilir)
 # ---------------------------------------------------------------------------

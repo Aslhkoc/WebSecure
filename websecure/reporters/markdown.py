@@ -301,7 +301,7 @@ def render(results: Dict) -> str:
     lines.append("# WebSec Report")
     lines.append("")
     if target:
-        lines.append(f"**Target:** `{esc_md(target)}`  •  **Date:** `{when}`")
+        lines.append(f"**Target:** `{_esc_md(target)}`  •  **Date:** `{when}`")
     lines.append("")
 
     # Summary Table
