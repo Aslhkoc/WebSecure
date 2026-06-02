@@ -2068,7 +2068,6 @@ class AntiBlockingHTTP:
 
 
 def build_http_client(cfg: Dict[str, Any]) -> AntiBlockingHTTP:
-    http_cfg = (cfg.get("http") or {})
     ab_cfg = ((cfg.get("anti_blocking") or {}).get("http") or {})
     # P4 fix: pass full cfg so hardened_session() can read top-level waf/tls/privacy keys.
     sess = hardened_session(cfg)

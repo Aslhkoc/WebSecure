@@ -141,7 +141,6 @@ class CookieSecurityAnalyzer:
 
         if not r.http_only:
             r.missing_http_only = True
-            sev = "High" if is_sensitive else "Medium"
             r.issues.append(
                 f"HttpOnly eksik — JavaScript cookie erişimi mümkün "
                 f"({'kritik: oturum çalınabilir' if is_sensitive else 'risk: izleme cookie'})"

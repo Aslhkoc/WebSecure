@@ -161,9 +161,20 @@ class ScanCircuitBreaker:
 
             if self._state == CBState.HALF_OPEN:
                 if self._half_open_probes >= self._cfg.half_open_probe_limit:
+                    # B5/B4 fix: probe budget exhausted without a 2xx success.
+                    # Previously this raised HALF_OPEN forever. On a target that answers
+                    # every probe with 4xx (403/429), record() keeps the state HALF_OPEN
+                    # ("server alive"), so no probe flips it to OPEN/CLOSED → check() then
+                    # locked out *all* further requests permanently (no recovery timer in
+                    # HALF_OPEN). Per the documented contract ("probe_limit before
+                    # auto-re-open") we now re-OPEN: _transition resets _opened_at so the
+                    # breaker waits recovery_timeout and then re-enters HALF_OPEN to probe.
+                    self._transition(
+                        CBState.OPEN,
+                        f"half-open probe budget exhausted ({self._cfg.half_open_probe_limit}) without recovery",
+                    )
                     raise CircuitBreakerTripped(
-                        CBState.HALF_OPEN,
-                        f"probe budget exhausted ({self._cfg.half_open_probe_limit}); waiting for probe results",
+                        CBState.OPEN, self._open_reason, retry_in=self._cfg.recovery_timeout,
                     )
                 self._half_open_probes += 1
 
