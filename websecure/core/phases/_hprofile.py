@@ -225,7 +225,7 @@ def hpm_bootstrap_from_file(path: str) -> None:
 
 
 def hpm() -> HProfileManager:
-    global _HPM
+    # _HPM yalnızca okunuyor (atama hpm_init_from_config içinde) → `global` gereksiz.
     if _HPM is None:
         with _HPM_LOCK:
             if _HPM is None:
