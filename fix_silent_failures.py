@@ -6,7 +6,7 @@ import re
 import os
 from pathlib import Path
 
-ROOT = Path("C:/Users/Acer/PycharmProjects/WebSecure")
+ROOT = Path(__file__).resolve().parent
 SRC  = ROOT / "websecure"
 
 # Bu pattern'ler dokunulmadan bırakılır (cleanup / opsiyonel / acceptable)

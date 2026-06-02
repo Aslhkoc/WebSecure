@@ -12,7 +12,7 @@ import ast, os, re, json, sys
 from pathlib import Path
 from collections import defaultdict
 
-ROOT = Path("C:/Users/Acer/PycharmProjects/WebSecure")
+ROOT = Path(__file__).resolve().parent
 SRC  = ROOT / "websecure"
 CFG  = ROOT / "config.json"
 

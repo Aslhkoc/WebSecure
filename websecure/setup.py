@@ -34,8 +34,6 @@ if __name__ == "__main__":
             "lxml>=5.2.2",
             "tldextract>=5.1.2",
             "cryptography>=42.0.0",
-            "pyOpenSSL>=24.0.0",
-            "sslyze>=6.0.0",
             "jinja2>=3.1.0",
             "cvss>=3.2",
             "pyyaml>=6.0",        # scan profiles + playbooks (ProfileLoader)
@@ -62,9 +60,13 @@ if __name__ == "__main__":
                 "PySocks>=1.7.1",
             ],
             "tui": ["rich>=13.0.0"],
+            # Derin TLS analizi (sslyze/nassl native) — opsiyonel; yoksa tls.py zarifçe atlar
+            "tls": ["pyOpenSSL>=24.0.0", "sslyze>=6.0.0"],
             "full": [
                 "playwright>=1.46.0",
                 "weasyprint>=61.0",
+                "pyOpenSSL>=24.0.0",
+                "sslyze>=6.0.0",
                 "curl-cffi>=0.6.0",
                 "tls-client>=1.0.1",
                 "cloudscraper>=1.2.71",
