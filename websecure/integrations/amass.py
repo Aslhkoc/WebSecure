@@ -138,7 +138,6 @@ class AmassWrapper(ToolIntegration):
 
         # Amass v5 -oA flag'i ile prefix-based dosya üretir: prefix.json, prefix.txt
         out_prefix = os.path.join(tempfile.gettempdir(), f"ws_amass_{uuid.uuid4().hex[:12]}")
-        out_json = out_prefix + ".json"
 
         try:
             subdomains = self._run_enum(

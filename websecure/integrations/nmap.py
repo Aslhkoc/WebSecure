@@ -25,7 +25,6 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -170,7 +169,7 @@ def _run_nmap(binary: str, args: List[str], target: str,
 
         # Ctrl+C gelince öldürülebilmesi için kaydet
         try:
-            from websecure.core.phases import register_child_proc, unregister_child_proc
+            from websecure.core.phases import register_child_proc
             register_child_proc(proc)
         except Exception as _fix_e:
             logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -549,7 +548,7 @@ class NmapWrapper(ToolIntegration):
 
         # --- UDP: raw socket varsa kritik portlar ---
         if raw:
-            print(f"\033[36m[Nmap UDP]\033[0m Kritik UDP portları taranıyor...")
+            print("\033[36m[Nmap UDP]\033[0m Kritik UDP portları taranıyor...")
             udp_args = [
                 "-sU", "-Pn", "-T4",
                 "--version-intensity", "5",
