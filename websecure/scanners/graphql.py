@@ -101,11 +101,11 @@ class GraphQLProbe(Protocol):
 class IntrospectionProbe:
     def run(self, client: GraphQLClient, url: str) -> List[Finding]:
         code, j, _, dt = client.post(url, INTROSPECTION_PING)
-        if code == 200 and j.get("data", {}).get("__schema"):
+        if code == 200 and (j.get("data") or {}).get("__schema"):
             return [Finding(url, "Introspection Enabled", "Medium", INTROSPECTION_PING, code, dt)]
         # Check GET
         g_code, g_j, _, g_dt = client.get(url, INTROSPECTION_PING["query"])
-        if g_code == 200 and g_j.get("data", {}).get("__schema"):
+        if g_code == 200 and (g_j.get("data") or {}).get("__schema"):
             return [Finding(url, "Introspection Enabled (GET)", "Medium", {"method": "GET"}, g_code, g_dt)]
         return []
 

@@ -12,6 +12,7 @@ import logging, random, re, string, uuid, urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 from websecure.scanners.base import BaseScanner
 from websecure.core.http import hardened_session as _hardened_session
+from websecure.core.reporting import add_result as _add_result
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,13 @@ def run(url: str, session=None, debug: bool = False, auth_ctx: Any = None, **_) 
             except Exception as exc:
                 logger.debug("[CRLF] Cookie probe error: %s", exc)
 
+    # Faz-1 bulguları phases runner tarafından dönüş değeri kullanılmadan çağrılıyor;
+    # add_result ile merkezi rapor sistemine doğrudan ilet (B2/P10 fix).
+    for f in results:
+        _add_result("crlf_injection", f)
+        if f.get("severity") in ("Critical", "High"):
+            _add_result("offensive", f)
+
     # Phase 2: Adim 5 full CRLF scanner (HeaderInjectionProber, ResponseSplittingExploiter,
     # CachePoisoningChain, LogPoisoningChain, CRLFResponseSplittingProber,
     # CRLFCookieInjectionProber, CRLFXSSProber) — connected here to avoid orphan
@@ -293,7 +301,7 @@ class ResponseSplittingExploiter:
             try:
                 resp = session.get(test_url, timeout=timeout, allow_redirects=False)
                 body = getattr(resp, "text", "")[:3000]
-                if re.search(r"HTTP/\d\.\d\s+200\s+OK", body) or "split" in body.lower():
+                if re.search(r"HTTP/\d\.\d\s+200\s+OK", body) or "<html>split</html>" in body.lower():
                     return {
                         "vuln_type": "HTTP Response Splitting",
                         "url": test_url, "severity": "Critical",

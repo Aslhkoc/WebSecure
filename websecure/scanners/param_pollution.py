@@ -1014,11 +1014,13 @@ class HPPWAFBypassProber(BaseScanner):
 
         body = _safe_text(resp)
         # Check for canary or SQL error indicators
+        # NOTE: "union" alone is too broad (FP on any page mentioning unions).
+        # "sql" alone is too broad (FP on SQL documentation/framework pages).
+        # Use specific SQL error messages or canary reflection only.
         reflected = (
             canary.lower() in body.lower()
             or "syntax error" in body.lower()
             or "you have an error in your sql" in body.lower()
-            or "union" in body.lower()
         )
         if reflected:
             waf_note = "WAF fingerprinted — bypass confirmed." if waf_present else "No WAF detected."
@@ -1106,9 +1108,12 @@ class HPPWAFBypassProber(BaseScanner):
             if attack_type == "XSS":
                 reflected = evil_payload.lower() in body.lower()
             elif attack_type == "SQLi":
+                # "sql" alone is too broad (FP on SQL docs/framework pages); use specific errors.
                 reflected = (
                     "syntax error" in body.lower()
-                    or "sql" in body.lower()
+                    or "you have an error in your sql" in body.lower()
+                    or "sql syntax" in body.lower()
+                    or "ora-0" in body.lower()
                     or evil_payload.lower() in body.lower()
                 )
             elif attack_type == "PathTraversal":

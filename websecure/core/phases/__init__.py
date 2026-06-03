@@ -1669,16 +1669,14 @@ def _runner_scanners_ssrf_xxe(ctx) -> None:
     scan(ctx, **_filter_kwargs(scan, kw_all))
 
 def _runner_scanners_request_smuggling(ctx) -> None:
-    """scanners.request_smuggling.SmugglingProber üzerinden düşük etkili prob seti."""
-    prober_cls = _opt_import("websecure.scanners.request_smuggling", "RequestSmugglingScanner")
-    if not prober_cls:
-        add_result("offensive", {
-            "type": "Request Smuggling",
-            "severity": "Informational",
-            "reason": "Modül bulunamadı."
-        })
-        _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
-
+    """HTTP Request Smuggling (CL.TE / TE.CL / TE.TE / H2.CL / H2.TE / differential)."""
+    # B2/P3 FIX: eski runner `probe_te_cl` vb. metotları arıyordu — bunlar mevcut
+    # RequestSmugglingScanner'da YOK (BaseScanner'dan türer, sadece run() var).
+    # hasattr guard nedeniyle sessizce hiçbir prob çalışmıyordu.
+    # Düzeltme: modül-düzeyi run() kullan (tüm CL.TE/TE.CL/differential/H2 probu yapar).
+    mod = _opt_import("websecure.scanners.request_smuggling")
+    if not mod:
+        add_result("meta", {"stage": "request_smuggling", "status": "skipped:module-not-found"})
         return
     base_url = (getattr(ctx, "url", None)
                 or getattr(ctx, "base_url", None)
@@ -1687,77 +1685,20 @@ def _runner_scanners_request_smuggling(ctx) -> None:
     if not base_url:
         add_result("meta", {"stage": "request_smuggling", "status": "skipped:no-url"})
         return
-    cfg = getattr(ctx, "config", {}) or {}
-    tls_verify = bool((cfg.get("http") or {}).get("tls_verify", (cfg.get("tls") or {}).get("verify", True)))
-
-    # İmza uyumlu kurucu
-    init_kw = {
-        "base_url": base_url,
-        "target": base_url,
-        "tls_verify": tls_verify,
-        "verify_tls": tls_verify,
-        "user_agent": "WebSecure/SmuggleProbe",
-        "ua": "WebSecure/SmuggleProbe",
-    }
-    ctor_params = inspect.signature(prober_cls).parameters
-    prober = prober_cls(**{k: v for k, v in init_kw.items() if k in ctor_params})
-
-    # Probeları ayrık thread'lerde çalıştır; hatalar thread excepthook ile toplanır
-    probe_names = (
-        "probe_te_cl",
-        "probe_te_cl_swap",
-        "probe_te_duplicate",
-        "probe_te_obfuscated_lws",
-        "probe_conn_te_token",
-        "probe_hbh_custom_token",
-    )
-    probes: List[Dict[str, Any]] = []
-    errors: List[Dict[str, Any]] = []
-
-    def _hook(args: threading.ExceptHookArgs):
-        errors.append({
-            "name": getattr(args.thread, "name", "probe"),
-            "error": f"{getattr(args.exc_type, '__name__', 'Exception')}: {str(args.exc_value)}",
-            "trace": "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))[-1000:]
-        })
-
-    old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
-    ts: List[threading.Thread] = []
-
-    for meth in probe_names:
-        if not hasattr(prober, meth):
-            continue
-        fn = getattr(prober, meth)
-        if not callable(fn):
-            continue
-
-        def _runner(call: Callable = fn, label: str = meth):
-            res = call()
-            probes.append({
-                "name": getattr(res, "name", label),
-                "status": getattr(res, "status_line", ""),
-                "code": getattr(res, "status_code", 0),
-                "headers": getattr(res, "headers", {}),
-                "anomaly": getattr(res, "anomaly", None),
-                "body_sample": (getattr(res, "body_sample", "") or "")[:400],
-            })
-
-        t = threading.Thread(target=_runner, name=f"smuggle::{meth}", daemon=True)
-        t.start()
-        ts.append(t)
-
-    for t in ts:
-        t.join()
-    threading.excepthook = old_hook  # restore
-
-    # Rapor
-    add_result("offensive", {
-        "type": "HTTP Request Smuggling (yan etkisiz prob)",
-        "severity": "Informational",
-        "url": base_url,
-        "proof": {"probes": probes, "errors": errors}
-    })
+    sess = getattr(ctx, "session", None)
+    debug = bool(getattr(ctx, "debug", False))
+    try:
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            findings = run_fn(base_url, session=sess, debug=debug) or []
+            for f in findings:
+                add_result("request_smuggling", f)
+                if (f.get("severity") or "") in ("Critical", "High", "Medium"):
+                    add_result("offensive", f)
+            add_result("meta", {"stage": "request_smuggling", "findings": len(findings)})
+    except Exception as e:
+        _logger.warning(f"[phases] Request Smuggling runner error: {e}")
+        _report_phase_error("request_smuggling", "phases._runner_scanners_request_smuggling", e)
 
 def _runner_mass_assignment(ctx) -> None:
     mod = _opt_import("websecure.scanners.mass_assignment")
