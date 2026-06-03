@@ -4,7 +4,7 @@ import logging
 import re
 import requests
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin
 
 from .base import BaseScanner

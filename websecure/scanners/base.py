@@ -145,53 +145,6 @@ class BaseScanner:
         """Normalize severity string, including Turkish variants."""
         return _SEVERITY_NORMALIZE_MAP.get((sev or "").lower().strip(), sev or "Info")
 
-    def _apply_cvss_severity(self, entry: Dict, hint_severity: str = "") -> Dict:
-        """
-        Override scanner-provided severity with CVSS v3.1 score.
-        Applies a confidence penalty for unverified findings.
-        Preserves the scanner's original assessment in hint_severity.
-        """
-        try:
-            from ..core.cvss import CVSSScorer, lookup_cwe
-
-            waf_detected = bool(self.results.get("waf_detected"))
-            auth_required = bool(self.results.get("authenticated"))
-
-            scored = CVSSScorer(
-                auth_required=auth_required, waf_detected=waf_detected
-            ).score(entry)
-
-            cvss_severity: str = scored.get("cvss_severity") or hint_severity or "Informational"
-            cvss_score: float = scored.get("cvss_score", 0.0)
-
-            # Confidence penalty: unverified / low-confidence findings drop one level
-            verified = (
-                entry.get("verified")
-                or entry.get("oast_verified")
-                or entry.get("confirmed")
-            )
-            confidence = entry.get("confidence", "medium")
-            if not verified and confidence in ("low", None):
-                _levels = ["Critical", "High", "Medium", "Low", "Informational"]
-                idx = _levels.index(cvss_severity) if cvss_severity in _levels else 2
-                cvss_severity = _levels[min(idx + 1, len(_levels) - 1)]
-
-            entry["severity"] = cvss_severity
-            entry["cvss_score"] = cvss_score
-            entry["cvss_vector"] = scored.get("cvss_vector", "")
-            entry["hint_severity"] = self._normalize_severity(hint_severity)
-            entry.setdefault("remediation", scored.get("remediation", ""))
-
-            # CWE injection: mevcut değer yoksa veya boşsa otomatik doldur
-            if not entry.get("cwe_ids"):
-                entry["cwe_ids"] = lookup_cwe(entry.get("type", ""))
-
-        except Exception as exc:
-            self.logger.debug(f"[{self.name}] CVSS scoring failed, using hint: {exc!r}")
-            entry["severity"] = self._normalize_severity(hint_severity or entry.get("severity", "Informational"))
-
-        return entry
-
     def report_finding(
         self,
         *,

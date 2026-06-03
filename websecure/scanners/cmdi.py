@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import urllib.parse
 from urllib.parse import parse_qsl, urlparse, urlencode, urlunparse
 

@@ -681,7 +681,7 @@ class XSSScanner(BaseScanner):
             executable = hit.pop("_executable", False)
             rq_score  = hit.pop("_rq_score",   0.0)
             rq_detail = hit.pop("_rq_detail",  "")
-            rq_sev    = hit.pop("_rq_severity", "Low")
+            hit.pop("_rq_severity", None)  # strip internal key from **hit spread; severity derived below
 
             # Severity: DOM confirmation > quality score > confidence > executable flag
             if dom_confirmed:
