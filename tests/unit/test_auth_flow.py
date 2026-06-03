@@ -5,8 +5,7 @@ Unit tests for websecure.core.auth_flow — key functions and classes.
 """
 from __future__ import annotations
 
-import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -63,13 +62,9 @@ def test_extract_csrf_not_found():
 def test_extract_csrf_empty_html():
     from websecure.core.auth_flow import extract_csrf
 
-    # Empty string → lxml raises ParserError, extract_csrf should handle gracefully
-    # The function may return None or raise — verify it doesn't crash unexpectedly
-    try:
-        result = extract_csrf("")
-        assert result is None
-    except Exception:
-        pytest.skip("extract_csrf does not handle empty string — lxml limitation")
+    # Empty/whitespace input must be handled gracefully (no lxml ParserError).
+    assert extract_csrf("") is None
+    assert extract_csrf("   ") is None
 
 
 # ---------------------------------------------------------------------------

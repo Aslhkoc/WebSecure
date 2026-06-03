@@ -61,7 +61,7 @@ class TestRankOrderSort:
     """Items must be sorted Critical > High > Medium > Low > Info."""
 
     def test_sorting_with_mixed_language_severity(self):
-        from websecure.core.reporting import _norm_sev_tr, _sev_rank
+        from websecure.core.reporting import _sev_rank
 
         items = [
             {"severity": "Low", "type": "A"},
@@ -172,8 +172,6 @@ class TestCIGate:
 
 import threading
 import http.server
-import urllib.request
-import time
 
 
 class _XSSServer(http.server.BaseHTTPRequestHandler):

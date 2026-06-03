@@ -5,7 +5,7 @@ NoSQL injection scanner testleri.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
@@ -30,7 +30,7 @@ class TestNoSQLiDetection:
         ]
         mock_session.get.side_effect = responses
 
-        with patch.object(nosqli, "report_finding") as mock_report:
+        with patch.object(nosqli, "report_finding"):
             nosqli.run("http://target.test/users?role=admin")
 
         # Crash olmamalı
@@ -42,6 +42,8 @@ class TestNoSQLiDetection:
         )
         with patch.object(nosqli, "report_finding") as mock_report:
             nosqli.run("http://target.test/search?q=test")
+        # Identical baseline/injection responses must NOT yield a finding.
+        mock_report.assert_not_called()
 
     def test_no_crash_on_timeout(self, nosqli, mock_session):
         mock_session.get.side_effect = requests.exceptions.Timeout("timed out")

@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from websecure.core import reporting
 from websecure.core.chain_reactor import (
-    ChainReactor,
     ExploitGraph,
     ExploitGraphBuilder,
     ChainNode,

@@ -230,6 +230,10 @@ def _extract_csrf_regex(html_text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 def extract_csrf(html_text: str) -> Optional[str]:
+    # Empty/whitespace input has no token — return early so the lxml-based DOM
+    # parser is never handed an empty document (raises ParserError otherwise).
+    if not html_text or not html_text.strip():
+        return None
     ext, = _import_optional("websecure.core.analysis", ["extract_csrf"])
     if callable(ext):
         v = ext(html_text)  # type: ignore[misc]

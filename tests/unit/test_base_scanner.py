@@ -6,7 +6,6 @@ BaseScanner: inject_param, run_parallel_probes, fetch_baseline, report_finding, 
 from __future__ import annotations
 
 import threading
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest

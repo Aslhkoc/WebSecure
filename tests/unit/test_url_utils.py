@@ -10,7 +10,6 @@ Note on _ws3_is_ipv6_literal:
 """
 from __future__ import annotations
 
-import pytest
 
 from websecure.core.url_utils import (
     _ws3_is_ipv6_literal,

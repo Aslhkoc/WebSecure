@@ -8,7 +8,6 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-import pytest
 
 from websecure.core.redaction import (
     redact_sensitive,

@@ -5,7 +5,7 @@ SSTI scanner testleri: polyglot detect, engine fingerprint, header injection.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
@@ -26,7 +26,7 @@ class TestSSTIDetection:
             text="<html>Result: 49 items found</html>"
         )
 
-        with patch.object(ssti, "report_finding") as mock_report:
+        with patch.object(ssti, "report_finding"):
             ssti._scan_url("http://target.test/page?name=test")
 
         # En az bir çağrı veya hiç çağrı (SSTI motoruna bağlı), crash olmamalı
@@ -53,8 +53,9 @@ class TestSSTIDetection:
         )
         with patch.object(ssti, "report_finding") as mock_report:
             ssti._scan_url("http://target.test/search?q=hello")
-        # Burada basit say kontrolü yapıyoruz — yanlış pozitif yoksa 0 ya da 1 çağrı
-        # Kesin false positive yokluğu için daha gelişmiş context gerekir
+        # A literal "49" with no template evaluation must NOT trigger SSTI — the
+        # random-canary confirmation rejects static reflections (see FAZ 12).
+        mock_report.assert_not_called()
 
     def test__scan_url_returns_list(self, ssti, mock_session):
         mock_session.get.return_value = mock_session._make_response(text="safe response")

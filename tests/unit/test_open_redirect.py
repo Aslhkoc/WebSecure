@@ -5,7 +5,7 @@ Open Redirect scanner testleri: BaseScanner inheritance, redirect detect, no fal
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests

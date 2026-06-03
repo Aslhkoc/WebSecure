@@ -5,7 +5,7 @@ IDOR scanner testleri: dual-role detection, sequential enum, no false positive.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
@@ -40,6 +40,8 @@ class TestIDORDetection:
         )
         with patch.object(idor, "report_finding") as mock_report:
             idor.run("http://target.test/user/1", urls=["http://target.test/user/1"])
+        # Identical denied responses must NOT be reported as IDOR.
+        mock_report.assert_not_called()
 
     def test_no_crash_on_timeout(self, idor, mock_session):
         mock_session.get.side_effect = requests.exceptions.Timeout("timed out")
