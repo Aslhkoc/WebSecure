@@ -7,7 +7,7 @@ import logging
 import inspect
 import random
 import string
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Set
 from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)

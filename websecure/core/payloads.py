@@ -106,12 +106,23 @@ def _get_package_root() -> Path:
     # payloads.py is in websecure/core/, so root is three levels up -> WebSecure (Project Root)
     return Path(__file__).resolve().parent.parent.parent
 
+
+def _bundled_wordlists_root() -> Path:
+    """Yerleşik wordlist dizini — yolların tek kaynağı paths.py üzerinden (frozen-aware).
+    paths import edilemezse __file__-göreli yola düşülür (dev+frozen'da aynı dizine çözülür)."""
+    try:
+        from websecure.core.paths import wordlists_dir
+        return wordlists_dir()
+    except Exception:
+        return _get_package_root() / "websecure" / "wordlists"
+
+
 _PKG_ROOT = _get_package_root()
 
 _DEFAULTS = {
     # Bundled high-quality wordlists — sole source, always available, no external dependency
     "bundled": {
-        "root": _PKG_ROOT / "websecure" / "wordlists",
+        "root": _bundled_wordlists_root(),
         "git": None,
         # Injection payloads
         "xss":                  ["xss.txt"],
@@ -203,7 +214,7 @@ def sync_wordlists(cfg: Dict[str, Any] | None = None) -> Dict[str, Any]:
             try:
                 code, out = _run("git pull --ff-only", cwd=root, timeout=60)
             except Exception as exc:
-                code, out = 1, "Skipped pull due to timeout/error"
+                code, out = 1, f"Skipped pull due to error: {exc}"
             report[name] = {"action": "pull", "code": code, "out": (out or "")[-2000:]}
         elif (not root.exists() or not any(root.iterdir() if root.exists() else [])) and url:
             # USER REQUEST: DISABLE AUTO-CLONE
