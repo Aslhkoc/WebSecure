@@ -472,7 +472,9 @@ class TLSROBOTProber(BaseScanner):
                 except ssl.SSLError:
                     return None  # RSA ciphers not available locally
                 with socket.create_connection((host, port), timeout=6) as raw:
-                    with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    # The TLS handshake itself is the measured event; the wrapped
+                    # socket object is not needed beyond completing it.
+                    with ctx.wrap_socket(raw, server_hostname=host):
                         times.append(time.time() - t0)
             except Exception:
                 times.append(time.time() - t0)
@@ -604,6 +606,7 @@ class CDNMisconfigProber(BaseScanner):
                             "CDN caches their private page -> attacker retrieves it."
                         ),
                         "evidence": {"suffix": suffix, "age": age,
+                                     "cache_control": cache_ctrl,
                                      "x_cache": x_cache, "status": resp.status_code},
                     })
                     self.report_finding(**results[-1])
@@ -1450,6 +1453,13 @@ def _run_sslyze(target: str) -> List[Dict]:
         )
         from sslyze.errors import ServerRejectedTlsHandshake, ConnectionToServerFailed
     except ImportError:
+        # sslyze is an optional 'tls' extra (not bundled in the frozen exe / CI).
+        # Without it, the deep TLS scan (Heartbleed/ROBOT/CCS/cipher-enum) is
+        # disabled — surface that instead of silently returning nothing.
+        _tls_logger.info(
+            "[tls] sslyze not installed — deep TLS analysis (cipher enum, "
+            "Heartbleed/ROBOT/CCS) skipped. Install the 'tls' extra to enable it."
+        )
         return []
 
     parsed = urlparse(target)

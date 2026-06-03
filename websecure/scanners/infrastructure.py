@@ -216,7 +216,6 @@ def analyze_response_headers(resp, origin_for_cors: t.Optional[str] = None) -> t
     # -- CORS Analysis ------------------------------------------------------
     acao = _header(resp, "Access-Control-Allow-Origin")
     acac = _header(resp, "Access-Control-Allow-Credentials")
-    acao_methods = _header(resp, "Access-Control-Allow-Methods")
 
     if acao == "*":
         if acac and acac.lower() == "true":
@@ -956,7 +955,8 @@ class PySSLCertChecker:
             problems.append("Certificate validation failed (Self-signed or expired).")
         except Exception as exc:
             valid = False
-            
+            _logger.debug("[infrastructure] cert validation non-SSL error for %s: %r", url, exc)
+
         nb = details.get("not_before", "")
         na = details.get("not_after", "")
 

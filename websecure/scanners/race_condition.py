@@ -499,7 +499,6 @@ class GateTechniqueExploiter(BaseScanner):
         host    = parsed.hostname or target
         port    = parsed.port or (443 if parsed.scheme == "https" else 80)
         use_tls = parsed.scheme == "https"
-        path    = parsed.path or "/"
 
         # Find mutation endpoints (POST endpoints)
         mutation_eps = self._find_mutation_endpoints(target)
@@ -517,7 +516,6 @@ class GateTechniqueExploiter(BaseScanner):
             "/api/coupon/apply", "/api/discount/use",
             "/api/invite/accept", "/api/v1/transfer",
         ]
-        parsed = urllib.parse.urlparse(base)
         found  = []
         for path in candidates:
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
@@ -625,10 +623,6 @@ class RaceAuthBypassProber(BaseScanner):
 
     def run(self, target: str, n_threads: int = 15, **kwargs) -> List[Dict]:
         results: List[Dict] = []
-        parsed  = urllib.parse.urlparse(target)
-        host    = parsed.hostname or target
-        port    = parsed.port or (443 if parsed.scheme == "https" else 80)
-        use_tls = parsed.scheme == "https"
 
         # Test login rate limit bypass
         login_ep = self._find_login_endpoint(target)

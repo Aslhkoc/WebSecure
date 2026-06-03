@@ -63,7 +63,7 @@ class CORSWildcardProber(BaseScanner):
                         "vuln_type": "CORS Wildcard Origin" + (" + credentials" if acac == "true" else ""),
                         "url": url, "severity": sev,
                         "description": (
-                            f"CORS ACAO: * detected. "
+                            "CORS ACAO: * detected. "
                             + ("ACAC: true with wildcard is a critical misconfiguration — "
                                "credentials cannot actually be sent (browser blocks), "
                                "but indicates a poorly configured CORS policy." if acac == "true"

@@ -585,7 +585,7 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
                                 f"OAuth redirect_uri bypass accepted: {evil_uri!r}. "
                                 f"Authorization redirected to attacker host. "
                                 + (f"Auth code: {code.group(1)[:8]}..." if code else "")
-                                + (f"Token leaked." if token else "")
+                                + ("Token leaked." if token else "")
                             ),
                             "evidence": {
                                 "evil_uri": evil_uri,
@@ -679,7 +679,6 @@ class OpenRedirectSSRFChain(BaseScanner):
 
     def run(self, target: str, **kwargs) -> List[Dict]:
         results: List[Dict] = []
-        parsed  = urllib.parse.urlparse(target)
 
         # Find server-side fetching endpoints (url/src/fetch params)
         fetch_params = ["url", "src", "fetch", "proxy", "resource", "remote", "load"]

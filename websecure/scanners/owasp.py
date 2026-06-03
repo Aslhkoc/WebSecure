@@ -258,7 +258,6 @@ def check_cache_poisoning_and_host_header(url: str, results: Dict[str, Any], ses
     vulns = 0
 
     pr = urlparse(url)
-    base = f"{pr.scheme}://{pr.netloc}"
     bust = str(int(time.time())) + "-" + str(random.randint(1000, 9999))
     target = url if pr.query else f"{url}?cb={bust}"
 
@@ -318,6 +317,7 @@ def check_cache_poisoning_and_host_header(url: str, results: Dict[str, Any], ses
                 "variant": name,
                 "status": r.status_code,
                 "severity": sev,
+                "reason": reason,
                 "hints": hints,
                 "headers": {k: (r.headers.get(k) or "") for k in ("Cache-Control","Vary","Age","Location","Via","X-Cache")}
             })
@@ -706,8 +706,8 @@ def run_nuclei_signatures(
         proc.terminate()
         try:
             proc.wait(timeout=2)
-        except Exception as exc:
-            # burada ekstra try kullanmıyoruz; terminate sonrası bekleyememe durumunda işlem üst katmana zaten görünür
+        except Exception:
+            # terminate sonrası bekleyememe durumunda işlem üst katmana zaten görünür
             pass
 
     if debug and stderr:

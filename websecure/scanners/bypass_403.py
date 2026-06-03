@@ -526,9 +526,9 @@ class EncodingBypass(BaseScanner):
             # HTML entity style (broken parsers)
             f"/&#x2f;{seg}",
             # Hex lowercase
-            f"/%2fadmin" if seg == "admin" else f"/%2f{seg}",
+            "/%2fadmin" if seg == "admin" else f"/%2f{seg}",
             # Hex uppercase
-            f"/%2Fadmin" if seg == "admin" else f"/%2F{seg}",
+            "/%2Fadmin" if seg == "admin" else f"/%2F{seg}",
             # Leading double encode
             f"/%2F{seg}%2F",
         ]

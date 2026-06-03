@@ -17,16 +17,14 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import random
 import re
 import string
 import struct
-import time
 import urllib.parse
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 try:
     from bs4 import BeautifulSoup
