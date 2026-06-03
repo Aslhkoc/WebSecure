@@ -30,7 +30,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional, Set
 
@@ -2469,7 +2469,7 @@ class ChainExploitRunner:
                         f"{lfi_url}?{lfi_param}=../uploads/shell.php"
                         if lfi_url else "N/A"
                     ),
-                    f"4. Execute: <shell_url>?cmd=id",
+                    "4. Execute: <shell_url>?cmd=id",
                 ],
                 "impact": "Remote Code Execution via File Upload chain (PoC — shell path unknown)",
             }
@@ -2612,7 +2612,7 @@ class ChainExploitRunner:
         3. HTML src/href attribute pointing to the filename
         """
         import json as _json
-        from urllib.parse import urlparse, urljoin
+        from urllib.parse import urljoin
 
         # Check Location header
         location = response.headers.get("Location", "")
@@ -2653,7 +2653,7 @@ class ChainExploitRunner:
         Builds candidate paths from common upload directories and tries
         LFI inclusion to detect if the shell is present and PHP-executed.
         """
-        from urllib.parse import urlparse, urljoin
+        from urllib.parse import urlparse
         upload_path = urlparse(upload_url).path
 
         # Common upload directory guesses
