@@ -233,7 +233,7 @@ class GitHubIssueNotifier(BaseNotifier):
         emoji = _SEV_EMOJI.get(sev, "[o]")
         title = f"{emoji} {_finding_title(finding)}"[:255]
         body = _finding_body(finding)
-        body += f"\n\n---\n*Auto-created by [WebSecure](https://github.com/Aslhkoc/WebSecure)*"
+        body += "\n\n---\n*Auto-created by [WebSecure](https://github.com/Aslhkoc/WebSecure)*"
 
         payload = {
             "title": title,

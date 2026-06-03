@@ -9,7 +9,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse
 from pathlib import Path
 from collections import defaultdict
 from websecure.core.alerts import AlertManager
@@ -289,7 +289,7 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
             print(f"\n\033[92m[+] HTML Report Generated: {report_path}\033[0m")
-            print(f"\033[90m    (Contains detailed findings, evidence, Nmap results, SSL info)\033[0m")
+            print("\033[90m    (Contains detailed findings, evidence, Nmap results, SSL info)\033[0m")
             # Add to written artifacts
             out["written"]["html"] = report_path
     except Exception as e:
@@ -467,11 +467,8 @@ _logger: logging.Logger | None = None
 _ENFORCE_REDACT = True
 
 from websecure.core.redaction import (  # noqa: E402
-    REDACT_KEYS,
     redact_sensitive,
     RedactFilter,
-    _redact_str,
-    _MASK,
 )
 
 
@@ -628,7 +625,6 @@ def add_result(bucket: str, item: Any) -> None:
 # FAZ 4.1: Ayrı modüle taşındı (core/live_monitor.py). Backward compat için import.
 # ===========================================================================
 from websecure.core.live_monitor import (  # noqa: E402
-    LiveMonitor,
     get_live_monitor,
     console_alert as _console_alert_new,
 )
@@ -1140,7 +1136,6 @@ def _render_markdown_report_inline(results: Dict) -> str:
     # Hazırlık
     items_raw = _coerce_final(results)
     items = _dedupe_findings(items_raw)
-    proofs = _collect_http_proofs(results)  # Collect proofs for associating responses
     items.sort(key=lambda i: (
     -_sev_rank(i.get("severity")), -(i.get("score") or 0), str(i.get("type") or ""), str(i.get("url") or "")))
 
@@ -1217,9 +1212,9 @@ def _render_markdown_report_inline(results: Dict) -> str:
     lines.append(f"- Denenen modül/faz: **{len(tried)}**")
     lines.append(f"- Başarılı (en az 1 bulgu üreten): **{len(success)}**  -> **%{pct:.1f}**")
     if tried:
-        lines.append(f"- Dene(n)en: " + ", ".join(f"`{tried_map[k]}`" for k in tried))
+        lines.append("- Dene(n)en: " + ", ".join(f"`{tried_map[k]}`" for k in tried))
     if success:
-        lines.append(f"- Başarılı: " + ", ".join(f"`{tried_map[k]}`" for k in success))
+        lines.append("- Başarılı: " + ", ".join(f"`{tried_map[k]}`" for k in success))
     lines.append("")
 
     # Kullanılan Araçlar (item alanlarından derle)
@@ -1536,7 +1531,6 @@ def _cvss_for_item(it: Dict[str, Any], cfg: Dict[str, Any] | None) -> dict:
     sev = _norm_sev_en(str(it.get("severity") or "low"))
     score = _CVSS_DEFAULTS.get(sev, 3.1)
     rule = str(it.get("type") or it.get("title") or "").strip()
-    reg = RULES_REGISTRY.get(rule) or {}
     # Optional tweak: give IDOR/SSRF/SQLi a small bump to align with common baselines
     if rule.upper() in ("IDOR", "SSRF", "SQL INJECTION", "SQLI"):
         score = max(score, 7.5 if sev in ("high","critical") else 6.5)

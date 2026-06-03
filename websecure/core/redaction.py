@@ -61,7 +61,7 @@ def _redact_str(s: str) -> str:
     t = _RE_COOKIE.sub(lambda m: m.group(1) + _MASK, t)
     for json_re, eq_re in _KEY_RE_PAIRS:
         t = json_re.sub(fr'\1{_MASK}"', t)
-        t = eq_re.sub(fr'\1=' + _MASK, t)
+        t = eq_re.sub(r'\1=' + _MASK, t)
     return t
 
 

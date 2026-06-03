@@ -222,7 +222,7 @@ class LiveMonitor:
         try:
             from websecure.core.reporting import _counters as _gc
             global_reqs = int(_gc.get("http_requests", 0))
-        except Exception as exc:
+        except Exception:
             global_reqs = 0
         total_reqs = max(c["requests"], global_reqs)
         self._print(

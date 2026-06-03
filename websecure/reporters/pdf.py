@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from html import escape as _h
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
 
