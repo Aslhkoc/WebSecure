@@ -2420,58 +2420,13 @@ if __name__ == "__main__":
     # scan_modes modülü kaldırıldı — işlevsellik scan_runner.py içinde
     # hpm_bootstrap_from_file('config.json')
 
-    # [WS3] Interactive Mode (Wizard)
-    if len(_sys.argv) < 2:
-        try:
-            from websecure.cli.wizard import run_wizard as _run_wizard
-            # Run wizard and if it returns True (Run Now selected)
-            if _run_wizard():
-                # We need to simulate CLI args for main() to be happy
-                # Load the config we just saved to get the target
-                try:
-                    import json
-                    with open("config.json", "r", encoding="utf-8") as _f:
-                        _wiz_cfg = json.load(_f)
-                        _wiz_tgt = _wiz_cfg.get("target")
-                        if _wiz_tgt:
-                            # Inject target into argv so main() parses it
-                            _sys.argv.append(_wiz_tgt)
-                            print(f"[Wizard] Hedef yüklendi: {_wiz_tgt}")
-                            print("[Wizard] Otomatik başlatılıyor...")
-                            time.sleep(1.5)
-                except Exception as _e:
-                    print(f"[!] Config okuma hatası: {_e}")
-                    _sys.exit(1)
-            else:
-                # User cancelled or chose not to run immediately
-                _sys.exit(0)
-        except ImportError:
-            pass
-
-    # [WS3] External Tool Management
-    try:
-        from websecure.core.tool_manager import ToolManager as _ToolManager
-        # Load temporary config just for this decision
-        import json
-        _tm_cfg = {}
-        if os.path.exists("config.json"):
-            with open("config.json", "r", encoding="utf-8") as _cfg_f:
-                _tm_cfg = json.load(_cfg_f)
-
-        _tm = _ToolManager(_tm_cfg)
-        # Only ask if interactive and not configured
-        if "--interactive" in sys.argv:
-            _tm.ask_user_interactive()
-
-        # Ensure SQLMap API is started if enabled in config
-        if (_tm_cfg.get("offensive", {}).get("sqlmap", {}).get("enabled")) or \
-           (_tm_cfg.get("tools", {}).get("sqlmap", {}).get("enabled")):
-            _tm.start_sqlmap_api()
-
-    except Exception as e:
-        print(f"[!] Tool Manager Error: {e}")
-
-    # Wordlists sync removed per user request
+    # NOT: Eskiden burada bir config sihirbazı (cli.wizard.ConfigWizard, 10 adımlı
+    # "ayar formu") ve ikinci/yinelenen bir ToolManager bloğu vardı. Banner'dan ÖNCE
+    # çalışıp başlangıcı karıştırıyordu. Kaldırıldı — tüm başlangıç akışı (banner →
+    # harici araç seçimi → Tor/proxy/auth) artık tek yerde, main() içinde:
+    #   _print_banner() → _startup_phase() [ToolManager.ask_user_interactive] →
+    #   setup_tor() / setup_auth() / setup_proxy().
+    # Sihirbaza hâlâ `--wizard` flag'i ile erişilebilir (main() içinde, opt-in).
     try:
         main()
     except KeyboardInterrupt:
