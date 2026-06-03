@@ -69,7 +69,7 @@ def _extract_csrf(html: str) -> Optional[str]:
             return m.group(1)
         # meta tag
         m = re.search(
-            rf'<meta[^>]+name=["\']csrf[^"\']*["\'][^>]*content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']csrf[^"\']*["\'][^>]*content=["\']([^"\']+)["\']',
             html, re.I,
         )
         if m:

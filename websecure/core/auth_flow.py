@@ -1146,7 +1146,7 @@ class LoginAuditor:
         try:
             with open(self.wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
                 passwords = [l.strip() for l in f if l.strip()]
-        except Exception as exc:
+        except Exception:
             passwords = ["admin", "123456", "password", "admin123"] # Fallback
             
         # Limit
@@ -1157,12 +1157,8 @@ class LoginAuditor:
         for form in self.found_forms:
             logger.info(f"[Login-Auditor] Auditing form at {form['url']} with {len(passwords)} passwords.")
             
-            # Try a few common usernames
-            usernames = ["admin", "administrator", "root", "user", "test"]
-            
-            # Simple strategy: Brute force 'admin' first, then others if requested
-            # For 1000 pwd, we'll stick to 'admin' + 1-2 others to avoid massive spam
-            
+            # Brute force 'admin' only — keeps attack volume low (anti-spam).
+            # Wider username list was never wired; admin is the deliberate single target.
             target_users = ["admin"]
             
             for user in target_users:
@@ -1182,7 +1178,6 @@ class LoginAuditor:
         
         # Baseline request
         base_resp = self._attempt(form, "dummy_invalid_user", "dummy_invalid_pass")
-        fail_len = len(base_resp.text)
         fail_code = base_resp.status_code
         
         for pwd in passwords:
@@ -1256,7 +1251,7 @@ class LoginAuditor:
                 return self.session.post(form['url'], data=data, headers=headers, allow_redirects=False)
             else:
                 return self.session.get(form['url'], params=data, headers=headers, allow_redirects=False)
-        except Exception as exc:
+        except Exception:
             # dummy obj
             class Dummy:
                 status_code = 999
