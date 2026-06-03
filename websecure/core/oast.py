@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
-from urllib.parse import urlencode, urlparse, parse_qsl, urlsplit, urlunsplit
+from urllib.parse import urlencode, parse_qsl, urlsplit, urlunsplit
 import requests as _req
 
 # ---------------------------------------------------------------------------
@@ -431,21 +431,10 @@ class InteractshClient(_BaseOSAT, IOSATClient):
             _logger.warning(f"[OAST] AES anahtarı çözme hatası: {e}")
         return events
 
-class CollaboratorClient(_BaseOSAT, IOSATClient):
-    # Similar structure to Generic but potentially custom polling logic
-    async def new_token(self) -> str:
-        return gen_token(self.cfg.payload_prefix or "x")
-    def payloads_for(self, token: str) -> Dict[str, List[str]]:
-        return build_payloads(self.cfg.root_domain, token, include_dns=self.cfg.enable_dns, include_http=self.cfg.enable_http, include_bxss=self.cfg.enable_bxss)
-    async def poll_async(self, interested_tokens: Iterable[str]) -> List[Dict[str, Any]]:
-        # Fallback to generic poll
-        return []
-
 def create_osat_client(cfg: OSATConfig) -> IOSATClient:
     p = (cfg.provider or "generic").strip().lower()
     if p == "interactsh": return InteractshClient(cfg)
-    if p in ("collaborator", "burp"): return CollaboratorClient(cfg)
-    if p in ("enhanced_collaborator", "burp_pro", "oast_pro"):
+    if p in ("collaborator", "burp", "enhanced_collaborator", "burp_pro", "oast_pro"):
         # EnhancedCollaboratorClient is defined later in this module; resolve lazily
         _cls = globals().get("EnhancedCollaboratorClient")
         if _cls is not None:
@@ -1072,8 +1061,8 @@ class OASTCorrelationEngine:
     def get_unmatched_injections(self, min_age_s: float = 30.0) -> List[Dict[str, Any]]:
         """Return injections with no callback yet (potential false negatives)."""
         now = time.time()
-        matched_tokens = {ev["token"] for ev in self._events}
         with self._lock:
+            matched_tokens = {ev["token"] for ev in self._events}
             return [
                 inj for tok, inj in self._injections.items()
                 if tok not in matched_tokens and (now - inj.get("inject_ts", now)) >= min_age_s
