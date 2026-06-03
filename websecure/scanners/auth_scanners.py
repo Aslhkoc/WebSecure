@@ -714,12 +714,18 @@ class OAuth2AttackSurface(BaseScanner):
         try:
             r1 = self.session.post(token_url, data=payload, timeout=8)
             r2 = self.session.post(token_url, data=payload, timeout=8)
-            if r2.status_code == 200 and "access_token" in (r2.text or ""):
+            # A genuine replay requires the FIRST exchange to succeed (proving the
+            # code was valid and consumed) AND the second to succeed too. Checking
+            # only r2 would false-positive on endpoints that 200 every request.
+            first_ok = r1.status_code == 200 and "access_token" in (r1.text or "")
+            if first_ok and r2.status_code == 200 and "access_token" in (r2.text or ""):
                 return {
                     "vuln_type": "OAuth2 Authorization Code Replay",
                     "url": token_url, "severity": "Critical",
                     "description": "Authorization code accepted on second use. Codes must be single-use.",
-                    "evidence": {"code": code[:8] + "...", "second_use_status": r2.status_code},
+                    "evidence": {"code": code[:8] + "...",
+                                 "first_use_status": r1.status_code,
+                                 "second_use_status": r2.status_code},
                 }
         except Exception as exc:
             _logger6.debug("[OAuth2] code reuse: %s", exc)
@@ -928,7 +934,6 @@ class OAuth2AttackSurface(BaseScanner):
                 r = self.session.get(token_url, timeout=6, verify=False)
                 headers = dict(r.headers)
                 referrer_policy = headers.get("Referrer-Policy", "")
-                csp = headers.get("Content-Security-Policy", "")
 
                 body = (r.text or "")
                 if r.status_code in (200,) and ("access_token" in body or "token" in body.lower()):
@@ -1515,12 +1520,18 @@ class PasswordResetAttacker(BaseScanner):
             payload = {"token": token, "password": "NewPass123!", "password_confirmation": "NewPass123!"}
             r1 = self.session.post(confirm_url, data=payload, timeout=8)
             r2 = self.session.post(confirm_url, data=payload, timeout=8)
-            if r2.status_code == 200 and "invalid" not in (r2.text or "").lower()[:100]:
+            # Reuse is only proven if the FIRST use succeeded (token was valid and
+            # the reset went through) AND the second use also succeeded. Checking
+            # only r2 would false-positive when the endpoint 200s every request.
+            first_ok = r1.status_code == 200 and "invalid" not in (r1.text or "").lower()[:100]
+            if first_ok and r2.status_code == 200 and "invalid" not in (r2.text or "").lower()[:100]:
                 return {
                     "vuln_type": "Password Reset Token Single-Use Not Enforced",
                     "url": confirm_url, "severity": "Critical",
                     "description": "Password reset token accepted on second use. Tokens must be invalidated after use.",
-                    "evidence": {"token": token[:8] + "...", "second_use_status": r2.status_code},
+                    "evidence": {"token": token[:8] + "...",
+                                 "first_use_status": r1.status_code,
+                                 "second_use_status": r2.status_code},
                 }
         except Exception as exc:
             _logger6.debug("[PassReset] token reuse: %s", exc)
@@ -1603,22 +1614,22 @@ class PrivilegeEscalationProber(BaseScanner):
 
     def _probe_mass_assignment(self, url: str, auth_headers: Dict) -> Optional[Dict]:
         """POST/PUT with extra admin fields injected."""
-        for field in self._ROLE_ESCALATION_FIELDS[:4]:
+        for fld in self._ROLE_ESCALATION_FIELDS[:4]:
             for val in ["admin", True, 1, "superuser"]:
-                payload = {field: val, "username": "test", "email": "test@example.com"}
+                payload = {fld: val, "username": "test", "email": "test@example.com"}
                 try:
                     r = self.session.post(url, json=payload, headers=auth_headers, timeout=8)
                     if r.status_code in (200, 201):
                         body = (r.text or "").lower()
-                        if field in body and any(str(v) in body for v in [val, "admin", "true"]):
+                        if fld in body and any(str(v) in body for v in [val, "admin", "true"]):
                             return {
                                 "vuln_type": "Mass Assignment — Privilege Escalation",
                                 "url": url, "severity": "Critical",
                                 "description": (
-                                    f"Server accepted '{field}={val}' in POST body and reflected it. "
+                                    f"Server accepted '{fld}={val}' in POST body and reflected it. "
                                     "Mass assignment may allow role escalation."
                                 ),
-                                "evidence": {"field": field, "value": str(val),
+                                "evidence": {"field": fld, "value": str(val),
                                              "status": r.status_code, "body_snippet": body[:150]},
                             }
                 except Exception as _fix_e:
@@ -1684,7 +1695,6 @@ class BOLAIDORChain(BaseScanner):
         results: List[Dict] = []
         victim_hdrs   = {"Authorization": f"Bearer {victim_token}"}   if victim_token   else {}
         attacker_hdrs = {"Authorization": f"Bearer {attacker_token}"} if attacker_token else {}
-        parsed = urlparse(target)
         all_endpoints = endpoints or self._discover_id_endpoints(target, victim_hdrs)
 
         for ep in all_endpoints:
@@ -1712,7 +1722,6 @@ class BOLAIDORChain(BaseScanner):
             "/api/users/{id}", "/api/orders/{id}", "/api/documents/{id}",
             "/users/{id}", "/accounts/{id}", "/profile/{id}",
         ]
-        parsed = urlparse(base)
         found  = []
         for tpl in candidates:
             for test_id in [1, 2, 100]:

@@ -10,8 +10,7 @@ Checks for:
 from __future__ import annotations
 import re
 import logging
-from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse
+from typing import Dict, Any, List
 
 import requests
 from websecure.core.reporting import add_result

@@ -22,7 +22,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutureTimeoutError
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import requests
 
@@ -163,15 +163,18 @@ class SessionFixationExploiter(BaseScanner):
         try:
             pre_session = hardened_session({})
             pre_session.verify = False
-            r_pre = pre_session.get(login_url, timeout=_TIMEOUT, allow_redirects=True)
+            # Response body is irrelevant here — we only need the Set-Cookie side
+            # effect captured in the session jar.
+            pre_session.get(login_url, timeout=_TIMEOUT, allow_redirects=True)
             pre_cookies = dict(pre_session.cookies)
 
             pre_tokens = {k: v for k, v in pre_cookies.items() if _SENSITIVE_NAMES.search(k)}
             if not pre_tokens:
                 logger.debug("[SessionFixation] No session cookie found pre-auth")
             else:
-                # Login with same session
-                r_post = pre_session.post(
+                # Login with same session (we read the post-auth cookie jar, not
+                # the response body).
+                pre_session.post(
                     login_url, data=credentials, timeout=_TIMEOUT, allow_redirects=True
                 )
                 post_cookies = dict(pre_session.cookies)
@@ -207,7 +210,7 @@ class SessionFixationExploiter(BaseScanner):
             try:
                 s = hardened_session({})
                 s.verify = False
-                r = s.get(test_url, timeout=_TIMEOUT, allow_redirects=True)
+                s.get(test_url, timeout=_TIMEOUT, allow_redirects=True)
                 jar = dict(s.cookies)
                 if jar.get(param) == fixed_token or jar.get(param.upper()) == fixed_token:
                     self.report_finding(

@@ -463,6 +463,7 @@ class JWTScanner(BaseScanner):
             lower = r.text.lower()
             return not any(kw in lower for kw in _AUTH_ERROR_KEYWORDS)
         except Exception as exc:
+            logger.debug("[jwt] token-acceptance verification failed for %s: %r", url, exc)
             return False
 
     # -------------------------------------------------------------------------
