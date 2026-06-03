@@ -401,7 +401,7 @@ def _cmd_db(ns: argparse.Namespace) -> int:
         db = get_db()
 
         if action == "init":
-            print(f"[+] Veritabanı başlatıldı.")
+            print("[+] Veritabanı başlatıldı.")
             stats = db.stats()
             for table, cnt in stats.items():
                 print(f"    {table}: {cnt} kayıt")

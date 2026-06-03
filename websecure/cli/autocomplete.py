@@ -316,8 +316,6 @@ class ZshCompletionGenerator(BaseCompletionGenerator):
     def generate(self) -> str:
         cmds_block: List[str] = []
         for cmd in _TOP_COMMANDS:
-            spec = _CLI_TREE.get(cmd, {})
-            flags = spec.get("flags", [])
             desc = {
                 "scan":       "Web güvenlik taraması başlat",
                 "init":       "İnteraktif yapılandırma sihirbazı",
@@ -605,13 +603,13 @@ def run_completion_cli(args: list) -> int:
         path = gen.install()
         if path:
             print(f"[[OK]] Tamamlama betiği kuruldu: {path}")
-            print(f"    Aktifleştirmek için shell'i yeniden başlatın veya:")
+            print("    Aktifleştirmek için shell'i yeniden başlatın veya:")
             if ns.shell == "bash":
                 print(f"    source {path}")
             elif ns.shell == "zsh":
                 print(f"    source {path}  # veya fpath'e ekleyin")
             elif ns.shell == "fish":
-                print(f"    (fish otomatik yükler)")
+                print("    (fish otomatik yükler)")
         else:
             print("[!] Kurulum yolu belirlenemedi — manuel kurulum gerekebilir.")
             print(gen.generate())

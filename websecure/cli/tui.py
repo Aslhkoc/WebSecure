@@ -15,6 +15,7 @@ SOLID
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import threading
 import time
@@ -460,20 +461,14 @@ class ScanTUI:
         if force_plain:
             return PlainTUI()
 
-        try:
-            import rich  # noqa: F401
+        if importlib.util.find_spec("rich") is not None:
             return RichTUI()
-        except ImportError:
-            logger.debug("[TUI] Rich kütüphanesi bulunamadı, PlainTUI kullanılıyor.")
-            return PlainTUI()
+        logger.debug("[TUI] Rich kütüphanesi bulunamadı, PlainTUI kullanılıyor.")
+        return PlainTUI()
 
     @staticmethod
     def is_rich_available() -> bool:
-        try:
-            import rich  # noqa: F401
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("rich") is not None
 
 
 # ---------------------------------------------------------------------------

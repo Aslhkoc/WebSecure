@@ -12,12 +12,6 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-c", "import subprocess,sys; subprocess.run([sys.executable, 'sqlmapapi.py', '-s', '-H', '127.0.0.1', '-p', '8775'], cwd='tools/sqlmap')"],
       "port": 8775
-    },
-    {
-      "name": "Web Dashboard (Static Server)",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8080", "--directory", "websecure/web"],
-      "port": 8080
     }
   ]
 }

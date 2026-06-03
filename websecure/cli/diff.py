@@ -30,12 +30,13 @@ SOLID
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -266,13 +267,9 @@ class DiffRenderer:
     @staticmethod
     def print_terminal(diff: DiffResult, use_rich: bool = True) -> None:
         """Terminal çıktısı — Rich mevcutsa renkli tablo."""
-        try:
-            if use_rich:
-                import rich
-                DiffRenderer._print_rich(diff)
-                return
-        except ImportError:
-            pass
+        if use_rich and importlib.util.find_spec("rich") is not None:
+            DiffRenderer._print_rich(diff)
+            return
         DiffRenderer._print_plain(diff)
 
     @staticmethod
@@ -383,12 +380,12 @@ class DiffRenderer:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         lines = [
-            f"# WebSecure Diff Raporu\n",
+            "# WebSecure Diff Raporu\n",
             f"**Tarih:** {ts}\n",
             f"**Eski Tarama:** `{diff.scan1_path}`  ",
             f"**Yeni Tarama:** `{diff.scan2_path}`\n",
-            f"| Kategori | Sayı |",
-            f"|---|---|",
+            "| Kategori | Sayı |",
+            "|---|---|",
             f"| [+] Yeni Bulgular | {s['new']} |",
             f"| [OK] Düzelen Bulgular | {s['fixed']} |",
             f"| [!] Kötüleşen | {s['regressed']} |",

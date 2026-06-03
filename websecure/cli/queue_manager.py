@@ -504,7 +504,7 @@ def run_queue_cli(args: list) -> int:
             return 0
         print(f"[*] {pending} giriş işleniyor — {ns.workers} worker...")
         q.run(blocking=True, max_workers=ns.workers)
-        print(f"[[OK]] Tamamlandı.")
+        print("[[OK]] Tamamlandı.")
         for k, v in q.stats().items():
             print(f"  {k:<12}: {v}")
 
