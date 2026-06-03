@@ -364,7 +364,7 @@ class CmdiScanner(BaseScanner):
     def _get_oast_domain(self) -> Optional[str]:
         """Return OAST domain from global poller or results dict."""
         try:
-            from websecure.core.oast import get_global_poller
+            from websecure.core.oast import get_oast_poller as get_global_poller
             poller = get_global_poller()
             if poller:
                 client = getattr(poller, "_client", None)
@@ -411,7 +411,7 @@ class CmdiScanner(BaseScanner):
         # OAST poller — we don't need to block here. Do a single immediate check
         # (catches any pre-queued callbacks) and log the token for deferred tracking.
         try:
-            from websecure.core.oast import get_global_poller
+            from websecure.core.oast import get_oast_poller as get_global_poller
             poller = get_global_poller()
             if poller:
                 for cb in list(getattr(poller, "_callbacks_received", [])):
@@ -492,7 +492,7 @@ class CMDiOOBDNSProber(BaseScanner):
             # Check OAST poller for immediate callback
             if oast_domain:
                 try:
-                    from websecure.core.oast import get_global_poller
+                    from websecure.core.oast import get_oast_poller as get_global_poller
                     poller = get_global_poller()
                     if poller:
                         for cb in list(getattr(poller, "_callbacks_received", [])):

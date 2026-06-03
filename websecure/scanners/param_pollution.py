@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import (
     parse_qsl,
     urlencode,

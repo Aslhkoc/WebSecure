@@ -109,7 +109,7 @@ def _canary_in_response(resp, canary: str) -> bool:
     try:
         text = resp.text if hasattr(resp, "text") else resp.content.decode("utf-8", "replace")
         return canary in text
-    except Exception as exc:
+    except Exception:
         return False
 
 
@@ -482,7 +482,9 @@ def run(
     if debug:
         logger.setLevel(logging.DEBUG)
 
-    _results: Dict[str, Any] = results if results is not None else {}
+    # NOTE: bu modül-düzeyi run() bulguları LİSTE olarak döndürür (caller
+    # phases._runner_prototype_pollution dönüş değerini add_result'a aktarır);
+    # `results` param uniform scanner imzası için tutulur ama bu akışta yazılmaz.
     scan_results: List[Dict[str, Any]] = []
     canary = _canary()
 
