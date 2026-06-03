@@ -459,7 +459,7 @@ class _DifferentialComputer:
 
         if title_changed:
             confidence += 0.10
-            evidence_parts.append(f"Title changed")
+            evidence_parts.append("Title changed")
 
         if word_delta > 20 or word_delta < -20:
             confidence += 0.05

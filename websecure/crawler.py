@@ -13,20 +13,16 @@ import importlib.util as _iu
 from pathlib import Path
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Pattern, Set, Tuple, Callable, Iterable
+from typing import Any, Deque, Dict, List, Optional, Pattern, Set, Tuple
 from urllib.parse import urljoin, urlparse, urldefrag, urlsplit, parse_qs
 from xml.etree import ElementTree as ET
 
 import socket
 import requests
-from requests import session
 
 # WebSecure Imports
 from websecure.core.utils import canonicalize_url, same_origin
-from websecure.core.http import (
-    verify_for_phase, HTTP_METRICS, instrument_requests_session, 
-    set_trace_id, hardened_session
-)
+from websecure.core.http import verify_for_phase
 from websecure.core.reporting import (
     counters_inc, counters_add_bytes, add_result
 )
@@ -848,7 +844,7 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                         try:
                             page.wait_for_load_state("networkidle", timeout=timeout_ms)
                             time.sleep(3) # Explicit fallback for heavy SPAs
-                        except Exception as exc:
+                        except Exception:
                             time.sleep(5) # Hard wait if state fails
                             page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
                         
@@ -947,7 +943,6 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
                     # [WS3] XSS Kill-Cam: Capture Alerts
                     # Selenium handles alerts by blocking, we need to check explicitly
                     try:
-                        from selenium.webdriver.common.alert import Alert
                         from selenium.common.exceptions import NoAlertPresentException
                         try:
                             alert = driver.switch_to.alert
@@ -1105,6 +1100,6 @@ def discovery_enrich(url: str, results: dict, open_ports: dict = None, detailed:
                     
                     banner = s.recv(1024).decode('utf-8', 'ignore').strip()
                     services[port] = banner[:50] if banner else "Open (no banner)"
-            except Exception as exc:
+            except Exception:
                 services[port] = "Open"
         results['discovery']['services'] = services

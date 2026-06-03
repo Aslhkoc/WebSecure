@@ -22,7 +22,7 @@ import binascii
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Callable, Iterable, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Iterable, Protocol, runtime_checkable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin, parse_qsl
 
@@ -58,9 +58,8 @@ except ImportError:
     Image = None
 
 # WebSecure Imports
-from websecure.core.utils import normalize_url, resolve_canonical_base
-from websecure.core.http import hardened_session, verify_for_phase
-from websecure.core.reporting import add_result, log_warn
+from websecure.core.utils import normalize_url
+from websecure.core.reporting import add_result
 
 _logger = logging.getLogger(__name__)
 
