@@ -15,6 +15,7 @@ Auto-install coverage:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
@@ -258,9 +259,7 @@ def ensure_playwright_chromium() -> bool:
     Playwright kurulu ve chromium binary'si mevcut olduğunu kontrol eder.
     Eksikse otomatik olarak 'playwright install chromium' çalıştırır.
     """
-    try:
-        from playwright.sync_api import sync_playwright  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("playwright") is None:
         if _paths.is_frozen():
             print("[!] Playwright bu .exe build'inde paketlenmedi. DOM XSS taraması devre dışı.")
             return False
@@ -302,24 +301,22 @@ def ensure_playwright_chromium() -> bool:
 
 def ensure_curl_cffi() -> bool:
     """curl_cffi kurulu değilse otomatik kurar (JA3/JA4 TLS taklidi için)."""
-    try:
-        from curl_cffi import requests as _  # noqa: F401
+    if importlib.util.find_spec("curl_cffi") is not None:
         return True
-    except ImportError:
-        if _paths.is_frozen():
-            print("[*] curl_cffi bu .exe build'inde yok; requests/tls-client fallback kullanılacak.")
-            return False
-        print("[*] curl_cffi kuruluyor (TLS parmak izi gizleme)…")
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "curl_cffi"],
-                check=True, capture_output=True, timeout=120,
-            )
-            print("[+] curl_cffi kuruldu.")
-            return True
-        except Exception as exc:
-            print(f"[!] curl_cffi kurulamadı: {exc}")
-            return False
+    if _paths.is_frozen():
+        print("[*] curl_cffi bu .exe build'inde yok; requests/tls-client fallback kullanılacak.")
+        return False
+    print("[*] curl_cffi kuruluyor (TLS parmak izi gizleme)…")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "curl_cffi"],
+            check=True, capture_output=True, timeout=120,
+        )
+        print("[+] curl_cffi kuruldu.")
+        return True
+    except Exception as exc:
+        print(f"[!] curl_cffi kurulamadı: {exc}")
+        return False
 
 
 # ---------------------------------------------------------------------------

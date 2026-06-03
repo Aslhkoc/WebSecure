@@ -34,7 +34,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -11,12 +11,9 @@ import importlib.util
 import logging
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from websecure.scanners.base import BaseScanner
 
 
 class PluginRegistry:
