@@ -1302,7 +1302,9 @@
   },
   "browser": {
     "enabled": true,
-    "headless": true,
+    "headless": false,
+    "show_browser": true,
+    "slow_mo_ms": 150,
     "max_pages": 50,
     "timeout_ms": 15000,
     "wait_after_load_ms": 1500,

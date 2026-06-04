@@ -1400,9 +1400,16 @@ def _runner_browser_crawler(ctx) -> None:
             return
 
         cfg = getattr(ctx, "config", {}) or {}
-        bc_cfg = cfg.get("browser_crawler") or cfg.get("browser") or {}
+        # Config yolları: üst seviye browser_crawler/browser VEYA crawl.browser
+        # (kullanıcının config.json'da headless ayarı crawl.browser altında).
+        bc_cfg = (cfg.get("browser_crawler") or cfg.get("browser")
+                  or (cfg.get("crawl") or {}).get("browser") or {})
+        _headless = bool(bc_cfg.get("headless", True))
         config = BrowserCrawlConfig(
-            headless=bool(bc_cfg.get("headless", True)),
+            headless=_headless,
+            # headless=False zaten görünür Chrome açar; show_browser onu garanti eder
+            show_browser=bool(bc_cfg.get("show_browser", not _headless)),
+            slow_mo_ms=int(bc_cfg.get("slow_mo_ms") or 0),
             max_pages=int(bc_cfg.get("max_pages") or 50),
             timeout_ms=int(bc_cfg.get("timeout_ms") or 15000),
         )
@@ -4100,25 +4107,38 @@ def run_discovery_extended(ctx) -> None:
     c_cfg.max_depth = int(_get_config(ctx, "crawl.max_depth", 3))
     c_cfg.max_pages = int(_get_config(ctx, "crawl.max_pages", 50))
     
-    # [Check 1] Visibility
+    # [Check 1] Visibility — crawl.browser.headless=false veya ctx.visible -> görünür Chrome
     is_visible = bool(getattr(ctx, "visible", False) or _get_config(ctx, "crawl.browser.headless") is False)
-    
+    # is_visible'ı gerçekten crawler'a bağla (önceden hesaplanıp kullanılmıyordu)
+    c_cfg.headless = not is_visible
+    # Tarayıcı tabanlı JS keşfini config'ten etkinleştir (crawl.use_browser).
+    # Aksi halde _run_browser_discovery() hiç çağrılmaz ve Chrome açılmaz.
+    c_cfg.browser_js_discovery = bool(
+        _get_config(ctx, "crawl.use_browser", c_cfg.browser_js_discovery)
+    )
+    c_cfg.browser_max_pages = int(
+        _get_config(ctx, "crawl.browser.max_pages", c_cfg.browser_max_pages)
+    )
+    if is_visible:
+        _logger.info(
+            "[Crawler] Görünür mod aktif (crawl.browser.headless=false) — "
+            "Chrome penceresi açılacak, tarama adımlarını izleyebilirsiniz."
+        )
+
     # [Check 5] Proxy/Evasion
     proxy_server = _resolve_proxy(ctx)
     if proxy_server:
         _logger.info(f"[Evasion] Crawler using proxy: {proxy_server}")
+        c_cfg.proxy_url = proxy_server
 
-    # Note: WebCrawler inner logic should handle driver proxy config if implemented
+    # headless / browser_js_discovery / proxy artık c_cfg üzerinden WebCrawler'a geçiyor
     crawler = WebCrawler(
-        session, 
-        start_url=url, 
-        config=c_cfg, 
+        session,
+        start_url=url,
+        config=c_cfg,
         debug=bool(getattr(ctx, "debug", False)),
-        driver=None # Driver will be initialized inside with visibility check if crawler.py supports it
+        driver=None
     )
-    
-    # If crawler.py WebCrawler supports 'headless' param in init, use it. 
-    # Current code inspection suggests it auto-detects or uses driver.
     
     res = crawler.start()
     
