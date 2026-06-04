@@ -791,10 +791,26 @@ def make_queue_governor(start_url: str):
         if _exceeds_page_param(u): return False
         parts = [s for s in (pu.path or "/").split("/") if s]
         leaf = parts[-1] if parts else ""
+        # Bucket anahtarı: numeric/episode (/product/1) VEYA dinamik template
+        # ({handle}/{slug}/{id}/...). Eskiden yalnız NUMERIC leaf sınırlanıyordu,
+        # bu yüzden Kick/Twitch kullanıcı adları (kick.com/gugucan — numeric değil)
+        # SINIRSIZ geçip her yayıncıya giriliyordu. Artık _url_template ile dinamik
+        # segmentler de bucket başına _WS_PER_BUCKET_MAX (vars. 5) ile sınırlanır.
+        key = None
         if _episode_like(u) or _looks_numeric(leaf):
             key = _bucket_key(u)
+        else:
+            try:
+                from websecure.core.crawler import _url_template as _t
+                tm = _t(u)
+                if "{" in tm:  # dinamik placeholder içeriyor → bucketle
+                    key = tm
+            except Exception:
+                key = None
+        if key is not None:
             cur = buckets.get(key, 0)
-            if cur >= _WS_PER_BUCKET_MAX: return False
+            if cur >= _WS_PER_BUCKET_MAX:
+                return False
             buckets[key] = cur + 1
         return True
     return _allow
@@ -838,11 +854,33 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
             from playwright.sync_api import sync_playwright
             visited, queue = set(), []
             allow = make_queue_governor(start_url)
-            
+            # Template-bazlı budget: Kick/Twitch/e-ticaret gibi sitelerde her
+            # kanal/ürün AYRI URL. Browser crawler her birine girip (sayfa başına
+            # ~3-5sn render) taramayı saatlerce uzatıyordu. Aynı URL template'inden
+            # (örn. kick.com/{handle}) en fazla _MAX_PER_TMPL örnek gez → "her
+            # yayıncıya/ürüne girme" sorunu kökten çözülür, gerçek route'lar korunur.
+            try:
+                from websecure.core.crawler import _url_template as _tmpl
+            except Exception:
+                _tmpl = lambda u: u  # noqa: E731
+            _tmpl_counts: dict = {}
+            _queued_set: set = set()
+            _MAX_PER_TMPL = 3
+            _MAX_TMPLS = 40
+
             def _enqueue(u):
                 u = _strip_fragment(u or "")
-                if u and u not in visited and len(visited) < max_pages and allow(u):
-                    queue.append(u)
+                if (not u or u in visited or u in _queued_set
+                        or len(visited) >= max_pages or not allow(u)):
+                    return
+                tm = _tmpl(u)
+                if _tmpl_counts.get(tm, 0) >= _MAX_PER_TMPL:
+                    return  # bu template doygun (örn. 3 kanal yeter)
+                if len(_tmpl_counts) >= _MAX_TMPLS and tm not in _tmpl_counts:
+                    return  # template çeşitliliği sınırı
+                _tmpl_counts[tm] = _tmpl_counts.get(tm, 0) + 1
+                _queued_set.add(u)
+                queue.append(u)
 
             with sync_playwright() as p:
                 logger.info("[Playwright] Launching browser...")

@@ -101,23 +101,57 @@ _SEG_UUID_RE = re.compile(
 )
 _SEG_HEX_RE = re.compile(r'^[0-9a-f]{16,}$', re.I)
 _SEG_SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9\-]{3,}[a-z0-9]$', re.I)
+# Kullanıcı adı / kanal / profil tarzı tek-kelime segment (Kick/Twitch/IG vb.):
+# küçük harf + rakam + alt çizgi/nokta, 3-30 karakter, tire YOK (slug değil).
+_SEG_HANDLE_RE = re.compile(r'^[a-z0-9][a-z0-9_.]{2,29}$', re.I)
+
+# Bunlar GERÇEK uygulama route'larıdır — {handle}'a indirgenmemeli (yoksa
+# /login ve /about aynı template'e düşüp biri atlanır). Statik route allowlist'i.
+_STATIC_ROUTES = frozenset({
+    "login", "logout", "signin", "signup", "register", "kaydol", "giris",
+    "auth", "oauth", "account", "accounts", "settings", "profile", "user",
+    "users", "home", "about", "help", "support", "faq", "contact", "terms",
+    "privacy", "legal", "careers", "jobs", "press", "blog", "news", "search",
+    "ara", "explore", "browse", "gozat", "discover", "category", "categories",
+    "tag", "tags", "api", "graphql", "admin", "dashboard", "cart", "checkout",
+    "payment", "billing", "orders", "wishlist", "favorites", "following",
+    "followers", "notifications", "messages", "inbox", "feed", "trending",
+    "popular", "live", "videos", "clips", "vods", "streams", "channels",
+    "directory", "store", "shop", "market", "products", "product", "download",
+    "downloads", "docs", "documentation", "status", "health", "static",
+    "assets", "img", "images", "css", "js", "media", "uploads", "files",
+    "en", "tr", "de", "fr", "es", "index", "main", "app", "web", "www",
+})
 
 
 def _url_template(url: str) -> str:
-    """Normalize dynamic URL path segments to a canonical template string."""
+    """Normalize dynamic URL path segments to a canonical template string.
+
+    Amaç: Kick/Twitch/e-ticaret gibi sitelerde her kullanıcı/ürün ayrı URL
+    olduğundan crawler her birine giriyordu. Dinamik segmentleri ({id}/{uuid}/
+    {hex}/{slug}/{handle}) tek template'e indirger → max_samples_per_template ile
+    "her yayıncıya/ürüne girme" sorununu kökten çözer. Statik route'lar korunur.
+    """
     from urllib.parse import parse_qs
     parsed = urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
     norm: List[str] = []
     for part in parts:
-        if _SEG_UUID_RE.match(part):
+        low = part.lower()
+        if low in _STATIC_ROUTES:
+            norm.append(low)  # gerçek route — ASLA templateleme (sıra: önce bu)
+        elif _SEG_UUID_RE.match(part):
             norm.append("{uuid}")
         elif _SEG_ID_RE.match(part):
             norm.append("{id}")
         elif _SEG_HEX_RE.match(part):
             norm.append("{hex}")
-        elif _SEG_SLUG_RE.match(part) and any(c.isdigit() for c in part) and "-" in part:
+        elif _SEG_SLUG_RE.match(part) and "-" in part:
+            # tireli çok-kelimeli segment = ürün/makale/başlık slug'ı (dinamik)
             norm.append("{slug}")
+        elif _SEG_HANDLE_RE.match(part):
+            # kullanıcı adı / kanal / profil tarzı tek-kelime dinamik segment
+            norm.append("{handle}")
         else:
             norm.append(part)
     if parsed.query:
