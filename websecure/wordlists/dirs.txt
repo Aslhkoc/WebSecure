@@ -418,3 +418,28 @@ history
 audit
 activity
 changelog
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# VCS / secrets
+.aws
+.ssh
+.docker
+.kube
+.well-known
+.well-known/security.txt
+# DevOps / observability panelleri
+sonarqube
+keycloak
+# framework / build çıktıları
+_next
+_nuxt
+__nuxt
+vendor
+# CI/CD
+.github
+.gitlab
+.circleci
+# yaygın hassas dizinler
+internal
+server-status
+server-info

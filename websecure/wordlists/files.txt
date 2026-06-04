@@ -658,3 +658,21 @@ desktop.ini
 *.old
 *.tmp
 *.temp
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# .env varyantları
+# CI/CD & container
+# uygulama config
+# paket / secret yöneticileri
+.pypirc
+.netrc
+service-account.json
+.firebaserc
+# IaC / state
+terraform.tfstate
+.terraform/terraform.tfstate
+kubeconfig
+.kube/config
+# DB dump / backup
+db.sqlite3
+# misc

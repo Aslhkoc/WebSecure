@@ -747,3 +747,23 @@ start
 end
 begin
 finish
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# redirect / SSRF eğilimli
+jsonp
+# yetki / IDOR eğilimli
+is_admin
+isAdmin
+user_role
+invoice
+# dosya / şablon / LFI eğilimli
+download
+# kimlik / secret
+otp
+# iş mantığı / fiyat
+promo
+balance
+# enjeksiyon / debug
+__proto__
+constructor
+draft

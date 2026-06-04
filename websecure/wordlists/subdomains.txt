@@ -552,3 +552,29 @@ health
 status
 uptime
 heartbeat
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# API / gateway / auth
+api-dev
+api-staging
+api-prod
+api-internal
+apigw
+# yönetim / iç
+internal
+corp
+# DevOps / CI-CD
+argocd
+rancher
+harbor
+artifactory
+# gözlemleme / veri
+metabase
+airflow
+elastic
+kafka
+vault
+keycloak
+# depolama / CDN
+# ortamlar
+# iş

