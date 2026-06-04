@@ -105,7 +105,7 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 .d3-btn:active { transform:translateY(0); }
 .d3-link { fill:none; stroke:rgba(88,166,255,.2); stroke-width:1.5px; }
 .d3-node circle { cursor:pointer; }
-.d3-node text { font-family:'Consolas',monospace; font-size:11.5px; fill:var(--text); cursor:pointer; dominant-baseline:central; pointer-events:none; }
+.d3-node text { font-family:'Consolas',monospace; font-size:13px; fill:var(--text); cursor:pointer; dominant-baseline:central; pointer-events:none; }
 .d3-node.leaf text { fill:var(--muted); }
 .d3-node.dimmed { opacity:.12; }
 .d3-node.matched circle { filter:brightness(1.6) drop-shadow(0 0 4px currentColor); }
@@ -218,7 +218,7 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 
 <div id="treePanel" class="panel active">
   <div id="d3-stats"></div>
-  <div id="d3-hint">&#128270; node&#39;a t&#305;kla: geni&#351;let/daralt &nbsp;&#124;&nbsp; &#128433; scroll: zoom &nbsp;&#124;&nbsp; s&#252;r&#252;kle: kaydir &nbsp;&#124;&nbsp; yaprak node: rapor detay&#305;</div>
+  <div id="d3-hint">&#128270; node&#39;a t&#305;kla: geni&#351;let/daralt &nbsp;&#124;&nbsp; &#128433; tekerlek: kayd&#305;r (Shift: yatay) &nbsp;&#124;&nbsp; Ctrl+tekerlek: zoom &nbsp;&#124;&nbsp; s&#252;r&#252;kle: kayd&#305;r &nbsp;&#124;&nbsp; yaprak node: rapor detay&#305;</div>
   <div id="d3-toolbar">
     <button class="d3-btn" onclick="d3FitAll()">&#128301; Ekrana S&#305;&#287;d&#305;r</button>
     <button class="d3-btn" onclick="d3Reset()">&#8634; S&#305;f&#305;rla</button>
@@ -818,12 +818,30 @@ function initD3Tree(){
   svg.selectAll('*').remove();
 
   const gWrap=svg.append('g');
-  const zoom=d3.zoom().scaleExtent([0.04,4]).on('zoom',e=>gWrap.attr('transform',e.transform));
-  svg.call(zoom);
+  const zoom=d3.zoom().scaleExtent([0.04,4])
+    // Düz tekerlek = kaydırma (aşağıda elle yönetilir); sadece Ctrl/Cmd+tekerlek zoom.
+    // Böylece tüm dosyalar açıkken zoom'a gerek kalmadan belge gibi gezilir, okunur kalır.
+    .filter(e=>{ if(e.type==='wheel') return e.ctrlKey||e.metaKey; return !e.button; })
+    .on('zoom',e=>gWrap.attr('transform',e.transform));
+  svg.call(zoom).on('dblclick.zoom',null);
 
   const g=gWrap.append('g');
   const initTX=180, initTY=H/2;
   svg.call(zoom.transform, d3.zoomIdentity.translate(initTX,initTY));
+
+  // Düz tekerlek -> dikey kaydırma (Shift -> yatay). Zoom seviyesi sabit kalır,
+  // yani açık ağaç hep OKUNUR boyutta; kullanıcı içinde gezinir.
+  const _cont=document.getElementById('d3-container');
+  _cont.addEventListener('wheel',ev=>{
+    if(ev.ctrlKey||ev.metaKey) return;   // zoom'u d3'e bırak
+    ev.preventDefault();
+    const t=d3.zoomTransform(svg.node());
+    const dyS=-ev.deltaY, dxS=-(ev.deltaX||0);
+    const nt = ev.shiftKey
+      ? t.translate(dyS/t.k, 0)          // Shift+tekerlek -> yatay
+      : t.translate(dxS/t.k, dyS/t.k);   // düz tekerlek -> dikey
+    svg.call(zoom.transform, nt);
+  }, {passive:false});
 
   // Dikey aralik 22->28 (etiketler ust uste binmesin), yatay 240->280 (uzun dosya adlari)
   const treeLayout=d3.tree().nodeSize([28,280]);
@@ -965,7 +983,16 @@ function initD3Tree(){
     svg.transition().duration(420).call(zoom.transform,
       d3.zoomIdentity.translate(180,H/2).scale(1));
   };
-  window.d3ExpandAll=function(){ expandRec(root); update(root); setTimeout(window.d3FitAll,80); };
+  // Tümünü Aç: FIT YAPMA (fit = karınca). Okunur zoom (1.0) ve tepeye konumlan;
+  // kullanıcı tekerlekle aşağı kaydırarak okur — her an ekrandaki kısım net.
+  window.d3ExpandAll=function(){
+    expandRec(root); update(root); treeLayout(root);
+    // FIT YAPMA. Okunur zoom (1.0), KÖKTEN başlat (sol-orta). Kullanıcı tekerlekle
+    // yukarı/aşağı kaydırıp tüm dosyaları okur — her ekran net, hiç küçülmez.
+    const k=1;
+    const t=d3.zoomIdentity.translate(200-k*root.y, (H/2)-k*root.x).scale(k);
+    svg.transition().duration(450).call(zoom.transform,t);
+  };
   window.d3CollapseAll=function(){ window.d3Reset(); };
 }
 
