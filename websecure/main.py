@@ -1355,6 +1355,16 @@ def main() -> None:
     WebSecure entry point — intentionally slim.
     Each phase is delegated to a focused helper function.
     """
+    # Windows konsolu (cp1252) Unicode çıktıda (↓ ✓ ✗ … ş) UnicodeEncodeError
+    # fırlatıp araç indirmeyi/çıktıyı çökertebilir. `python -m websecure` ile
+    # çalıştırıldığında frozen entry point'in (run_websecure.py) reconfigure'ı
+    # devreye girmez; bu yüzden burada da UTF-8 + errors=replace uygula.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except Exception:
+            pass
+
     _print_banner()
     cfg = load_config()
 
