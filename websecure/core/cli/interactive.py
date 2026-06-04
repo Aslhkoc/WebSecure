@@ -275,9 +275,13 @@ def setup_proxy(cfg: dict, args: Namespace) -> None:
     # --- OpSec Summary ---
     _tor_on    = bool(cfg.get("_tor_proxy"))
     _pool_on   = bool((cfg.get("network", {}).get("proxies") or {}).get("pool"))
-    _single_on = bool((cfg.get("http", {}).get("proxies") or {}).get("https")) and not _pool_on
-    _auth_on   = bool(((cfg.get("authenticated") or {}).get("auth_profiles") or [{}])[0].get("username"))
+    # Tor açıkken http.proxies.https Tor adresiyle dolar; bunu "tek proxy" sanma.
+    _https_proxy = str((cfg.get("http", {}).get("proxies") or {}).get("https") or "")
+    _proxy_is_tor = "socks" in _https_proxy.lower() or bool(_tor_on)
+    _single_on = bool(_https_proxy) and not _pool_on and not _proxy_is_tor
+    # Placeholder profil (KULLANICI_ADI) gerçek hesap değildir.
     _uname     = (((cfg.get("authenticated") or {}).get("auth_profiles") or [{}])[0].get("username") or "")
+    _auth_on   = bool(_uname) and _uname != "KULLANICI_ADI"
 
     print("  +-----------------------------------------------------+")
     print("  |              TARAMA OPSec OZETI                     |")

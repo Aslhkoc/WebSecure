@@ -223,11 +223,29 @@ def _session_priming(session, base_url, cfg):
 
     u = url if "://" in url else ("http://" + url)
 
-    # Doğrulama kararı merkezî verify_for_phase() ile verilir. Eski yerel verify_flag
-    # hesabı (host:443 TCP probe ile https_open + insecure_skip_verify/soft_fail) hiç
-    # kullanılmıyordu — verify_for_phase bunu zaten içeride ele alıyor — ölü koddu, kaldırıldı.
-    r = session.get(u, timeout=6, allow_redirects=True,
-                    verify=verify_for_phase(cfg, 'egress', u))
+    # Priming EN İYİ-ÇABA bir optimizasyondur: hedefin CSRF token'ını önceden
+    # yakalamak içindir. Hedef erişilemezse (Tor yavaş/timeout, DNS, bağlantı
+    # reddi, hedefin Tor exit node'larını engellemesi) TÜM taramayı çökertmemeli.
+    # Tor üzerinden gecikme yüksek olduğundan timeout'u genişlet.
+    _proxies = getattr(session, "proxies", {}) or {}
+    _via_tor = "socks" in str(_proxies.get("https") or _proxies.get("http") or "").lower()
+    _timeout = 30 if _via_tor else 8
+
+    # Doğrulama kararı merkezî verify_for_phase() ile verilir.
+    try:
+        r = session.get(u, timeout=_timeout, allow_redirects=True,
+                        verify=verify_for_phase(cfg, 'egress', u))
+    except Exception as exc:
+        _logger.warning(
+            f"[Priming] Hedef ön-istek başarısız ({type(exc).__name__}: "
+            f"{str(exc)[:140]}) — atlanıyor, tarama devam ediyor."
+        )
+        if _via_tor:
+            _logger.warning(
+                "[Priming] İpucu: Tor aktif. Hedef Tor exit node'larını engelliyor "
+                "veya çok yavaş olabilir. Tor'suz deneyin ya da timeout'u artırın."
+            )
+        return
 
     hdr_token = r.headers.get("x-csrf-token") or r.headers.get("x-xsrf-token")
     if hdr_token:

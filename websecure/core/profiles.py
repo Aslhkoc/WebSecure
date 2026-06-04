@@ -35,6 +35,9 @@ from typing import Any, Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
 
+# PyYAML eksik uyarısı süreç başına yalnızca bir kez gösterilsin (spam önleme).
+_YAML_MISSING_WARNED = False
+
 # ---------------------------------------------------------------------------
 # Sabitler
 # ---------------------------------------------------------------------------
@@ -881,7 +884,14 @@ class ProfileLoader:
             _logger.debug(f"[ProfileLoader] Yuklendi: {path.name} -> '{profile.NAME}'")
             return profile
         except ModuleNotFoundError:
-            _logger.warning("[ProfileLoader] PyYAML yuklu degil. `pip install pyyaml`")
+            # Her YAML profili için tekrar tekrar uyarma — süreç başına bir kez yeter.
+            global _YAML_MISSING_WARNED
+            if not _YAML_MISSING_WARNED:
+                _logger.warning(
+                    "[ProfileLoader] PyYAML yuklu degil — YAML profilleri atlaniyor. "
+                    "`pip install pyyaml`"
+                )
+                _YAML_MISSING_WARNED = True
             return None
 
     def _find_profile_files(self):
