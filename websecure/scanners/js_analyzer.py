@@ -269,7 +269,11 @@ class JSAnalyzer:
         for ep in endpoints:
             findings.append({
                 "type": "JS Endpoint Discovered",
-                "severity": "Low",
+                # KEŞİF verisi — tek başına bir zafiyet DEĞİL (saldırı yüzeyi bilgisi).
+                # "Low" olarak işaretlemek yüzlerce keşif kaydını zafiyet sayısına
+                # şişiriyordu; "JS File Discovered" zaten Info. Tutarlılık + doğruluk
+                # için Info: raporda görünür ama vuln sayısına/CI gate'e girmez.
+                "severity": "Info",
                 "url": js_url,
                 "parameter": ep,
                 "detail": f"Endpoint extracted from JS: {ep}",
