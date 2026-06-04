@@ -125,10 +125,29 @@ def install_http_phase_policies(cfg: dict) -> None:
         if k in idem:
             _HTTP_POLICY["idempotent_first"][k] = idem[k]
 
+# Gerçekçi tarayıcı kimliği fallback'i — config http.identity_pools BOŞ olduğunda
+# kullanılır. Eskiden çıplak "Mozilla/5.0" + Accept "*/*" gönderiliyordu; bu
+# kombinasyon hiçbir gerçek tarayıcıda görülmez ve TEK BAŞINA bir bot imzasıdır
+# (Cloudflare/Akamai gibi WAF'lar anında işaretler). Ayrıca WAFBypassAdapter UA'yı
+# yalnızca yoksa/"python-requests" ise döndürdüğünden, "Mozilla/5.0" sessizce
+# kalıp gerçek rotasyonu da etkisiz bırakıyordu. Artık fallback'te de gerçek,
+# rotasyonlu tarayıcı kimlikleri kullanılır.
+_FALLBACK_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
+# Gerçek tarayıcıların gönderdiği tam Accept başlığı (Chrome/Firefox tarzı).
+_FALLBACK_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+_FALLBACK_ACCEPT_LANG = "en-US,en;q=0.9"
+
 def _choose_identity_for_phase(phase: str) -> Dict[str, str]:
-    ua_pool = _IDENTITY_POOLS["user_agents"] or ["Mozilla/5.0"]
-    al_pool = _IDENTITY_POOLS["accept_language"] or ["en-US,en;q=0.9"]
-    ac_pool = _IDENTITY_POOLS["accept"] or ["*/*"]
+    ua_pool = _IDENTITY_POOLS["user_agents"] or _FALLBACK_UA_POOL
+    al_pool = _IDENTITY_POOLS["accept_language"] or [_FALLBACK_ACCEPT_LANG]
+    ac_pool = _IDENTITY_POOLS["accept"] or [_FALLBACK_ACCEPT]
     ua = random.choice(ua_pool)
     al = random.choice(al_pool)
     ac = random.choice(ac_pool)
