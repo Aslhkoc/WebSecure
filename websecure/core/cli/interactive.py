@@ -102,8 +102,13 @@ def setup_tor(cfg: dict, args: Namespace) -> None:
             cfg["privacy"]["tor"]["socks_url"] = _socks
             cfg["_tor_proxy"] = _socks
             print(f"  [+] Tor aktif: {_socks}")
-            print("  [+] Tum Python HTTP trafiği Tor uzerinden gidecek.")
-            print("  [+] Tum araclar (Nmap, SQLMap, FFUF, Nuclei, Playwright) Tor ile calisacak.")
+            print("  [+] Python HTTP trafiği + SQLMap, FFUF, Nuclei, Katana -> Tor (gercek IP gizli).")
+            print("  [!] ISTISNA — NMAP: Port taramasi raw-socket/dogrudan TCP kullanir.")
+            print("      Tor yalnizca TCP stream tasir; SYN/UDP/OS tespiti ve ping")
+            print("      Tor'dan GECMEZ. Bu yuzden Nmap fazi GERCEK IP'nizi hedefe gosterir.")
+            print("      Anonimlik kritikse: Nmap'i kapatin (--no-nmap) ya da -sT + proxychains.")
+            print("  [!] TARAYICI (Playwright/Selenium): WebRTC/DNS sizdirabilir; tam")
+            print("      anonimlik icin tarayicili tarama yerine Tor Browser kullanin.")
         else:
             print("  [!] Tor baslatilamadi veya bulunamadi.")
             print("  [!] Tor Browser'i elle acin ve tekrar deneyin.")

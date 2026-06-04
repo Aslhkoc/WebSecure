@@ -805,7 +805,12 @@ class NmapWrapper(ToolIntegration):
         # When a SOCKS proxy (Tor on 9150, etc.) is configured, skip --proxies
         # entirely so nmap can reach the target directly.
         if proxy.startswith(("socks5://", "socks5h://", "socks4://", "socks4a://")):
-            logger.info(f"[Nmap] SOCKS proxy atlandı — nmap yalnızca HTTP proxy destekler: {proxy}")
+            # nmap SOCKS proxy desteklemez; ayrıca raw-socket (SYN/UDP/OS) taramaları
+            # hiçbir proxy üzerinden geçemez. Bu yüzden nmap DOĞRUDAN bağlanır =
+            # GERÇEK IP hedefe görünür. Bu kritik bir OpSec durumudur — görünür uyar.
+            logger.warning(f"[Nmap] SOCKS/Tor proxy atlandı — nmap yalnızca HTTP proxy destekler: {proxy}")
+            print("\033[31m[Nmap] UYARI: Tor/SOCKS atlandı — bu port taraması GERÇEK IP'nizle "
+                  "yapılıyor, hedef sizi görecek.\033[0m")
             return
         args.extend(["--proxies", proxy])
         if "-n" not in args:
