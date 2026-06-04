@@ -838,8 +838,17 @@ class SQLInjectionScanner(BaseScanner):
                 p_name = inp.get("name")
                 if not p_name:
                     continue
-                # Test ALL inputs — never stop early; multi-param forms may have
-                # several vulnerable fields (e.g. username AND password both injectable)
+                # Context-aware routing: alanı sınıflandır (username/email/redirect/
+                # csrf-token/file...) ve SQLi için İLGİSİZSE atla. Örn. CSRF token'a
+                # (kategori listesi boş) veya saf redirect alanına SQLi atmak hem
+                # boşa istek hem token'ı bozar. Bağlam bilinmiyorsa GENERIC → test
+                # edilir (asla eksik test etmez). Bu hem doğruluğu artırır hem büyük
+                # sitelerde gereksiz istekleri azaltır (perf).
+                if self._should_skip_param(p_name, "sqli", inp.get("value", "")):
+                    logger.debug(f"[SQLi] '{p_name}' alanı SQLi için ilgisiz (context) — atlandı")
+                    continue
+                # Test ALL relevant inputs — never stop early; multi-param forms may
+                # have several vulnerable fields (e.g. username AND password both injectable)
                 self._test_form_param_parallel(
                     action, method, inputs, p_name, payloads,
                     baseline_errors, time_threshold
