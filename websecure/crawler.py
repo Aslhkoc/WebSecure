@@ -926,51 +926,14 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                         
                         # [SPA FORM DISCOVERY] Modal-arkası formları aç + form-dışı
                         # input'ları (arama kutusu, React alanları) yakala.
+                        #
+                        # Buton METNİNE GÜVENMEZ (her site farklı: login/sign in/
+                        # giriş/iniciar sesión/anmelden/ikon-only...). Asıl sinyal:
+                        # bir öğeye tıklayınca yeni input alanları BELİRİYOR mu?
+                        # ("tıkla-ve-ölç" — dil/yazım bağımsız). Kelime listesi
+                        # yalnızca DENEME SIRASINI önceliklendirir, KARARI vermez.
                         try:
-                            # 1) Login/kayıt/arama modallerini açan tetikleyicilere
-                            #    tıkla — Kick/Twitch benzeri SPA'larda bu formlar
-                            #    ancak tıklamayla DOM'a giriyor (aksi halde sadece
-                            #    URL'ye saldırılıp formlar hiç test edilmiyordu).
-                            _TRIGGER_KW = [
-                                "login", "log in", "sign in", "signin", "giriş",
-                                "giris", "register", "sign up", "signup", "kaydol",
-                                "kayıt", "kayit", "account", "search", "ara",
-                                "subscribe", "abone", "checkout", "ödeme", "odeme",
-                            ]
-                            try:
-                                clickable = page.query_selector_all(
-                                    "button, [role=button], a:not([href]), "
-                                    "a[href='#'], a[href^='#']"
-                                )
-                                clicked = 0
-                                for el in clickable:
-                                    if clicked >= 6:
-                                        break
-                                    try:
-                                        txt = (el.inner_text() or "").strip().lower()[:40]
-                                        aria = (el.get_attribute("aria-label") or "").lower()
-                                    except Exception:
-                                        continue
-                                    if any(k in txt or k in aria for k in _TRIGGER_KW):
-                                        try:
-                                            el.click(timeout=2000)
-                                            clicked += 1
-                                            time.sleep(1.2)  # modal render
-                                        except Exception:
-                                            continue
-                                if clicked:
-                                    logger.info(
-                                        f"[Playwright] {clicked} form-tetikleyici "
-                                        f"tıklandı (modal keşfi) @ {target}"
-                                    )
-                            except Exception as _click_e:
-                                logger.debug(f"[Playwright] trigger-click skipped: {_click_e!r}")
-
-                            # 2) Form + STANDALONE input çıkarımı. name yoksa
-                            #    id/placeholder/aria-label'a düş (React input'ları
-                            #    genelde name taşımaz). Form-dışı input'lar sanal
-                            #    form olarak gruplanır.
-                            page_forms = page.evaluate(r"""() => {
+                            _EXTRACT_JS = r"""() => {
                                 const idOf = (e) => e.name || e.id ||
                                     e.getAttribute('placeholder') ||
                                     e.getAttribute('aria-label') || '';
@@ -995,7 +958,85 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                                     inputs: loose.slice(0, 25), kind: 'loose'
                                 });
                                 return out;
-                            }""")
+                            }"""
+                            _N_INPUTS_JS = "() => document.querySelectorAll('input,textarea,select').length"
+
+                            def _dedup_forms(forms):
+                                seen, uniq = set(), []
+                                for f in forms or []:
+                                    key = (f.get("action", ""),
+                                           tuple(sorted(i.get("name", "") for i in f.get("inputs", []))))
+                                    if key in seen:
+                                        continue
+                                    seen.add(key)
+                                    uniq.append(f)
+                                return uniq
+
+                            # Çok-dilli + yaygın terimler — yalnızca ÖNCELİK için
+                            _TRIGGER_KW = (
+                                "login", "log in", "sign in", "signin", "sign up", "signup",
+                                "register", "log on", "logon", "account", "auth", "sign",
+                                "search", "cash", "subscribe", "checkout", "cart", "pay",
+                                "giriş", "giris", "kaydol", "kayıt", "kayit", "ara", "abone",
+                                "ödeme", "odeme", "sepet", "üye", "uye",
+                                "iniciar", "sesión", "sesion", "entrar", "acceder", "registr",
+                                "connexion", "connecter", "inscription", "anmelden", "registr",
+                                "accedi", "войти", "регист", "登录", "登入", "تسجيل", "로그인",
+                            )
+
+                            collected = list(page.evaluate(_EXTRACT_JS))  # baseline (DOM'daki mevcut formlar)
+
+                            # Aday tetikleyicileri topla + kelime eşleşmesine göre skorla
+                            try:
+                                cands = page.query_selector_all("button, [role=button], a")
+                                scored = []
+                                for el in cands[:80]:
+                                    try:
+                                        if not el.is_visible():
+                                            continue
+                                        blob = " ".join(filter(None, [
+                                            (el.inner_text() or "")[:60],
+                                            el.get_attribute("aria-label") or "",
+                                            el.get_attribute("data-testid") or "",
+                                            el.get_attribute("title") or "",
+                                            el.get_attribute("class") or "",
+                                            el.get_attribute("href") or "",
+                                        ])).lower()
+                                    except Exception:
+                                        continue
+                                    score = 2 if any(k in blob for k in _TRIGGER_KW) else 1
+                                    scored.append((score, el))
+                                scored.sort(key=lambda x: -x[0])
+
+                                revealed = 0
+                                for _score, el in scored:
+                                    if revealed >= 6:
+                                        break
+                                    try:
+                                        before = page.evaluate(_N_INPUTS_JS)
+                                        el.click(timeout=1500)
+                                        time.sleep(1.0)  # modal/animasyon render
+                                        after = page.evaluate(_N_INPUTS_JS)
+                                        if after > before:
+                                            # Tıklama yeni input açtı = form-tetikleyici
+                                            collected += page.evaluate(_EXTRACT_JS)
+                                            revealed += 1
+                                            try:
+                                                page.keyboard.press("Escape")  # modali kapat
+                                                time.sleep(0.3)
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        continue
+                                if revealed:
+                                    logger.info(
+                                        f"[Playwright] {revealed} gizli form/modal "
+                                        f"açığa çıkarıldı (tıkla-ve-ölç) @ {target}"
+                                    )
+                            except Exception as _click_e:
+                                logger.debug(f"[Playwright] trigger-probe skipped: {_click_e!r}")
+
+                            page_forms = _dedup_forms(collected)
                             if page_forms:
                                 artifacts.setdefault("discovered_forms", []).append({
                                     "url": target,
