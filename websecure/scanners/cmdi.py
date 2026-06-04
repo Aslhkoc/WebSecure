@@ -512,22 +512,28 @@ class CMDiOOBDNSProber(BaseScanner):
                 except Exception as exc:
                     logger.debug(f"[CMDiOOBDNSProber] OAST poller check failed: {exc!r}")
 
-            # Report with appropriate severity — Critical if real OOB, High for placeholder
-            evidence_msg = (
-                f"OOB DNS payloads sent to {probe_host} (token={token}). "
-                "Verify DNS callbacks in your OAST/Burp Collaborator panel."
-                if not oast_domain else
-                f"OOB DNS payload sent to {probe_host} (token={token}). "
-                "OAST poller will report confirmed callbacks asynchronously."
-            )
-            self.report_finding(
-                vuln_type="OS Command Injection (OOB/DNS Probe)",
-                url=target,
-                param=param_name,
-                payload=f"; nslookup {probe_host}",
-                severity=severity,
-                evidence=evidence_msg,
-            )
+            # FP FIX: OOB tekniğinin TEK kanıtı gerçek DNS/HTTP callback'idir.
+            # Eskiden burada KOŞULSUZ olarak (callback gelmese de, hatta OAST hiç
+            # yokken `burpcollaborator.net` placeholder'ı ile) High/Critical bir
+            # "OOB/DNS Probe" bulgusu raporlanıyordu → vulnerable OLMAYAN her
+            # parametrede sahte CMDi false-positive üretiyordu (benchmark'ta
+            # safe_ping bile [High] işaretlendi). Doğrulanmamış OOB ASLA vuln
+            # olarak raporlanmamalı:
+            #   - OAST varsa: yalnız yukarıdaki callback-onaylı yol raporlar;
+            #     gecikmeli callback'leri global OAST poller asenkron raporlar.
+            #   - OAST yoksa: kontrol ettiğimiz bir callback alanı olmadığından
+            #     teknik DOĞRULANAMAZ → bulgu üretme, sadece logla.
+            if oast_domain:
+                logger.info(
+                    "[CMDiOOBDNSProber] OOB payloadları gönderildi (token=%s, host=%s) — "
+                    "onaylı DNS callback'leri OAST poller asenkron raporlayacak.",
+                    token, probe_host,
+                )
+            else:
+                logger.debug(
+                    "[CMDiOOBDNSProber] OAST domain yok — OOB doğrulanamaz, bulgu "
+                    "üretilmedi (FP önleme). OAST/interactsh yapılandırın.",
+                )
 
 
 class CMDiTimeBasedProber(BaseScanner):

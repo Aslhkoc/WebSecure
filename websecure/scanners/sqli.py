@@ -1125,20 +1125,19 @@ class SQLInjectionScanner(BaseScanner):
             for param, _ in parse_qsl(parsed.query):
                 sent = prober.probe(url, param, self.session, self.inject_param, oob_host)
                 if sent:
-                    self.report_finding(
-                        vuln_type="SQL Injection (OOB DNS — Pending Callback)",
-                        url=url,
-                        param=param,
-                        payload=sent[0]["payload"],
-                        severity="High",
-                        evidence=(
-                            f"OOB payloads sent -> {oob_host}. "
-                            f"Check OAST server for DNS/HTTP callbacks. "
-                            f"Payloads tried: {len(sent)}"
-                        ),
-                        extra={"oob_host": oob_host, "payloads_sent": len(sent), "detection_method": "oob_dns", "confidence": "low"},
+                    # FP FIX: OOB SQLi'nin TEK kanıtı gerçek DNS/HTTP callback'idir.
+                    # Eskiden payload "gönderildi" diye KOŞULSUZ olarak High bir
+                    # "Pending Callback" bulgusu raporlanıyordu → vulnerable OLMAYAN
+                    # her parametrede sahte SQLi false-positive (benchmark'ta
+                    # safe_product bile [High] işaretlendi). Doğrulanmamış OOB ASLA
+                    # vuln olarak raporlanmamalı; onaylı callback'leri global OAST
+                    # poller asenkron raporlar. Burada yalnız gönderimi logla.
+                    logger.info(
+                        "[SQLi/OOB] OOB payloadları gönderildi (url=%s param=%s host=%s, "
+                        "%d payload) — onaylı DNS callback'leri OAST poller raporlayacak.",
+                        url, param, oob_host, len(sent),
                     )
-                    break  # one finding per URL is enough
+                    break
 
     def _run_stacked_query_phase(self, urls: List[str]) -> None:
         """Stacked query (multi-statement) tespiti — time-based cross-validation."""

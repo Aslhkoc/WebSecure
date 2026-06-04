@@ -709,7 +709,7 @@ class XSSScanner(BaseScanner):
                 confidence="high" if dom_confirmed else hit_confidence,
                 detection_method=hit.get("detection_method", "reflection"),
                 reflection_quality=round(rq_score, 3),
-                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
+                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method", "severity")},
             )
             # XSS -> ATO: DOM onaylıysa gerçek cookie theft dene
             if dom_confirmed:
@@ -731,7 +731,7 @@ class XSSScanner(BaseScanner):
                     ato["ato_cookie_count"] = len(captured.cookies)
                     ato["ato_ls_keys"] = len(captured.local_storage)
                     ato["ato_raw_cookie"] = captured.raw_cookie_str[:200]
-                self.report_finding(severity="Critical", **ato)
+                self.report_finding(severity="Critical", **{k: v for k, v in ato.items() if k != "severity"})
 
     def _dom_verify_xss(self, url: str, param_name: str, payload: str) -> bool:
         """
@@ -813,18 +813,18 @@ class XSSScanner(BaseScanner):
 
             # Prototype pollution — URL-level, no specific param
             for f in pp_prober.probe(url, self.session):
-                self.report_finding(severity="High", confidence="medium", detection_method="proto_pollution", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
+                self.report_finding(severity="High", confidence="medium", detection_method="proto_pollution", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method", "severity")})
 
             for param in params[:5]:
                 inject_fn = self._inject_param_fn
 
                 # mXSS
                 for f in mxss_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="High", confidence="medium", detection_method="mxss", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
+                    self.report_finding(severity="High", confidence="medium", detection_method="mxss", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method", "severity")})
 
                 # DOM Clobbering
                 for f in clobber_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="Medium", confidence="low", detection_method="dom_clobbering", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
+                    self.report_finding(severity="Medium", confidence="low", detection_method="dom_clobbering", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method", "severity")})
 
                 # CSP bypass payloads
                 for payload in csp_bypasses[:6]:
@@ -864,12 +864,12 @@ class XSSScanner(BaseScanner):
 
                 # Trusted Types bypass
                 for f in tt_prober.probe(url, param, self.session, inject_fn):
-                    self.report_finding(severity="Medium", confidence="low", detection_method="trusted_types", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method")})
+                    self.report_finding(severity="Medium", confidence="low", detection_method="trusted_types", **{k: v for k, v in f.items() if k not in ("confidence", "detection_method", "severity")})
 
                 # Template literal injection
                 for f in tl_prober.probe(url, param, self.session, inject_fn):
                     sev = "High" if f.get("confidence") == "high" else "Medium"
-                    self.report_finding(severity=sev, detection_method="template_literal", **{k: v for k, v in f.items() if k not in ("detection_method",)})
+                    self.report_finding(severity=sev, detection_method="template_literal", **{k: v for k, v in f.items() if k not in ("detection_method", "severity")})
 
                 # Blind XSS (OOB)
                 for f in blind_prober.probe(url, param, self.session, inject_fn):
@@ -981,7 +981,7 @@ class XSSScanner(BaseScanner):
                 ),
                 detection_method=hit.get("detection_method", "reflection_form"),
                 confidence=hit_confidence,
-                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method")},
+                **{k: v for k, v in hit.items() if k not in ("confidence", "detection_method", "severity")},
             )
 
 

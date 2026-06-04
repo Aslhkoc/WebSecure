@@ -149,16 +149,35 @@ class BaseScanner:
         self,
         *,
         vuln_type: str = "",
-        url: str,
+        url: str = "",
         param: str = "",
         payload: str = "",
-        severity: str,
+        severity: str = "",
         evidence: str = "",
         extra: Optional[Dict] = None,
         # legacy alias used by some scanners
         type: str = "",
         **kwargs: Any,
     ) -> None:
+        # SAVUNMACI: bazı prober'lar finding dict'ini **spread ile geçiriyor ve
+        # dict'te `url`/`severity` olmayabiliyor. Eskiden bunlar zorunlu keyword
+        # olduğundan "missing required argument" ile TÜM taramayı çökertiyordu.
+        # url'i kwargs/extra/target'tan kurtar; severity yoksa Info varsay;
+        # yine de url yoksa bulguyu sessizce atla (çökme yok).
+        if not url:
+            url = (
+                str(kwargs.pop("url", "") or "")
+                or str((extra or {}).get("url", "") or "")
+                or str(kwargs.pop("target", "") or "")
+            )
+        if not severity:
+            severity = str(kwargs.pop("severity", "") or "") or "Info"
+        if not url:
+            self.logger.debug(
+                f"[{self.name}] report_finding atlandı (url yok): "
+                f"{vuln_type or type or 'finding'}"
+            )
+            return
         """
         Unified finding reporter used by all scanners.
         Replaces the per-scanner _report_vuln / _report_finding methods.
