@@ -383,11 +383,21 @@ class NmapWrapper(ToolIntegration):
         _raw = (root and not on_windows) or _npcap_ok   # SYN / raw socket erişimi var mı
 
         if _raw and _npcap_ok:
-            print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN scan aktif")
+            print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN/OS/UDP tam güç aktif")
         elif _raw:
-            print("\033[36m[Nmap]\033[0m Root — SYN scan aktif")
+            print("\033[36m[Nmap]\033[0m Root — SYN/OS/UDP tam güç aktif")
         else:
-            print("\033[36m[Nmap]\033[0m Raw socket yok — TCP connect modunda")
+            # Raw socket yok: port + servis/versiyon + tüm NSE scriptleri ÇALIŞIR;
+            # sadece SYN-stealth / -O OS tespiti / -sU UDP kaybedilir.
+            print("\033[36m[Nmap]\033[0m TCP connect modu (-sT) — port/servis/NSE tam çalışır.")
+            if on_windows:
+                if _has_npcap() and not root:
+                    # Npcap kurulu ama yönetici değil → elevation kilidi açar
+                    print("\033[33m[Nmap]\033[0m Npcap kurulu ama yönetici değil — "
+                          "SYN-stealth + OS tespiti + UDP için CMD'yi 'Yönetici olarak' çalıştırın.")
+                elif not _has_npcap():
+                    print("\033[33m[Nmap]\033[0m Npcap kurulu değil — SYN/OS/UDP için "
+                          "npcap.com'dan Npcap kurup yönetici olarak çalıştırın.")
 
         mode = (mode or "aggressive").lower()
 
