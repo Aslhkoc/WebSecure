@@ -1428,24 +1428,28 @@ class TemplateLiteralInjectionProber:
             try:
                 injected = inject_fn(url, param, payload)
                 resp = session.get(injected, timeout=timeout)
-                # Expression evaluation: 7*7 = 49
-                if "49" in resp.text and "7" in payload:
+                # FP FIX: Template injection'ın TEK güvenilir kanıtı ifadenin
+                # DEĞERLENDİRİLMESİDİR (7*7 -> 49), ham yansıma DEĞİL. Eskiden
+                # `elif payload in resp.text` ile YANSIYAN her `${7*7}` Medium bir
+                # "Template Injection" FP'si üretiyordu — html.escape'li güvenli
+                # sayfa bile (payload'da < > yoksa kaçışlanmadan yansır). Artık
+                # yalnız ifade gerçekten evaluate edilmişse raporla: çıktıda "49"
+                # VAR ve ham payload (`${7*7}`) KAYBOLMUŞ (yerine 49 geçmiş) ise.
+                # Ham yansıma (potansiyel XSS) zaten reflected-XSS prober'ında ele
+                # alınır; burada tekrar (ve yanlış kategoriyle) raporlanmaz.
+                evaluated = (
+                    "7*7" in payload
+                    and "49" in resp.text
+                    and payload not in resp.text
+                )
+                if evaluated:
                     findings.append({
                         "vuln_type": "Template Literal Injection (XSS/SSTI)",
                         "url": url,
                         "param": param,
                         "payload": payload,
-                        "evidence": "Expression 7*7=49 evaluated server/client-side",
+                        "evidence": "Expression 7*7=49 evaluated (payload no longer reflected verbatim)",
                         "confidence": "high",
-                    })
-                elif payload in resp.text:
-                    findings.append({
-                        "vuln_type": "Template Literal Injection (XSS/SSTI)",
-                        "url": url,
-                        "param": param,
-                        "payload": payload,
-                        "evidence": "Template injection payload reflected unescaped",
-                        "confidence": "medium",
                     })
             except Exception as _exc:
                 logger.debug(f"[TemplateLiteralInjection] probe failed for {url} param={param}: {_exc!r}")
@@ -1482,29 +1486,31 @@ class BlindXSSProber:
         inject_fn: Callable[[str, str, str], str],
         timeout: int = 8,
     ) -> List[Dict[str, Any]]:
-        findings: List[Dict[str, Any]] = []
+        # FP FIX: Blind XSS'in TEK kanıtı gerçek OOB callback'idir (payload kurban
+        # tarayıcısında SONRADAN çalışır). Eskiden yalnız "HTTP < 400 döndü" diye
+        # her parametrede High bir "Blind XSS (OOB)" bulgusu üretiliyordu — hedef
+        # zafiyetli olmasa da (oast.invalid placeholder, hiçbir callback yok). Bu,
+        # 200 dönen HER sayfada sahte blind-XSS FP'siydi. Payload'ları teslim et;
+        # onaylı callback'leri (gerçek OAST host'u varsa) global OAST poller
+        # asenkron raporlar. Teslimde bulgu ÜRETME.
+        delivered = 0
         for payload in self.get_payloads():
             try:
                 injected = inject_fn(url, param, payload)
                 resp = session.get(injected, timeout=timeout)
                 if resp.status_code < 400:
-                    findings.append({
-                        "vuln_type": "Blind XSS (OOB)",
-                        "url": url,
-                        "param": param,
-                        "payload": payload,
-                        "evidence": (
-                            f"OOB payload delivered (HTTP {resp.status_code}). "
-                            f"Check {self.oob_host} for callbacks."
-                        ),
-                        "confidence": "low",
-                        "requires_oob_confirmation": True,
-                    })
+                    delivered += 1
                     break  # one delivery per param is sufficient
             except Exception as _exc:
                 logger.debug(f"[BlindXSS] probe failed for {url} param={param}: {_exc!r}")
                 continue
-        return findings
+        if delivered:
+            logger.info(
+                "[BlindXSS] OOB payload teslim edildi (url=%s param=%s host=%s) — "
+                "onaylı callback'leri OAST poller raporlayacak.",
+                url, param, self.oob_host,
+            )
+        return []
 
 
 class XSSToATOChain:
