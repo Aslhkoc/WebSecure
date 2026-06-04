@@ -2866,11 +2866,17 @@ def _runner_ssrf(ctx) -> None:
                 scanner.results = results
             run_fn = getattr(scanner, "run", None)
             if callable(run_fn):
-                run_kw = dict(oast_cfg=oast_cfg)
+                # SSRFScanner.run(self, url, **kwargs) — `url` ZORUNLU.
+                # Eskiden run_kw'de url yoktu → "missing 1 required positional
+                # argument: 'url'" ile SSRF taraması tamamen çöküyordu (XXE runner
+                # ise url'i doğru geçiyordu). endpoints/oast_cfg run imzasında
+                # **kwargs altında olduğundan _filter_kwargs onları eler; url ise
+                # adlandırılmış parametre olduğu için korunur.
+                run_kw = dict(url=url, endpoints=endpoints, oast_cfg=oast_cfg)
                 try:
                     run_fn(**_filter_kwargs(run_fn, run_kw))
                 except TypeError:
-                    run_fn()
+                    run_fn(url)
             # Flush findings from scanner.results
             for bucket_key in ("ssrf", "offensive"):
                 for item in (getattr(scanner, "results", {}) or {}).get(bucket_key) or []:

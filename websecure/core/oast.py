@@ -238,10 +238,48 @@ class _BaseOSAT:
         if cfg.proxy:
             if "proxy" in ac_params: client_kwargs["proxy"] = cfg.proxy
             elif "proxies" in ac_params: client_kwargs["proxies"] = cfg.proxy
-        self._client = httpx.AsyncClient(**client_kwargs)
-    
+        # httpx.AsyncClient bağlantı havuzu, ilk kullanıldığı event loop'a bağlanır.
+        # OAST sync sarmalayıcıları (poll_events_sync vb.) her çağrıda yeni bir loop
+        # açıp kapattığı için TEK bir client'ı kapanmış loop'ta yeniden kullanmak
+        # "[OAST] interactsh kayıt hatası: Event loop is closed" hatası veriyordu.
+        # Çözüm: client'ı çalışan loop'a göre tembel/loop-bilinçli (yeniden) oluştur.
+        self._client_kwargs: Dict[str, Any] = client_kwargs
+        self._client_obj = None
+        self._client_loop = None
+
+    def _make_async_client(self):
+        return httpx.AsyncClient(**self._client_kwargs)
+
+    @property
+    def _client(self):
+        try:
+            cur = asyncio.get_running_loop()
+        except RuntimeError:
+            cur = None
+        loop = self._client_loop
+        if (self._client_obj is None
+                or loop is not cur
+                or (loop is not None and loop.is_closed())):
+            self._client_obj = self._make_async_client()
+            self._client_loop = cur
+        return self._client_obj
+
+    @_client.setter
+    def _client(self, value):
+        # Geriye dönük uyumluluk: doğrudan atama (örn. testler) hâlâ çalışsın.
+        self._client_obj = value
+        try:
+            self._client_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._client_loop = None
+
     async def aclose(self) -> None:
-        await self._client.aclose()
+        obj = self._client_obj
+        if obj is not None:
+            try:
+                await obj.aclose()
+            except Exception:
+                pass
 
 class GenericOSATClient(_BaseOSAT, IOSATClient):
     async def new_token(self) -> str:

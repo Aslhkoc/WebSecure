@@ -72,7 +72,10 @@ _HTTP_POLICY = {
     "idempotent_first": {
         "enabled": True,
         "early_phases": ["discovery", "mapping"],
-        "allow_post_threshold": 0.2
+        "allow_post_threshold": 0.2,
+        # True yapılırsa eski katı davranışa döner: saldırı fazlarında da POST
+        # yalnızca _post_ratio_ok=True ise geçer (varsayılan: kapalı — POST izinli).
+        "strict_non_idempotent": False
     }
 }
 
@@ -142,8 +145,18 @@ def _respect_idempotent_first(phase: str, method: str, post_ratio_ok: bool) -> b
         return True
     if phase in pol["early_phases"]:
         return method.upper() in ("GET", "HEAD", "OPTIONS")
+    # Erken keşif (discovery/mapping) dışındaki fazlar saldırı/test fazlarıdır
+    # (xxe, ssrf, sqli, cmdi, ssti, nosqli, graphql, auth, mass_assignment ...).
+    # Bu fazlarda POST/PUT/DELETE/PATCH saldırının ÖZÜDÜR.
+    # Eski mantık `bool(post_ratio_ok)` döndürüyordu; ancak hiçbir çağıran
+    # `_post_ratio_ok=True` geçmediği için bu DAİMA False'tu → tüm non-idempotent
+    # istekler "Non-idempotent method blocked by policy" ile sessizce bloklanıyor,
+    # XXE çöküyor ve diğer scanner'ların POST kapsamı kayboluyordu.
+    # (Kimliksiz/stealth idempotent-only kısıtı zaten ayrı mekanizmada —
+    #  HttpClient._kimliksiz_idempotent / suppress_non_idempotent_at_start — uygulanır.)
+    # Çağıran açıkça izin vermek isterse _post_ratio_ok=True ek bir kapı olarak kalır.
     if method.upper() in ("POST", "PUT", "DELETE", "PATCH"):
-        return bool(post_ratio_ok)
+        return True if not pol.get("strict_non_idempotent", False) else bool(post_ratio_ok)
     return True
 
 
