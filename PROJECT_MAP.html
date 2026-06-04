@@ -95,10 +95,14 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 .t-dir .fname         { color: #79c0ff; font-weight: 700; }
 
 /* D3 TREE */
-#d3-container { width:100%; height:calc(100vh - 178px); overflow:hidden; background:var(--bg); border-radius:8px; border:1px solid var(--border); cursor:grab; }
+#d3-container { width:100%; height:calc(100vh - 220px); overflow:hidden; background:var(--bg); border-radius:8px; border:1px solid var(--border); cursor:grab; }
 #d3-container:active { cursor:grabbing; }
 #d3-svg { width:100%; height:100%; }
-#d3-hint { text-align:center; color:var(--muted); font-size:11px; padding:4px 0 10px; letter-spacing:.03em; }
+#d3-hint { text-align:center; color:var(--muted); font-size:11px; padding:4px 0 8px; letter-spacing:.03em; }
+#d3-toolbar { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; padding:0 0 10px; }
+.d3-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:5px 12px; border-radius:6px; font-size:12px; cursor:pointer; transition:background .15s, border-color .15s, transform .1s; font-family:inherit; }
+.d3-btn:hover { background:rgba(88,166,255,.12); border-color:var(--blue); transform:translateY(-1px); }
+.d3-btn:active { transform:translateY(0); }
 .d3-link { fill:none; stroke:rgba(88,166,255,.2); stroke-width:1.5px; }
 .d3-node circle { cursor:pointer; }
 .d3-node text { font-family:'Consolas',monospace; font-size:11.5px; fill:var(--text); cursor:pointer; dominant-baseline:central; pointer-events:none; }
@@ -215,6 +219,12 @@ header h1 { font-size: 20px; font-weight: 700; color: var(--blue); }
 <div id="treePanel" class="panel active">
   <div id="d3-stats"></div>
   <div id="d3-hint">&#128270; node&#39;a t&#305;kla: geni&#351;let/daralt &nbsp;&#124;&nbsp; &#128433; scroll: zoom &nbsp;&#124;&nbsp; s&#252;r&#252;kle: kaydir &nbsp;&#124;&nbsp; yaprak node: rapor detay&#305;</div>
+  <div id="d3-toolbar">
+    <button class="d3-btn" onclick="d3FitAll()">&#128301; Ekrana S&#305;&#287;d&#305;r</button>
+    <button class="d3-btn" onclick="d3Reset()">&#8634; S&#305;f&#305;rla</button>
+    <button class="d3-btn" onclick="d3ExpandAll()">&#10133; T&#252;m&#252;n&#252; A&#231;</button>
+    <button class="d3-btn" onclick="d3CollapseAll()">&#10134; T&#252;m&#252;n&#252; Kapat</button>
+  </div>
   <div id="d3-container"><svg id="d3-svg"></svg></div>
 </div>
 
@@ -812,19 +822,32 @@ function initD3Tree(){
   svg.call(zoom);
 
   const g=gWrap.append('g');
-  const initTX=130, initTY=H/2;
+  const initTX=180, initTY=H/2;
   svg.call(zoom.transform, d3.zoomIdentity.translate(initTX,initTY));
 
-  const treeLayout=d3.tree().nodeSize([22,240]);
+  // Dikey aralik 22->28 (etiketler ust uste binmesin), yatay 240->280 (uzun dosya adlari)
+  const treeLayout=d3.tree().nodeSize([28,280]);
   let root=d3.hierarchy(buildOSINTData());
+
+  // Bir node'a okunakli zoom'da odaklan — actikca "karinca" olmasini engeller.
+  // Mevcut zoom'u [0.55, 1.2] okunakli bandina ceker, node'u sola-ortaya tasir.
+  function focusNode(d){
+    const cur=d3.zoomTransform(svg.node());
+    const k=Math.min(Math.max(cur.k,0.55),1.2);
+    const t=d3.zoomIdentity.translate(200-k*d.y, (H/2)-k*d.x).scale(k);
+    svg.transition().duration(420).call(zoom.transform,t);
+  }
+
+  // id'leri TÜM node'lara collapse'tan ÖNCE ata — yoksa _children'a taşınan
+  // node'lar id alamaz (undefined), data-join key'i bozulur ve genişlet/daralt'ta
+  // exit çalışmaz (orphan node'lar DOM'da kalır). root.each tüm hiyerarşiyi gezer.
+  let uid=0;
+  root.each(d=>{d.id=++uid; d.x0=0; d.y0=0;});
 
   // collapse everything deeper than depth 1
   root.descendants().forEach(d=>{
     if(d.depth>1&&d.children){d._children=d.children;d.children=null;}
   });
-
-  let uid=0;
-  root.descendants().forEach(d=>{d.id=++uid; d.x0=0; d.y0=0;});
 
   function nodeColor(d){
     if(d.data.type==='root')return'#58a6ff';
@@ -859,8 +882,7 @@ function initD3Tree(){
       .attr('d',()=>{ const o={x:src.x0||0,y:src.y0||0}; return bezierLink(o,o); });
     lSel.merge(lEnter).transition().duration(280)
       .attr('d',d=>bezierLink(d.source,d.target));
-    lSel.exit().transition().duration(280)
-      .attr('d',()=>{ const o={x:src.x,y:src.y}; return bezierLink(o,o); }).remove();
+    lSel.exit().remove();
 
     // ── nodes ──
     const nSel=g.selectAll('g.d3-node').data(nodes,d=>d.id);
@@ -870,9 +892,12 @@ function initD3Tree(){
       .on('click',(ev,d)=>{
         ev.stopPropagation();
         if(d.data.isLeaf){ showDetail(d.data.path); return; }
+        const wasCollapsed=!d.children;
         if(d.children){d._children=d.children;d.children=null;}
         else{d.children=d._children;d._children=null;}
         update(d);
+        // Genisletince tiklanan node'a okunakli zoom'da odaklan (karinca sorunu cozumu)
+        if(wasCollapsed) focusNode(d);
       });
 
     nEnter.append('circle').attr('r',0)
@@ -902,8 +927,9 @@ function initD3Tree(){
       .attr('text-anchor',d=>d.children||d._children?'end':'start')
       .attr('fill',textColor);
 
-    nSel.exit().transition().duration(280)
-      .attr('transform',`translate(${src.y},${src.x})`).remove();
+    // Anında kaldır — transition .remove() toplu daraltmada güvenilmez
+    // (interrupt edilince orphan node DOM'da kalıyordu).
+    nSel.exit().remove();
 
     nodes.forEach(d=>{d.x0=d.x; d.y0=d.y;});
   }
@@ -911,6 +937,36 @@ function initD3Tree(){
   root.x0=0; root.y0=0;
   update(root);
   window._d3Svg=d3.select('#d3-svg');
+
+  // ── Toolbar: referansları global'e bağla ──────────────
+  function expandRec(d){
+    if(d._children){d.children=d._children;d._children=null;}
+    if(d.children)d.children.forEach(expandRec);
+  }
+  function collapseToDepth1(){
+    root.descendants().forEach(d=>{ if(d.depth>1&&d.children){d._children=d.children;d.children=null;} });
+  }
+  // Görünür tüm node'ları ekrana sığdır (overview — bilerek küçük olabilir)
+  window.d3FitAll=function(){
+    treeLayout(root);
+    const nodes=root.descendants();
+    if(!nodes.length)return;
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    nodes.forEach(d=>{minX=Math.min(minX,d.x);maxX=Math.max(maxX,d.x);
+      minY=Math.min(minY,d.y);maxY=Math.max(maxY,d.y);});
+    const boxH=(maxX-minX)||1, boxW=(maxY-minY)||1, pad=80;
+    const k=Math.max(Math.min((W-pad)/boxW,(H-pad)/boxH,1.2),0.04);
+    const cx=(minY+maxY)/2, cy=(minX+maxX)/2;
+    const t=d3.zoomIdentity.translate(W/2-k*cx,H/2-k*cy).scale(k);
+    svg.transition().duration(450).call(zoom.transform,t);
+  };
+  window.d3Reset=function(){
+    collapseToDepth1(); update(root);
+    svg.transition().duration(420).call(zoom.transform,
+      d3.zoomIdentity.translate(180,H/2).scale(1));
+  };
+  window.d3ExpandAll=function(){ expandRec(root); update(root); setTimeout(window.d3FitAll,80); };
+  window.d3CollapseAll=function(){ window.d3Reset(); };
 }
 
 function buildReport(files){

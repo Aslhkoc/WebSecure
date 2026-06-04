@@ -12,6 +12,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-c", "import subprocess,sys; subprocess.run([sys.executable, 'sqlmapapi.py', '-s', '-H', '127.0.0.1', '-p', '8775'], cwd='tools/sqlmap')"],
       "port": 8775
+    },
+    {
+      "name": "ProjectMap Static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8123"],
+      "port": 8123
     }
   ]
 }
