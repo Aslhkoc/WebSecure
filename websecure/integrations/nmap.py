@@ -64,11 +64,16 @@ def _has_npcap() -> bool:
     # Npcap veya WinPcap servisi çalışıyor mu
     for svc in ("npcap", "npf"):
         try:
+            # encoding/errors ZORUNLU: Türkçe/non-UTF8 Windows konsolunda (cp1254)
+            # `sc query` çıktısında 0x81 gibi baytlar text=True'nun varsayılan
+            # codec'iyle UnicodeDecodeError fırlatıp servis kontrolünü çökertiyordu
+            # (reader-thread traceback'leri + kontrol yalnızca DLL-fallback'ine düşüyordu).
             r = subprocess.run(
                 ["sc", "query", svc],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="ignore",
             )
-            if "RUNNING" in r.stdout:
+            if "RUNNING" in (r.stdout or ""):
                 return True
         except Exception as _fix_e:
             logger.debug(f"[integrations.nmap] {type(_fix_e).__name__}: {_fix_e!r}")
