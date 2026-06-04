@@ -111,20 +111,21 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
             logging.warning("[WebDriver] Uyumlu ChromeDriver bulunamadı.")
             return None
 
-        profile_dir = tempfile.mkdtemp(prefix="ws_chrome_")
-
         attempts = [
-            # (headless, new_headless, swiftshader, label)
-            (headless, True,  False, "headless=new"),
-            (headless, False, False, "headless eski mod"),
-            (False,    False, False, "GUI mod"),
-            (headless, True,  True,  "headless=new + SwiftShader"),
-            (False,    False, True,  "GUI + SwiftShader (profil yok)"),
+            # (headless, new_headless, swiftshader, use_profile, label)
+            (headless, True,  False, True,  "headless=new"),
+            (headless, False, False, True,  "headless eski mod"),
+            (False,    False, False, True,  "GUI mod"),
+            (headless, True,  True,  True,  "headless=new + SwiftShader"),
+            (False,    False, True,  False, "GUI + SwiftShader (profil yok)"),
         ]
 
-        for is_headless, new_hl, swift, label in attempts:
-            # Son denemede user-data-dir'i de kaldır (bazı ortamlarda temp sorun çıkarır)
-            pdir = profile_dir if label != "GUI + SwiftShader (profil yok)" else None
+        last_exc: Optional[Exception] = None
+        for is_headless, new_hl, swift, use_profile, label in attempts:
+            # Her denemeye TAZE profil dizini ver — bir önceki denemenin
+            # bıraktığı SingletonLock, sonraki denemeleri "user data dir
+            # already in use" ile zincirleme düşürmesin.
+            pdir = tempfile.mkdtemp(prefix="ws_chrome_") if use_profile else None
             try:
                 driver = webdriver.Chrome(
                     service=service,
@@ -133,9 +134,23 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
                 logging.info(f"[WebDriver] Chrome başlatıldı ({label}).")
                 return driver
             except Exception as exc:
-                logging.warning(f"[WebDriver] {label} başarısız: {type(exc).__name__} — sonraki deneniyor...")
+                last_exc = exc
+                # Gerçek hata mesajının ilk satırını göster (sadece sınıf adı değil) —
+                # SessionNotCreated mesajı sürüm uyuşmazlığını/sebebi açıkça yazar.
+                raw = str(exc).strip()
+                first = raw.splitlines()[0] if raw else type(exc).__name__
+                logging.warning(f"[WebDriver] {label} başarısız: {first[:220]} — sonraki deneniyor...")
 
         logging.warning("[WebDriver] Tüm başlatma denemeleri başarısız.")
+        if last_exc is not None:
+            logging.warning(f"[WebDriver] Son hata ayrıntısı: {str(last_exc)[:400]}")
+            logging.warning(
+                "[WebDriver] İpucu: (1) CMD'yi 'Yönetici olarak' çalıştırmak Chrome "
+                "başlatmayı engelleyebilir — normal kullanıcı olarak deneyin. "
+                "(2) Chrome ↔ ChromeDriver sürümü uyuşmuyorsa Chrome'u güncelleyip "
+                "%USERPROFILE%\\.wdm önbelleğini silin. "
+                "(3) Açık kalmış chrome.exe süreçlerini kapatın."
+            )
         return None
 
     except Exception as e:
