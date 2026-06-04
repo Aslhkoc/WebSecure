@@ -63,7 +63,13 @@ def _chrome_opts(headless: bool, proxy: str, profile_dir: str,
         opts.add_argument("--headless=new" if new_headless else "--headless")
 
     if proxy:
-        opts.add_argument(f"--proxy-server={proxy}")
+        # Chrome `socks5h://` şemasını anlamaz → `socks5://` (SOCKS5'te DNS zaten
+        # uzaktan çözülür, sızıntı yok). WebRTC gerçek-IP sızıntısını da kapat.
+        _p = proxy.replace("socks5h://", "socks5://").replace("socks4a://", "socks4://")
+        opts.add_argument(f"--proxy-server={_p}")
+        opts.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+        opts.add_argument("--disable-features=WebRtcHideLocalIpsWithMdns")
+        opts.add_argument("--proxy-bypass-list=<-loopback>")
 
     if profile_dir:
         opts.add_argument(f"--user-data-dir={profile_dir}")

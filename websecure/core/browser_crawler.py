@@ -179,7 +179,17 @@ class BrowserCrawler:
         if self.config.slow_mo_ms > 0 and not use_headless:
             launch_opts["slow_mo"] = self.config.slow_mo_ms
         if self.config.proxy_url:
-            launch_opts["proxy"] = {"server": self.config.proxy_url}
+            # Chrome `socks5h://` anlamaz → `socks5://` (SOCKS5'te DNS uzaktan çözülür).
+            _p = (self.config.proxy_url.replace("socks5h://", "socks5://")
+                                       .replace("socks4a://", "socks4://"))
+            launch_opts["proxy"] = {"server": _p}
+            # WebRTC gerçek-IP sızıntısını kapat — tarayıcı Tor üzerindeyken IP gizli kalsın
+            launch_opts.setdefault("args", []).extend([
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--disable-features=WebRtcHideLocalIpsWithMdns",
+                "--proxy-bypass-list=<-loopback>",
+            ])
+            _logger.info(f"[BrowserCrawler] Proxy/Tor üzerinden (IP gizli): {_p}")
 
         if not use_headless:
             _logger.info(

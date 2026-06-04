@@ -238,10 +238,46 @@ class NmapWrapper(ToolIntegration):
     def __init__(self, binary_path: str = "nmap"):
         super().__init__(binary_path)
         self._find_binary()
+        # IP-karıştırma (obfuscation) ayarları — config: nmap.decoys / nmap.spoof_mac
+        self._decoys = 0
+        self._spoof_mac = False
+        try:
+            from websecure.core.utils import load_config as _lc  # type: ignore
+            _ncfg = (_lc() or {}).get("nmap") or {}
+            self._decoys = int(_ncfg.get("decoys") or 0)
+            self._spoof_mac = bool(_ncfg.get("spoof_mac", False))
+        except Exception as _fix_e:
+            logger.debug(f"[integrations.nmap] config okunamadı: {_fix_e!r}")
 
     @property
     def tool_name(self) -> str:
         return "nmap"
+
+    def _obfuscation_args(self, raw: bool) -> List[str]:
+        """
+        Raw-socket (Admin+Npcap / root) varken IP-karıştırma argümanları üretir.
+
+        DÜRÜST UYARI: Bunlar gerçek IP'nizi GİZLEMEZ. Decoy (-D) tarama, sizin
+        gerçek IP'nizi (ME) bir grup sahte IP arasına karıştırır — hedef yine de
+        gerçek IP'nizi görür, sadece HANGİSİNİN gerçek tarayıcı olduğunu ayırt
+        etmesi zorlaşır. nmap'te sonuç-döndüren bir taramada IP'yi tamamen gizleyen
+        TEK yöntem idle/zombie scan (-sI <zombie>) veya Tor+(-sT)'dir; ikisi de
+        decoy ile birlikte çalışmaz. Bu yüzden nmap'i atlamak istemiyorsanız en
+        gerçekçi seçenek budur: karıştırma (obfuscation), gizleme değil.
+
+        -sT (unprivileged/Tor) modunda decoy ÇALIŞMAZ → boş döner.
+        """
+        if not raw or self._decoys <= 0:
+            return []
+        import random
+        args = [
+            "-D", f"RND:{self._decoys},ME",   # N sahte IP + gerçek IP (ME)
+            "--data-length", "24",            # rastgele padding — imza tespitini zorlaştır
+            "-g", str(random.choice([53, 80, 443, 20])),  # kaynak portu maskele
+        ]
+        if self._spoof_mac:
+            args += ["--spoof-mac", "0"]      # rastgele MAC (yalnızca aynı LAN'da etkili)
+        return args
 
     def _find_binary(self):
         # 1. PATH üzerinden ara
@@ -386,6 +422,14 @@ class NmapWrapper(ToolIntegration):
             print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN/OS/UDP tam güç aktif")
         elif _raw:
             print("\033[36m[Nmap]\033[0m Root — SYN/OS/UDP tam güç aktif")
+
+        # Obfuscation (decoy) durumu — yalnızca raw-socket modunda etkili
+        if _raw and self._decoys > 0:
+            print(f"\033[36m[Nmap]\033[0m Decoy obfuscation: {self._decoys} sahte IP + gerçek IP "
+                  f"(karıştırma — gerçek IP yine de hedefe ulaşır, gizleme DEĞİL).")
+        elif not _raw and self._decoys > 0:
+            print("\033[33m[Nmap]\033[0m Decoy istendi ama raw-socket yok (-sT modu) — "
+                  "decoy çalışmaz; yönetici olmadan IP karıştırma mümkün değil.")
         else:
             # Raw socket yok: port + servis/versiyon + tüm NSE scriptleri ÇALIŞIR;
             # sadece SYN-stealth / -O OS tespiti / -sU UDP kaybedilir.
@@ -466,6 +510,7 @@ class NmapWrapper(ToolIntegration):
                  "--host-timeout", "600s", "--unprivileged"]
             )
 
+        phase1.extend(self._obfuscation_args(raw))
         self._inject_proxy(phase1, proxy)
         t1 = max(timeout // 2, 300)
         rc1, xml1, _, _ = _run_nmap(self.binary, phase1, target, timeout=t1)
@@ -549,6 +594,7 @@ class NmapWrapper(ToolIntegration):
         if extra_args:
             phase2.extend(extra_args)
 
+        phase2.extend(self._obfuscation_args(raw))
         self._inject_proxy(phase2, proxy)
         rc2, xml2, _, _ = _run_nmap(self.binary, phase2, target, timeout=timeout)
         if rc2 not in (0, 1):
@@ -711,6 +757,7 @@ class NmapWrapper(ToolIntegration):
         if on_windows and not raw:
             phase1 += ["--unprivileged"]
 
+        phase1.extend(self._obfuscation_args(raw))
         self._inject_proxy(phase1, proxy)
         t1 = max(timeout // 2, 240)
         _, xml1, _, _ = _run_nmap(self.binary, phase1, target, timeout=t1)
@@ -742,6 +789,7 @@ class NmapWrapper(ToolIntegration):
         if extra_args:
             phase2.extend(extra_args)
 
+        phase2.extend(self._obfuscation_args(raw))
         self._inject_proxy(phase2, proxy)
         _, xml2, _, _ = _run_nmap(self.binary, phase2, target, timeout=timeout)
         results = NmapParser.parse_xml(xml2)

@@ -803,6 +803,33 @@ class _BrowserDiscoveryStrategy:
     def discover(self, start_url: str, headless: bool, timeout_ms: int, max_pages: int, record_dir: Optional[str] = None, return_artifacts: bool = False, proxy: Optional[str] = None):
         raise NotImplementedError
 
+def _chrome_proxy_for_browser(proxy: Optional[str]) -> tuple[Optional[str], List[str]]:
+    """
+    Tor/SOCKS proxy'sini Chromium'un anlayacağı biçime çevirir ve IP-sızıntısını
+    kapatan bayrakları döndürür. Tarayıcı trafiğini Tor üzerinden geçirip gerçek
+    IP'yi gizlemek için kullanılır.
+
+    - Chrome `socks5h://` şemasını ANLAMAZ → `socks5://`'e çevrilir. SOCKS5'te
+      Chrome zaten DNS'i proxy üzerinden çözer (uzak DNS) → DNS sızıntısı olmaz.
+    - WebRTC, proxy'yi atlayıp gerçek IP'yi sızdırabilir → disable_non_proxied_udp
+      ile kapatılır.
+    Returns: (normalized_proxy_or_None, anti_leak_args)
+    """
+    if not proxy:
+        return None, []
+    norm = proxy.strip()
+    # socks5h/socks4a → Chrome'un desteklediği socks5/socks4
+    norm = norm.replace("socks5h://", "socks5://").replace("socks4a://", "socks4://")
+    anti_leak = [
+        # WebRTC gerçek-IP sızıntısını engelle (proxy dışı UDP'yi kapat)
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        "--disable-features=WebRtcHideLocalIpsWithMdns",
+        # Proxy'yi loopback dışında her şey için zorla (bypass'ı daralt)
+        "--proxy-bypass-list=<-loopback>",
+    ]
+    return norm, anti_leak
+
+
 class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
     def discover(self, start_url, headless, timeout_ms, max_pages, record_dir=None, return_artifacts=False, proxy=None):
         endpoints = []
@@ -820,7 +847,11 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
             with sync_playwright() as p:
                 logger.info("[Playwright] Launching browser...")
                 l_args = ['--disable-webgl', '--disable-extensions']
-                p_cfg = {"server": proxy} if proxy else None
+                _norm_proxy, _anti_leak = _chrome_proxy_for_browser(proxy)
+                p_cfg = {"server": _norm_proxy} if _norm_proxy else None
+                if _norm_proxy:
+                    l_args.extend(_anti_leak)
+                    logger.info(f"[Playwright] Proxy/Tor üzerinden (IP gizli): {_norm_proxy}")
                 browser = p.chromium.launch(headless=headless, args=l_args, proxy=p_cfg)
                 ctx = browser.new_context(ignore_https_errors=True)
                 page = ctx.new_page()
@@ -915,8 +946,12 @@ class _UCStrategy(_BrowserDiscoveryStrategy):
             # Use temp profile to avoid locking main profile
             tmp_profile = tempfile.mkdtemp(prefix="ws_uc_profile_")
             options.add_argument(f"--user-data-dir={tmp_profile}")
-            if proxy:
-                options.add_argument(f'--proxy-server={proxy}')
+            _norm_proxy, _anti_leak = _chrome_proxy_for_browser(proxy)
+            if _norm_proxy:
+                options.add_argument(f'--proxy-server={_norm_proxy}')
+                for _a in _anti_leak:
+                    options.add_argument(_a)
+                logger.info(f"[UC] Proxy/Tor üzerinden (IP gizli): {_norm_proxy}")
 
             # Check for local driver
             driver_path = None

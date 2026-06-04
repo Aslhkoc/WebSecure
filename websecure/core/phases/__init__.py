@@ -1412,6 +1412,8 @@ def _runner_browser_crawler(ctx) -> None:
             slow_mo_ms=int(bc_cfg.get("slow_mo_ms") or 0),
             max_pages=int(bc_cfg.get("max_pages") or 50),
             timeout_ms=int(bc_cfg.get("timeout_ms") or 15000),
+            # Tor/proxy üzerinden geçir ki tarayıcı da gerçek IP'yi gizlesin
+            proxy_url=_resolve_proxy(ctx),
         )
 
         crawler = BrowserCrawler(config)

@@ -1169,6 +1169,9 @@
   "output_dir": "output",
   "nmap": {
     "enabled": true,
+    "decoys": 8,
+    "spoof_mac": false,
+    "_decoys_note": "Raw-socket (Admin+Npcap) varken N sahte IP + gercek IP ile tarar. UYARI: gercek IP'yi GIZLEMEZ, sadece decoy'lar arasinda karistirir; hedef yine gercek IP'yi gorur. -sT/Tor modunda calismaz. 0 = kapali.",
     "ports": [
       80,
       443,
