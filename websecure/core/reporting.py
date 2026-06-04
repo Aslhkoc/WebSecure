@@ -508,8 +508,18 @@ def log_err(msg, *a):   (_logger or logging.getLogger("websec")).error(msg, *a)
 
 # -------------------- Kova API --------------------
 def reset() -> None:
+    """Tüm tarama-sonucu durumunu sıfırla (çoklu-hedef/queue/API/benchmark arası).
+
+    BUG FIX: Eskiden yalnız `_buckets` temizleniyordu; ancak `get_global_results()`
+    `_GLOBAL_RESULTS`'tan okur ve add_result her ikisine de yazar. `_GLOBAL_RESULTS`
+    temizlenmediği için bir taramanın bulguları SONRAKİ taramaya sızıyordu
+    (çoklu-hedef/queue/API'de yanlış rapor; benchmark'ta sahte FP). Artık her iki
+    sonuç deposu da temizlenir.
+    """
     with _lock:
         _buckets.clear()
+    with _GLOBAL_LOCK:
+        _GLOBAL_RESULTS.clear()
 
 
 def _normalize_item(item: Any) -> Dict[str, Any]:
