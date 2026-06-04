@@ -924,34 +924,89 @@ class _PlaywrightStrategy(_BrowserDiscoveryStrategy):
                                 full = urljoin(target, href)
                                 _enqueue(full)
                         
-                        # [SPA FIX] Extract Forms from DOM
+                        # [SPA FORM DISCOVERY] Modal-arkası formları aç + form-dışı
+                        # input'ları (arama kutusu, React alanları) yakala.
                         try:
-                            # Execute JS to grab all forms and inputs
-                            page_forms = page.evaluate("""() => {
-                                return Array.from(document.forms).map(f => ({
-                                    action: f.action || window.location.href,
-                                    method: f.method || 'GET',
-                                    inputs: Array.from(f.elements)
-                                        .filter(e => e.name)
-                                        .map(e => ({
-                                            name: e.name,
-                                            type: e.type || 'text',
-                                            value: e.value || ''
-                                        }))
-                                }));
+                            # 1) Login/kayıt/arama modallerini açan tetikleyicilere
+                            #    tıkla — Kick/Twitch benzeri SPA'larda bu formlar
+                            #    ancak tıklamayla DOM'a giriyor (aksi halde sadece
+                            #    URL'ye saldırılıp formlar hiç test edilmiyordu).
+                            _TRIGGER_KW = [
+                                "login", "log in", "sign in", "signin", "giriş",
+                                "giris", "register", "sign up", "signup", "kaydol",
+                                "kayıt", "kayit", "account", "search", "ara",
+                                "subscribe", "abone", "checkout", "ödeme", "odeme",
+                            ]
+                            try:
+                                clickable = page.query_selector_all(
+                                    "button, [role=button], a:not([href]), "
+                                    "a[href='#'], a[href^='#']"
+                                )
+                                clicked = 0
+                                for el in clickable:
+                                    if clicked >= 6:
+                                        break
+                                    try:
+                                        txt = (el.inner_text() or "").strip().lower()[:40]
+                                        aria = (el.get_attribute("aria-label") or "").lower()
+                                    except Exception:
+                                        continue
+                                    if any(k in txt or k in aria for k in _TRIGGER_KW):
+                                        try:
+                                            el.click(timeout=2000)
+                                            clicked += 1
+                                            time.sleep(1.2)  # modal render
+                                        except Exception:
+                                            continue
+                                if clicked:
+                                    logger.info(
+                                        f"[Playwright] {clicked} form-tetikleyici "
+                                        f"tıklandı (modal keşfi) @ {target}"
+                                    )
+                            except Exception as _click_e:
+                                logger.debug(f"[Playwright] trigger-click skipped: {_click_e!r}")
+
+                            # 2) Form + STANDALONE input çıkarımı. name yoksa
+                            #    id/placeholder/aria-label'a düş (React input'ları
+                            #    genelde name taşımaz). Form-dışı input'lar sanal
+                            #    form olarak gruplanır.
+                            page_forms = page.evaluate(r"""() => {
+                                const idOf = (e) => e.name || e.id ||
+                                    e.getAttribute('placeholder') ||
+                                    e.getAttribute('aria-label') || '';
+                                const skip = ['hidden','submit','button','image','reset','file','checkbox','radio'];
+                                const mapIn = (e) => ({ name: idOf(e), type: e.type || 'text', value: e.value || '' });
+                                const out = [];
+                                for (const f of Array.from(document.forms)) {
+                                    const inputs = Array.from(f.elements)
+                                        .filter(e => ['INPUT','TEXTAREA','SELECT'].includes(e.tagName) && idOf(e))
+                                        .map(mapIn);
+                                    if (inputs.length) out.push({
+                                        action: f.action || location.href,
+                                        method: (f.method || 'GET').toUpperCase(),
+                                        inputs, kind: 'form'
+                                    });
+                                }
+                                const loose = Array.from(document.querySelectorAll('input, textarea, select'))
+                                    .filter(e => !e.closest('form') && idOf(e) && !skip.includes(e.type || 'text'))
+                                    .map(mapIn);
+                                if (loose.length) out.push({
+                                    action: location.href, method: 'GET',
+                                    inputs: loose.slice(0, 25), kind: 'loose'
+                                });
+                                return out;
                             }""")
                             if page_forms:
-                                # Add to artifacts or a side-channel
-                                # We use a special key in artifacts to pass this back
-                                if "discovered_forms" not in artifacts:
-                                    artifacts["discovered_forms"] = []
-                                
-                                artifacts["discovered_forms"].append({
+                                artifacts.setdefault("discovered_forms", []).append({
                                     "url": target,
                                     "count": len(page_forms),
-                                    "forms": page_forms
+                                    "forms": page_forms,
                                 })
-                                logger.info(f"[Playwright] Extracted {len(page_forms)} forms from {target}")
+                                _ni = sum(len(f.get("inputs", [])) for f in page_forms)
+                                logger.info(
+                                    f"[Playwright] {len(page_forms)} form/grup, "
+                                    f"{_ni} input çıkarıldı @ {target}"
+                                )
                         except Exception as e:
                             logger.debug(f"[Playwright] Form extraction failed on {target}: {e}")
 

@@ -191,6 +191,16 @@ class _VulnHandler(BaseHTTPRequestHandler):
                                   ctype="text/plain; charset=utf-8")
             return self._send(400, "Invalid host")
 
+        # === FORM keşfi — login formu içeren sayfa (POST form injection için) ===
+        if path == "/login_page":
+            return self._send(200,
+                "<html><body><h2>Login</h2>"
+                "<form method='POST' action='/login_sqli'>"
+                "<input type='text' name='username' value=''>"
+                "<input type='password' name='password' value=''>"
+                "<input type='submit' value='Giriş'>"
+                "</form></body></html>")
+
         # === Info Disclosure — ZAFİYETLİ: .env açıkta ===
         if path == "/.env":
             return self._send(200, _DOTENV, ctype="text/plain; charset=utf-8")
@@ -211,6 +221,19 @@ class _VulnHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         if path == "/login":
             return self._send(200, '{"status":"ok"}', ctype="application/json")
+        # === SQLi via POST FORM body — ZAFİYETLİ (username alanı) ===
+        if path == "/login_sqli":
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+            fields = parse_qs(body)
+            username = (fields.get("username", [""]) or [""])[0]
+            if _sqli_marks(username):
+                return self._send(
+                    500,
+                    f"<html><body><h2>Database Error</h2><pre>{_MARIADB_SQL_ERROR} "
+                    f"'{html.escape(username)}'</pre></body></html>",
+                )
+            return self._send(200, "<html><body>Login failed</body></html>")
         return self.do_GET()
 
 

@@ -118,6 +118,39 @@ def test_sqli_no_fake_oob_on_safe(target, session):
 
 
 # ----------------------------------------------------------------------------
+# #3 — FORM (POST body) injection: sadece URL değil form alanları da test edilmeli
+# ----------------------------------------------------------------------------
+
+def test_form_post_sqli_detected(target, session):
+    # Login formunu keşfet → forms_meta → SQLi scan_forms → username alanına enjekte.
+    from websecure.core.crawler import HTTPCrawler
+    import importlib
+    cr = HTTPCrawler(max_pages=5)
+    res = cr.crawl(target + "/login_page", session)
+    assert res.forms, "Login formu keşfedilemedi (form discovery kırık)"
+    forms_meta = [{"url": target + "/login_page", "forms": res.forms}]
+    reporting.reset()
+    importlib.import_module("websecure.scanners.sqli").run(
+        target + "/login_page", session=session,
+        results={"forms_meta": forms_meta}, debug=False,
+    )
+    hits = _vuln_findings([
+        {"bucket": b, **it}
+        for b, items in reporting.get_global_results().items()
+        for it in items if isinstance(it, dict)
+    ])
+    form_hits = [h for h in hits if "form" in str(h.get("type", "")).lower()]
+    assert form_hits, "Form POST SQLi tespit edilemedi (form-field injection çalışmıyor)"
+
+
+def test_url_template_collapses_channels():
+    # #2 regresyon: kullanıcı adı/kanal URL'leri tek template'e inmeli.
+    from websecure.core.crawler import _url_template as t
+    assert t("https://kick.com/gugucan") == t("https://kick.com/eray") == t("https://kick.com/buddha")
+    assert t("https://kick.com/login") != t("https://kick.com/gugucan")  # gerçek route korunur
+
+
+# ----------------------------------------------------------------------------
 # POLİTİKA REGRESYON — saldırı fazlarında POST izinli olmalı
 # ----------------------------------------------------------------------------
 
