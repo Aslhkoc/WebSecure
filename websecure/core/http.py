@@ -144,6 +144,45 @@ _FALLBACK_UA_POOL = [
 _FALLBACK_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
 _FALLBACK_ACCEPT_LANG = "en-US,en;q=0.9"
 
+def _client_hints_for_ua(ua: str) -> Dict[str, str]:
+    """UA string'ine TUTARLI sec-ch-ua client-hint başlıkları üretir.
+
+    Modern Chromium tarayıcıları (Chrome/Edge) bu başlıkları gönderir; Firefox/
+    Safari göndermez (boş döner). UA "Chrome/124" derken client-hints'in farklı
+    bir sürüm/platform söylemesi WAF'lar için bot sinyalidir — bu yüzden ikisini
+    aynı UA'dan türetip tutarlı tutuyoruz.
+    """
+    import re as _re
+    hints: Dict[str, str] = {}
+    if "Windows" in ua:
+        platform = '"Windows"'
+    elif "Macintosh" in ua or "Mac OS X" in ua:
+        platform = '"macOS"'
+    elif "Android" in ua:
+        platform = '"Android"'
+    elif "iPhone" in ua or "iPad" in ua:
+        platform = '"iOS"'
+    elif "Linux" in ua:
+        platform = '"Linux"'
+    else:
+        platform = '"Unknown"'
+    mobile = "?1" if any(s in ua for s in ("Mobile", "Android", "iPhone")) else "?0"
+
+    if "Edg/" in ua:
+        me = _re.search(r"Edg/(\d+)", ua)
+        v = me.group(1) if me else "124"
+        hints["sec-ch-ua"] = f'"Chromium";v="{v}", "Microsoft Edge";v="{v}", "Not.A/Brand";v="99"'
+        hints["sec-ch-ua-mobile"] = mobile
+        hints["sec-ch-ua-platform"] = platform
+    else:
+        mc = _re.search(r"Chrome/(\d+)", ua)
+        if mc and "Firefox" not in ua and "OPR/" not in ua:
+            v = mc.group(1)
+            hints["sec-ch-ua"] = f'"Chromium";v="{v}", "Google Chrome";v="{v}", "Not.A/Brand";v="99"'
+            hints["sec-ch-ua-mobile"] = mobile
+            hints["sec-ch-ua-platform"] = platform
+    return hints
+
 def _choose_identity_for_phase(phase: str) -> Dict[str, str]:
     ua_pool = _IDENTITY_POOLS["user_agents"] or _FALLBACK_UA_POOL
     al_pool = _IDENTITY_POOLS["accept_language"] or [_FALLBACK_ACCEPT_LANG]
@@ -152,6 +191,8 @@ def _choose_identity_for_phase(phase: str) -> Dict[str, str]:
     al = random.choice(al_pool)
     ac = random.choice(ac_pool)
     ident = {"User-Agent": ua, "Accept-Language": al, "Accept": ac}
+    # UA ile tutarlı client-hints (Chromium ise) — tutarlı tarayıcı parmak izi
+    ident.update(_client_hints_for_ua(ua))
     prev = _LAST_IDENTITY.get()
     if prev != ident:
         _logger.debug(f"[HTTP] identity switch -> UA='{ua[:42]}...' AL='{al}'")

@@ -23,6 +23,19 @@
       "file": "scan_pro.log",
       "redact_sensitive": true
     },
+    "security": {
+      "captcha": {
+        "_comment": "CAPTCHA tespiti her zaman aktiftir (classify_access_block -> captcha_block). ÇÖZME için ücretli sağlayıcı gerekir: provider='2captcha'/'anticaptcha'/'capsolver' yapıp api_key girin.",
+        "provider": "none",
+        "api_key": "",
+        "tesseract_lang": "eng",
+        "timeout_sec": 120,
+        "poll_interval_sec": 5,
+        "recaptcha_type": "RecaptchaV2TaskProxyless",
+        "recaptcha_action": "",
+        "min_score": 0.5
+      }
+    },
     "scan_profile": "aggressive",
     "wordlists": {
       "root": "./websecure/wordlists",
@@ -1316,7 +1329,24 @@
   "http": {
     "timeout_seconds": 20,
     "retries": 2,
-    "user_agent": "Mozilla/5.0 (compatible; WebSecure/2.5)"
+    "user_agent": "Mozilla/5.0 (compatible; WebSecure/2.5)",
+    "identity_pools": {
+      "user_agents": [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      ],
+      "accept_language": [
+        "en-US,en;q=0.9",
+        "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+      ],
+      "accept": [
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+      ]
+    }
   },
   "ffuf": {
     "header_fuzzing": true

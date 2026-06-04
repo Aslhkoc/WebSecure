@@ -1145,6 +1145,21 @@ def _startup_phase(cfg: dict) -> None:
     cfg.setdefault("_resolved_profile", _profiles.get(_active, {}))
     configure_logging(level=str(((cfg or {}).get("settings") or {}).get("logging", {}).get("level", "INFO")))
 
+    # HTTP politika + CAPTCHA config'ini config.json'dan HTTP katmanına uygula.
+    # ÖNEMLİ: Bu iki fonksiyon tanımlıydı ama HİÇBİR YERDEN ÇAĞRILMIYORDU —
+    # bu yüzden config.http.identity_pools (UA/Accept-Language rotasyonu),
+    # http.rate_limit, http.idempotent_first, http.phase_profiles ve
+    # settings.captcha ayarları okunmuyordu. Artık startup'ta uygulanıyor.
+    try:
+        from websecure.core.http import (
+            install_http_phase_policies as _ihpp,
+            install_captcha_config as _icc,
+        )
+        _ihpp(cfg)
+        _icc(cfg)
+    except Exception as _httpcfg_e:
+        _logger.debug(f"[startup] HTTP policy/captcha install başarısız: {_httpcfg_e!r}")
+
     # Dependency checks
     _ensure_playwright_chromium()
     _ensure_curl_cffi()

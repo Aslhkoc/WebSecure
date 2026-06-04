@@ -358,6 +358,99 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
         items = items[:maxn]
     return items
 
+# --- Learned payloads (runtime feedback loop) -------------------------------
+# config.fuzz.learning.enabled=true iken, onaylanmış (confirmed) bir enjeksiyon
+# bulgusunun payload'ı learned.txt'ye `category<TAB>payload` olarak yazılır ve
+# sonraki taramalarda o kategoride ÖNCELİKLE (listenin başında) denenir.
+# Format kategori-bazlı olduğundan learned.txt normal wordlist glob'larına dahil
+# DEĞİLDİR; yalnızca buradaki yardımcılar okur/yazar.
+
+_LEARNED_LOCK = threading.Lock()
+_LEARNED_CACHE: dict[str, list[str]] | None = None
+
+
+def _learning_cfg() -> dict:
+    cfg = _load_cfg()
+    fz = (cfg.get("fuzz") or {}) if isinstance(cfg, dict) else {}
+    lc = (fz.get("learning") or {}) if isinstance(fz, dict) else {}
+    return lc if isinstance(lc, dict) else {}
+
+
+def _learned_file_path() -> Path:
+    lc = _learning_cfg()
+    p = lc.get("learned_words_file")
+    if p:
+        try:
+            pp = Path(str(p))
+            if not pp.is_absolute():
+                pp = _get_package_root() / pp
+            return pp
+        except Exception:
+            pass
+    return _bundled_wordlists_root() / "learned.txt"
+
+
+def _read_learned_all() -> dict[str, list[str]]:
+    global _LEARNED_CACHE
+    if _LEARNED_CACHE is not None:
+        return _LEARNED_CACHE
+    out: dict[str, list[str]] = {}
+    path = _learned_file_path()
+    try:
+        if path.exists() and path.is_file():
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "\t" in s:
+                    cat, _, pl = s.partition("\t")
+                    cat, pl = cat.strip().lower(), pl.strip()
+                else:
+                    cat, pl = "generic", s
+                if pl:
+                    out.setdefault(cat, []).append(pl)
+    except Exception as e:
+        _logger.debug("[payloads] learned.txt okunamadı: %r", e)
+    _LEARNED_CACHE = out
+    return out
+
+
+def load_learned_payloads(category: str) -> list[str]:
+    """Verilen kategori için öğrenilmiş (onaylanmış) payload'ları döndürür."""
+    category = (category or "").lower().strip()
+    return list(_read_learned_all().get(category, []))
+
+
+def record_learned_payload(category: str, payload: str) -> bool:
+    """Onaylanmış bir payload'ı learned.txt'ye ekler (config.fuzz.learning.enabled ise).
+    Aynı (kategori,payload) zaten varsa tekrar eklemez. Eklendiyse True döner."""
+    lc = _learning_cfg()
+    if not bool(lc.get("enabled", False)):
+        return False
+    category = (category or "").lower().strip()
+    payload = (payload or "").strip()
+    if not category or not payload or len(payload) > 2048:
+        return False
+    with _LEARNED_LOCK:
+        existing = _read_learned_all()
+        if payload in existing.get(category, []):
+            return False
+        path = _learned_file_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{category}\t{payload}\n")
+        except Exception as e:
+            _logger.debug("[payloads] learned.txt yazılamadı: %r", e)
+            return False
+        existing.setdefault(category, []).append(payload)
+    # payload cache'i bayatlamasın diye o kategoriye ait cache'leri temizle
+    with _PAYLOAD_CACHE_LOCK:
+        for ck in [k for k in _PAYLOAD_CACHE if k[0] == category]:
+            _PAYLOAD_CACHE.pop(ck, None)
+    return True
+
+
 def get_payloads(
     category: str,
     *,
@@ -396,6 +489,16 @@ def get_payloads(
                 category,
             )
 
+    # Öğrenilmiş (önceki taramalarda onaylanmış) payload'ları LİSTENİN BAŞINA ekle —
+    # böylece bu kategoride en çok işe yarayan payload'lar öncelikli denenir.
+    try:
+        learned = load_learned_payloads(category)
+        if learned:
+            learned = _apply_marker(learned, marker)
+            items = _dedup_preserve(list(learned) + list(items))
+    except Exception as _le:
+        _logger.debug("[payloads] learned prepend atlandı: %r", _le)
+
     items = filter_by_technology(items, category, tech_tags)
 
     with _PAYLOAD_CACHE_LOCK:
@@ -407,6 +510,8 @@ __all__ = [
     "get_payloads",
     "filter_by_technology",
     "sync_wordlists",
+    "record_learned_payload",
+    "load_learned_payloads",
 ]
 
 # === PATCH: WebSecure Upgrade (auto-applied) @ 2025-09-07T16:43:08.489221 ===

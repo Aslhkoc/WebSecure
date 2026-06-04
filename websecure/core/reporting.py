@@ -554,6 +554,15 @@ def _normalize_item(item: Any) -> Dict[str, Any]:
     return {"value": repr(item)}
 
 
+# add_result -> learned.txt geri-besleme döngüsü için "öğrenilebilir" enjeksiyon
+# bucket'ları. Bucket adı get_payloads(category) ile birebir aynı olmalı ki bir
+# sonraki taramada doğru kategoriye eşleşip öncelikli denensin.
+_LEARNABLE_BUCKETS = frozenset({
+    "sqli", "xss", "ssti", "lfi", "cmdi", "rce", "nosqli",
+    "ssrf", "xxe", "open_redirect", "redirect", "graphql",
+})
+
+
 def add_result(bucket: str, item: Any) -> None:
     if not bucket:
         return
@@ -618,6 +627,20 @@ def add_result(bucket: str, item: Any) -> None:
             get_live_monitor().log_finding(bucket, safe_it)
         except (AttributeError, TypeError) as exc:
             log_warn(f"[reporting] LiveMonitor log_finding failed: {exc!r}")
+
+    # --- Öğrenme döngüsü: onaylanmış enjeksiyon payload'ını learned.txt'ye yaz ---
+    # (kilit dışında — dosya I/O'su kilidi tutmasın). config.fuzz.learning.enabled
+    # kapalıysa record_learned_payload no-op'tur. Sonraki taramalarda get_payloads
+    # bu payload'ı listenin başına ekleyip öncelikli dener.
+    try:
+        _pl = safe_it.get("payload")
+        _sev = safe_it.get("severity")
+        if (_pl and bucket in _LEARNABLE_BUCKETS
+                and _sev in ("Critical", "High", "Medium")):
+            from websecure.core.payloads import record_learned_payload as _rlp
+            _rlp(bucket, str(_pl))
+    except Exception:
+        pass
 
 
 # ===========================================================================
