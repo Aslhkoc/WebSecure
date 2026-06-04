@@ -3977,6 +3977,11 @@ def run_plan_if_needed(ctx: dict):
         pid = item.get("id")
         if pid in _executed:
             continue
+        # ÖNEMLİ: çalıştırılan fazı _executed'a ekle. Aksi halde plan listesinde
+        # aynı id iki kez bulunuyorsa (parallel gruba dahil değilse) faz İKİ KEZ
+        # çalışıyordu — stealth profilinde fazı ~1800s'e kadar boşa tekrarlayıp
+        # "Phase '...' exceeded ...s" uyarısını çiftliyordu. Tek-çalıştırma garantisi.
+        _executed.add(pid)
         _run_phase_item(item)
 
     results["meta"]["scan_end"] = _t.time()

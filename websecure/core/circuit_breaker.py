@@ -328,7 +328,11 @@ class ScanCircuitBreaker:
                 from websecure.core.reporting import add_result as _ar
                 _ar("circuit_breaker", {
                     "type": "circuit_breaker_trip",
-                    "severity": "Medium",
+                    # Bu bir ZAFİYET DEĞİL — operasyonel/teşhis olayıdır (tarama
+                    # throttle/blok edildi). "Medium" iken raporda "VULN #..[Medium]"
+                    # olarak sayılıp CI gate'i ve uyarı bannerını tetikliyordu.
+                    # "Info" → vuln sayısına girmez, CI'ı düşürmez, alarm çalmaz.
+                    "severity": "Info",
                     "reason": reason,
                     "from_state": old.value,
                     "detail": (

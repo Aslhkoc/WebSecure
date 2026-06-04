@@ -42,6 +42,8 @@ class LiveMonitor:
         "errors", "meta", "nmap", "portscan", "tls", "sessions",
         "security_headers", "tech_stack", "egress_degraded",
         "passive_recon", "passive", "dns", "subdomain",
+        # circuit_breaker trip = operasyonel teşhis, zafiyet değil → VULN sayma
+        "circuit_breaker",
     })
     # Severity values that mean "not a real vuln" — skip counter for these
     _NON_VULN_SEVS: frozenset = frozenset({
