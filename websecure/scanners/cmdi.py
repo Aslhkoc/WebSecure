@@ -171,7 +171,14 @@ class CmdiScanner(BaseScanner):
         # Test ALL parameters — never stop at first hit (multi-param URLs may have
         # several injectable fields)
         found = False
-        for param_name, _ in params:
+        for param_name, p_val in params:
+            # Context-aware routing: alanı sınıflandır ve komut enjeksiyonu için
+            # İLGİSİZSE atla. CMDi bu haritada "rce" kategorisidir (analysis.py).
+            # Örn. CSRF token (boş liste) veya saf redirect alanı → atla; bağlam
+            # bilinmiyorsa GENERIC → "rce" listede olduğu için test edilir.
+            if self._should_skip_param(param_name, "rce", p_val):
+                logger.debug(f"[CMDI] '{param_name}' alanı komut enjeksiyonu için ilgisiz (context) — atlandı")
+                continue
             if self._test_param(url, params, param_name, baseline_text, time_threshold):
                 found = True
             # OOB/DNS detection for this parameter
