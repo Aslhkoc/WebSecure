@@ -300,9 +300,9 @@ class StealthProfile(ScanProfile):
 
         cfg.setdefault("_sqlmap", {}).update({
             "risk": 3, "level": 5, "threads": 1,
-            "timeout": 900,  # 15 dk toplam bütçe; run_sqlmap_scan endpoint başına böler
+            "timeout": 1800,  # --delay=5 ile yeterli süre
             "extra_args": [
-                "--delay=3", "--random-agent", "--batch", "--forms",
+                "--delay=5", "--random-agent", "--batch", "--forms", "--crawl=3",
                 "--tamper=space2comment,between,randomcase,charencode",
             ],
         })

@@ -1197,13 +1197,12 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
 
     phase_timeout = _PHASE_TIMEOUTS.get(phase_id, _DEFAULT_PHASE_TIMEOUT)
 
-    # Stealth profilinde yavaş araçlara fazladan zaman ver —
-    # sqlmap hariç: sqlmap artık kendi iç bütçesiyle kontrol ediliyor,
-    # 3x çarpanı fazla gecikmeye yol açıyordu.
+    # Stealth profilinde harici araçlara (ffuf, feroxbuster, sqlmap) 3x zaman ver —
+    # çünkü -rate 1-2 ile çalışıyorlar ve aynı iş çok daha uzun sürüyor.
     _ctx_cfg = getattr(ctx, "config", {}) or {}
     _scan_profile = str((_ctx_cfg.get("settings") or {}).get("scan_profile", "normal")).lower()
     if _scan_profile == "stealth" and phase_id in (
-        "ffuf", "feroxbuster", "nuclei", "amass", "subdomain", "passive_recon"
+        "ffuf", "feroxbuster", "sqlmap", "nuclei", "amass", "subdomain", "passive_recon"
     ):
         phase_timeout = int(phase_timeout * 3)
 
@@ -4726,71 +4725,57 @@ def run_sqlmap_scan(ctx) -> None:
 
     param_str = ",".join(params) if params else None
 
-    findings = []
-    _logger.info(f"Launching SQLMap scan on {len(endpoints)} endpoints...")
-
-    # --- Global SQLMap deadline: tüm endpoint'ler için toplam zaman bütçesi ---
-    # Her endpoint başına ayrı ayrı 1800s beklemek programı bloke eder.
-    # Bunun yerine toplam bütçeyi endpoint sayısına böleriz (min 60s, max 600s).
     _sqlmap_profile = (getattr(ctx, "config", {}) or {}).get("_sqlmap", {})
-    _total_budget = int(_sqlmap_profile.get("timeout", 600))  # toplam bütçe
-    _scan_profile = str(((getattr(ctx, "config", {}) or {}).get("settings") or {}).get("scan_profile", "normal")).lower()
-    # Stealth profil: bütçeyi 2x yap (3x phases çarpanı zaten var, burada küçük tutuyoruz)
-    if _scan_profile == "stealth":
-        _total_budget = min(_total_budget, 900)  # stealth'de max 900s (15 dk) toplam
-    else:
-        _total_budget = min(_total_budget, 600)  # diğer profillerde max 600s (10 dk) toplam
+    findings = []
 
-    # Öncelikli endpoint'leri al: parametre içerenleri önce, maks 5 endpoint
-    _param_eps = [u for u in endpoints if "?" in u][:3]
-    _other_eps  = [u for u in endpoints if "?" not in u and u not in _param_eps][:2]
-    _limited_eps = (_param_eps + _other_eps)[:5]
+    # SQLMap TEK ÇALIŞTIRILIR — endpoint başına döngü yok.
+    # Önce parametre içeren URL'leri önceliklendir; hepsini -m dosyasıyla tek
+    # sqlmap invocation'ına ver. Bu şekilde sqlmap kendi iç concurrency'siyle
+    # yönetir ve 1800s bir kez harcanır, N kez değil.
+    _param_eps  = [u for u in endpoints if "?" in u]
+    _other_eps  = [u for u in endpoints if "?" not in u]
+    # Önce param'lılar, sonra diğerleri; statik varlıkları atla
+    _static_ext = (".png", ".jpg", ".css", ".js", ".woff", ".ttf", ".svg", ".ico", ".gif", ".webp")
+    _all_eps    = [u for u in (_param_eps + _other_eps)
+                   if not any(u.lower().endswith(e) for e in _static_ext)]
 
-    if not _limited_eps:
-        _limited_eps = endpoints[:3]
+    if not _all_eps:
+        _all_eps = [url]
 
-    _per_ep_timeout = max(60, _total_budget // max(len(_limited_eps), 1))
-    _logger.info(
-        "[SQLMap] %d endpoint, toplam bütçe=%ds, endpoint başına max=%ds",
-        len(_limited_eps), _total_budget, _per_ep_timeout,
-    )
+    # Tek hedef varsa -u, birden fazlaysa -m ile URL listesi dosyası geç
+    import tempfile as _tmpfile, os as _os
+    cmd_args = list(extra_args)
+    if param_str:
+        cmd_args.extend(["-p", param_str])
 
-    import time as _time_mod
-    _sqlmap_start = _time_mod.monotonic()
-
-    for target_ep in _limited_eps:
-        # Skip static assets
-        if any(target_ep.endswith(ext) for ext in (".png", ".jpg", ".css", ".js", ".woff", ".ttf", ".svg", ".ico")):
-            continue
-
-        # Kalan global bütçeyi kontrol et
-        _elapsed = _time_mod.monotonic() - _sqlmap_start
-        _remaining = _total_budget - _elapsed
-        if _remaining < 30:
-            _logger.warning("[SQLMap] Global bütçe doldu (%ds geçti) — kalan endpoint'ler atlanıyor", int(_elapsed))
-            break
-
-        cmd_args = list(extra_args)
-        if param_str:
-            cmd_args.extend(["-p", param_str])
-
-        # Per-endpoint timeout: kalan bütçeyi aşma
-        _ep_timeout = min(_per_ep_timeout, int(_remaining))
-
-        # profile_cfg kopyasını timeout'u override ederek geçir
-        _ep_profile = dict(_sqlmap_profile)
-        _ep_profile["timeout"] = _ep_timeout
-
-        current_findings = wrapper.scan(
-            target_ep, batch=True, level=level, risk=risk,
-            extra_args=cmd_args, proxy=proxy, profile_cfg=_ep_profile,
+    if len(_all_eps) == 1:
+        _logger.info("[SQLMap] Tek endpoint — sqlmap bir kez çalışıyor: %s", _all_eps[0])
+        findings = wrapper.scan(
+            _all_eps[0], batch=True, level=level, risk=risk,
+            extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile,
         )
-        findings.extend(current_findings)
-
-        # İlk doğrulanmış SQLi bulunca kalan endpoint'leri atla
-        if findings:
-            _logger.info("[SQLMap] SQLi bulundu — kalan endpoint'ler atlanıyor (early exit)")
-            break
+    else:
+        # -m: sqlmap URL listesi dosyasından okur, tek process içinde iter eder
+        _url_fd, _url_file = _tmpfile.mkstemp(suffix=".txt", prefix="ws_sqlmap_urls_")
+        try:
+            with _os.fdopen(_url_fd, "w") as _fh:
+                _fh.write("\n".join(_all_eps))
+            _logger.info(
+                "[SQLMap] %d endpoint — tek sqlmap çalışması (-m): %s",
+                len(_all_eps), _url_file,
+            )
+            # -m flag'ini extra_args olarak geçir; wrapper.scan() birincil URL'yi
+            # sadece raporlama için kullanır, asıl hedefler dosyadan okunur
+            _m_args = cmd_args + ["-m", _url_file]
+            findings = wrapper.scan(
+                _all_eps[0], batch=True, level=level, risk=risk,
+                extra_args=_m_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+            )
+        finally:
+            try:
+                _os.unlink(_url_file)
+            except Exception:
+                pass
 
     # Report
     if findings:
