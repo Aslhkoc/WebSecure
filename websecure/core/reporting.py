@@ -573,6 +573,28 @@ _LEARNABLE_BUCKETS = frozenset({
 })
 
 
+def _is_contentless_vuln(it: Dict[str, Any]) -> bool:
+    """Vuln-severity'li ama HİÇBİR actionable içeriği olmayan (url/payload/evidence/
+    mesaj yok) ve generic type'lı bulgu mu? Gerçek taramada raporu/sayımı
+    "VULN #N: VULNERABILITY [Medium] Target: N/A Payload: N/A" gibi junk'larla
+    kirletiyordu. Bunlar Info'ya indirilir: veride kalır ama vuln SAYILMAZ, banner
+    çalmaz, CI gate'i düşürmez."""
+    sev = str(it.get("severity") or "").lower()
+    if sev not in ("critical", "high", "medium", "low"):
+        return False
+    content_keys = (
+        "url", "target", "endpoint", "matched_at", "matched-at",
+        "payload", "evidence", "parameter", "param", "message",
+        "detail", "details", "reason", "proof", "request", "response",
+    )
+    if any(it.get(k) for k in content_keys):
+        return False
+    t = str(it.get("type") or it.get("vuln_type") or "").strip().lower()
+    if t and t not in ("vulnerability", "offensive", "finding", "vuln"):
+        return False
+    return True
+
+
 def add_result(bucket: str, item: Any) -> None:
     if not bucket:
         return
@@ -587,6 +609,12 @@ def add_result(bucket: str, item: Any) -> None:
         raw_sev = it.get("severity")
         if raw_sev is not None:
             it["severity"] = _norm_sev_tr(raw_sev)  # returns "Critical"/"High"/…
+
+        # İÇERİKSİZ junk bulguları (severity var ama url/payload/evidence yok) Info'ya
+        # indir — "VULNERABILITY N/A" şişirmesini engeller, gerçek bulgular etkilenmez.
+        if it.get("severity") and it["severity"] != "Info" and _is_contentless_vuln(it):
+            it["severity"] = "Info"
+            it.setdefault("_note", "contentless-downgraded")
 
         enforce = globals().get("_ENFORCE_REDACT", True)
         # [WS3] Bypass redaction for explicit 'sessions' bucket if user requested visibility
