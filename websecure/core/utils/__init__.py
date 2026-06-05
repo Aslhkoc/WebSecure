@@ -15,6 +15,8 @@ from .net import (
     resolve_canonical_base,
     canonicalize_url,
     same_origin,
+    same_site,
+    registrable_domain,
     is_static_asset,
     run_content_discovery,
     validate_url,
@@ -68,7 +70,8 @@ __all__ = [
     "detect_canonical_scheme", "apply_detected_scheme", "http_to_ws",
     "make_curl_poc", "allowed_http_methods", "build_raw_http_request",
     "build_response_head", "normalize_url", "resolve_canonical_base",
-    "canonicalize_url", "same_origin", "is_static_asset",
+    "canonicalize_url", "same_origin", "same_site", "registrable_domain",
+    "is_static_asset",
     "run_content_discovery", "validate_url",
     # helpers
     "random_string", "apply_auth_context", "sig_params", "kw_filter",

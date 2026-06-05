@@ -133,6 +133,53 @@ def same_origin(url_a: str, url_b: str) -> bool:
     except Exception as exc:
         return False
 
+# Bilinen çok-parçalı second-level domain'ler (eTLD+1 sezgiseli için).
+# PSL'in tam kopyası değil; analytics/ads gibi third-party gürültüsünü
+# elemeye ve meşru alt-domain'leri (api.site.co.il) korumaya yeter.
+_MULTI_PART_SLD = frozenset({
+    "co", "com", "org", "net", "gov", "edu", "ac", "mil", "gob",
+    "or", "ne", "go", "in", "biz", "info",
+})
+
+
+def registrable_domain(host: str) -> str:
+    """
+    Bir host adından kayıt-edilebilir alan adını (eTLD+1) sezgisel olarak çıkarır.
+    'www.ynet.co.il' -> 'ynet.co.il', 'analytics.google.com' -> 'google.com'.
+    PSL kullanmaz; çok-parçalı ccTLD'ler için _MULTI_PART_SLD sezgisini kullanır.
+    """
+    host = (host or "").lower().strip().strip(".")
+    if not host:
+        return ""
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    # 'example.co.il' / 'example.com.tr' gibi: son etiket 2 harf (ccTLD) ve
+    # ondan önceki etiket bilinen bir SLD ise son 3 etiketi al.
+    if len(labels[-1]) == 2 and labels[-2] in _MULTI_PART_SLD:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def same_site(url_a: str, url_b: str) -> bool:
+    """
+    İki URL'in aynı kayıt-edilebilir alan adına (site) ait olup olmadığını döner.
+    Crawl/fuzz kapsamını hedef siteye sınırlamak için kullanılır; üçüncü-parti
+    analytics/ads/tracking host'larını (analytics.google.com, doubleclick vb.)
+    keşif havuzunun dışında tutar. same_origin'den daha gevşektir: alt-domain'lere
+    (api.site.com) izin verir.
+    """
+    try:
+        ha = urlparse(url_a).hostname or ""
+        hb = urlparse(url_b).hostname or ""
+        if not ha or not hb:
+            return False
+        rd_a = registrable_domain(ha)
+        return bool(rd_a) and rd_a == registrable_domain(hb)
+    except Exception:
+        return False
+
+
 def is_static_asset(url: str) -> bool:
     path = (urlparse(url).path or "").lower()
     # Common static extensions

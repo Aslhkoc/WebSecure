@@ -17,6 +17,27 @@ from urllib.parse import urljoin, urlparse
 _logger = logging.getLogger(__name__)
 
 try:
+    from websecure.core.utils.net import same_site as _same_site
+except Exception:  # pragma: no cover - import güvenliği
+    _same_site = None
+
+
+def _in_scope(url: str, base_url: str) -> bool:
+    """
+    url'in hedef site kapsamında olup olmadığını döner (same-site / eTLD+1).
+    same_site import edilemezse exact-netloc'a düşer (güvenli taraf: daha dar).
+    """
+    if not url:
+        return False
+    if _same_site is not None:
+        return _same_site(url, base_url)
+    try:
+        return urlparse(url).netloc == urlparse(base_url).netloc
+    except Exception:
+        return False
+
+
+try:
     from playwright.async_api import async_playwright, Page, Browser, BrowserContext
     _PLAYWRIGHT_AVAILABLE = True
 except ImportError:
@@ -254,6 +275,14 @@ class BrowserCrawler:
                 url = request.url
                 resource_type = request.resource_type
                 method = request.method
+
+                # Scope gate: üçüncü-parti host'ları (analytics.google.com,
+                # doubleclick, hotjar vb.) keşif havuzuna ALMA. Aksi halde GA4
+                # 'g/collect' beacon'ları gibi binlerce alakasız URL fuzz fazına
+                # sızıp taramayı saatlerce uzatır. same_site alt-domain'lere izin
+                # verir (api.site.com), yalnız farklı siteyi eler.
+                if not _in_scope(url, base_url):
+                    return
 
                 if resource_type in ("xhr", "fetch"):
                     req_record: Dict[str, Any] = {

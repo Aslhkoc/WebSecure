@@ -1431,8 +1431,19 @@ def _runner_browser_crawler(ctx) -> None:
             _asyncio.set_event_loop(loop)
             result = loop.run_until_complete(crawler.crawl(url))
 
-        # Endpoint'leri ctx.results'a ekle
-        new_urls = set(result.endpoints + result.api_endpoints + result.spa_routes)
+        # Endpoint'leri ctx.results'a ekle.
+        # Defense-in-depth: browser_crawler kapsam dışı host'ları zaten elemeli,
+        # ama burada da same-site süzgeci uygula — üçüncü-parti analytics/ads
+        # beacon URL'lerinin (analytics.google.com vb.) fuzz havuzuna sızıp
+        # taramayı şişirmesini ikinci kez engeller.
+        try:
+            from websecure.core.utils import same_site as _same_site
+            new_urls = {
+                u for u in (result.endpoints + result.api_endpoints + result.spa_routes)
+                if _same_site(u, url)
+            }
+        except Exception:
+            new_urls = set(result.endpoints + result.api_endpoints + result.spa_routes)
         ctx_results = getattr(ctx, "results", None)
         if ctx_results is None:
             ctx_results = {}
