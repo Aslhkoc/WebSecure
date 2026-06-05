@@ -38,6 +38,8 @@ from ..redaction import redact_sensitive
 from .system import (
     setup_logging,
     setup_webdriver,
+    quit_driver,
+    reap_drivers,
     ensure_dir,
     current_identity,
     set_identity,
@@ -79,7 +81,8 @@ __all__ = [
     # redaction
     "redact_sensitive",
     # system
-    "setup_logging", "setup_webdriver", "ensure_dir", "current_identity",
+    "setup_logging", "setup_webdriver", "quit_driver", "reap_drivers",
+    "ensure_dir", "current_identity",
     "set_identity", "_ws_import_any", "_ws_maybe_import_any",
     # config
     "load_config", "get_active_profile", "validate_and_normalize_config",

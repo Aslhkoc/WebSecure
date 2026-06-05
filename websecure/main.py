@@ -288,48 +288,51 @@ else:
             drv = setup_webdriver(headless=headless)
             if drv is None:
                 return ([], {"reason": "webdriver_unavailable"} if return_artifacts else {})
-            # Zaman aşımı ve başlangıç parametreleri
-            pl_timeout = max(1, int(timeout_ms / 1000))
-            if hasattr(drv, "set_page_load_timeout"):
-                drv.set_page_load_timeout(pl_timeout)
-            parsed = urlparse(start_url)
-            origin = (parsed.scheme, parsed.netloc)
-            q: list[str] = [start_url]
-            seen: set[str] = set()
-            found: list[str] = []
-            steps = 0
-            while q and len(seen) < int(max_pages):
-                u = q.pop(0)
-                if u in seen:
-                    continue
-                seen.add(u)
-                try:
-                    drv.get(u)
-                    # Bağlantıları DOM'dan topla
-                    hrefs = drv.execute_script(
-                        "return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
-                    if isinstance(hrefs, list):
-                        for h in hrefs:
-                            if not isinstance(h, str):
-                                continue
-                            p = urlparse(h)
-                            if (p.scheme, p.netloc) != origin:
-                                continue
-                            h2, _ = urldefrag(h)
-                            if h2 not in found:
-                                found.append(h2)
-                            if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
-                                q.append(h2)
-                except Exception as exc:
-                    _logger.debug(f"[main] WebDriver link extract hatası: {exc!r}")
-                steps += 1
-                if steps % 5 == 0:
-                    sleep(0.05)
-            # Kapat
-            if hasattr(drv, "quit"):
-                drv.quit()
-            art = {"visited": len(seen), "found": len(found), "source": "selenium_fallback"} if return_artifacts else {}
-            return (found, art)
+            # GARANTİ kapanış: aşağıdaki gezinme sırasında (drv.get/execute_script
+            # ya da timeout) bir exception olursa happy-path quit atlanır ve Chrome
+            # öksüz kalırdı. quit'i finally'ye al → her durumda kapanır.
+            try:
+                # Zaman aşımı ve başlangıç parametreleri
+                pl_timeout = max(1, int(timeout_ms / 1000))
+                if hasattr(drv, "set_page_load_timeout"):
+                    drv.set_page_load_timeout(pl_timeout)
+                parsed = urlparse(start_url)
+                origin = (parsed.scheme, parsed.netloc)
+                q: list[str] = [start_url]
+                seen: set[str] = set()
+                found: list[str] = []
+                steps = 0
+                while q and len(seen) < int(max_pages):
+                    u = q.pop(0)
+                    if u in seen:
+                        continue
+                    seen.add(u)
+                    try:
+                        drv.get(u)
+                        # Bağlantıları DOM'dan topla
+                        hrefs = drv.execute_script(
+                            "return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);")
+                        if isinstance(hrefs, list):
+                            for h in hrefs:
+                                if not isinstance(h, str):
+                                    continue
+                                p = urlparse(h)
+                                if (p.scheme, p.netloc) != origin:
+                                    continue
+                                h2, _ = urldefrag(h)
+                                if h2 not in found:
+                                    found.append(h2)
+                                if h2 not in seen and h2 not in q and len(q) < (max_pages * 2):
+                                    q.append(h2)
+                    except Exception as exc:
+                        _logger.debug(f"[main] WebDriver link extract hatası: {exc!r}")
+                    steps += 1
+                    if steps % 5 == 0:
+                        sleep(0.05)
+                art = {"visited": len(seen), "found": len(found), "source": "selenium_fallback"} if return_artifacts else {}
+                return (found, art)
+            finally:
+                quit_driver(drv)
 
         with ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(_job)
@@ -360,6 +363,7 @@ from websecure.core.utils import (
     apply_active_profile,
     setup_logging,
     setup_webdriver,
+    quit_driver,
     silence_insecure_request_warnings,
     validate_url,
 )
@@ -2267,7 +2271,7 @@ def _run_scan_phases(
         written = (out or {}).get("written", {})
 
         if driver is not None:
-            getattr(driver, 'quit', lambda: None)()
+            quit_driver(driver)  # kapat + reaper kaydından düş
         s = session
         if s is not None:
             getattr(s, 'close', lambda: None)()

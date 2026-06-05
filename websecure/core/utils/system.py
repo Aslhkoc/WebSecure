@@ -33,6 +33,66 @@ def setup_logging(level: str = "INFO", log_file: str = None):
     logging.getLogger("selenium").setLevel(logging.WARNING)
 
 # ========================== WebDriver ==========================
+# Açılan her WebDriver'ı merkezî olarak izle ve interpreter çıkışında GARANTİ
+# kapat. Aksi halde tarama pipeline'ında (auth/scanner/fuzzing/rapor) herhangi
+# bir exception `driver.quit()` çağrısını atlar ve Chrome process'i öksüz kalır
+# (parent ölür, chrome.exe arkada hayatta kalır → her tarama 1-2 leak biriktirir).
+import weakref as _weakref
+import atexit as _atexit
+
+_LIVE_DRIVERS: "list[_weakref.ref]" = []
+_DRIVER_LOCK = threading.Lock()
+_REAPER_INSTALLED = False
+
+
+def _register_driver(driver) -> None:
+    """Yeni açılan driver'ı reaper kaydına ekle; atexit reaper'ı bir kez kur."""
+    global _REAPER_INSTALLED
+    if driver is None:
+        return
+    with _DRIVER_LOCK:
+        _LIVE_DRIVERS.append(_weakref.ref(driver))
+        if not _REAPER_INSTALLED:
+            _atexit.register(reap_drivers)
+            _REAPER_INSTALLED = True
+
+
+def quit_driver(driver) -> None:
+    """Bir driver'ı güvenle kapat (idempotent) ve reaper kaydından düş.
+
+    Çağrı noktaları (main._run_scan_phases, discover_dynamic_endpoints) bunu
+    `finally` içinde çağırmalı — happy-path `driver.quit()` yetmez."""
+    if driver is None:
+        return
+    try:
+        driver.quit()
+    except Exception:
+        pass
+    # Kayıttan düş (ölü/eşleşen ref'leri temizle)
+    with _DRIVER_LOCK:
+        _LIVE_DRIVERS[:] = [r for r in _LIVE_DRIVERS
+                            if r() is not None and r() is not driver]
+
+
+def reap_drivers() -> int:
+    """Hâlâ hayatta olan tüm izlenen driver'ları kapat. atexit'te otomatik
+    çalışır; manuel de çağrılabilir. Kapatılan driver sayısını döner."""
+    n = 0
+    with _DRIVER_LOCK:
+        refs = list(_LIVE_DRIVERS)
+        _LIVE_DRIVERS.clear()
+    for r in refs:
+        d = r()
+        if d is None:
+            continue
+        try:
+            d.quit()
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
 def _chromedriver_path() -> Optional[str]:
     """
     ChromeDriver yürütülebilir yolunu çöz (WDM önce, yoksa yerel drivers/).
@@ -161,6 +221,7 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
                         options=_chrome_opts(is_headless, proxy, pdir, new_hl, swift),
                     )
                     logging.info(f"[WebDriver] Chrome başlatıldı ({label}).")
+                    _register_driver(driver)  # atexit reaper: öksüz Chrome bırakma
                     return driver
                 except Exception as exc:
                     last_exc = exc
