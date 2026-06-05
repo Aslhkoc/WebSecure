@@ -90,11 +90,19 @@ def _emit(cb: Optional[Callable[[str, Dict[str, Any]], None]], evt: str, data: D
     ret = cb(evt, data)
     import inspect
     if inspect.isawaitable(ret):
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-        if loop.is_running():
-            loop.create_task(ret)  # mevcut döngüde planla
-        else:
-            asyncio.run(ret)       # ayrı döngüde tamamla
+        # BUG FIX: get_event_loop_policy().get_event_loop(), çalışan döngüsü
+        # OLMAYAN bir thread'de (örn. _safe'in 'phase::races' daemon thread'i)
+        # Python 3.10+'da "There is no current event loop in thread" RuntimeError'ı
+        # fırlatıp tüm Race fazını çökertiyordu. get_running_loop() ile temiz kontrol:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(ret)  # zaten çalışan döngü → planla
+        except RuntimeError:
+            # Bu thread'de çalışan döngü yok → ayrı döngüde tamamla (çökme yok).
+            try:
+                asyncio.run(ret)
+            except Exception:
+                pass  # event callback awaitable'ı sürülemedi — zararsız, atla
 
 
 # =======================
