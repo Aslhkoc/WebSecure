@@ -155,6 +155,12 @@ class DOMXSSScanner(BaseScanner):
         except Exception as exc:
             _logger.warning(f"[DOMXSSScanner] PostMessageInterceptionProber error: {exc!r}")
 
+        # --- DOM Clobbering tespiti (HTTP-tabanlı, Playwright gerektirmez) --
+        try:
+            self._test_dom_clobbering_http(target)
+        except Exception as exc:
+            _logger.warning(f"[DOMXSSScanner] DOM clobbering probe error: {exc!r}")
+
         # --- Adım 4: Stored XSS multi-endpoint correlation ----------------
         write_eps: List[Dict] = kwargs.get("write_endpoints") or []
         read_eps: List[str]   = kwargs.get("read_endpoints")  or endpoints
@@ -384,6 +390,52 @@ class DOMXSSScanner(BaseScanner):
         }
         self.add("offensive", finding)  # self.add() already calls add_result() internally
         _logger.warning(f"[DOMXSSScanner] DOM XSS found: {url} param={param}")
+
+    def _test_dom_clobbering_http(self, url: str) -> None:
+        """DOM Clobbering — id/name çakışan HTML enjekte et, kaynak kodda sink ara (Playwright gerektirmez)."""
+        import re as _re
+        from urllib.parse import urlparse as _up, parse_qsl as _pqsl, urlencode as _ue, urlunparse as _uup
+
+        parsed = _up(url)
+        params = _pqsl(parsed.query)
+        if not params:
+            return
+
+        clobber_payloads = [
+            '<a id="x"><a id="x" name="y" href="javascript:alert(1)">',
+            '<form id="config"><input name="token" value="CLOBBERED">',
+            '<a id="location" href="javascript:alert(document.domain)">',
+            '<img id="XMLHttpRequest" name="open">',
+            '<a id="document"><a id="document" name="cookie">',
+            '<form name="window"><input name="fetch" value="clobbered">',
+        ]
+        sink_patterns = [
+            r'document\[id\]', r'window\[name\]',
+            r'document\.getElementById\(',
+            r'innerHTML\s*=', r'location\s*=\s*[a-z]',
+            r'eval\(.*id', r'src\s*=\s*(?:id|name|data)',
+        ]
+
+        for param, _ in params[:3]:
+            for payload in clobber_payloads:
+                test_url = _uup(parsed._replace(query=_ue(
+                    [(k, payload if k == param else v) for k, v in params]
+                )))
+                try:
+                    resp = self.session.get(test_url, timeout=8)
+                    body = resp.text or ""
+                except Exception:
+                    continue
+                if payload[:30].lower() in body.lower():
+                    for sink in sink_patterns:
+                        if _re.search(sink, body, _re.IGNORECASE):
+                            self.report_finding(
+                                vuln_type="DOM Clobbering (Reflected + Dangerous Sink)",
+                                url=url, param=param, payload=payload,
+                                severity="High",
+                                evidence=f"Payload reflected and sink '{sink}' found in source",
+                            )
+                            return
 
 
 def run(target: str, session=None, results=None, debug=False, **kwargs):

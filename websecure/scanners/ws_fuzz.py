@@ -272,8 +272,54 @@ class WebSocketFuzzer(BaseScanner):
         logger.info(f"[WSFuzz] Scanning {len(ws_endpoints)} WebSocket endpoint(s)")
         for ws_url in ws_endpoints:
             self._fuzz_endpoint(ws_url, bucket)
+            self._test_cswsh(ws_url, bucket)
 
         return self.results
+
+    def _test_cswsh(self, ws_url: str, bucket: str) -> None:
+        """
+        Cross-Site WebSocket Hijacking (CSWSH) — Origin doğrulaması yapılmıyor mu?
+        Farklı Origin header'ları ile bağlantı kurup kabul edilip edilmediğini test eder.
+        Kabul edilirse saldırgan sayfasından kurbanın kimliğiyle WS açılabilir.
+        """
+        evil_origins = [
+            "https://evil.websecure.internal",
+            "null",
+            "http://localhost",
+            "https://attacker.example.com",
+        ]
+
+        for evil_origin in evil_origins:
+            conn = _RawWSConn(ws_url, extra_headers={"Origin": evil_origin}, timeout=5.0)
+            try:
+                connected = conn.connect()
+                if connected:
+                    conn.send('{"type":"ping","data":"cswsh-probe"}')
+                    resp = conn.recv(timeout=2.0)
+                    conn.close()
+
+                    self.add(bucket, {
+                        "type": "Cross-Site WebSocket Hijacking (CSWSH)",
+                        "severity": "High",
+                        "url": ws_url,
+                        "payload": f"Origin: {evil_origin}",
+                        "evidence": (
+                            f"WebSocket handshake accepted from evil Origin '{evil_origin}'. "
+                            f"Response snippet: {(resp or '')[:150]}"
+                        ),
+                        "description": (
+                            "Server accepted WS connection from cross-origin domain. "
+                            "Attacker can hijack authenticated WebSocket sessions."
+                        ),
+                    })
+                    return
+            except Exception as exc:
+                logger.debug("[CSWSH] Origin probe failed (%s): %s", evil_origin, exc)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # -------------------------------------------------------------------------
     # Endpoint discovery

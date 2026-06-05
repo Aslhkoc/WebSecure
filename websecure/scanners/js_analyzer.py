@@ -142,6 +142,112 @@ class JSAnalyzer:
             self._visited_js.add(js_url)
             findings.extend(self._analyse_js_file(js_url))
 
+        # SRI missing + Dependency confusion checks
+        findings.extend(self._check_sri_missing(url))
+        findings.extend(self._check_dependency_confusion(url))
+
+        return findings
+
+    def _check_sri_missing(self, url: str) -> List[Dict[str, Any]]:
+        """
+        Subresource Integrity (SRI) eksikliği — CDN'den yüklenen script/style
+        integrity attribute içermiyorsa, CDN compromise → XSS.
+        """
+        import re as _re
+        findings: List[Dict[str, Any]] = []
+        try:
+            resp = self.session.get(url, timeout=10)
+            html = resp.text or ""
+        except Exception:
+            return findings
+
+        # <script src="https://cdn...." > or <link href="https://cdn...." >
+        # that do NOT have integrity=
+        cdn_pattern = _re.compile(
+            r'<(?:script|link)[^>]+(?:src|href)=["\']?(https?://(?!(?:' + _re.escape(
+                __import__('urllib.parse', fromlist=['urlparse']).urlparse(url).netloc
+            ) + r')[^"\'>\s]+)["\']?[^>]*>',
+            _re.IGNORECASE | _re.DOTALL,
+        )
+        for match in cdn_pattern.finditer(html):
+            tag = match.group(0)
+            if 'integrity=' not in tag.lower():
+                cdn_url = _re.search(r'(?:src|href)=["\']?(https?://[^"\'>\s]+)', tag, _re.I)
+                if cdn_url:
+                    findings.append({
+                        "type": "Missing Subresource Integrity (SRI)",
+                        "severity": "Medium",
+                        "url": url,
+                        "evidence": f"External resource without integrity attribute: {cdn_url.group(1)[:120]}",
+                        "description": (
+                            "External script/stylesheet loaded without SRI integrity hash. "
+                            "If the CDN is compromised, attackers can inject malicious code."
+                        ),
+                    })
+                    self.add("js", findings[-1])
+                    if len(findings) >= 5:
+                        break  # cap noise
+
+        return findings
+
+    def _check_dependency_confusion(self, url: str) -> List[Dict[str, Any]]:
+        """
+        Dependency confusion — JS bundle'da iç paket adlarını tespit et, npm'de public mi kontrol et.
+        """
+        import re as _re
+        findings: List[Dict[str, Any]] = []
+
+        # Internal package naming patterns (e.g., @company/package, internal-utils)
+        internal_pkg_re = _re.compile(
+            r"""(?:require|from)\s*['"]((?:@[a-z0-9_-]+/[a-z0-9_-]+)|(?:[a-z][a-z0-9_-]*-(?:internal|private|corp|company|lib|utils|shared|common|core|sdk)))['"]""",
+            _re.IGNORECASE,
+        )
+
+        js_urls = list(self._visited_js)[:5]
+        for js_url in js_urls:
+            try:
+                resp = self.session.get(js_url, timeout=8)
+                content = resp.text or ""
+            except Exception:
+                continue
+
+            for m in internal_pkg_re.finditer(content):
+                pkg_name = m.group(1)
+                # Check if package exists on public npm registry
+                npm_url = f"https://registry.npmjs.org/{pkg_name}"
+                try:
+                    npm_resp = self.session.get(npm_url, timeout=6)
+                    if npm_resp.status_code == 200:
+                        npm_data = npm_resp.json()
+                        # If it exists publicly but seems like an internal name → possible confusion
+                        if npm_data.get("name") == pkg_name.split("/")[-1]:
+                            findings.append({
+                                "type": "Dependency Confusion Risk",
+                                "severity": "High",
+                                "url": js_url,
+                                "evidence": f"Package {pkg_name!r} found in bundle AND exists on public npm registry",
+                                "description": (
+                                    f"Package '{pkg_name}' appears internal but exists on public npm. "
+                                    "If internal registry is not configured, npm may resolve the public version."
+                                ),
+                            })
+                            self.add("js", findings[-1])
+                    elif npm_resp.status_code == 404:
+                        # Package doesn't exist publicly yet — attacker could register it
+                        findings.append({
+                            "type": "Dependency Confusion — Package Not on npm (Squattable)",
+                            "severity": "Medium",
+                            "url": js_url,
+                            "evidence": f"Internal package {pkg_name!r} not found on public npm (404) — registerable by attacker",
+                            "description": (
+                                f"'{pkg_name}' is used in bundle but not on public npm. "
+                                "An attacker registering this name could achieve RCE on developer machines."
+                            ),
+                        })
+                        self.add("js", findings[-1])
+                except Exception:
+                    pass
+
         return findings
 
     # ------------------------------------------------------------------

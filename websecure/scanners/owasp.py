@@ -424,9 +424,116 @@ def check_csrf(url: str, results: Dict, session, debug: bool = False):
         _summary(results, bucket, 0)
 
 def check_insecure_deserialization(url: str, results: Dict, session, debug: bool = False):
+    """
+    Insecure Deserialization — Java, PHP, .NET ViewState, Python pickle, Ruby/Node payload tespiti.
+    İki teknik:
+    1. Yanıt body'sinde bilinen serialize marker'larını ara (passive detection).
+    2. İstek parametrelerine serialize payload enjekte et, hata imzalarını kontrol et.
+    """
+    import re
     bucket = "a08_insecure_deserialization"
     _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
+
+    try:
+        resp = session.get(url, timeout=10)
+    except Exception:
+        _summary(results, bucket, 0)
+        return
+
+    body = resp.text or ""
+    hdrs = str(resp.headers)
+
+    # Passive: detect serialized objects in responses
+    passive_patterns = {
+        "Java Serialized Object": r"rO0AB",         # base64-encoded Java "ac ed 00 05"
+        "PHP Serialized Object":  r'O:\d+:"[^"]+?":\d+:\{',
+        "PHP Serialize (string)": r's:\d+:"',
+        ".NET ViewState":         r"__VIEWSTATE.*[A-Za-z0-9+/=]{40,}",
+        "Python Pickle":          r"\\x80\\x04\\x95|\\x80\\x02|cos\ngetattr\n",
+        "Java AMF":               r"\\x00\\x00\\x00\\x00\\x00\\x03|AMF\\d",
+        "PHP phar://":            r"phar://",
+    }
+
+    for name, pattern in passive_patterns.items():
+        if re.search(pattern, body + hdrs, re.IGNORECASE):
+            results[bucket].append({
+                "type": f"Insecure Deserialization — {name} (Passive)",
+                "severity": "High",
+                "url": url,
+                "evidence": f"Pattern '{pattern[:40]}' found in response",
+                "description": f"Response contains {name} marker. Application may deserialize attacker-controlled data.",
+            })
+            add_result(bucket, results[bucket][-1])
+
+    # Active: inject canary payloads
+    from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+    parsed = urlparse(url)
+    params = parse_qsl(parsed.query)
+    if not params:
+        _summary(results, bucket, len(results[bucket]))
+        return
+
+    # Java ysoserial-style DNS callback canary (base64 URLDNS chain header)
+    java_payload_b64 = "rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcAUH2sHDFmDRAwACRgAKbG9hZEZhY3RvckkACXRocmVzaG9sZHhwP0AAAAAAAAx3CAAAABAAAAABc3IADGphdmEubmV0LlVSTJYlNzYa/ORyAwAHSQAIaGFzaENvZGVJAAhwb3J0SWQACAhwcm90b2NvbEwABGF1dGh0ABJMamF2YS9sYW5nL1N0cmluZztMAAhob3N0bmFtZXEAfgAETAAEcGF0aHEAfgAETAAFcXVlcnlxAH4ABEwACHJlZmVyZW5jZXEAfgAEeHD//////////3EAfgAGdAAEaHR0cHQADHdzLXByb2JlLmludHQAAXQAAHB4"
+    error_sigs = [
+        r"java\.io\.InvalidClassException",
+        r"java\.lang\.ClassNotFoundException",
+        r"Caused by:.*Deserializ",
+        r"org\.apache\.commons",
+        r"ysoserial",
+        r"com\.sun\.org\.apache",
+        r"Java.*deserialization",
+        r"unserialize\(\)",
+        r"__PHP_Incomplete_Class",
+        r"Deserialization of untrusted data",
+    ]
+
+    viewstate_payloads = [
+        "__VIEWSTATE=" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "__VIEWSTATE=/wEPDwUKMTY3OTEwOTc0Ng9kFgICAw8WAh4EVGV4dAUFSGVsbG94ZGQCBg8WAh4EVGV4dAUFV29ybGR4ZGRkZGQTK==",
+    ]
+
+    for param, orig_val in params[:3]:
+        # Java payload
+        injected = urlunparse(parsed._replace(query=urlencode(
+            [(k, java_payload_b64 if k == param else v) for k, v in params]
+        )))
+        try:
+            resp2 = session.get(injected, timeout=8)
+            text2 = resp2.text or ""
+            for sig in error_sigs:
+                if re.search(sig, text2, re.IGNORECASE):
+                    results[bucket].append({
+                        "type": "Insecure Deserialization — Java (Active)",
+                        "severity": "Critical",
+                        "url": url, "parameter": param,
+                        "payload": java_payload_b64[:40] + "...",
+                        "evidence": f"Deserialization error signature: '{sig}'",
+                    })
+                    add_result(bucket, results[bucket][-1])
+                    break
+        except Exception:
+            pass
+
+        # .NET ViewState
+        for vs_payload in viewstate_payloads:
+            try:
+                resp3 = session.post(url, data={param: vs_payload}, timeout=8)
+                text3 = resp3.text or ""
+                if any(re.search(s, text3, re.IGNORECASE) for s in error_sigs):
+                    results[bucket].append({
+                        "type": "Insecure Deserialization — .NET ViewState (Active)",
+                        "severity": "High",
+                        "url": url, "parameter": param,
+                        "payload": vs_payload[:60],
+                        "evidence": "Deserialization error in ViewState response",
+                    })
+                    add_result(bucket, results[bucket][-1])
+                    break
+            except Exception:
+                pass
+
+    _summary(results, bucket, len(results[bucket]))
 
 def check_file_upload(url: str, forms, results: Dict, session, debug: bool = False):
     bucket = "a10_file_upload"

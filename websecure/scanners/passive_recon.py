@@ -1021,3 +1021,189 @@ def run(target: str, session=None, results=None, **kwargs):
     email_scanner = EmailHarvester(session, results)
     results["passive"].extend(email_scanner.scan(target, domain))
 
+    # 10. Email security (SPF / DKIM / DMARC) — domain spoofing riski
+    email_sec = EmailSecurityScanner(session, results)
+    results["passive"].extend(email_sec.scan(domain))
+
+    # 11. Cloud bucket misconfig — GCS / Azure (S3 zaten 6. adımda)
+    cloud_bucket = CloudBucketMisconfigScanner(session, results)
+    results["passive"].extend(cloud_bucket.scan(domain))
+
+
+# =============================================================================
+# EmailSecurityScanner — SPF / DKIM / DMARC
+# =============================================================================
+
+class EmailSecurityScanner(BaseScanner):
+    """
+    DNS TXT record kontrolü ile email güvenlik politikası eksikliklerini tespit eder.
+    SPF eksikliği → domain spoofing; DMARC eksikliği/p=none → reject edilmez;
+    DKIM eksikliği → imzasız mail kabul edilir.
+    """
+    name = "email_security"
+
+    def scan(self, domain: str) -> List[Dict]:
+        import subprocess, shutil
+        findings: List[Dict] = []
+
+        if not shutil.which("nslookup") and not shutil.which("dig"):
+            return findings
+
+        def _txt_records(name: str) -> List[str]:
+            try:
+                if shutil.which("dig"):
+                    out = subprocess.check_output(
+                        ["dig", "+short", "TXT", name], timeout=8, stderr=subprocess.DEVNULL
+                    ).decode(errors="replace")
+                else:
+                    out = subprocess.check_output(
+                        ["nslookup", "-type=TXT", name], timeout=8, stderr=subprocess.DEVNULL
+                    ).decode(errors="replace")
+                return out.splitlines()
+            except Exception:
+                return []
+
+        # SPF
+        spf_records = [r for r in _txt_records(domain) if "v=spf1" in r.lower()]
+        if not spf_records:
+            findings.append({
+                "type": "Missing SPF Record",
+                "severity": "Medium",
+                "url": domain,
+                "evidence": f"No SPF TXT record found for {domain}",
+                "description": "Without SPF, anyone can send email appearing to be from this domain (spoofing).",
+            })
+        elif any("~all" in r or "-all" not in r for r in spf_records):
+            if not any("-all" in r for r in spf_records):
+                findings.append({
+                    "type": "Weak SPF Policy (~all)",
+                    "severity": "Low",
+                    "url": domain,
+                    "evidence": str(spf_records[:1]),
+                    "description": "SPF uses ~all (softfail) instead of -all (hardfail). Spoofed mail may still be delivered.",
+                })
+
+        # DMARC
+        dmarc_records = _txt_records(f"_dmarc.{domain}")
+        if not any("v=DMARC1" in r for r in dmarc_records):
+            findings.append({
+                "type": "Missing DMARC Record",
+                "severity": "Medium",
+                "url": domain,
+                "evidence": f"No DMARC TXT at _dmarc.{domain}",
+                "description": "Without DMARC, receiving servers don't know how to handle SPF/DKIM failures.",
+            })
+        else:
+            for r in dmarc_records:
+                if "p=none" in r.lower():
+                    findings.append({
+                        "type": "Weak DMARC Policy (p=none)",
+                        "severity": "Low",
+                        "url": domain,
+                        "evidence": r[:200],
+                        "description": "DMARC policy p=none only monitors, does not reject spoofed mail.",
+                    })
+
+        # DKIM — check common selectors
+        dkim_found = False
+        for selector in ("default", "google", "mail", "k1", "dkim", "smtp"):
+            dkim_records = _txt_records(f"{selector}._domainkey.{domain}")
+            if any("v=DKIM1" in r or "p=" in r for r in dkim_records):
+                dkim_found = True
+                break
+        if not dkim_found:
+            findings.append({
+                "type": "DKIM Not Detected",
+                "severity": "Low",
+                "url": domain,
+                "evidence": f"No DKIM TXT record found for common selectors on {domain}",
+                "description": "DKIM not configured with common selectors — email may not be cryptographically signed.",
+            })
+
+        for f in findings:
+            self.add("passive", f)
+        return findings
+
+
+# =============================================================================
+# CloudBucketMisconfigScanner — GCS / Azure Blob (S3 ayrı sınıfta)
+# =============================================================================
+
+class CloudBucketMisconfigScanner(BaseScanner):
+    """
+    GCS ve Azure Blob storage bucket isim tahminlemesi + public access kontrolü.
+    Yaygın isimlendirme: <domain>-backup, <domain>-assets, <domain>-uploads vb.
+    """
+    name = "cloud_bucket"
+
+    _GCS_TEMPLATES = [
+        "https://storage.googleapis.com/{bucket}/",
+        "https://{bucket}.storage.googleapis.com/",
+    ]
+    _AZURE_TEMPLATES = [
+        "https://{account}.blob.core.windows.net/{container}?restype=container&comp=list",
+    ]
+
+    def scan(self, domain: str) -> List[Dict]:
+        findings: List[Dict] = []
+        base = domain.split(".")[0]  # e.g. "example" from "example.com"
+
+        bucket_names = [
+            base, f"{base}-backup", f"{base}-assets", f"{base}-uploads",
+            f"{base}-static", f"{base}-media", f"{base}-files", f"{base}-data",
+            f"{base}-logs", f"{base}-dev", f"{base}-prod", f"{base}-staging",
+        ]
+
+        gcs_markers = ["<ListBucketResult", "NoSuchBucket", "AccessDenied", "<Contents>"]
+        azure_markers = ["<EnumerationResults", "BlobNotFound", "ResourceNotFound", "<Blob>"]
+
+        for name in bucket_names:
+            # GCS
+            for tmpl in self._GCS_TEMPLATES:
+                url = tmpl.format(bucket=name)
+                try:
+                    resp = self.session.get(url, timeout=6)
+                    text = resp.text or ""
+                    if resp.status_code == 200 and any(m in text for m in gcs_markers):
+                        findings.append({
+                            "type": "GCS Bucket Public Access",
+                            "severity": "High" if "<Contents>" in text else "Medium",
+                            "url": url,
+                            "evidence": f"HTTP {resp.status_code}, markers found — bucket {name!r} publicly accessible",
+                            "description": "Google Cloud Storage bucket is publicly readable.",
+                        })
+                        self.add("passive", findings[-1])
+                        break
+                    elif resp.status_code == 403:
+                        findings.append({
+                            "type": "GCS Bucket Exists (Access Denied)",
+                            "severity": "Info",
+                            "url": url,
+                            "evidence": f"403 — bucket {name!r} exists but access denied",
+                        })
+                        self.add("passive", findings[-1])
+                        break
+                except Exception:
+                    pass
+
+            # Azure Blob
+            for tmpl in self._AZURE_TEMPLATES:
+                url = tmpl.format(account=name, container=name)
+                try:
+                    resp = self.session.get(url, timeout=6)
+                    text = resp.text or ""
+                    if resp.status_code == 200 and any(m in text for m in azure_markers):
+                        findings.append({
+                            "type": "Azure Blob Container Public Access",
+                            "severity": "High" if "<Blob>" in text else "Medium",
+                            "url": url,
+                            "evidence": f"HTTP {resp.status_code}, container {name!r} publicly listable",
+                            "description": "Azure Blob Storage container is publicly accessible.",
+                        })
+                        self.add("passive", findings[-1])
+                        break
+                except Exception:
+                    pass
+
+        return findings
+

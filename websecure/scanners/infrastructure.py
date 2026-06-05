@@ -363,6 +363,12 @@ class HeaderScanner(BaseScanner):
         # Cache Poisoning / Forwarded-Host reflection
         fnds.extend(self._test_cache_poisoning(url))
 
+        # Web Cache Deception
+        self._test_web_cache_deception(url)
+
+        # Hop-by-Hop header abuse
+        self._test_hop_by_hop(url)
+
         return {
             "url": url,
             "status": getattr(resp, "status_code", 0),
@@ -371,6 +377,152 @@ class HeaderScanner(BaseScanner):
             "findings": [f.__dict__ for f in fnds],
             "pocs": pocs
         }
+
+    # ------------------------------------------------------------------
+    # Web Cache Deception
+    # ------------------------------------------------------------------
+
+    def _test_web_cache_deception(self, url: str) -> None:
+        """
+        Web Cache Deception — path confusion ile özel sayfa içeriğinin cache'e düşürülmesi.
+        Örnek: /account/profile → /account/profile/nonexistent.css
+        Cache sunucusu .css'i statik sayıp cache'e alırsa, saldırgan aynı URL'yi
+        kullanarak kurbanın oturum verisini okuyabilir.
+        """
+        import re as _re
+        parsed = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(url)
+        base_path = parsed.path.rstrip("/") or "/"
+
+        # Statik uzantı suffix'leri — cache sunucularını yanıltmak için
+        deception_suffixes = [
+            "/nonexistent.css",
+            "/favicon.ico",
+            "/style.css",
+            "/app.js",
+            "/image.png",
+            "/robots.txt",
+            "/.well-known/test.css",
+            "/test;.css",
+            "/..%2F.css",
+        ]
+
+        try:
+            baseline = self.session.get(url, timeout=8)
+            b_len = len(baseline.text or "")
+        except Exception:
+            return
+
+        sensitive_markers = [
+            r"email", r"username", r"account", r"balance", r"credit.?card",
+            r"address", r"phone", r"token", r"session", r"profile",
+        ]
+
+        for suffix in deception_suffixes:
+            test_url = __import__("urllib.parse", fromlist=["urlunparse"]).urlunparse(
+                parsed._replace(path=base_path + suffix)
+            )
+            try:
+                resp = self.session.get(test_url, timeout=8)
+            except Exception:
+                continue
+            text = resp.text or ""
+            hdrs = resp.headers
+
+            # Must respond with similar content to baseline (not 404)
+            if resp.status_code not in (200, 203) or abs(len(text) - b_len) > b_len * 0.5:
+                continue
+
+            # Cache-related response header check
+            cached = (
+                "hit" in hdrs.get("x-cache", "").lower()
+                or "hit" in hdrs.get("cf-cache-status", "").lower()
+                or "age" in hdrs
+                or hdrs.get("cache-control", "") not in ("no-store", "no-cache, no-store")
+            )
+
+            # Sensitive content check
+            has_sensitive = any(_re.search(m, text, _re.IGNORECASE) for m in sensitive_markers)
+
+            if cached and has_sensitive:
+                self.report_finding(
+                    vuln_type="Web Cache Deception",
+                    url=test_url,
+                    severity="High",
+                    evidence=(
+                        f"Cache headers indicate caching (X-Cache/Age/CF-Cache-Status), "
+                        f"sensitive markers found in response for suffix {suffix!r}"
+                    ),
+                    description=(
+                        "Server returned sensitive page content for a static-extension URL "
+                        "and the response appears cached. Attacker may steal victim session data."
+                    ),
+                )
+                return
+            elif has_sensitive and resp.status_code == 200:
+                self.report_finding(
+                    vuln_type="Web Cache Deception (Possible)",
+                    url=test_url,
+                    severity="Medium",
+                    evidence=f"Sensitive content returned for suffix {suffix!r}, cache headers: {dict(list(hdrs.items())[:5])}",
+                )
+                return
+
+    # ------------------------------------------------------------------
+    # Hop-by-Hop Header Abuse
+    # ------------------------------------------------------------------
+
+    def _test_hop_by_hop(self, url: str) -> None:
+        """
+        Hop-by-hop header manipulation — Connection header'a özel başlık adı ekleyerek
+        proxy'nin bu başlıkları backend'e iletmesini engelle (authentication bypass, cache poisoning).
+        """
+        # Hedef: önemli başlıkları hop-by-hop olarak işaretle
+        critical_headers = ["Authorization", "X-Auth-Token", "Cookie", "X-Real-IP", "X-Forwarded-For"]
+
+        for drop_hdr in critical_headers:
+            payload_headers = {
+                "Connection": f"keep-alive, {drop_hdr}",
+                drop_hdr: "ws-hop-probe-value",
+            }
+            try:
+                resp = self.session.get(url, headers=payload_headers, timeout=8)
+            except Exception:
+                continue
+            text = resp.text or ""
+
+            # Başarılı bir auth bypass sinyali: auth header'ı varken bile 200 aldık
+            if resp.status_code == 200 and drop_hdr == "Authorization":
+                # Baseline without auth header
+                try:
+                    base = self.session.get(url, timeout=8)
+                    if base.status_code == 401:
+                        self.report_finding(
+                            vuln_type="Hop-by-Hop Header Manipulation (Auth Bypass)",
+                            url=url,
+                            severity="High",
+                            evidence="Authorization stripped via Connection header — server returned 200 (was 401 baseline)",
+                            description=(
+                                "Proxy stripped the Authorization header when listed in Connection. "
+                                "Backend served protected resource without authentication."
+                            ),
+                        )
+                        return
+                except Exception:
+                    pass
+
+            # Cache poisoning: response changed significantly when critical header dropped
+            try:
+                clean = self.session.get(url, timeout=8)
+                if abs(len(text) - len(clean.text or "")) > 200:
+                    self.report_finding(
+                        vuln_type="Hop-by-Hop Header Manipulation (Cache Poisoning Risk)",
+                        url=url,
+                        severity="Medium",
+                        evidence=f"Response differs by {abs(len(text)-len(clean.text or ''))} bytes when {drop_hdr} dropped via Connection",
+                    )
+                    return
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Host Header Injection — deep variant (password reset, routing, ambiguous)
