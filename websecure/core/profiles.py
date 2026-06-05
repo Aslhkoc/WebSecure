@@ -335,6 +335,32 @@ class StealthProfile(ScanProfile):
             "attempt_shell": True,
             "file_read": True,
         })
+
+        # --- Privacy/proxy: stealth modunda anonim çıkış ZORUNLU ---
+        # Gerçek IP sızıntısını önlemek için egress proxy'sini zorla.
+        # Asıl yönlendirme: proxy.enabled + proxy.url -> current_identity()
+        #   -> session_factory (s.proxies). privacy.egress.required ise
+        #   proxy hiç yoksa _enforce_egress_policy taramayı durdurarak sızıntıyı engeller.
+        # NOT: privacy.mode/setup_privacy yolu ana tarama akışında çağrılmıyor;
+        #   etkin mekanizma proxy.* + privacy.egress.required'dır.
+        proxy = cfg.setdefault("proxy", {})
+        proxy["enabled"] = True
+        if not proxy.get("url"):
+            proxy["url"] = "socks5://127.0.0.1:9050"  # Tor SOCKS (varsayılan)
+        egress = cfg.setdefault("privacy", {}).setdefault("egress", {})
+        egress["required"] = True
+        # Geri uyumluluk: setup_privacy() yolu için de işaretle (kullanıcı override'ına dokunma)
+        privacy = cfg["privacy"]
+        if not privacy.get("mode") or privacy.get("mode") == "none":
+            privacy["mode"] = "tor"
+            privacy.setdefault("auto_start_tor", True)
+            privacy.setdefault("verify_anonymity", True)
+            privacy.setdefault("rotate_identity", True)
+            privacy.setdefault("rotate_every", 50)
+        _logger.info(
+            "[StealthProfile] Egress proxy zorunlu (privacy.egress.required=True, "
+            "proxy=%s).", proxy.get("url"),
+        )
         return cfg
 
 

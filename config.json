@@ -473,7 +473,6 @@
     "enable_local_schemes": true,
     "enable_dict_scheme": false,
     "enable_metadata_probes": true,
-    "stealth": false,
     "scope_allowlist": [],
     "scope_denylist": [],
     "base_headers": {},
