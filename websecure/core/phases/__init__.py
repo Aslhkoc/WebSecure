@@ -2264,6 +2264,38 @@ def _runner_business_logic(ctx) -> None:
         _report_phase_error("business_logic", "phases._runner_business_logic", e)
 
 
+_DOM_XSS_SKIP_EXT = (
+    ".js", ".mjs", ".cjs", ".css", ".map", ".woff", ".woff2", ".ttf", ".eot",
+    ".otf", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico",
+    ".mp4", ".webm", ".mp3", ".wav", ".pdf", ".wasm", ".zip", ".gz",
+)
+_DOM_XSS_SKIP_PATH = (
+    "/_next/static/", "/static/chunks/", "/static/media/", "/_next/static",
+    "/static/js/", "/static/css/", "/assets/", "/dist/", "/build/static/",
+)
+
+
+def _is_static_asset(u: str) -> bool:
+    """Statik varlık mı (DOM XSS testine UYGUN DEĞİL)?
+
+    DOM XSS yalnız uygulama DOM'u olan HTML sayfalarında anlamlıdır. Statik
+    .js/.css/medya dosyaları tarayıcıda düz metin gösterilir; bunlara DOM XSS
+    testi yapmak yüzlerce SAHTE bulgu üretiyordu (Next.js chunk'ları: her
+    /_next/static/chunks/*.js için fragment/window.name/localStorage/postMessage
+    = 4 sahte High/Critical). Bu yüzden DOM XSS hedeflerinden elenir.
+    """
+    try:
+        from urllib.parse import urlparse as _up
+        p = _up(u).path.lower()
+    except Exception:
+        return False
+    if any(p.endswith(ext) for ext in _DOM_XSS_SKIP_EXT):
+        return True
+    if any(seg in p for seg in _DOM_XSS_SKIP_PATH):
+        return True
+    return False
+
+
 def _runner_dom_xss(ctx) -> None:
     mod = _opt_import("websecure.scanners.dom_xss")
     if not mod:
@@ -2272,7 +2304,13 @@ def _runner_dom_xss(ctx) -> None:
     url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
     sess = getattr(ctx, "session", None)
     results = _ensure_results_bucket(ctx)
-    endpoints = results.get("endpoints", [url]) if results else [url]
+    _raw_eps = results.get("endpoints", [url]) if results else [url]
+    # Statik asset'leri (JS/CSS/medya/Next.js chunk'ları) ele — DOM XSS yalnız
+    # HTML sayfalarına uygulanır. Eşlenik gerçek bir HTML hedef kalmazsa ana url'e düş.
+    endpoints = [e for e in _raw_eps if e and not _is_static_asset(e)] or [url]
+    _skipped = len(_raw_eps) - len(endpoints)
+    if _skipped > 0:
+        _logger.info(f"[dom_xss] {_skipped} statik asset (JS/CSS/medya) DOM XSS hedefinden elendi")
     try:
         scanner_cls = getattr(mod, "DOMXSSScanner", None)
         if scanner_cls:
