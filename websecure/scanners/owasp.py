@@ -590,6 +590,8 @@ def run(url: str = "", session=None, config: Dict[str, Any] | None = None, debug
     # Genişletilmiş kontroller (auto-append faz)
     host_header_cache_poison(url, session, results, debug=debug)
     backup_hunt(url, session, results, debug=debug)
+    # Insecure deserialization (A08:2021)
+    check_insecure_deserialization(url, results, session, debug=debug)
     return results
 
 
