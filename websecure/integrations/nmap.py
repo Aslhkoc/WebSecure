@@ -702,7 +702,7 @@ class NmapWrapper(ToolIntegration):
             phase2 = [
                 "-sS", "-Pn", "-T2",
                 "-sV", "--version-intensity", "3",  # Hafif versiyon tespiti — az probe
-                "--script", "default,safe,banner",  # safe + banner = bilgi ama gürültüsüz
+                "--script", "(default or safe or banner) and not (broadcast or targets-sniffer)",  # safe + banner = bilgi ama gürültüsüz
                 "--script-args", "http.useragent=Mozilla/5.0",
                 "--script-timeout", "45s",
                 "--host-timeout", "900s",
@@ -715,7 +715,7 @@ class NmapWrapper(ToolIntegration):
             phase2 = [
                 "-sT", "-Pn", "-T2",
                 "-sV", "--version-intensity", "3",
-                "--script", "default,safe,banner",
+                "--script", "(default or safe or banner) and not (broadcast or targets-sniffer)",
                 "--script-args", "http.useragent=Mozilla/5.0",
                 "--scan-delay", "150ms",
                 "--script-timeout", "45s",
@@ -783,7 +783,7 @@ class NmapWrapper(ToolIntegration):
             scan_t, "-Pn", "-T3",
             "-sV", "--version-intensity", "5",
             "-sC",
-            "--script", "default,safe,vuln",
+            "--script", "(default or safe or vuln) and not (broadcast or targets-sniffer)",
             "--script-args", "http.useragent=Mozilla/5.0,vulns.showall=true",
             "--script-timeout", "60s",
             "--host-timeout", "600s",
