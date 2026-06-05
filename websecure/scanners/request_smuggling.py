@@ -138,8 +138,31 @@ class SmugglingFinding:
 # CL.TE Probe
 # -----------------------------------------------------------------------------
 
+def _baseline_time(host: str, port: int, use_ssl: bool, path: str) -> float:
+    """Normal (smuggling'siz) bir POST isteğinin tipik yanıt süresini ölç.
+
+    Timing probe'ları bunun ANLAMLI üstündeki gecikmeyi gerçek desync sinyali
+    sayar → hızlı sunucu yanıtları (Vercel vb.) yanlışlıkla smuggling sanılmaz.
+    İki ölçümün medyanı alınır (tek-seferlik gürültüyü azaltır). Ölçülemezse 0.0."""
+    payload = (
+        f"POST {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode()
+    samples: List[float] = []
+    for _ in range(2):
+        raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=8.0, read_timeout=5.0)
+        if raw:
+            samples.append(elapsed)
+    if not samples:
+        return 0.0
+    return sorted(samples)[len(samples) // 2]
+
+
 def _probe_cl_te(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     CL.TE timing probe.
@@ -165,21 +188,28 @@ def _probe_cl_te(
         "\r\n"
     ).encode()
 
-    raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=10.0, read_timeout=4.0)
+    # FP FIX: read_timeout yükseltildi (gecikme görülebilsin) ve "hızlı yanıt =
+    # smuggling" ölçütü kaldırıldı. CL.TE zafiyetinde front-end (CL=6) eksik 1
+    # byte'ı BEKLER → istek GECİKİR. Sinyal gecikmedir, hız değil.
+    raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=12.0, read_timeout=8.0)
     st = _status_code(raw)
 
-    if raw and elapsed < 3.5:
+    # Yalnız NORMAL isteğin (baseline) anlamlı üstünde bir gecikme varsa bildir.
+    delay_threshold = max(5.0, baseline * 3.0 + 3.0)
+    if raw and elapsed >= delay_threshold:
         return SmugglingFinding(
-            technique   = "CL.TE",
+            technique   = "CL.TE (timing)",
             url         = url,
-            severity    = "High",
+            severity    = "Medium",  # timing-only, doğrulanmamış → Medium/low-confidence
             description = (
-                "Possible CL.TE desynchronisation: server responded in "
-                f"{elapsed:.2f}s despite body mismatch (CL=6, sent 5 bytes). "
-                "This indicates the back-end parsed the TE-terminated request "
-                "without waiting for the full Content-Length."
+                f"Olası CL.TE desync: istek {elapsed:.1f}s gecikti (baseline "
+                f"{baseline:.1f}s, eşik {delay_threshold:.1f}s). Front-end (CL=6) "
+                "TE-sonlandırmalı gövdeden sonra eksik byte'ı beklemiş olabilir. "
+                "Zamanlama tek başına kesin DEĞİL — differential probe ile doğrulayın."
             ),
-            evidence    = {"status": st, "elapsed_s": round(elapsed, 3), "raw_head": (raw or b"")[:200].decode("utf-8", "replace")},
+            evidence    = {"status": st, "elapsed_s": round(elapsed, 3),
+                           "baseline_s": round(baseline, 3),
+                           "raw_head": (raw or b"")[:200].decode("utf-8", "replace")},
         )
     return None
 
@@ -189,7 +219,7 @@ def _probe_cl_te(
 # -----------------------------------------------------------------------------
 
 def _probe_te_cl(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     TE.CL timing probe.
@@ -222,18 +252,22 @@ def _probe_te_cl(
     raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=12.0, read_timeout=8.0)
     st = _status_code(raw)
 
-    # If we timed out waiting (elapsed ~= read_timeout), the back-end was stalling
-    if elapsed >= 7.0:
+    # FP FIX: mutlak 7.0s eşiği yerine baseline-relatif gecikme. Tek başına bir
+    # hang (Tor/network gecikmesi de olabilir) kesin değil → timing-only Medium.
+    delay_threshold = max(7.0, baseline + 5.0)
+    if elapsed >= delay_threshold:
         return SmugglingFinding(
-            technique   = "TE.CL",
+            technique   = "TE.CL (timing)",
             url         = url,
-            severity    = "High",
+            severity    = "Medium",  # timing-only, doğrulanmamış
             description = (
-                f"Possible TE.CL desynchronisation: request hung for {elapsed:.1f}s. "
-                "The back-end (Content-Length) appears to be waiting for bytes that "
-                "were already processed by the chunked front-end."
+                f"Olası TE.CL desync: istek {elapsed:.1f}s askıda kaldı (baseline "
+                f"{baseline:.1f}s, eşik {delay_threshold:.1f}s). Back-end (CL) "
+                "chunked front-end'in işlediği byte'ları bekliyor olabilir. "
+                "Zamanlama tek başına kesin DEĞİL — differential probe ile doğrulayın."
             ),
-            evidence    = {"status": st, "elapsed_s": round(elapsed, 3)},
+            evidence    = {"status": st, "elapsed_s": round(elapsed, 3),
+                           "baseline_s": round(baseline, 3)},
         )
     return None
 
@@ -255,7 +289,7 @@ _TE_OBFUSCATIONS: List[str] = [
 
 
 def _probe_te_te(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     TE.TE probe.
@@ -283,15 +317,18 @@ def _probe_te_te(
         st = _status_code(raw)
 
         if st is not None and st not in (400, 408, 413, 502, 503, 504):
-            # Server accepted a malformed TE header — prerequisite for TE.TE desync
+            # FP FIX: Obfuscated TE header'ın kabul edilmesi yalnız bir ÖN KOŞULdur,
+            # zafiyet DEĞİL (çoğu sunucu garip TE'yi yoksayıp 200 döner). Eskiden
+            # Medium "TE.TE" vuln'ü olarak raporlanıp her sunucuyu FP'liyordu.
+            # Info'ya indirildi: bilgi olarak kalır, vuln sayılmaz.
             return SmugglingFinding(
-                technique   = "TE.TE",
+                technique   = "TE.TE (precondition)",
                 url         = url,
-                severity    = "Medium",
+                severity    = "Info",
                 description = (
-                    f"Server accepted obfuscated Transfer-Encoding header "
-                    f"({obf!r}) with status {st}. "
-                    "This is a necessary precondition for TE.TE request smuggling."
+                    f"Sunucu obfuscated Transfer-Encoding header'ını ({obf!r}) "
+                    f"status {st} ile kabul etti. Bu TE.TE smuggling için GEREKLİ "
+                    "bir ön koşuldur ama tek başına zafiyet değildir."
                 ),
                 evidence    = {
                     "obfuscation": obf,
@@ -308,7 +345,7 @@ def _probe_te_te(
 # -----------------------------------------------------------------------------
 
 def _probe_differential(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     Differential (evidence-collection) probe for CL.TE.
@@ -385,7 +422,7 @@ def _probe_differential(
 # -----------------------------------------------------------------------------
 
 def _probe_h2_cl(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     H2.CL — HTTP/2 front-end downgrades to HTTP/1.1 back-end.
@@ -444,7 +481,7 @@ def _probe_h2_cl(
 # -----------------------------------------------------------------------------
 
 def _probe_h2_te(
-    host: str, port: int, use_ssl: bool, path: str, url: str
+    host: str, port: int, use_ssl: bool, path: str, url: str, baseline: float = 0.0
 ) -> Optional[SmugglingFinding]:
     """
     H2.TE — HTTP/2 front-end strips Transfer-Encoding but back-end still
@@ -531,6 +568,14 @@ def run(
     if parsed.query:
         path += "?" + parsed.query
 
+    # FP FIX: zamanlama tabanlı probe'lar (CL.TE/TE.CL) MUTLAK eşikle çalışıyordu
+    # (örn. "yanıt < 3.5s ise smuggling") — bu, hızlı sunucularda (Vercel vb.) HER
+    # probe'u flag'liyordu. Bunun yerine NORMAL bir isteğin baseline süresini ölç;
+    # timing probe'ları yalnız baseline'ın ANLAMLI ÜSTÜNDE bir GECİKME gösterirse
+    # (back-end desync için bekliyor) bildirir. Baseline ölçülemezse 0 → probe'lar
+    # kendi muhafazakâr mutlak alt sınırlarına düşer.
+    base_t = _baseline_time(host, port, use_ssl, path)
+
     probes = [
         ("CL.TE timing",       _probe_cl_te),
         ("TE.CL timing",       _probe_te_cl),
@@ -543,7 +588,7 @@ def run(
     for name, fn in probes:
         logger.debug("[Smuggling] running %s probe on %s", name, url)
         try:
-            finding = fn(host, port, use_ssl, path, url)
+            finding = fn(host, port, use_ssl, path, url, base_t)
             if finding:
                 results.append(finding.to_dict())
                 logger.info(
