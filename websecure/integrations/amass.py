@@ -247,7 +247,10 @@ class AmassWrapper(ToolIntegration):
             _, stderr_b = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            try:
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
             logger.warning(f"[Amass] enum zaman aşımı ({timeout_s}s) — kısmi sonuçlar ayrıştırılıyor")
         else:
             if proc.returncode not in (0, 1):
@@ -495,7 +498,10 @@ class SubfinderIntegration(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(f"[subfinder] Zaman aşımı ({timeout_s}s) — kısmi sonuçlar ayrıştırılıyor")
             else:
                 if proc.returncode not in (0, 1):
@@ -664,7 +670,10 @@ class InteractshIntegration(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=timeout_s)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                _, stderr_b = proc.communicate()
+                try:
+                    _, stderr_b = proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    stderr_b = b""
 
             # Kayıtlı domain'i stderr'den çıkart
             domain = ""

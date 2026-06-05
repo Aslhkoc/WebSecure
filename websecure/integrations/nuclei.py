@@ -455,7 +455,10 @@ class NucleiWrapper(ToolIntegration):
             except subprocess.TimeoutExpired:
                 timed_out = True
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(
                     f"[Nuclei] Tarama {timeout}s içinde bitmedi — kısmi sonuçlar kullanılıyor"
                 )

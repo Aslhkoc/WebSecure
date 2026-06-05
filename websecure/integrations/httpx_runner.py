@@ -272,7 +272,10 @@ class HttpxWrapper(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(f"[httpx] Zaman aşımı ({_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
             else:
                 if proc.returncode not in (0, 1):

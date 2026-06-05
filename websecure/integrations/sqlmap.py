@@ -205,8 +205,13 @@ class SQLMapWrapper(ToolIntegration):
             else:
                 cmd = [self.binary]
 
+            # -m flag varsa -u ekleme: sqlmap -u ve -m aynı anda verilirse
+            # -u öncelik alır ve -m yoksayılır — URL listesi hiç okunmaz.
+            _has_m_flag = extra_args and "-m" in extra_args
+            if not _has_m_flag:
+                cmd.extend(["-u", target])
+
             cmd.extend([
-                "-u", target,
                 "--batch",
                 "--risk", str(_risk),
                 "--level", str(_level),
@@ -245,7 +250,10 @@ class SQLMapWrapper(ToolIntegration):
                 stdout_b, stderr_b = proc.communicate(timeout=_run_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(
                     "[SQLMap] Zaman aşımı (%ds) — kısmi sonuçlar ayrıştırılıyor", _run_timeout
                 )

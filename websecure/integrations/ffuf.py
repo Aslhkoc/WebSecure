@@ -441,7 +441,10 @@ class FFUFWrapper(ToolIntegration):
                 proc.communicate(timeout=120)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(f"[FFUF] Header fuzz timed out for header={header_name}")
             finally:
                 if _unreg:
@@ -512,7 +515,10 @@ class FFUFWrapper(ToolIntegration):
                 proc.communicate(timeout=120)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning("[FFUF] Header name fuzz timed out (120s)")
             finally:
                 if _unreg:
@@ -644,7 +650,10 @@ class FeroxbusterWrapper(ToolIntegration):
                     logger.warning(f"[Feroxbuster] rc={proc.returncode} stderr={stderr_b.decode('utf-8','ignore')[:300]}")
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning("[Feroxbuster] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
             finally:
                 if _unreg:

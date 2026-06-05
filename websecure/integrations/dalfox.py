@@ -190,7 +190,10 @@ class DalfoxWrapper(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=_timeout_df)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(f"[dalfox] Timeout ({_timeout_df}s)")
                 stderr_b = b""
             finally:
@@ -339,7 +342,10 @@ class DalfoxWrapper(ToolIntegration):
                 _, stderr_b = proc.communicate(timeout=_pipe_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
                 logger.warning(f"[dalfox] pipe zaman aşımı ({_pipe_timeout}s) — kısmi sonuçlar ayrıştırılıyor")
             finally:
                 if _unregister_cp:
