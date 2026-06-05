@@ -1197,12 +1197,13 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
 
     phase_timeout = _PHASE_TIMEOUTS.get(phase_id, _DEFAULT_PHASE_TIMEOUT)
 
-    # Stealth profilinde harici araçlara (ffuf, feroxbuster, sqlmap) 3x zaman ver —
-    # çünkü -rate 1-2 ile çalışıyorlar ve aynı iş çok daha uzun sürüyor.
+    # Stealth profilinde yavaş araçlara fazladan zaman ver —
+    # sqlmap hariç: sqlmap artık kendi iç bütçesiyle kontrol ediliyor,
+    # 3x çarpanı fazla gecikmeye yol açıyordu.
     _ctx_cfg = getattr(ctx, "config", {}) or {}
     _scan_profile = str((_ctx_cfg.get("settings") or {}).get("scan_profile", "normal")).lower()
     if _scan_profile == "stealth" and phase_id in (
-        "ffuf", "feroxbuster", "sqlmap", "nuclei", "amass", "subdomain", "passive_recon"
+        "ffuf", "feroxbuster", "nuclei", "amass", "subdomain", "passive_recon"
     ):
         phase_timeout = int(phase_timeout * 3)
 
@@ -4727,24 +4728,70 @@ def run_sqlmap_scan(ctx) -> None:
 
     findings = []
     _logger.info(f"Launching SQLMap scan on {len(endpoints)} endpoints...")
-    
-    for target_ep in endpoints:
-        # Skip static assets to save time
-        if any(target_ep.endswith(ext) for ext in (".png", ".jpg", ".css", ".js")):
+
+    # --- Global SQLMap deadline: tüm endpoint'ler için toplam zaman bütçesi ---
+    # Her endpoint başına ayrı ayrı 1800s beklemek programı bloke eder.
+    # Bunun yerine toplam bütçeyi endpoint sayısına böleriz (min 60s, max 600s).
+    _sqlmap_profile = (getattr(ctx, "config", {}) or {}).get("_sqlmap", {})
+    _total_budget = int(_sqlmap_profile.get("timeout", 600))  # toplam bütçe
+    _scan_profile = str(((getattr(ctx, "config", {}) or {}).get("settings") or {}).get("scan_profile", "normal")).lower()
+    # Stealth profil: bütçeyi 2x yap (3x phases çarpanı zaten var, burada küçük tutuyoruz)
+    if _scan_profile == "stealth":
+        _total_budget = min(_total_budget, 900)  # stealth'de max 900s (15 dk) toplam
+    else:
+        _total_budget = min(_total_budget, 600)  # diğer profillerde max 600s (10 dk) toplam
+
+    # Öncelikli endpoint'leri al: parametre içerenleri önce, maks 5 endpoint
+    _param_eps = [u for u in endpoints if "?" in u][:3]
+    _other_eps  = [u for u in endpoints if "?" not in u and u not in _param_eps][:2]
+    _limited_eps = (_param_eps + _other_eps)[:5]
+
+    if not _limited_eps:
+        _limited_eps = endpoints[:3]
+
+    _per_ep_timeout = max(60, _total_budget // max(len(_limited_eps), 1))
+    _logger.info(
+        "[SQLMap] %d endpoint, toplam bütçe=%ds, endpoint başına max=%ds",
+        len(_limited_eps), _total_budget, _per_ep_timeout,
+    )
+
+    import time as _time_mod
+    _sqlmap_start = _time_mod.monotonic()
+
+    for target_ep in _limited_eps:
+        # Skip static assets
+        if any(target_ep.endswith(ext) for ext in (".png", ".jpg", ".css", ".js", ".woff", ".ttf", ".svg", ".ico")):
             continue
-            
+
+        # Kalan global bütçeyi kontrol et
+        _elapsed = _time_mod.monotonic() - _sqlmap_start
+        _remaining = _total_budget - _elapsed
+        if _remaining < 30:
+            _logger.warning("[SQLMap] Global bütçe doldu (%ds geçti) — kalan endpoint'ler atlanıyor", int(_elapsed))
+            break
+
         cmd_args = list(extra_args)
         if param_str:
-            cmd_args.extend(["-p", param_str])  # Force test these params
-        
-        # [WS3] Boost Level/Risk for High-Value Targets
-        # If the URL contains high-value params, we might want to boost intensity
-        # For now, we just ensure they are tested.
-            
-        _sqlmap_profile = (getattr(ctx, "config", {}) or {}).get("_sqlmap", {})
-        current_findings = wrapper.scan(target_ep, batch=True, level=level, risk=risk, extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile)
+            cmd_args.extend(["-p", param_str])
+
+        # Per-endpoint timeout: kalan bütçeyi aşma
+        _ep_timeout = min(_per_ep_timeout, int(_remaining))
+
+        # profile_cfg kopyasını timeout'u override ederek geçir
+        _ep_profile = dict(_sqlmap_profile)
+        _ep_profile["timeout"] = _ep_timeout
+
+        current_findings = wrapper.scan(
+            target_ep, batch=True, level=level, risk=risk,
+            extra_args=cmd_args, proxy=proxy, profile_cfg=_ep_profile,
+        )
         findings.extend(current_findings)
-    
+
+        # İlk doğrulanmış SQLi bulunca kalan endpoint'leri atla
+        if findings:
+            _logger.info("[SQLMap] SQLi bulundu — kalan endpoint'ler atlanıyor (early exit)")
+            break
+
     # Report
     if findings:
         for f in findings:

@@ -231,13 +231,14 @@ def _apply_stealth_profile(cfg: dict) -> dict:
     fz["max_total"] = 100000
 
     # --- SQLMap: tam güç + WAF tamper + gecikmeli ---
+    # timeout = toplam bütçe (run_sqlmap_scan endpoint başına böler, max 5 ep)
     cfg.setdefault("_sqlmap", {}).update({
         "risk": 3, "level": 5,
         "threads": 1,
-        "timeout": 1800,  # --delay=5 ile 300+ istek = 1500s+ gerekebilir
+        "timeout": 900,  # 15 dk toplam bütçe; endpoint başına 180s (5 ep için)
         "extra_args": [
-            "--delay=5", "--random-agent", "--batch", "--forms", "--crawl=3",
-            "--tamper=space2comment,between,randomcase,charencode,equaltolike,greatest",
+            "--delay=3", "--random-agent", "--batch", "--forms",
+            "--tamper=space2comment,between,randomcase,charencode",
         ],
     })
 
