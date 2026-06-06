@@ -214,6 +214,17 @@ class EvidenceChainBuilder:
             url_a  = str(finding_a.get("url") or "")
             sev_a  = str(finding_a.get("severity") or "Low")
 
+            # Feedback-loop guard: do NOT build chains from *synthetic* chain /
+            # playbook findings produced by other correlators (chain_reactor).
+            # Their type text ("CHAIN: … SSTI → RCE …") contains both a root-vuln
+            # keyword AND a consequence keyword, so a single synthetic finding
+            # would fabricate a brand-new "SSTI → RCE" chain even when no real
+            # SSTI was ever detected — and do so twice, producing the duplicate
+            # critical chains seen in the wild. Only correlate primary findings.
+            if finding_a.get("is_chain") or finding_a.get("chain_id") or \
+               type_a.upper().startswith("CHAIN") or "ZINCIR" in type_a.upper():
+                continue
+
             for rule_vuln, rule_consequence, chain_type, title_tpl, narrative_tpl in _CHAIN_RULES:
                 if rule_vuln.lower() not in type_a.lower():
                     continue
@@ -290,9 +301,23 @@ class EvidenceChainBuilder:
                     f"score={chain.chain_score} ({chain.chain_severity})"
                 )
 
+        # Final dedup: collapse chains that are identical in kind and root URL.
+        # Two findings of the same type at the SAME url must not yield two copies
+        # of the same chain (e.g. duplicate "SSTI → RCE @ /x"). Distinct URLs are
+        # preserved as separate chains.
+        deduped: List[AttackChain] = []
+        seen_chain_keys: Set[Tuple[str, str]] = set()
+        for c in chains:
+            root_url = c.steps[0].url if getattr(c, "steps", None) else ""
+            key = (c.chain_type, root_url)
+            if key in seen_chain_keys:
+                continue
+            seen_chain_keys.add(key)
+            deduped.append(c)
+
         # Sort by chain score descending
-        chains.sort(key=lambda c: c.chain_score, reverse=True)
-        return chains
+        deduped.sort(key=lambda c: c.chain_score, reverse=True)
+        return deduped
 
     def annotate_results(self, results: Dict[str, Any]) -> None:
         """
@@ -380,6 +405,14 @@ class EvidenceChainBuilder:
             if idx == root_idx:
                 continue
             ftype = (f.get("type") or "").lower()
+
+            # Never satisfy a consequence from a *synthetic* chain/playbook finding
+            # — otherwise a real root vuln would "chain" into another correlator's
+            # output (e.g. SSTI → the pre-built "CHAIN: … RCE …" string), fabricating
+            # escalations that no primary scanner actually confirmed.
+            if f.get("is_chain") or f.get("chain_id") or \
+               ftype.startswith("chain") or "zincir" in ftype:
+                continue
 
             # P7 fix: the generic `consequence in ftype` check ran BEFORE the
             # specific keyword overrides. For "internal", ANY finding whose type

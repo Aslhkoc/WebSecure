@@ -189,6 +189,28 @@ class SQLInjectionScanner(BaseScanner):
         Returns (payload, evidence) if a successful UNION injection is detected.
         """
         marker = "wsunion1337"
+
+        # Reflection control — CRITICAL false-positive guard.
+        # The marker lives INSIDE the payload string (' UNION SELECT 'wsunion1337'…).
+        # If the parameter is simply echoed back into the page (error messages,
+        # breadcrumbs, hidden fields — extremely common on WooCommerce/WordPress),
+        # the marker appears with ZERO SQL execution → a bogus "UNION-based"
+        # CRITICAL. Observed in the wild: /sepet/?add-to-cart=… reflected the
+        # payload and produced a fabricated Critical that then fed RCE attack
+        # chains. We send the marker as a PLAIN value first; if it reflects, the
+        # union signal is untrustworthy on this parameter and we bail out.
+        control = "wsrefl" + str(random.randint(10000, 99999))
+        try:
+            cresp = self.session.get(self.inject_param(url, param, control), timeout=10)
+            if control in (cresp.text or ""):
+                logger.debug(
+                    "[SQLi] Union aborted: param %r reflects input (marker would "
+                    "echo without SQL execution) — avoiding reflection FP", param
+                )
+                return None
+        except _requests.exceptions.RequestException as exc:
+            logger.debug(f"[SQLi] Union reflection control failed: {exc!r}")
+
         for cols in range(1, self._UNION_MAX_COLS + 1):
             # Build NULL-padded union select with our marker in pos 1
             null_cols = ["NULL"] * cols
@@ -201,8 +223,9 @@ class SQLInjectionScanner(BaseScanner):
                     resp = self.session.get(test_url, timeout=10)
                     if marker in (resp.text or ""):
                         evidence = (
-                            f"Union-based: marker '{marker}' reflected in response "
-                            f"with {cols}-column UNION SELECT"
+                            f"Union-based: marker '{marker}' returned in response "
+                            f"with {cols}-column UNION SELECT (plain-marker control "
+                            f"did NOT reflect — server-side execution)"
                         )
                         return payload, evidence
                 except _requests.exceptions.RequestException as exc:
@@ -479,19 +502,42 @@ class SQLInjectionScanner(BaseScanner):
         bl_mean, bl_stdev = self._measure_baseline_timing(url, n=3)
         dynamic_threshold = max(bl_mean + 3.0 * bl_stdev, 4.0, time_threshold)
 
+        # WAF/ban status codes. A slow response that is actually a WAF block
+        # page (Cloudflare 403, rate-limit 429/503 …) is NOT evidence of a SQL
+        # delay — under an active WAF every confirm probe can be throttled past
+        # the threshold or 403'd, which previously produced bogus 3/3 time-based
+        # "confirmations" (observed on a Cloudflare target returning 1266× 403).
+        _BLOCK_STATUS = frozenset({403, 406, 409, 419, 429, 503, 509})
+
         hits = 0
+        blocked = 0
         for _ in range(n):
             injected = self.inject_param(url, param_name, payload)
             t0 = time.time()
             try:
-                self.session.get(injected, timeout=dynamic_threshold + 8)
+                resp = self.session.get(injected, timeout=dynamic_threshold + 8)
                 elapsed = time.time() - t0
+                if resp.status_code in _BLOCK_STATUS:
+                    # WAF interference, not a SQL-induced delay → never a hit.
+                    blocked += 1
+                    continue
                 if elapsed >= dynamic_threshold:
                     hits += 1
             except _requests.exceptions.Timeout:
-                hits += 1  # timeout itself is evidence of delay
+                # A timeout is only delay-evidence if we are not being actively
+                # blocked. Count it, but the blocked-gate below still vetoes a
+                # confirmation when the channel is dominated by WAF blocks.
+                hits += 1
             except _requests.exceptions.RequestException as _fix_e:
                 logger.debug(f"[scanners.sqli] {type(_fix_e).__name__}: {_fix_e!r}")
+        # If any probe was WAF-blocked, a full min_hits/n confirmation is
+        # untrustworthy — the timing channel is contaminated. Require a clean run.
+        if blocked > 0:
+            logger.debug(
+                "[scanners.sqli] time-based confirm aborted: %d/%d probes WAF-blocked",
+                blocked, n,
+            )
+            return False
         return hits >= min_hits
 
     def run(self, url, **kwargs):
