@@ -366,6 +366,7 @@ from websecure.core.utils import (
     quit_driver,
     silence_insecure_request_warnings,
     validate_url,
+    is_static_asset,
 )
 
 _det_spec = _ws_spec("websecure.core.detect")
@@ -1897,6 +1898,20 @@ def _run_scan_phases(
             except Exception as _ep_exc:
                 _logger.debug(f"[PlanB] EndpointPrioritizer error: {_ep_exc!r}")
 
+        # Enjeksiyon/fuzz hedef listesi: STATIK asset'leri (.js/.css/.png/.woff…)
+        # ele. Static chunk dosyaları query param işlemez; bunları SQLi/XSS/OAST/
+        # SSRF/fuzz'a sokmak yalnız zaman kaybı (logda ~7 dk boşa static .js
+        # fuzzing: 962-…js?q=, .js?redirect= …). Keşif/coverage için tam 'endpoints'
+        # korunur; YALNIZ enjeksiyon döngüleri _inj_endpoints kullanır.
+        _inj_endpoints = [u for u in endpoints
+                          if isinstance(u, str) and not is_static_asset(u)]
+        if not _inj_endpoints:
+            _inj_endpoints = list(endpoints)  # tümü static ise enjeksiyonu boş bırakma
+        _n_static = len(endpoints) - len(_inj_endpoints)
+        if _n_static > 0:
+            _logger.info(f"[fuzz] {_n_static} statik asset enjeksiyon listesinden elendi "
+                         f"({len(_inj_endpoints)} enjekte edilebilir hedef)")
+
         crawled_pf_items = [{"url": u, "method": "GET", "params": {"query": {}, "body": {}, "json": {}}} for u in
                             endpoints]
         discovered = discover_params_from_crawl(crawled_pf_items) if callable(
@@ -2009,7 +2024,7 @@ def _run_scan_phases(
         print("[•] SSRF/XXE sezgisel kontroller…")
         t = mark("ssrf_xxe")
         if callable(globals().get("ssrf_xxe_scan")):
-            kw = dict(session=session, endpoints=endpoints[:40], oast_cfg=oast_cfg, results=results,
+            kw = dict(session=session, endpoints=_inj_endpoints[:40], oast_cfg=oast_cfg, results=results,
                       debug=debug,
                       auth_ctx=auth_ctx)
             # imza uyumu için anahtar adlarını fonskiyon imzasına göre filtrele
@@ -2017,7 +2032,7 @@ def _run_scan_phases(
             # bazı sürümlerde 'endpoints' yerine yalnızca pozisyonel kullanılıyor olabilir:
             if not fk:
                 # minimum pozisyonel: (session, endpoints, oast_cfg, results)
-                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, endpoints[:40], oast_cfg, results,
+                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, _inj_endpoints[:40], oast_cfg, results,
                                                call_timeout=900.0)
             else:
                 ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, **fk, call_timeout=900.0)
@@ -2241,7 +2256,7 @@ def _run_scan_phases(
         sig_params = set(inspect.signature(fuzz_fn).parameters.keys()) if callable(fuzz_fn) else set()
 
         t_fz = mark("fuzzing")
-        for u in endpoints[:50]:  # güvenli üst sınır
+        for u in _inj_endpoints[:50]:  # güvenli üst sınır (static asset'ler elendi)
             if not callable(fuzz_fn):
                 if callable(globals().get("add_result")):
                     add_result("errors", {"stage": "fuzz", "url": u, "error": "fuzz_endpoint_missing"})
@@ -2283,9 +2298,10 @@ def _run_scan_phases(
             print("[•] SSRF & XXE taraması…")
             _safe_call(_ssrf_fn, ctx=ctx)
 
-        merged_eps = list(set(endpoints + (ctx.results.get("discovery", {}).get("query") or [])))
-        # Filter valid URLs
-        merged_eps = [u for u in merged_eps if isinstance(u, str) and "://" in u]
+        merged_eps = list(set(_inj_endpoints + (ctx.results.get("discovery", {}).get("query") or [])))
+        # Filter valid URLs + static asset'leri ele (discovery query'si de içerebilir)
+        merged_eps = [u for u in merged_eps
+                      if isinstance(u, str) and "://" in u and not is_static_asset(u)]
 
         # 3. SQL Injection (New Robust Module)
         # Import dynamically to handle 'shim' modules
@@ -2330,7 +2346,7 @@ def _run_scan_phases(
                     RoleProfile(name=rc.get("name", "user"), headers=rc.get("headers", {}),
                                 cookies=rc.get("cookies", {})))
             rctx = RoleContext(base=session, roles=roles)
-            ok_authz, auth_findings = _safe_call(authorization_run, rctx, endpoints[:30], call_timeout=600.0)
+            ok_authz, auth_findings = _safe_call(authorization_run, rctx, _inj_endpoints[:30], call_timeout=600.0)
             if ok_authz and isinstance(auth_findings, (list, tuple)):
                 for f in auth_findings:
                     if callable(globals().get("add_result")):
@@ -2372,7 +2388,7 @@ def _run_scan_phases(
             t = mark("oast")
             ok_client, client = _safe_call(OASTClient, session, oast_cfg, call_timeout=30.0)
             if ok_client:
-                for u in endpoints[:20]:
+                for u in _inj_endpoints[:20]:
                     disc = {"query": discovered.get("query", []), "body": [], "json": [], "headers": [],
                             "cookies": []}
                     limits = {"max_injections_per_loc": int(oast_cfg.get("max_injections_per_loc", 3))}

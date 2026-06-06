@@ -3955,7 +3955,13 @@ def run_plan_if_needed(ctx: dict):
             except (ImportError, AttributeError) as exc:
                 _logger.debug("[phases] LiveMonitor log_phase unavailable: %r", exc)
         start_t = _t.time()
-        _safe(ctx, lambda: runner(ctx), pid)
+        # ÇİFT _safe SARMASI BUG FIX: her Phase.runner zaten kendini _safe ile
+        # sarıyor (runner=lambda c: _safe(c, lambda: _runner_X(c), "X")). Burada
+        # tekrar _safe(ctx, lambda: runner(ctx), pid) çağırmak fazı İKİ watchdog
+        # thread'iyle iç içe çalıştırıyordu → eşzamanlı timeout'ta ÇİFT "Phase X
+        # exceeded ... skipped" logu (logda subdomain_takeover/dom_xss/sqlmap 2x)
+        # + gereksiz thread/kaynak. runner'ı doğrudan çağır — koruma iç _safe'te.
+        runner(ctx)
         if _is_debug:
             print(f"    -> {pid} finished in {_t.time() - start_t:.2f}s")
 
