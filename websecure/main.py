@@ -2198,88 +2198,16 @@ def _run_scan_phases(
 
             mark("offensive", t)
 
-        print("[•] Skorlama/Doğrulama (MD)…")
-        t = mark("reporting")
-        buckets = get_bucket_results()
-
-        all_findings = []
-        for _k, _lst in (buckets or {}).items():
-            if isinstance(_lst, list):
-                for _it in _lst:
-                    if isinstance(_it, dict):
-                        all_findings.append(_it)
-
-        oast_events = []
-        for _it in all_findings:
-            evs = _it.get("events")
-            if isinstance(evs, list):
-                for _ev in evs:
-                    if isinstance(_ev, dict):
-                        oast_events.append(_ev)
-
-        final = verify_and_score(all_findings, oast_events)
-
-        # Plan B (B9): Evidence chain builder — correlate findings into attack chains
-        if _PLAN_B_AVAILABLE and _EvidenceChainBuilder is not None and all_findings:
-            try:
-                _chain_builder = _EvidenceChainBuilder()
-                _chain_builder.annotate_results(results)
-                chains = results.get("attack_chains", [])
-                if chains:
-                    _logger.info(f"[PlanB/B9] Built {len(chains)} attack chains")
-                    print(f"[B9] Attack chains: {len(chains)} correlation(s) found")
-                    critical_chains = [c for c in chains if c.get("chain_severity") == "Critical"]
-                    if critical_chains:
-                        print(f"  [!!] Critical chains: {len(critical_chains)}")
-                        for c in critical_chains[:3]:
-                            print(f"      - {c['title']} (score={c['chain_score']})")
-            except Exception as _cb_exc:
-                _logger.debug(f"[PlanB] EvidenceChainBuilder error: {_cb_exc!r}")
-
-        report_payload = dict(results)
-        report_payload.update(get_bucket_results())
-        report_payload.update(buckets)
-        # Bucket'lardan nmap/tls/discovery verilerini açıkça al
-        _bkts = get_bucket_results()
-        report_payload.update({
-            "meta": {
-                "target": url,
-                "mode": mode,
-                "detailed": detailed,
-            },
-            "final": final,
-            "phase_timings": results.get("phase_timings", {}),
-            "crawl_summary": results.get("crawl_summary"),
-            "security_headers_summary": results.get("security_headers_summary"),
-            "port_scan_summary": results.get("port_scan_summary"),
-            "discovery_summary": results.get("discovery_summary"),
-            # Nmap: bucket veya results'tan
-            "nmap": _bkts.get("nmap") or results.get("nmap") or results.get("port_scan") or [],
-            # TLS: bucket veya results'tan; _e_table_tls_headers normalize eder
-            "tls": _bkts.get("tls") or results.get("tls") or [],
-            "tls_summary": results.get("tls_summary") or [],
-            # Discovery: bucket'lardan
-            "discovery": _bkts.get("discovery") or results.get("discovery") or [],
-            "files_discovered": _bkts.get("files_discovered") or results.get("files_discovered") or [],
-            # Plan B data
-            "attack_chains": results.get("attack_chains") or [],
-            "tech_profile": results.get("tech_profile") or {},
-            "endpoint_priority_summary": results.get("endpoint_priority_summary") or {},
-        })
-
-        out = perform_reporting(session, cfg, report_payload)
-        written = (out or {}).get("written", {})
-
-        if driver is not None:
-            quit_driver(driver)  # kapat + reaper kaydından düş
-        s = session
-        if s is not None:
-            getattr(s, 'close', lambda: None)()
-        print("\n[i] Tamamlandı.")
-        print(
-            # yazılan dosyalar ve webhook sonucunu içerir
-            f"[i] Üretilen dosyalar: {json.dumps(written, ensure_ascii=False)}")
-
+        # NOT (akış düzeltmesi): Skorlama + raporlama bloğu ESKİDEN burada,
+        # fuzzing/offensive taramalarından ÖNCE çalışıyordu. Sonuç:
+        #   (1) fuzzing/NoSQLi/SSRF/SQLi/XSS/CSRF/ChainReactor/bizlogic/OAST
+        #       bulguları resmî rapora GİRMİYORDU (rapor erken üretiliyordu),
+        #   (2) program "Tamamlandı" deyip fuzzing'e devam ediyordu (kullanıcıya
+        #       "bitti ama hâlâ çalışıyor" görünüyordu),
+        #   (3) session.close() fuzzing session'ı KULLANMADAN önce çağrılıyordu,
+        #   (4) en sonda finally safety-net İKİNCİ bir rapor basıyordu.
+        # Çözüm: skorlama+raporlama+temizlik artık tüm taramalardan SONRA, bu
+        # fonksiyonun en altında (_finalize_reporting) tek seferde yapılıyor.
         print("fuzzing başlıyor…")
         t = mark("fuzzing")
 
@@ -2450,6 +2378,97 @@ def _run_scan_phases(
                     add_result("errors", {"stage": "oast", "error": f"client_init_failed:{client}"})
             mark("oast", t)
 
+        # ===================== SKORLAMA + RAPORLAMA (EN SON) =====================
+        # Tüm taramalar (pasif/aktif/offensive/fuzz/OAST) bittikten SONRA tek
+        # seferde skorla + raporla. Böylece rapor HER bulguyu kapsar ve program
+        # "Tamamlandı" dediğinde gerçekten bitmiş olur.
+        print("[•] Skorlama/Doğrulama (MD)…")
+        t = mark("reporting")
+        buckets = get_bucket_results()
+
+        all_findings = []
+        for _k, _lst in (buckets or {}).items():
+            if isinstance(_lst, list):
+                for _it in _lst:
+                    if isinstance(_it, dict):
+                        all_findings.append(_it)
+
+        oast_events = []
+        for _it in all_findings:
+            evs = _it.get("events")
+            if isinstance(evs, list):
+                for _ev in evs:
+                    if isinstance(_ev, dict):
+                        oast_events.append(_ev)
+
+        final = verify_and_score(all_findings, oast_events)
+
+        # Plan B (B9): Evidence chain builder — correlate findings into attack chains
+        if _PLAN_B_AVAILABLE and _EvidenceChainBuilder is not None and all_findings:
+            try:
+                _chain_builder = _EvidenceChainBuilder()
+                _chain_builder.annotate_results(results)
+                chains = results.get("attack_chains", [])
+                if chains:
+                    _logger.info(f"[PlanB/B9] Built {len(chains)} attack chains")
+                    print(f"[B9] Attack chains: {len(chains)} correlation(s) found")
+                    critical_chains = [c for c in chains if c.get("chain_severity") == "Critical"]
+                    if critical_chains:
+                        print(f"  [!!] Critical chains: {len(critical_chains)}")
+                        for c in critical_chains[:3]:
+                            print(f"      - {c['title']} (score={c['chain_score']})")
+            except Exception as _cb_exc:
+                _logger.debug(f"[PlanB] EvidenceChainBuilder error: {_cb_exc!r}")
+
+        report_payload = dict(results)
+        report_payload.update(get_bucket_results())
+        report_payload.update(buckets)
+        # Bucket'lardan nmap/tls/discovery verilerini açıkça al
+        _bkts = get_bucket_results()
+        report_payload.update({
+            "meta": {
+                "target": url,
+                "mode": mode,
+                "detailed": detailed,
+            },
+            "final": final,
+            "phase_timings": results.get("phase_timings", {}),
+            "crawl_summary": results.get("crawl_summary"),
+            "security_headers_summary": results.get("security_headers_summary"),
+            "port_scan_summary": results.get("port_scan_summary"),
+            "discovery_summary": results.get("discovery_summary"),
+            # Nmap: bucket veya results'tan
+            "nmap": _bkts.get("nmap") or results.get("nmap") or results.get("port_scan") or [],
+            # TLS: bucket veya results'tan; _e_table_tls_headers normalize eder
+            "tls": _bkts.get("tls") or results.get("tls") or [],
+            "tls_summary": results.get("tls_summary") or [],
+            # Discovery: bucket'lardan
+            "discovery": _bkts.get("discovery") or results.get("discovery") or [],
+            "files_discovered": _bkts.get("files_discovered") or results.get("files_discovered") or [],
+            # Plan B data
+            "attack_chains": results.get("attack_chains") or [],
+            "tech_profile": results.get("tech_profile") or {},
+            "endpoint_priority_summary": results.get("endpoint_priority_summary") or {},
+        })
+
+        out = perform_reporting(session, cfg, report_payload)
+        written = (out or {}).get("written", {})
+        mark("reporting", t)
+
+        # Rapor başarıyla üretildi → finally safety-net'in İKİNCİ kez raporlamasını
+        # engelle (çift "Raporlama süreci" çıktısını önler).
+        globals()["_REPORTING_DONE"] = True
+
+        if driver is not None:
+            quit_driver(driver)  # kapat + reaper kaydından düş
+        s = session
+        if s is not None:
+            getattr(s, 'close', lambda: None)()
+        print("\n[i] Tamamlandı.")
+        print(
+            # yazılan dosyalar ve webhook sonucunu içerir
+            f"[i] Üretilen dosyalar: {json.dumps(written, ensure_ascii=False)}")
+
 
 def _as_int(x, default: int = 0) -> int:
     if isinstance(x, int):
@@ -2483,11 +2502,16 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
     finally:
-        # Emergency Report Save — works even on Ctrl+C or mid-scan crash
-        print("\n[!] Raporlama süreci (Safety Net)...")
+        # Emergency Report Save — SADECE normal raporlama yapılmadıysa (Ctrl+C /
+        # tarama ortası çökme). Normal akışta _run_scan_phases sonunda rapor zaten
+        # üretildi (_REPORTING_DONE=True) → burada İKİNCİ kez raporlama yapma;
+        # aksi halde kullanıcı "Tamamlandı" sonrası tekrar "Raporlama süreci" görür.
         _res = globals().get("results")
         _cfg = globals().get("cfg")
-        if _res and _cfg:
+        if globals().get("_REPORTING_DONE"):
+            pass  # rapor zaten kaydedildi, sessizce geç
+        elif _res and _cfg:
+            print("\n[!] Raporlama süreci (Safety Net)...")
             try:
                 import websecure.core.reporting as _rep_safe
                 # Merge bucket results (findings added during scan) into the payload
