@@ -67,6 +67,40 @@ except ImportError:
         ))
 
 
+def _control_is_authenticated(session, target: str, ua: str) -> bool:
+    """
+    Differential control gate for the session-acceptance heuristic.
+
+    ``_looks_authenticated()`` is a keyword heuristic ("logout", "my account",
+    "hesabım" …). On CMS/e-commerce targets (WordPress/WooCommerce) those words
+    live in the account menu of *every* page — anonymous pages included — so the
+    heuristic returns True for **any** request. Without a control that turns
+    every weak/predictable cookie into a bogus "auth bypass": a single neuneon
+    scan produced 144 duplicate CRITICAL "Weak Session ID" findings this way.
+
+    We send a high-entropy random cookie that cannot be a valid/weak/seeded
+    session value. If the server *still* looks authenticated, the heuristic is
+    unreliable for this target and dictionary/timestamp findings must be
+    suppressed (they would all be false positives).
+
+    Returns True when the control already looks authenticated (=> SUPPRESS).
+    On network error returns False (fail-open: a single aggregated finding may
+    still be emitted, but the per-target dedup keeps it from exploding).
+    """
+    control = uuid.uuid4().hex + uuid.uuid4().hex  # 64 hex chars — never a weak/seeded value
+    try:
+        resp = session.get(
+            target,
+            headers={"Cookie": f"PHPSESSID={control}", "User-Agent": ua},
+            timeout=5,
+            verify=False,
+        )
+        return bool(_looks_authenticated(resp.text, resp))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[session] control request failed (%s) — cannot gate", exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # CookieFlagScanner
 # ---------------------------------------------------------------------------
@@ -598,7 +632,18 @@ class WeakSessionBruteForcer(BaseScanner):
         phase_timeout = int(kwargs.get("op_timeout", self.PHASE_TIMEOUT))
         ua = (self.session.headers.get("User-Agent") if self.session else None) or "Mozilla/5.0"
 
-        def check_one(name: str, value: str) -> Optional[Dict]:
+        # Control gate: if a random (non-weak) cookie already "looks
+        # authenticated", the heuristic cannot distinguish accepted vs rejected
+        # sessions on this target → every weak value would be a false positive.
+        if _control_is_authenticated(self.session, target, ua):
+            logger.info(
+                "[WeakSessionBruteForcer] Baseline random cookie already looks "
+                "authenticated — heuristic unreliable for %s; suppressing "
+                "dictionary-attack findings to avoid false positives.", target
+            )
+            return findings
+
+        def check_one(name: str, value: str) -> Optional[str]:
             try:
                 resp = self.session.get(
                     target,
@@ -607,25 +652,12 @@ class WeakSessionBruteForcer(BaseScanner):
                     verify=False,
                 )
                 if _looks_authenticated(resp.text, resp):
-                    return {
-                        "type": "Weak Session ID — Dictionary Attack",
-                        "severity": "Critical",
-                        "url": target,
-                        "cookie": f"{name}={value}",
-                        "status": resp.status_code,
-                        "description": (
-                            f"Access gained with trivial session: {name}={value!r}. "
-                            "Server accepts a well-known weak session identifier."
-                        ),
-                        "remediation": (
-                            "Use cryptographically random session IDs (os.urandom(32)). "
-                            "Never accept predictable or dictionary-word values."
-                        ),
-                    }
+                    return f"{name}={value}"
             except Exception as exc:
                 logger.debug("[WeakSessionBruteForcer] %s=%s: %s", name, value, exc)
             return None
 
+        accepted: List[str] = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(check_one, name, val): (name, val)
@@ -634,16 +666,39 @@ class WeakSessionBruteForcer(BaseScanner):
             }
             try:
                 for f in as_completed(futures, timeout=phase_timeout):
-                    result = f.result()
-                    if result:
-                        self.report_finding(**result)
-                        findings.append(result)
+                    cookie = f.result()
+                    if cookie:
+                        accepted.append(cookie)
             except _FutureTimeoutError:
                 logger.warning(
                     "[WeakSessionBruteForcer] Phase timed out after %ds", phase_timeout
                 )
                 for f in futures:
                     f.cancel()
+
+        # Dedup: emit ONE finding per target listing every accepted weak value,
+        # instead of one CRITICAL per name×value combination (was up to 144).
+        if accepted:
+            result = {
+                "type": "Weak Session ID — Dictionary Attack",
+                "severity": "Critical",
+                "url": target,
+                "cookies": accepted,
+                "accepted_count": len(accepted),
+                "description": (
+                    f"Server accepted {len(accepted)} well-known weak session "
+                    f"identifier(s): {', '.join(accepted[:10])}"
+                    + (" …" if len(accepted) > 10 else "")
+                    + ". A random control cookie did NOT look authenticated, so "
+                    "this is a differential positive."
+                ),
+                "remediation": (
+                    "Use cryptographically random session IDs (os.urandom(32)). "
+                    "Never accept predictable or dictionary-word values."
+                ),
+            }
+            self.report_finding(**result)
+            findings.append(result)
 
         return findings
 
@@ -671,6 +726,16 @@ class TimestampSessionPredictor(BaseScanner):
         workers = int(kwargs.get("threads", self.MAX_WORKERS))
         phase_timeout = int(kwargs.get("op_timeout", self.PHASE_TIMEOUT))
         ua = (self.session.headers.get("User-Agent") if self.session else None) or "Mozilla/5.0"
+
+        # Control gate (same rationale as WeakSessionBruteForcer): suppress when
+        # a random cookie already looks authenticated, else every seed is a FP.
+        if _control_is_authenticated(self.session, target, ua):
+            logger.info(
+                "[TimestampSessionPredictor] Baseline random cookie already looks "
+                "authenticated — heuristic unreliable for %s; suppressing "
+                "timestamp-seed findings to avoid false positives.", target
+            )
+            return findings
 
         now = int(time.time())
         seeds = list(range(now - 900, now, 30))   # 15 min window, 30s intervals
@@ -718,6 +783,8 @@ class TimestampSessionPredictor(BaseScanner):
                         )
             return None
 
+        # Dedup: a predictable-session weakness is one finding per target. Emit
+        # only the first confirmed seed instead of one CRITICAL per seed (was 30).
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(test_seed, ts): ts for ts in seeds}
             try:
@@ -726,6 +793,9 @@ class TimestampSessionPredictor(BaseScanner):
                     if result:
                         self.report_finding(**result)
                         findings.append(result)
+                        for other in futures:
+                            other.cancel()
+                        break
             except _FutureTimeoutError:
                 logger.warning(
                     "[TimestampSessionPredictor] Phase timed out after %ds", phase_timeout
