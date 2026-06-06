@@ -417,22 +417,36 @@ class AsyncioEngine(RaceEngine):
 
             return sigs, bodies, errors
 
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-        if loop.is_running():
-            # Ayrı thread’de yeni loop ile çalıştır
+        # BUG FIX (Race Scan Failed: "no current event loop in thread phase::races"):
+        # get_event_loop_policy().get_event_loop() ana-thread DIŞINDA çalışan loop
+        # yoksa loop OLUŞTURMAZ, RuntimeError fırlatır (Python 3.10+). Bu fonksiyon
+        # _safe'in 'phase::races' daemon thread'inden çağrıldığı için race scan'i
+        # tamamen düşürüyordu. Modern get_running_loop() ile "çalışan loop var mı"
+        # güvenle saptanır; yoksa kendi loop'umuzu kurarız.
+        try:
+            asyncio.get_running_loop()
+            loop_running = True
+        except RuntimeError:
+            loop_running = False
+
+        if loop_running:
+            # Zaten çalışan bir loop var → ayrı thread’de yeni loop ile çalıştır.
             result_box: Dict[str, Any] = {}
 
             def _worker():
                 loop2 = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop2)
-                result_box["val"] = loop2.run_until_complete(_main())
-                loop2.close()
+                try:
+                    result_box["val"] = loop2.run_until_complete(_main())
+                finally:
+                    loop2.close()
 
             t = threading.Thread(target=_worker, daemon=True)
             t.start()
             t.join()
             return result_box.get("val", ([], [], []))
         else:
+            # Çalışan loop yok (sync bağlam / worker thread) → asyncio.run güvenli.
             return asyncio.run(_main())
 
 

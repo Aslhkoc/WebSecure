@@ -5635,10 +5635,16 @@ def run_authorization_matrix(ctx) -> None:
     url = getattr(ctx, "base_url", "")
     
     try:
-        # Modülün run fonksiyonunu çağır
-        # Not: scanners.auth.run genelde (url, session, config) veya (url, users) bekler.
-        # İmzayı dinamik kontrol edelim.
-        kw = _filter_kwargs(run_fn, {"url": url, "base_url": url, "session": sess, "config": cfg, "users": users})
+        # Modülün run fonksiyonunu çağır.
+        # BUG FIX ("run() missing 1 required positional argument: 'target'"):
+        # auth_scanners.run imzası (target, session, results, debug) — ilk ZORUNLU
+        # param 'target'. Eski kod yalnız url/base_url veriyordu, _filter_kwargs
+        # 'target'ı eşleştiremeyip düşürünce çağrı patlıyordu. 'target' anahtarını
+        # ekle (url/base_url da uyumlu imzalar için kalsın).
+        kw = _filter_kwargs(run_fn, {
+            "target": url, "url": url, "base_url": url,
+            "session": sess, "config": cfg, "users": users,
+        })
         findings = run_fn(**kw)
         
         if findings:
