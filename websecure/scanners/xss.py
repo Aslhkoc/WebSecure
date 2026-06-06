@@ -272,9 +272,24 @@ def _is_xss_executable(payload: str, response_text: str) -> bool:
     # Collect which dangerous chars appear in the payload
     relevant_chars = [c for c in _DANGEROUS_CHARS if c in payload]
     if not relevant_chars:
-        # Payload has no angle brackets / quotes (e.g. pure JS like alert(1))
-        # — still reflected, no encoding concern
-        return True
+        # Payload has no HTML breakout chars (< > " '). Such a payload can only
+        # execute if it lands in an ALREADY-executable context — a javascript:
+        # URI inside an href/src, an event-handler value, or inside a live
+        # <script>. html.escape() leaves ':' '/' '(' ')' untouched, so a payload
+        # like `javascript://%0aalert(1)` survives verbatim through a sanitised
+        # text node yet is completely inert there. Require an executable context;
+        # a bare reflection in a text node is a false positive (was reported High
+        # on the html.escape'd benchmark endpoint).
+        pos0 = response_text.find(payload)
+        win0 = response_text[max(0, pos0 - 40): pos0 + len(payload) + 5]
+        if (_HREF_INDICATORS.search(win0) or _SRC_INDICATORS.search(win0)
+                or _EVENT_INDICATORS.search(win0) or _SCRIPT_INDICATORS.search(win0)):
+            return True
+        logger.debug(
+            "[XSS] Payload has no breakout chars and no executable context "
+            f"— not executable (FP guard): {payload[:50]!r}"
+        )
+        return False
 
     # Find the reflection position and inspect a window around it
     pos = response_text.find(payload)
@@ -682,6 +697,20 @@ class XSSScanner(BaseScanner):
             rq_score  = hit.pop("_rq_score",   0.0)
             rq_detail = hit.pop("_rq_detail",  "")
             hit.pop("_rq_severity", None)  # strip internal key from **hit spread; severity derived below
+
+            # FALSE-POSITIVE GUARD: a reflection that is neither executable (its
+            # dangerous chars did not survive in an executable context) nor
+            # confirmed by the DOM engine is not a demonstrable XSS — it is just
+            # input being echoed (every search page echoes its query). Reporting
+            # it inflates findings with unverifiable Medium "manual check"
+            # entries (the html.escape'd benchmark endpoint produced exactly such
+            # a false positive). Require executable OR DOM-confirmed to report.
+            if not executable and not dom_confirmed:
+                logger.debug(
+                    "[XSS] Reflection not executable and DOM-unconfirmed — "
+                    f"suppressing FP: {str(hit.get('payload',''))[:50]!r}"
+                )
+                continue
 
             # Severity: DOM confirmation > quality score > confidence > executable flag
             if dom_confirmed:
@@ -1239,14 +1268,28 @@ class MutationXSSProber:
             try:
                 injected = inject_fn(url, param, payload)
                 resp = session.get(injected, timeout=timeout)
-                if any(sig in resp.text for sig in _exec_sigs):
-                    findings.append({
-                        "vuln_type": "mXSS (Mutation XSS)",
-                        "url": url,
-                        "param": param,
-                        "payload": payload,
-                        "evidence": "mXSS execution signature detected in response",
-                    })
+                body = resp.text or ""
+                if not any(sig in body for sig in _exec_sigs):
+                    continue
+                # FALSE-POSITIVE GUARD. The execution signature ("onerror=alert"
+                # …) is part of the payload text and html.escape() does NOT touch
+                # it (it only encodes < > & " '), so it survives verbatim even
+                # when the markup is fully neutralised — e.g. the safe benchmark
+                # endpoint reflected `&lt;img onerror=alert(1)&gt;` and produced
+                # 10 bogus mXSS criticals. A real mXSS needs the handler to live
+                # inside an UNESCAPED tag. Reject when the payload came back
+                # html-escaped, and require a raw `<…on*=` tag to be present.
+                if html.escape(payload) in body:
+                    continue
+                if not re.search(r"<[^<>]*\bon\w+\s*=", body, re.I):
+                    continue
+                findings.append({
+                    "vuln_type": "mXSS (Mutation XSS)",
+                    "url": url,
+                    "param": param,
+                    "payload": payload,
+                    "evidence": "mXSS execution signature in an unescaped tag context",
+                })
             except Exception as _exc:
                 logger.debug(f"[mXSS] probe failed for {url} param={param}: {_exc!r}")
                 continue
