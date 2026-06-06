@@ -183,11 +183,27 @@ class LiveMonitor:
         else:
             # System / informational events: show a compact line without VULN counter
             if self.verbose and not is_system:
-                msg = str(item.get("message") or item.get("reason") or item.get("details") or "")[:100]
+                # İçeriği birden çok alandan derle. Eski kod yalnız message/reason/
+                # details'e bakıyor, bunlar boşsa `vtype` bucket adına düşüyor ve
+                # "[ENDPOINTS]  endpoints" gibi BOŞ gürültü satırları basıyordu
+                # (logda 67× endpoints, boş [VULNERABILITY]/[OFFENSIVE]/[CRAWL]…).
+                msg = str(
+                    item.get("message") or item.get("reason") or item.get("details")
+                    or item.get("url") or item.get("target") or item.get("endpoint")
+                    or item.get("path") or item.get("name") or item.get("value") or ""
+                ).strip()[:100]
+                vt = vtype.strip()
+                # Anlamlı içerik yoksa (msg boş VE vtype yalnızca bucket adının
+                # tekrarı) → bu satır saf gürültü, hiç basma.
+                if not msg and (not vt or vt.lower() == bucket.lower()):
+                    return
+                # vtype bucket adının tekrarıysa label'ı boş bırak (çift yazma).
+                label = vt[:60] if (vt and vt.lower() != bucket.lower()) else ""
+                tail = f"{label}  {msg}".strip()
                 self._print(
                     f"{self._DIM}[{self._ts()}]{self._RS}  "
                     f"{self._G}[{bucket.upper()}]{self._RS}  "
-                    f"{vtype[:60]}  {msg}"
+                    f"{tail}"
                 )
             return
 
