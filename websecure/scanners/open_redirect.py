@@ -22,7 +22,7 @@ import re
 from concurrent.futures import TimeoutError as _FuturesTimeout
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import requests as _requests
 
@@ -418,9 +418,14 @@ class AdvancedRedirectProber(BaseScanner):
         parsed = urlparse(target)
         base = f"{parsed.scheme}://{parsed.netloc}"
 
+        # Scope: probe ONLY the target the caller handed us. Previously this also
+        # appended invented paths (/login, /redirect, /go, /out, /) to EVERY scan,
+        # so a request to audit /safe_redirect silently also hit /redirect — in the
+        # benchmark that bled a genuine /redirect hit onto the safe endpoint and
+        # was scored as a false positive. Real redirect endpoints are supplied by
+        # the discovery phase, not invented here. (madde 5: çalışmaması gereken
+        # yerde çalışıyordu.)
         probe_urls = [target]
-        for path in ["/login", "/redirect", "/go", "/out", "/"]:
-            probe_urls.append(base.rstrip("/") + path)
 
         for probe_url in probe_urls:
             for param in _ADV_PARAMS:
@@ -455,7 +460,15 @@ class AdvancedRedirectProber(BaseScanner):
         # JS / Data URI → Critical (XSS chain)
         payload_lower = payload.lower()
         if (payload_lower.startswith("javascript:") or payload_lower.startswith("data:")):
-            if status_ok and location:
+            # Strict: it is only an open-redirect-to-XSS if the server actually
+            # set the redirect TARGET to the dangerous URI. Previously any 3xx
+            # with any Location qualified, so a benign internal redirect (or a
+            # blocked request that still 302'd elsewhere) was reported Critical.
+            loc_norm = unquote(location or "").strip().lower()
+            target_is_dangerous = (
+                loc_norm.startswith("javascript:") or loc_norm.startswith("data:")
+            )
+            if status_ok and location and target_is_dangerous:
                 return {
                     "vuln_type": "Open Redirect (XSS Chain — JS/Data URI)",
                     "url": test_url,
