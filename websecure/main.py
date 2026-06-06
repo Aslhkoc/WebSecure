@@ -1470,8 +1470,29 @@ def _run_scan_phases(
             _logger.debug(f"[HumanAdapter] Yüklenemedi: {_ha_exc}")
 
         # --- Otomatik Playwright login (auth_profiles yapılandırılmışsa) ---
+        # config.json varsayılan olarak PLACEHOLDER auth_profile içerir
+        # (KULLANICI_ADI / SIFRE / https://hedef-site.com/login). Eski koşul yalnız
+        # "username ve password dolu mu" diye baktığından, kullanıcı interaktif
+        # olarak auth'u reddetse bile placeholder'lar dolu sayılıp Playwright login
+        # SAHTE 'hedef-site.com' domain'ine bağlanmaya çalışıyor, zaman kaybediyor
+        # ve "Mevcut URL: https://hedef-site.com/login" gibi yanıltıcı log basıyordu.
+        # Çözüm: placeholder değerleri (ve hedefle alakasız login_url'i) ele.
+        _PLACEHOLDER_AUTH = {
+            "KULLANICI_ADI", "SIFRE", "KULLANICI", "PAROLA",
+            "USERNAME", "PASSWORD", "user", "pass", "", None,
+        }
         _run_auth_profiles = ((cfg.get("authenticated") or {}).get("auth_profiles") or [])
-        if _run_auth_profiles and _run_auth_profiles[0].get("username") and _run_auth_profiles[0].get("password"):
+        _ap0 = _run_auth_profiles[0] if _run_auth_profiles else {}
+        _ap_user = (_ap0.get("username") or "").strip()
+        _ap_pass = (_ap0.get("password") or "").strip()
+        _ap_login = (_ap0.get("login_url") or "").strip().lower()
+        _auth_is_real = (
+            _ap_user and _ap_pass
+            and _ap_user not in _PLACEHOLDER_AUTH
+            and _ap_pass not in _PLACEHOLDER_AUTH
+            and "hedef-site.com" not in _ap_login  # placeholder domain
+        )
+        if _auth_is_real:
             try:
                 from websecure.core.auth_flow import playwright_login as _pw_login
                 print("[*] Playwright ile otomatik giris yapiliyor...")
