@@ -1260,6 +1260,17 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
             _logger.warning(
                 "[phases] Phase '%s' exceeded %ds — skipped to prevent hang", phase_id, phase_timeout
             )
+            # The phase thread cannot be force-killed; signal cooperative
+            # cancellation so its still-running daemon stops issuing HTTP
+            # requests in the background (otherwise it keeps crawling for the
+            # rest of the scan, stealing time from later phases and polluting
+            # their output — exactly what produced the duplicated 'discovery'
+            # block in the wild).
+            try:
+                from websecure.core.http import mark_phase_abandoned as _mark_abandoned
+                _mark_abandoned(phase_id)
+            except Exception:
+                pass
             add_result("errors", {
                 "type": "phase_timeout",
                 "phase": phase_id,

@@ -24,6 +24,14 @@ except ImportError:  # pragma: no cover
     class _CircuitBreakerTripped(Exception):  # type: ignore[no-redef]
         pass
 
+# PhaseAbandoned — raised by the HTTP layer when this phase was skipped by the
+# watchdog; treated exactly like a tripped breaker (abort the batch quietly).
+try:  # pragma: no cover
+    from ..core.http import PhaseAbandoned as _PhaseAbandoned
+except ImportError:  # pragma: no cover
+    class _PhaseAbandoned(Exception):  # type: ignore[no-redef]
+        pass
+
 # Turkish → English severity normalization (lowercase keys for case-insensitive lookup)
 # Canonical values MUST match what the DB layer and reporting use: "Info" not "Informational"
 _SEVERITY_NORMALIZE_MAP: Dict[str, str] = {
@@ -346,7 +354,7 @@ class BaseScanner:
             for fut in as_completed(futures):
                 try:
                     result = fut.result()
-                except _CircuitBreakerTripped as exc:
+                except (_CircuitBreakerTripped, _PhaseAbandoned) as exc:
                     # The global circuit breaker is OPEN — every remaining probe in
                     # this batch will instantly trip too. Aborting here avoids both
                     # the 200+ duplicate tracebacks seen in the wild and the wasted
@@ -355,8 +363,8 @@ class BaseScanner:
                     if not cb_tripped:
                         cb_tripped = True
                         self.logger.warning(
-                            f"[{self.name}] Circuit breaker open — aborting remaining "
-                            f"probes in this batch: {exc}"
+                            f"[{self.name}] Aborting remaining probes in this batch "
+                            f"(circuit breaker open or phase abandoned): {exc}"
                         )
                     for f in futures:
                         f.cancel()

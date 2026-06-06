@@ -54,6 +54,38 @@ def is_open(host: str, port: int, timeout: float = 0.4) -> bool:
 
 ACTIVE_PHASE = contextvars.ContextVar("ACTIVE_PHASE", default="discovery")
 
+# ---- Abandoned-phase cooperative cancellation ----------------------------
+# A phase that exceeds its watchdog timeout is logged as "skipped", but Python
+# cannot force-kill its daemon thread — so the thread KEEPS issuing throttled
+# HTTP requests in the background, stealing the rest of the scan's wall-clock
+# budget and interleaving its output into later phases (observed on the neuneon
+# run: 'discovery' kept crawling after being skipped). When the watchdog gives
+# up on a phase it calls mark_phase_abandoned(); every subsequent request made
+# from that phase's thread then short-circuits *before* sleeping or hitting the
+# network, so the orphaned thread drains fast instead of running for hours.
+_ABANDONED_PHASES: set = set()
+_ABANDONED_LOCK = threading.Lock()
+
+
+class PhaseAbandoned(Exception):
+    """Raised to abort requests issued by a phase that the watchdog has skipped."""
+
+
+def mark_phase_abandoned(name: str) -> None:
+    with _ABANDONED_LOCK:
+        _ABANDONED_PHASES.add(name)
+
+
+def clear_phase_abandoned(name: str) -> None:
+    with _ABANDONED_LOCK:
+        _ABANDONED_PHASES.discard(name)
+
+
+def is_phase_abandoned(name: Optional[str] = None) -> bool:
+    nm = name if name is not None else ACTIVE_PHASE.get()
+    with _ABANDONED_LOCK:
+        return nm in _ABANDONED_PHASES
+
 _IDENTITY_POOLS = {
     "user_agents": [],
     "accept_language": [],
@@ -104,6 +136,9 @@ _LAST_CANARY_TS = 0.0
 _LAST_CANARY_TS_LOCK = threading.Lock()
 
 def set_active_phase(name: str) -> None:
+    # A fresh start for this phase id clears any stale "abandoned" flag from a
+    # previous run so it is not pre-emptively cancelled.
+    clear_phase_abandoned(name)
     ACTIVE_PHASE.set(name)
     prof = _HTTP_POLICY["phase_profiles"].get(name, {})
     rps = int(prof.get("initial_rps", _CURRENT_RPS.get()))
@@ -290,6 +325,12 @@ def _maybe_recover_from_backoff() -> None:
 
 def _smart_request(self, method, url, **kwargs):
     phase = ACTIVE_PHASE.get()
+
+    # Cooperative cancellation: if this phase was abandoned by the watchdog
+    # (exceeded its timeout), abort immediately — before sleeping or touching
+    # the network — so the orphaned daemon thread stops consuming scan time.
+    if is_phase_abandoned(phase):
+        raise PhaseAbandoned(f"phase '{phase}' was skipped by the watchdog")
 
     # Identity setup
     hdrs = dict(kwargs.get("headers", {}) or {})
