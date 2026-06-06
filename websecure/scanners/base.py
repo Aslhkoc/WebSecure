@@ -14,6 +14,16 @@ from ..core.http import hardened_session
 from ..core.reporting import add_result, redact_sensitive
 from ..core.payloads import get_payloads
 
+# Circuit breaker — when the global breaker is OPEN (e.g. WAF returning a
+# storm of 403s), every further request raises CircuitBreakerTripped. This is
+# an *expected* operational condition, not a bug, so probe loops must treat it
+# as a stop-signal rather than logging a full traceback per payload.
+try:  # pragma: no cover - import guard mirrors core.http
+    from ..core.circuit_breaker import CircuitBreakerTripped as _CircuitBreakerTripped
+except ImportError:  # pragma: no cover
+    class _CircuitBreakerTripped(Exception):  # type: ignore[no-redef]
+        pass
+
 # Turkish → English severity normalization (lowercase keys for case-insensitive lookup)
 # Canonical values MUST match what the DB layer and reporting use: "Info" not "Informational"
 _SEVERITY_NORMALIZE_MAP: Dict[str, str] = {
@@ -330,11 +340,27 @@ class BaseScanner:
             max_workers = self._max_workers
         hits: List[Any] = []
 
+        cb_tripped = False
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             futures = {exe.submit(probe_fn, p): p for p in payloads}
             for fut in as_completed(futures):
                 try:
                     result = fut.result()
+                except _CircuitBreakerTripped as exc:
+                    # The global circuit breaker is OPEN — every remaining probe in
+                    # this batch will instantly trip too. Aborting here avoids both
+                    # the 200+ duplicate tracebacks seen in the wild and the wasted
+                    # work of churning through payloads that cannot be sent. Logged
+                    # once, at WARNING (not ERROR/traceback): this is expected.
+                    if not cb_tripped:
+                        cb_tripped = True
+                        self.logger.warning(
+                            f"[{self.name}] Circuit breaker open — aborting remaining "
+                            f"probes in this batch: {exc}"
+                        )
+                    for f in futures:
+                        f.cancel()
+                    break
                 except _requests.exceptions.RequestException as exc:
                     self.logger.debug(
                         f"[{self.name}] Probe raised network error: {exc!r}"

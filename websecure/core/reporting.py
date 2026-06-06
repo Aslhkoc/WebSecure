@@ -1403,20 +1403,57 @@ def _write(path: str, data: str) -> str:
     return path
 
 
+def _sanitize_json_keys(obj: Any, _depth: int = 0) -> Any:
+    """
+    Recursively coerce dict keys to JSON-legal types.
+
+    json.dump's ``default=`` hook only rescues non-serialisable *values*; a
+    dict *key* that is not str/int/float/bool/None aborts the whole dump with
+    ``TypeError: keys must be str, int, float, bool or None, not <X>``. In the
+    wild this happened when a urllib3 ``PoolKey`` namedtuple leaked into the
+    results tree (via a raw requests/connection object whose ``__dict__`` was
+    expanded), crashing report generation at the very end of a 5-hour scan.
+
+    This walks the structure once at report time and rewrites any offending key
+    as ``str(key)`` so the report can never be lost to a stray internal object.
+    A depth guard prevents runaway recursion on pathological/cyclic structures.
+    """
+    if _depth > 200:
+        return obj
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if not isinstance(k, (str, int, float, bool)) and k is not None:
+                k = str(k)
+            out[k] = _sanitize_json_keys(v, _depth + 1)
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_json_keys(v, _depth + 1) for v in obj]
+    return obj
+
+
 def _json_dump(path: str, obj: Any) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    
+
     def _default(o):
+        # Do NOT blindly expand library/transport internals (requests, urllib3,
+        # http.client, sockets …): their __dict__ holds connection pools keyed
+        # by non-serialisable objects (PoolKey) and can be huge. Render a repr
+        # instead so nothing leaks into — or crashes — the report.
+        mod = type(o).__module__ or ""
+        if mod.split(".", 1)[0] in {"requests", "urllib3", "http", "socket", "ssl"}:
+            return repr(o)
         if hasattr(o, "to_dict"):
             return o.to_dict()
+        if hasattr(o, "name") and hasattr(o, "value"):  # Enum-like
+            return o.value
         if hasattr(o, "__dict__"):
             return o.__dict__
-        if hasattr(o, "name") and hasattr(o, "value"): # Enum-like
-            return o.value
         return str(o)
 
+    safe = _sanitize_json_keys(obj)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2, default=_default)
+        json.dump(safe, f, ensure_ascii=False, indent=2, default=_default)
     return path
 
 
