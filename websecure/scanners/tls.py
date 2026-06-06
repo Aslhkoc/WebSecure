@@ -705,6 +705,32 @@ class WeakCipherSuiteProber(BaseScanner):
         ("EXPORT", "EXP-RC4-MD5:EXP-DES-CBC-SHA","Critical"),
     ]
 
+    # Başarısız handshake'te ssl/openssl "cipher" alanına bu sahte değerleri yazar
+    # — gerçek bir cipher anlaşması DEĞİLDİR, FP üretmemek için reddedilir.
+    _NULL_CIPHER_TOKENS = frozenset({
+        "", "0", "00", "0000", "0x0000", "none", "(none)", "tls_null_with_null_null",
+    })
+    # Her kategori için negotiated cipher adının İÇERMESİ gereken imza. Başarısız
+    # handshake "0000"/"(NONE)" döndüğünde bu imza tutmaz → FP engellenir.
+    _CIPHER_CATEGORY_TOKENS = {
+        "RC4":    ("RC4",),
+        "3DES":   ("3DES", "DES-CBC3"),
+        "DES":    ("DES",),
+        "NULL":   ("NULL",),
+        "EXPORT": ("EXP", "EXPORT"),
+    }
+
+    @classmethod
+    def _is_real_weak_cipher(cls, negotiated_name: str, cipher_name: str) -> bool:
+        """negotiated cipher gerçekten zayıf kategoriyle eşleşiyor mu?
+        Başarısız handshake artığı (0000, (NONE) vb.) → False (FP engelle)."""
+        nn = (negotiated_name or "").strip()
+        if nn.lower() in cls._NULL_CIPHER_TOKENS:
+            return False
+        tokens = cls._CIPHER_CATEGORY_TOKENS.get(cipher_name, (cipher_name,))
+        up = nn.upper()
+        return any(tok.upper() in up for tok in tokens)
+
     def run(self, target: str, **kwargs) -> List[Dict]:
         results: List[Dict] = []
         parsed = urllib.parse.urlparse(target)
@@ -735,7 +761,9 @@ class WeakCipherSuiteProber(BaseScanner):
             with socket.create_connection((host, port), timeout=6) as raw:
                 with ctx.wrap_socket(raw, server_hostname=host) as s:
                     negotiated = s.cipher()
-                    if negotiated:
+                    # negotiated[0] gerçekten zayıf kategoriyle eşleşmeli; aksi halde
+                    # (başarısız/yanıltıcı handshake) FP üretme.
+                    if negotiated and self._is_real_weak_cipher(negotiated[0], cipher_name):
                         return {
                             "vuln_type": f"Weak Cipher Suite — {cipher_name}",
                             "url": f"https://{host}:{port}",
@@ -774,13 +802,24 @@ class WeakCipherSuiteProber(BaseScanner):
             )
             output = result.stdout.decode("utf-8", errors="replace") + \
                      result.stderr.decode("utf-8", errors="replace")
-            # Successful handshake marker
-            if "Cipher    :" in output:
+            # FP koruması: openssl s_client BAŞARISIZ handshake'te bile
+            # "Cipher    : 0000" / "(NONE)" satırı basar. Eski kod bunu "kabul
+            # edilmiş weak cipher" sanıp CRITICAL NULL FP üretiyordu (Vercel/CF
+            # gibi NULL desteklemeyen hedeflerde cert alınamazken bile).
+            # Gerçek handshake başarısı: returncode==0 + sunucu sertifikası geldi
+            # + negotiated cipher gerçekten zayıf kategoriyle eşleşiyor.
+            handshake_ok = (
+                result.returncode == 0
+                and ("BEGIN CERTIFICATE" in output or "Server certificate" in output)
+                and "(NONE)" not in output.split("SSL-Session")[0][-400:]
+            )
+            if handshake_ok and "Cipher    :" in output:
                 # Extract cipher name from output
                 for line in output.splitlines():
                     if "Cipher    :" in line:
                         negotiated_name = line.split(":")[-1].strip()
-                        if negotiated_name in ("", "NONE", "(NONE)"):
+                        # Sahte/boş cipher VEYA kategoriyle eşleşmiyorsa → FP, atla
+                        if not self._is_real_weak_cipher(negotiated_name, cipher_name):
                             break
                         return {
                             "vuln_type": f"Weak Cipher Suite — {cipher_name}",
@@ -1160,6 +1199,44 @@ class CertificateValidationProber(BaseScanner):
 
         return results
 
+    @staticmethod
+    def _der_to_peercert_dict(cert_bin: bytes) -> dict:
+        """DER (binary) sertifikayı getpeercert() ile aynı şekle parse et.
+        CERT_NONE'da getpeercert() boş {} döner; downstream kontroller (expiry/
+        self-signed/hostname) çalışsın diye DER'i cryptography ile çözüyoruz."""
+        try:
+            from cryptography import x509  # noqa: PLC0415
+            from cryptography.x509.oid import NameOID, ExtensionOID  # noqa: PLC0415
+            c = x509.load_der_x509_certificate(cert_bin)
+
+            def _rdns(name):
+                out = []
+                for attr in name:
+                    short = {
+                        NameOID.COMMON_NAME: "commonName",
+                        NameOID.ORGANIZATION_NAME: "organizationName",
+                        NameOID.COUNTRY_NAME: "countryName",
+                    }.get(attr.oid, attr.oid._name)
+                    out.append(((short, attr.value),))
+                return tuple(out)
+
+            d: dict = {
+                "subject": _rdns(c.subject),
+                "issuer": _rdns(c.issuer),
+                "notAfter": c.not_valid_after_utc.strftime("%b %d %H:%M:%S %Y GMT"),
+                "notBefore": c.not_valid_before_utc.strftime("%b %d %H:%M:%S %Y GMT"),
+            }
+            try:
+                san = c.extensions.get_extension_for_oid(
+                    ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+                d["subjectAltName"] = tuple(
+                    ("DNS", n) for n in san.get_values_for_type(x509.DNSName))
+            except Exception:
+                d["subjectAltName"] = ()
+            return d
+        except Exception:
+            return {}
+
     def _probe_cert(self, host: str, port: int) -> List[Dict]:
         findings = []
         try:
@@ -1170,12 +1247,22 @@ class CertificateValidationProber(BaseScanner):
             with socket.create_connection((host, port), timeout=10) as raw:
                 with ctx.wrap_socket(raw, server_hostname=host) as s:
                     cert = s.getpeercert()
+                    # FP koruması: verify_mode=CERT_NONE iken getpeercert() GEÇERLİ
+                    # sertifika olsa BİLE boş {} döner (Python ssl davranışı). Eski
+                    # kod bunu "Certificate Not Retrieved" HIGH sanıyordu — handshake
+                    # başarılıyken bile FP. Gerçek varlık binary_form ile saptanır.
+                    cert_bin = s.getpeercert(binary_form=True)
 
-            if not cert:
+            if not cert and cert_bin:
+                # Sertifika VAR ama CERT_NONE yüzünden parse edilmedi → DER'den çöz.
+                cert = self._der_to_peercert_dict(cert_bin)
+
+            if not cert and not cert_bin:
+                # Gerçekten sertifika alınamadı (nadir; handshake bitmiş ama cert yok).
                 findings.append({
                     "vuln_type": "Certificate Not Retrieved",
                     "url": f"https://{host}:{port}",
-                    "severity": "High",
+                    "severity": "Low",
                     "description": "Could not retrieve TLS certificate from server.",
                     "evidence": {"host": host},
                 })
