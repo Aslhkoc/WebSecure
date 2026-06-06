@@ -1181,6 +1181,9 @@
   "output_dir": "output",
   "nmap": {
     "enabled": true,
+    "origin_discovery": true,
+    "cdn_limit_to_web": true,
+    "_cdn_note": "origin_discovery: CDN/WAF (Cloudflare/Akamai/Vercel...) arkasindaki hedeflerde gercek origin IP'sini crt.sh + yaygin origin host'lariyla kesfeder; bulunursa origin tam guc taranir. cdn_limit_to_web: origin bulunamazsa port taramasi 80/443 ile sinirlanir (CDN edge'inde tum port taramasi anlamsizdir).",
     "decoys": 8,
     "spoof_mac": false,
     "_decoys_note": "Raw-socket (Admin+Npcap) varken N sahte IP + gercek IP ile tarar. UYARI: gercek IP'yi GIZLEMEZ, sadece decoy'lar arasinda karistirir; hedef yine gercek IP'yi gorur. -sT/Tor modunda calismaz. 0 = kapali.",
@@ -1209,14 +1212,18 @@
   },
   "sqlmap": {
     "enabled": true,
-    "risk": 2,
-    "level": 3,
+    "risk": 3,
+    "level": 5,
+    "fingerprint": true,
+    "crawl_depth": 3,
     "extra_args": [
       "--batch",
       "--parse-errors",
       "--technique=BEUSTQ",
-      "--tamper=space2comment,between,randomcase",
-      "--threads=3"
+      "--tamper=space2comment,between,randomcase,charencode",
+      "--threads=4",
+      "--keep-alive",
+      "--smart"
     ],
     "random_agent": true
   },

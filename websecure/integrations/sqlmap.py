@@ -141,8 +141,8 @@ class SQLMapWrapper(ToolIntegration):
         start = time.monotonic()
         raw = self.scan(
             target,
-            risk=kwargs.get("risk", 1),
-            level=kwargs.get("level", 1),
+            risk=kwargs.get("risk", 3),
+            level=kwargs.get("level", 5),
             proxy=kwargs.get("proxy"),
             profile_cfg=kwargs.get("profile_cfg"),
         )
@@ -174,7 +174,7 @@ class SQLMapWrapper(ToolIntegration):
             ))
         return findings
 
-    def scan(self, target: str, batch: bool = True, risk: int = 1, level: int = 1, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None) -> List[Dict[str, Any]]:
+    def scan(self, target: str, batch: bool = True, risk: int = 3, level: int = 5, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None) -> List[Dict[str, Any]]:
         """
         Runs sqlmap on the target.
         Note: Parsing sqlmap textual output is hard. 

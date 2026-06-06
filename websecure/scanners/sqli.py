@@ -513,8 +513,6 @@ class SQLInjectionScanner(BaseScanner):
         self._run_oob_phase(urls)
         self._run_stacked_query_phase(urls)
         self._run_adaptive_scan(urls)
-        if urls:
-            self._run_sqlmap_bridge(urls[0])
 
         # --- Adım 4: Second-order & Stored SQLi probing ----------------------
         self._run_second_order_phase(urls)
@@ -1350,70 +1348,6 @@ class SQLInjectionScanner(BaseScanner):
                         )
                         break
 
-    def _run_sqlmap_bridge(self, url: str) -> None:
-        """Confirmed bulgular için SQLMap CLI doğrulaması."""
-        if not self.results.get("offensive"):
-            return
-        bridge = SQLMapBridge()
-        if not bridge.is_available():
-            logger.debug("[SQLi/SQLMap] sqlmap PATH'de bulunamadı, bridge atlanıyor")
-            return
-        parsed = urlparse(url)
-        params = parse_qsl(parsed.query)
-        if not params:
-            return
-        param = params[0][0]
-        result = bridge.confirm(url, param)
-        if result.get("success"):
-            self.report_finding(
-                vuln_type="SQL Injection (SQLMap Confirmed)",
-                url=url,
-                param=param,
-                payload="sqlmap --technique=BEUST",
-                severity="Critical",
-                evidence=(
-                    f"SQLMap bağımsız olarak doğruladı. "
-                    f"Output dir: {result.get('output_dir')}"
-                ),
-                extra={"sqlmap": result},
-                detection_method="sqlmap_confirmed",
-                verified=True,
-                confidence="confirmed",
-            )
-
-        # Full exploitation pipeline after SQLMap confirmation
-        if result.get("success") and self.results.get("cfg", {}).get("exploitation", {}).get("enabled", True) is not False:
-            exploiter = SQLiExploiter(session=self.session)
-            exploit_report = exploiter.full_exploitation_pipeline(url, param)
-            if exploit_report.get("credentials"):
-                self.report_finding(
-                    vuln_type="SQL Injection — Credentials Extracted",
-                    url=url,
-                    param=param,
-                    payload="UNION SELECT user,password FROM users",
-                    severity="Critical",
-                    evidence=f"Extracted {len(exploit_report['credentials'])} credential(s): "
-                             + str(exploit_report['credentials'][:3])[:400],
-                    extra={"exploitation": exploit_report},
-                    detection_method="sqli_exploiter",
-                    verified=True,
-                    confidence="confirmed",
-                )
-            if exploit_report.get("web_shell"):
-                self.report_finding(
-                    vuln_type="SQL Injection → Web Shell (RCE)",
-                    url=url,
-                    param=param,
-                    payload="UNION SELECT shell INTO OUTFILE",
-                    severity="Critical",
-                    evidence=f"Web shell deployed: {exploit_report['web_shell']}",
-                    extra={"shell_url": exploit_report["web_shell"], "exploitation": exploit_report},
-                    detection_method="sqli_webshell",
-                    verified=True,
-                    confidence="confirmed",
-                )
-
-
     # -------------------------------------------------------------------------
     # Second-order SQLi phase
     # -------------------------------------------------------------------------
@@ -1929,74 +1863,6 @@ class AdaptivePayloadMutator:
         v.append(_hex_str(payload))
 
         return v
-
-
-class SQLMapBridge:
-    """
-    SQLMap CLI entegrasyonu: WebSecure tespit edilen SQLi'yi bağımsız olarak doğrular.
-    Sadece onaylanan bulgular için çağrılır.
-    Non-destructive: --technique=BEUST, --level=1, --risk=1, --batch.
-    """
-
-    _CMD = "sqlmap"
-    _TIMEOUT = 120
-
-    def is_available(self) -> bool:
-        import shutil
-        return shutil.which(self._CMD) is not None
-
-    def confirm(
-        self,
-        url: str,
-        param: str,
-        output_dir: Optional[str] = None,
-        extra_args: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        """SQLMap çalıştır ve sonucu döndür."""
-        if not self.is_available():
-            return {"success": False, "error": "sqlmap PATH'de bulunamadı"}
-
-        import subprocess as _sp
-        import tempfile
-
-        out_dir = output_dir or tempfile.mkdtemp(prefix="ws_sqlmap_")
-        cmd = [
-            self._CMD,
-            "-u", url,
-            "-p", param,
-            "--batch",
-            "--level=1",
-            "--risk=1",
-            "--technique=BEUST",
-            f"--output-dir={out_dir}",
-        ]
-        if extra_args:
-            cmd.extend(extra_args)
-
-        try:
-            proc = _sp.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self._TIMEOUT,
-                check=False,
-            )
-            stdout = proc.stdout or ""
-            confirmed = (
-                "sqlmap identified" in stdout.lower()
-                or "parameter appears to be" in stdout.lower()
-                or "is vulnerable" in stdout.lower()
-            )
-            return {
-                "success": confirmed,
-                "returncode": proc.returncode,
-                "output": stdout[:3000],
-                "output_dir": out_dir,
-            }
-        except _sp.TimeoutExpired:
-            return {"success": False, "error": f"sqlmap {self._TIMEOUT}s'de zaman aşımı"}
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
 
 
 # =============================================================================

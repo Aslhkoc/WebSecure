@@ -47,6 +47,266 @@ _UDP_PORTS = "53,67,68,69,111,123,137,138,161,162,500,514,520,1900,4500,5353,112
 # Windows'ta raw socket desteklenmiyor — bu returncode assertion failure'ı gösterir
 _WINDOWS_CRASH_CODES = {3221226505, 3221225477, 3221225725, 0xC0000005, 0xC000013A}
 
+# ---------------------------------------------------------------------------
+# CDN tespiti + Origin keşfi
+# ---------------------------------------------------------------------------
+# Neden: CDN/WAF (Cloudflare, Akamai, Vercel...) arkasındaki hedeflerde nmap
+# ORIGIN'i değil EDGE düğümünü tarar → "80/443 açık" yanıltıcıdır ve tüm
+# 65535 portu taramak saf zaman israfıdır. Bu yüzden önce CDN'i tespit edip
+# gerçek origin IP'sini bulmaya çalışırız; bulamazsak port taramasını 80/443
+# ile sınırlayıp bunu açıkça raporlarız.
+
+# CNAME / alias / PTR içinde geçen CDN imzaları → vendor
+_CDN_CNAME_TOKENS: Dict[str, str] = {
+    "cloudflare": "Cloudflare",
+    "cdn.cloudflare": "Cloudflare",
+    "akamai": "Akamai",
+    "akamaiedge": "Akamai",
+    "edgekey": "Akamai",
+    "edgesuite": "Akamai",
+    "akadns": "Akamai",
+    "fastly": "Fastly",
+    "fastlylb": "Fastly",
+    "cloudfront": "CloudFront",
+    "vercel-dns": "Vercel",
+    "vercel": "Vercel",
+    "incapdns": "Imperva Incapsula",
+    "sucuri": "Sucuri",
+    "stackpath": "StackPath",
+    "cdn77": "CDN77",
+    "azureedge": "Azure CDN",
+    "azurefd": "Azure Front Door",
+    "llnwd": "Limelight",
+    "edgecastcdn": "Edgecast",
+    "netlify": "Netlify",
+    "wpengine": "WP Engine",
+    "myshopify": "Shopify",
+}
+
+# Bilinen CDN IPv4 CIDR blokları (vendor)
+_CDN_CIDRS: List[Tuple[str, str]] = [
+    # Cloudflare
+    ("173.245.48.0/20", "Cloudflare"), ("103.21.244.0/22", "Cloudflare"),
+    ("103.22.200.0/22", "Cloudflare"), ("103.31.4.0/22", "Cloudflare"),
+    ("141.101.64.0/18", "Cloudflare"), ("108.162.192.0/18", "Cloudflare"),
+    ("190.93.240.0/20", "Cloudflare"), ("188.114.96.0/20", "Cloudflare"),
+    ("197.234.240.0/22", "Cloudflare"), ("198.41.128.0/17", "Cloudflare"),
+    ("162.158.0.0/15", "Cloudflare"), ("104.16.0.0/13", "Cloudflare"),
+    ("104.24.0.0/14", "Cloudflare"), ("172.64.0.0/13", "Cloudflare"),
+    ("131.0.72.0/22", "Cloudflare"),
+    # Fastly
+    ("151.101.0.0/16", "Fastly"), ("199.232.0.0/16", "Fastly"),
+    # Vercel
+    ("76.76.21.0/24", "Vercel"), ("216.198.0.0/16", "Vercel"),
+    ("66.33.60.0/24", "Vercel"),
+]
+
+# Origin keşfi için denenecek yaygın host önekleri (apex'e eklenir)
+_ORIGIN_PREFIXES = (
+    "origin", "origin-www", "direct", "direct-connect", "cpanel", "webdisk",
+    "webmail", "mail", "ftp", "dev", "staging", "test", "www2", "server",
+    "portal", "backend", "api-origin", "old", "cms",
+)
+
+
+def _ip_is_private(ip: str) -> bool:
+    try:
+        import ipaddress
+        return ipaddress.ip_address(ip).is_private
+    except Exception:
+        return False
+
+
+def _cdn_vendor_for_ip(ip: str) -> Optional[str]:
+    """IP bilinen bir CDN CIDR'ında mı? Vendor adını döndür."""
+    try:
+        import ipaddress
+        addr = ipaddress.ip_address(ip)
+        for cidr, vendor in _CDN_CIDRS:
+            if addr in ipaddress.ip_network(cidr):
+                return vendor
+    except Exception:
+        return None
+    return None
+
+
+def _cdn_vendor_for_names(names: List[str]) -> Optional[str]:
+    """CNAME/alias listesinde CDN imzası ara."""
+    for nm in names:
+        low = str(nm).lower()
+        for token, vendor in _CDN_CNAME_TOKENS.items():
+            if token in low:
+                return vendor
+    return None
+
+
+def _apex_domain(host: str) -> str:
+    parts = str(host).split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return host
+
+
+def _resolve_aliases(host: str) -> Tuple[Optional[str], List[str]]:
+    """gethostbyname_ex ile birincil IP + alias (CNAME) listesi döndür."""
+    import socket as _socket
+    try:
+        name, aliases, ips = _socket.gethostbyname_ex(host)
+        all_names = [name] + list(aliases or [])
+        return (ips[0] if ips else None), all_names
+    except Exception:
+        try:
+            return _socket.gethostbyname(host), [host]
+        except Exception:
+            return None, [host]
+
+
+def _crtsh_candidate_hosts(domain: str, timeout: float = 8.0) -> List[str]:
+    """crt.sh sertifika şeffaflık kayıtlarından subdomain adayları topla."""
+    try:
+        import requests as _rq
+    except Exception:
+        return []
+    out: set = set()
+    try:
+        r = _rq.get(
+            f"https://crt.sh/?q=%25.{domain}&output=json",
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                for nm in str(row.get("name_value", "")).splitlines():
+                    nm = nm.strip().lstrip("*.").lower()
+                    if nm.endswith(domain) and "@" not in nm:
+                        out.add(nm)
+    except Exception as exc:
+        logger.debug(f"[Nmap/origin] crt.sh sorgusu başarısız: {exc!r}")
+    return sorted(out)[:60]
+
+
+def _verify_origin(ip: str, host: str, timeout: float = 6.0) -> Tuple[bool, int]:
+    """
+    Aday origin IP'sini doğrula: orijinal Host header'ı ile istek at, gerçek
+    bir uygulama yanıtı (<500) dönüyorsa origin adayıdır.
+
+    Returns (plausible, status_code).
+    """
+    try:
+        import requests as _rq
+    except Exception:
+        return False, 0
+    for scheme in ("https", "http"):
+        try:
+            r = _rq.get(
+                f"{scheme}://{ip}/",
+                headers={"Host": host, "User-Agent": "Mozilla/5.0"},
+                timeout=timeout,
+                verify=False,
+                allow_redirects=False,
+            )
+            if r.status_code < 500 and (r.content or r.headers):
+                return True, r.status_code
+        except Exception:
+            continue
+    return False, 0
+
+
+def assess_cdn_origin(host: str, url: Optional[str] = None,
+                      do_origin_discovery: bool = True) -> Dict[str, Any]:
+    """
+    Hedefin CDN/WAF arkasında olup olmadığını tespit eder ve mümkünse gerçek
+    origin IP'sini keşfeder.
+
+    Returns:
+        {
+          "host": str,
+          "resolved_ip": str|None,
+          "is_cdn": bool,
+          "cdn_vendor": str|None,
+          "origin_ip": str|None,
+          "origin_verified": bool,
+          "origin_source": str|None,
+          "recommended_target": str,   # origin_ip (bulunduysa) yoksa host
+          "limit_ports": str|None,     # CDN & origin yok → "80,443"; yoksa None
+          "note": str,
+        }
+    """
+    info: Dict[str, Any] = {
+        "host": host,
+        "resolved_ip": None,
+        "is_cdn": False,
+        "cdn_vendor": None,
+        "origin_ip": None,
+        "origin_verified": False,
+        "origin_source": None,
+        "recommended_target": host,
+        "limit_ports": None,
+        "note": "",
+    }
+
+    resolved_ip, names = _resolve_aliases(host)
+    info["resolved_ip"] = resolved_ip
+
+    vendor = _cdn_vendor_for_names(names) or (
+        _cdn_vendor_for_ip(resolved_ip) if resolved_ip else None
+    )
+    if not vendor:
+        # CDN değil → nmap tam güç, origin keşfine gerek yok
+        info["note"] = "CDN tespit edilmedi — nmap doğrudan hedefi tam güç tarar."
+        return info
+
+    info["is_cdn"] = True
+    info["cdn_vendor"] = vendor
+    logger.info(f"[Nmap/origin] CDN tespit edildi: {vendor} ({host} -> {resolved_ip})")
+
+    if not do_origin_discovery:
+        info["limit_ports"] = "80,443"
+        info["note"] = f"{vendor} arkasında — origin keşfi kapalı, port taraması 80/443 ile sınırlı."
+        return info
+
+    # --- Origin keşfi: crt.sh adayları + yaygın origin host önekleri ---
+    apex = _apex_domain(host)
+    candidates: List[str] = []
+    candidates.extend(_crtsh_candidate_hosts(apex))
+    candidates.extend(f"{pfx}.{apex}" for pfx in _ORIGIN_PREFIXES)
+
+    seen_ips: set = set()
+    checked = 0
+    for cand_host in candidates:
+        if checked >= 40:
+            break
+        cand_ip, cand_names = _resolve_aliases(cand_host)
+        if not cand_ip or cand_ip in seen_ips:
+            continue
+        seen_ips.add(cand_ip)
+        checked += 1
+        # Aday IP yine CDN'de veya private ise origin olamaz
+        if _ip_is_private(cand_ip):
+            continue
+        if _cdn_vendor_for_ip(cand_ip) or _cdn_vendor_for_names(cand_names):
+            continue
+        plausible, status = _verify_origin(cand_ip, host)
+        if plausible:
+            info["origin_ip"] = cand_ip
+            info["origin_verified"] = True
+            info["origin_source"] = f"{cand_host} (HTTP {status})"
+            info["recommended_target"] = cand_ip
+            info["note"] = (
+                f"{vendor} arkasında ama gerçek origin bulundu: {cand_ip} "
+                f"({cand_host}). nmap origin'i tam güç tarar."
+            )
+            logger.warning(f"[Nmap/origin] Origin IP bulundu: {cand_ip} ({cand_host})")
+            return info
+
+    # Origin bulunamadı → port taramasını edge 80/443 ile sınırla
+    info["limit_ports"] = "80,443"
+    info["note"] = (
+        f"{vendor} arkasında — origin IP bulunamadı. Port taraması yalnızca "
+        f"80/443 (edge) ile sınırlandı; tüm port taraması CDN üzerinde anlamsızdır."
+    )
+    return info
+
 def _is_windows() -> bool:
     return platform.system() == "Windows"
 

