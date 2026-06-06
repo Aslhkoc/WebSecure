@@ -62,7 +62,7 @@ except ImportError:
 
 
 import logging as _logging
-from urllib.parse import urlparse, urldefrag
+from urllib.parse import urlparse, urldefrag, parse_qsl
 from time import sleep
 import shutil
 import subprocess
@@ -2302,6 +2302,33 @@ def _run_scan_phases(
         # Filter valid URLs + static asset'leri ele (discovery query'si de içerebilir)
         merged_eps = [u for u in merged_eps
                       if isinstance(u, str) and "://" in u and not is_static_asset(u)]
+
+        # Saldırı-yüzeyi dedup: birebir-string set() yetmez. WordPress/WooCommerce
+        # gibi sitelerde `?add_to_wishlist=<id>&_wpnonce=<nonce>` linki HER ürün/
+        # kategori/sayfalama varyantında tekrarlanır → aynı handler binlerce ayrı
+        # "hedef" olarak fuzz'lanır (neuneon: 6207 wishlist URL'i, 2385 hedef,
+        # ~5 saat). İmza = (host, sayısal-segmentleri normalize edilmiş path,
+        # param-İSİM seti). Aynı imzadan tek temsilci tutulur: param DEĞERLERİ
+        # fuzzing için önemsizdir (parametrenin kendisini test ederiz), volatil
+        # nonce/id/pagination yüzünden kombinasyon patlaması engellenir.
+        def _ep_signature(u: str):
+            pr = urlparse(u)
+            segs = tuple("#" if s.isdigit() else s for s in pr.path.split("/"))
+            names = tuple(sorted(n for n, _ in parse_qsl(pr.query, keep_blank_values=True)))
+            return (pr.netloc, segs, names)
+
+        _seen_sig: set = set()
+        _deduped_eps = []
+        for u in merged_eps:
+            sig = _ep_signature(u)
+            if sig in _seen_sig:
+                continue
+            _seen_sig.add(sig)
+            _deduped_eps.append(u)
+        if len(_deduped_eps) < len(merged_eps):
+            print(f"[•] Saldırı yüzeyi dedup: {len(merged_eps)} → {len(_deduped_eps)} "
+                  f"hedef (volatil nonce/id/pagination varyantları birleştirildi)")
+        merged_eps = _deduped_eps
 
         # 3. SQL Injection (New Robust Module)
         # Import dynamically to handle 'shim' modules
