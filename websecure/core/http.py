@@ -565,6 +565,51 @@ HTTP_METRICS: dict = {
 }
 
 
+# ---------- Per-location status sampler ("nereden 200/3xx/403/429 aldık") ----------
+# Bounded: en fazla _HTTP_LOC_CAP farklı (path) tutulur; her path için status-sınıfı
+# sayaçları toplanır. results.json'u şişirmeden konum-bazlı trafik dağılımı sağlar.
+_HTTP_LOC_CAP = 400
+HTTP_STATUS_LOCATIONS: dict[str, dict[str, int]] = {}
+_loc_lock = threading.Lock()
+
+def _status_class(code: int) -> str:
+    c = int(code or 0)
+    if 200 <= c < 300:
+        return "2xx"
+    if 300 <= c < 400:
+        return "3xx"
+    if c == 401:
+        return "401"
+    if c == 403:
+        return "403"
+    if c == 429:
+        return "429"
+    if 400 <= c < 500:
+        return "4xx"
+    if c >= 500:
+        return "5xx"
+    return "other"
+
+def note_status_location(url: str, code: int) -> None:
+    """Kaydı path bazında (query'siz) topla; sınırlı sayıda path tutar."""
+    try:
+        path = (url or "").split("?", 1)[0]
+        if not path:
+            return
+        cls = _status_class(code)
+        with _loc_lock:
+            slot = HTTP_STATUS_LOCATIONS.get(path)
+            if slot is None:
+                if len(HTTP_STATUS_LOCATIONS) >= _HTTP_LOC_CAP:
+                    return  # cap aşıldı — yeni path ekleme, mevcutları güncellemeye devam
+                slot = {}
+                HTTP_STATUS_LOCATIONS[path] = slot
+            slot[cls] = int(slot.get(cls, 0)) + 1
+            slot["last"] = int(code or 0)
+    except Exception:
+        pass
+
+
 # ---------- Structural Metrics (phase + latency histogram + 403/429 trend) ----------
 HTTP_LAT_BUCKETS = ((0,50),(50,100),(100,250),(250,500),(500,1000),(1000,None))
 HTTP_LATENCY_HIST: dict[str, int] = {f"{lo}-{hi if hi is not None else '+'}": 0 for (lo,hi) in HTTP_LAT_BUCKETS}
@@ -682,10 +727,13 @@ def get_http_metrics() -> dict:
         for k, v in HTTP_METRICS.items()
     }
     metrics["403_ratio"] = (forb / total) if total else 0.0
+    with _loc_lock:
+        status_locations = {k: dict(v) for k, v in HTTP_STATUS_LOCATIONS.items()}
     return {
         "counters": metrics,
         "latency_histogram": dict(HTTP_LATENCY_HIST),
         "phases": {k: dict(v) for k,v in _PHASE_STATS.items()},
+        "status_locations": status_locations,
     }
 
 def set_trace_id(trace_id: str | None) -> None:
@@ -1117,9 +1165,20 @@ class _RequestsDriver:
         self._interval = 0.0 if self._rps <= 0 else 1.0 / self._rps
         self._pace_before()
 
+        __t0 = time.time()
         resp = self.s.request(method, url, verify=self.verify, **kw)
+        __rt_ms = int((time.time() - __t0) * 1000)
         _collect_rate_limit(resp, url)
         st = int(getattr(resp, "status_code", 0) or 0)
+        # Global HTTP metrics (feeds output/metrics.json → Saldırı Trafiği panosu).
+        # Bu sürücü varsayılan istek yoludur; eksik kalırsa tüm sayaçlar 0 görünür.
+        try:
+            __clen = len(getattr(resp, "content", b"") or b"")
+        except (TypeError, AttributeError):
+            __clen = 0
+        record_timing_ms(__rt_ms, st, content_bytes=__clen)
+        record_status(st)
+        note_status_location(url, st)
         hpm_record_status(st)
         _cb_record(st)  # feed circuit breaker
 
@@ -1171,6 +1230,7 @@ class _HttpxDriver:
         st = int(getattr(resp, 'status_code', 0) or 0)
         record_timing_ms(__rt_ms, st, content_bytes=__clen)
         record_status(st)
+        note_status_location(url, st)
         _collect_rate_limit(resp, url)
         st = int(getattr(resp, "status_code", 0) or 0)
         if st in (429, 403):

@@ -111,6 +111,9 @@ def _parse_nmap_ssl_cert(text: str) -> dict:
             except Exception as _fix_e:
                 _logger.debug(f"[reporters.html_dashboard] {type(_fix_e).__name__}: {_fix_e!r}")
 
+        elif lower.startswith("sig_algo:") or lower.startswith("signature algorithm:"):
+            cert["sig_algo"] = line.split(":", 1)[1].strip()
+
         elif lower.startswith("sha-1:") or lower.startswith("sha1:"):
             cert["fingerprint"] = line.split(":", 1)[1].strip()
 
@@ -126,6 +129,43 @@ def _parse_nmap_ssl_cert(text: str) -> dict:
             ]
             if san_list:
                 cert["san"] = san_list
+
+    # nmap çoğu zaman issuer/pubkey satırlarını boş bırakır ama PEM gömülüdür.
+    # cryptography varsa PEM'i çözüp issuer (CA), imza algoritması ve anahtar
+    # boyutunu doldur — "veriler tam gelsin" hedefi.
+    if not cert.get("issuer_CN"):
+        _pem_m = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", text, re.S)
+        if _pem_m:
+            try:
+                from cryptography import x509 as _x509
+                _c = _x509.load_pem_x509_certificate(_pem_m.group(0).encode())
+                def _attr(name_obj, oid):
+                    try:
+                        vals = name_obj.get_attributes_for_oid(oid)
+                        return vals[0].value if vals else ""
+                    except Exception:
+                        return ""
+                from cryptography.x509.oid import NameOID as _NameOID
+                _icn = _attr(_c.issuer, _NameOID.COMMON_NAME)
+                _ion = _attr(_c.issuer, _NameOID.ORGANIZATION_NAME)
+                if _icn:
+                    cert["issuer_CN"] = _icn
+                if _ion:
+                    cert["issuer_O"] = _ion
+                if not cert.get("subject_CN"):
+                    _scn = _attr(_c.subject, _NameOID.COMMON_NAME)
+                    if _scn:
+                        cert["subject_CN"] = _scn
+                if not cert.get("sig_algo") and getattr(_c, "signature_algorithm_oid", None):
+                    cert["sig_algo"] = _c.signature_algorithm_oid._name
+                try:
+                    _ks = _c.public_key().key_size
+                    if _ks:
+                        cert["key_bits"] = int(_ks)
+                except Exception:
+                    pass
+            except Exception as _pem_e:
+                _logger.debug(f"[reporters.html_dashboard] PEM decode skipped: {_pem_e!r}")
 
     if cert.get("subject_CN") or cert.get("not_after"):
         cert.setdefault("valid", True)
@@ -200,6 +240,24 @@ def render_html_dashboard(results: dict) -> str:
                 f_type = item.get("type") or item.get("title") or item.get("message") or "Generic"
             _raw_sev = (item.get("severity") or "Info").lower()
             f_sev = _HTML_SEV_NORM.get(_raw_sev, "Info")
+
+            # ---------------------------------------------------------------
+            # Gürültü filtresi — bulgu tablosunu kirleten kayıtları ele.
+            # (a) Etiketi olmayan crawl/tech zenginleştirme artıfaktları:
+            #     katana ile bulunan /static/chunks/*.js gibi URL'ler 'final'
+            #     kovasına type'sız düşüp sahte CVSS 6.1/Medium damgası yiyor.
+            #     Bunlar zafiyet değil — keşfedilen endpoint'ler (crawl bölümünde).
+            # (b) Tarama-süreci olayları (phase_error vb.) ayrı tanı bölümünde.
+            # ---------------------------------------------------------------
+            _has_label = bool(item.get("type") or item.get("title") or item.get("message"))
+            if not _has_label:
+                continue
+            _proc_noise = {
+                "phase_error", "phase_timeout", "circuit_breaker_trip",
+                "phase_metrics", "anti_block_event",
+            }
+            if str(item.get("type") or "").strip().lower() in _proc_noise:
+                continue
 
             # Skip status/meta-only items
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
@@ -298,31 +356,9 @@ def render_html_dashboard(results: dict) -> str:
         or "N/A"
     )
 
-    # Charts logic (images)
+    # Charts — artık statik Matplotlib PNG yerine canlı verilerden üretilen
+    # gömülü SVG grafikler kullanıyoruz (aşağıda, stats + type_map hazır olunca).
     charts_html = ""
-    charts = results.get("charts") or []
-    if charts:
-        charts_html += '<div class="gallery">'
-        for ch in charts:
-            path = ch.get("rel_path") or ch.get("path")
-            title = ch.get("title")
-            if path:
-                # If path is local, we might want to inline it or just link it.
-                # For now, linking assuming relative path structure (output/report.html -> output/images/...)
-                # But to be safe, if 'images/' is in path, use it.
-                if "images" in path and not path.startswith("http"):
-                    # fix path separator for web
-                    path = path.replace("\\", "/")
-                    if "images/" in path:
-                         path = "images/" + path.split("images/")[-1]
-
-                charts_html += f'''
-                <div class="card chart-card">
-                    <h3>{_escape(title)}</h3>
-                    <img src="{path}" alt="{_escape(title)}" onerror="this.style.display='none'">
-                </div>
-                '''
-        charts_html += '</div>'
 
     # --- JS Analysis Data Prep ---
     js_files_html = ""
@@ -352,29 +388,29 @@ def render_html_dashboard(results: dict) -> str:
             for f in js_secrets
         )
 
-        secret_warning = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] {len(js_secrets)} hardcoded secret(s) detected in JavaScript files!</div>" if js_secrets else ""
+        secret_warning = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] JavaScript dosyalarında {len(js_secrets)} adet gömülü secret tespit edildi!</div>" if js_secrets else ""
 
         js_files_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">[scroll] JavaScript File Analysis</h3>
+            <h3 style="margin-top:0;">[scroll] JavaScript Dosya Analizi</h3>
             {secret_warning}
             <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem;">
                 <div class="stat-card" style="padding:1rem; text-align:center;">
                     <span class="stat-value" style="font-size:1.5rem; color:var(--accent)">{len(js_files)}</span>
-                    <span class="stat-label">JS Files Found</span>
+                    <span class="stat-label">Bulunan JS Dosyası</span>
                 </div>
                 <div class="stat-card" style="padding:1rem; text-align:center;">
                     <span class="stat-value" style="font-size:1.5rem; color:var(--sev-low)">{len(js_endpoints)}</span>
-                    <span class="stat-label">Endpoints Extracted</span>
+                    <span class="stat-label">Çıkarılan Endpoint</span>
                 </div>
                 <div class="stat-card" style="padding:1rem; text-align:center;">
                     <span class="stat-value" style="font-size:1.5rem; color:var(--sev-high)">{len(js_secrets)}</span>
-                    <span class="stat-label">Secrets Detected</span>
+                    <span class="stat-label">Tespit Edilen Secret</span>
                 </div>
             </div>
-            {"<h4>JS Files</h4><div class='table-container'><table><thead><tr><th>URL</th><th>Info</th></tr></thead><tbody>" + rows_files + "</tbody></table></div>" if rows_files else ""}
-            {"<h4 style='margin-top:1rem;'>Hidden Endpoints / API Paths</h4><div class='table-container'><table><thead><tr><th>Path</th><th>Found In</th></tr></thead><tbody>" + rows_endpoints + "</tbody></table></div>" if rows_endpoints else ""}
-            {"<h4 style='margin-top:1rem; color:var(--sev-high);'>[!] Hardcoded Secrets</h4><div class='table-container'><table><thead><tr><th>Severity</th><th>Type</th><th>File</th><th>Detail</th></tr></thead><tbody>" + rows_secrets + "</tbody></table></div>" if rows_secrets else ""}
+            {"<h4>JS Dosyaları</h4><div class='table-container'><table><thead><tr><th>URL</th><th>Bilgi</th></tr></thead><tbody>" + rows_files + "</tbody></table></div>" if rows_files else ""}
+            {"<h4 style='margin-top:1rem;'>Gizli Endpoint'ler / API Yolları</h4><div class='table-container'><table><thead><tr><th>Yol</th><th>Bulunduğu Yer</th></tr></thead><tbody>" + rows_endpoints + "</tbody></table></div>" if rows_endpoints else ""}
+            {"<h4 style='margin-top:1rem; color:var(--sev-high);'>[!] Gömülü Secret'lar</h4><div class='table-container'><table><thead><tr><th>Severity</th><th>Tür</th><th>Dosya</th><th>Detay</th></tr></thead><tbody>" + rows_secrets + "</tbody></table></div>" if rows_secrets else ""}
         </div>
         """
 
@@ -407,10 +443,10 @@ def render_html_dashboard(results: dict) -> str:
         if _hx_rows:
             httpx_html = f"""
             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[signal] HTTP Probe Results — httpx ({len(_hx_rows)} hosts)</h3>
+                <h3 style="margin-top:0;">[signal] HTTP Probe Sonuçları — httpx ({len(_hx_rows)} host)</h3>
                 <div class="table-container">
                     <table>
-                        <thead><tr><th>URL</th><th>Status</th><th>Title / Server</th><th>Technologies</th><th>Content-Length</th></tr></thead>
+                        <thead><tr><th>URL</th><th>Status</th><th>Başlık / Server</th><th>Teknolojiler</th><th>Content-Length</th></tr></thead>
                         <tbody>{''.join(_hx_rows)}</tbody>
                     </table>
                 </div>
@@ -441,10 +477,10 @@ def render_html_dashboard(results: dict) -> str:
             )
             katana_html = f"""
             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[globe] Crawled Endpoints — katana ({len(_kat_eps)} found{', showing 200' if len(_kat_eps) > 200 else ''})</h3>
+                <h3 style="margin-top:0;">[globe] Taranan Endpoint'ler — katana ({len(_kat_eps)} bulundu{', ilk 200 gösteriliyor' if len(_kat_eps) > 200 else ''})</h3>
                 <div class="table-container">
                     <table>
-                        <thead><tr><th>URL</th><th>Method</th><th>Source</th></tr></thead>
+                        <thead><tr><th>URL</th><th>Method</th><th>Kaynak</th></tr></thead>
                         <tbody>{_kat_rows}</tbody>
                     </table>
                 </div>
@@ -465,14 +501,14 @@ def render_html_dashboard(results: dict) -> str:
             for f in file_items if isinstance(f, dict) and f.get("url")
         )
         if all_file_rows:
-            sen_warn = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] {len(sensitive_files)} sensitive file(s) exposed!</div>" if sensitive_files else ""
+            sen_warn = f"<div style='background:rgba(218,54,51,0.1); border:1px solid var(--sev-critical); border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--sev-critical); font-weight:600;'>[!] {len(sensitive_files)} adet hassas dosya dışarı açık!</div>" if sensitive_files else ""
             files_html = f"""
             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[dir] Discovered Files ({len(file_items)} total, {len(sensitive_files)} sensitive)</h3>
+                <h3 style="margin-top:0;">[dir] Keşfedilen Dosyalar ({len(file_items)} toplam, {len(sensitive_files)} hassas)</h3>
                 {sen_warn}
                 <div class="table-container">
                     <table>
-                        <thead><tr><th>Severity</th><th>URL</th><th>Type / Detail</th></tr></thead>
+                        <thead><tr><th>Severity</th><th>URL</th><th>Tür / Detay</th></tr></thead>
                         <tbody>{all_file_rows}</tbody>
                     </table>
                 </div>
@@ -480,45 +516,59 @@ def render_html_dashboard(results: dict) -> str:
             """
 
     # --- Remediation Priority Matrix ---
+    # Düzeltme önerileri — Türkçe açıklama, teknik terimler (CSP, JWT, SameSite…) korunur.
     _REMEDIATION_DB = {
-        "sql injection": ("Parameterized queries / prepared statements", "Low"),
-        "sqli": ("Parameterized queries / prepared statements", "Low"),
-        "ssti": ("Disable user-controlled template evaluation; use static templates", "Medium"),
-        "template injection": ("Disable user-controlled template evaluation; use static templates", "Medium"),
-        "command injection": ("Avoid shell calls; use subprocess list args instead of shell=True", "Low"),
-        "cmdi": ("Avoid shell calls; use subprocess list args instead of shell=True", "Low"),
-        "xss": ("Output-encode all user data; set strict CSP header", "Medium"),
-        "cross-site scripting": ("Output-encode all user data; set strict CSP header", "Medium"),
-        "ssrf": ("Allowlist outbound destinations; block access to internal metadata endpoints", "Medium"),
-        "xxe": ("Disable external entity processing in XML parser config", "Low"),
-        "jwt": ("Use RS256/ES256; validate aud/iss/exp; rotate signing keys", "Medium"),
-        "idor": ("Enforce server-side authorization on every resource access", "Medium"),
-        "csrf": ("SameSite=Strict cookies + CSRF tokens on all state-changing requests", "Low"),
-        "open redirect": ("Allowlist redirect destinations; reject arbitrary user-supplied URLs", "Low"),
-        "security header": ("Set HSTS, X-Content-Type-Options, X-Frame-Options, CSP", "Low"),
-        "prototype pollution": ("Freeze Object.prototype; use null-prototype objects for merge targets", "Medium"),
-        "file upload": ("Validate MIME type server-side; store outside web root; rename files", "Medium"),
-        "mass assignment": ("Use explicit allow-lists for assignable fields; reject extra params", "Low"),
-        "nosql": ("Use typed query builders; never interpolate user input into query strings", "Low"),
-        "graphql": ("Disable introspection in production; enforce query depth/cost limits", "Low"),
-        "request smuggling": ("Normalize HTTP/1.1 headers; use HTTP/2 end-to-end where possible", "High"),
-        "race condition": ("Use atomic operations / advisory locks around critical sections", "High"),
-        "tls": ("Upgrade to TLS 1.2+; disable SSLv3/TLS 1.0; renew expiring certificates", "Low"),
-        "certificate": ("Renew certificate; use a trusted CA; enable HSTS preloading", "Low"),
+        "sql injection": ("Parametreli sorgu / prepared statement kullan; girdi birleştirmeyi bırak", "Düşük"),
+        "sqli": ("Parametreli sorgu / prepared statement kullan; girdi birleştirmeyi bırak", "Düşük"),
+        "ssti": ("Kullanıcı kontrollü template render'ı kapat; statik template kullan", "Orta"),
+        "template injection": ("Kullanıcı kontrollü template render'ı kapat; statik template kullan", "Orta"),
+        "command injection": ("Shell çağrısından kaçın; shell=True yerine subprocess liste argümanı kullan", "Düşük"),
+        "cmdi": ("Shell çağrısından kaçın; shell=True yerine subprocess liste argümanı kullan", "Düşük"),
+        "xss": ("Tüm kullanıcı verisini output-encode et; sıkı CSP header'ı uygula", "Orta"),
+        "cross-site scripting": ("Tüm kullanıcı verisini output-encode et; sıkı CSP header'ı uygula", "Orta"),
+        "ssrf": ("Giden bağlantıları allowlist'le; iç metadata endpoint'lerine erişimi engelle", "Orta"),
+        "xxe": ("XML parser'da external entity işlemeyi kapat (DTD devre dışı)", "Düşük"),
+        "jwt": ("RS256/ES256 kullan; aud/iss/exp doğrula; imza anahtarlarını rotate et", "Orta"),
+        "idor": ("Her kaynak erişiminde sunucu tarafı authorization zorla", "Orta"),
+        "csrf": ("SameSite=Strict cookie + durum değiştiren her istekte CSRF token", "Düşük"),
+        "open redirect": ("Yönlendirme hedeflerini allowlist'le; serbest URL'leri reddet", "Düşük"),
+        "security header": ("HSTS, X-Content-Type-Options, X-Frame-Options, CSP header'larını ayarla", "Düşük"),
+        "prototype pollution": ("Object.prototype'ı dondur; merge hedeflerinde null-prototype obje kullan", "Orta"),
+        "file upload": ("MIME tipini sunucuda doğrula; web root dışında sakla; dosyaları yeniden adlandır", "Orta"),
+        "mass assignment": ("Atanabilir alanlar için açık allow-list kullan; fazladan parametreyi reddet", "Düşük"),
+        "nosql": ("Tipli sorgu builder kullan; kullanıcı girdisini sorguya asla interpolate etme", "Düşük"),
+        "graphql": ("Production'da introspection'ı kapat; query depth/cost limiti uygula", "Düşük"),
+        "request smuggling": ("HTTP/1.1 header'larını normalize et; mümkünse uçtan uca HTTP/2 kullan", "Yüksek"),
+        "race condition": ("Kritik bölümlerde atomik işlem / advisory lock kullan", "Yüksek"),
+        "tls": ("TLS 1.2+'ye yükselt; SSLv3/TLS 1.0'ı kapat; süresi dolan sertifikaları yenile", "Düşük"),
+        "certificate": ("Sertifikayı yenile; güvenilir CA kullan; HSTS preloading etkinleştir", "Düşük"),
+        "weak cipher": ("Zayıf/NULL cipher suite'leri kapat; sadece güçlü AEAD cipher'lara izin ver", "Düşük"),
+        "clickjacking": ("X-Frame-Options: DENY veya CSP frame-ancestors 'none' uygula", "Düşük"),
+        "cors": ("Origin'i allowlist'le; Access-Control-Allow-Origin'de wildcard + credentials kullanma", "Düşük"),
+        "teknoloji": ("Sunucu/framework sürüm header'larını gizle; güncel yamalarda kal", "Düşük"),
+        "web crawler": ("Keşfedilen endpoint'leri gözden geçir; gereksiz/eski olanları yetkilendir veya kaldır", "Düşük"),
+        "api endpoint": ("Keşfedilen API endpoint'lerinde authentication/authorization doğrula", "Düşük"),
     }
     _SEV_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
-    _EFFORT_COLOR = {"Low": "var(--sev-low)", "Medium": "var(--sev-medium)", "High": "var(--sev-high)"}
+    _EFFORT_COLOR = {"Düşük": "var(--sev-low)", "Orta": "var(--sev-medium)", "Yüksek": "var(--sev-high)"}
 
     # Build type -> {max_sev, count, advice, effort}
     type_map = {}
     for f in findings:
         raw_type = f["type"].split(" (")[0] if " (" in f["type"] else f["type"]
-        entry = type_map.setdefault(raw_type, {"count": 0, "max_sev": 0, "sev_label": "Info"})
+        entry = type_map.setdefault(raw_type, {"count": 0, "max_sev": 0, "sev_label": "Info", "examples": []})
         entry["count"] += 1
         sev_rank = _SEV_ORDER.get(f["severity"], 0)
         if sev_rank > entry["max_sev"]:
             entry["max_sev"] = sev_rank
             entry["sev_label"] = f["severity"]
+        if len(entry["examples"]) < 8:
+            entry["examples"].append({
+                "url": f.get("url") or "-",
+                "param": f.get("param") or "-",
+                "severity": f.get("severity") or "Info",
+                "method": f.get("method") or "GET",
+            })
         # Lookup advice
         if "advice" not in entry:
             key_lower = raw_type.lower()
@@ -527,35 +577,150 @@ def render_html_dashboard(results: dict) -> str:
                     entry["advice"] = adv
                     entry["effort"] = eff
                     break
-        entry.setdefault("advice", "Review and remediate per OWASP guidance")
-        entry.setdefault("effort", "Medium")
+        entry.setdefault("advice", "OWASP rehberine göre incele ve düzelt")
+        entry.setdefault("effort", "Orta")
 
     priority_rows = sorted(type_map.items(), key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
 
+    # -----------------------------------------------------------------------
+    # Inline SVG charts — canlı veriden üretilir (statik Matplotlib PNG yerine).
+    #   Sol: Risk Seviyesi Dağılımı (donut)
+    #   Sağ: En Sık Görülen Bulgu Türleri (yatay bar) — "başarısız grafiği"nin
+    #        yerine geçer; pentestçiye gerçek değer veren bir özet.
+    # -----------------------------------------------------------------------
+    import math as _math
+    _SEV_COLORS = {
+        "Critical": "#da3633", "High": "#d29922", "Medium": "#db6d28",
+        "Low": "#3fb950", "Info": "#8b949e",
+    }
+    _sev_chart = [(s, stats.get(s, 0), _SEV_COLORS[s])
+                  for s in ("Critical", "High", "Medium", "Low", "Info")]
+    _sev_total = sum(c for _, c, _ in _sev_chart) or 1
+    _R = 70.0
+    _CIRC = 2 * _math.pi * _R
+    _seg_svg = ""
+    _legend_rows = ""
+    _acc = 0.0
+    for _name, _cnt, _col in _sev_chart:
+        _frac = _cnt / _sev_total
+        if _cnt > 0:
+            _seg = _frac * _CIRC
+            _seg_svg += (
+                f'<circle cx="100" cy="100" r="{_R:.1f}" fill="none" stroke="{_col}" '
+                f'stroke-width="26" stroke-dasharray="{_seg:.2f} {_CIRC - _seg:.2f}" '
+                f'stroke-dashoffset="{-_acc:.2f}" transform="rotate(-90 100 100)">'
+                f'<title>{_name}: {_cnt}</title></circle>'
+            )
+            _acc += _seg
+        _legend_rows += (
+            f'<div style="display:flex;align-items:center;gap:8px;font-size:0.85rem;margin:3px 0;">'
+            f'<span style="width:11px;height:11px;border-radius:2px;background:{_col};display:inline-block;flex:0 0 auto;"></span>'
+            f'<span style="color:var(--text-main);min-width:64px;">{_name}</span>'
+            f'<span style="color:var(--text-muted);">{_cnt} ({100*_frac:.1f}%)</span>'
+            f'</div>'
+        )
+    _donut = (
+        f'<svg viewBox="0 0 200 200" width="200" height="200" style="display:block;margin:0 auto;">'
+        f'<circle cx="100" cy="100" r="{_R:.1f}" fill="none" stroke="var(--bg-body)" stroke-width="26"></circle>'
+        f'{_seg_svg}'
+        f'<text x="100" y="94" text-anchor="middle" font-size="34" font-weight="700" fill="var(--text-main)">{total_issues}</text>'
+        f'<text x="100" y="116" text-anchor="middle" font-size="12" fill="var(--text-muted)">BULGU</text>'
+        f'</svg>'
+    )
+
+    # Top vulnerability types (by count) — yatay bar
+    _by_count = sorted(type_map.items(), key=lambda x: -x[1]["count"])[:8]
+    _max_cnt = max((info["count"] for _, info in _by_count), default=1) or 1
+    _bars = ""
+    if _by_count:
+        for _vt, _info in _by_count:
+            _w = max(4.0, 100.0 * _info["count"] / _max_cnt)
+            _bc = _SEV_COLORS.get(_info["sev_label"], "#8b949e")
+            _vt_short = _vt if len(_vt) <= 34 else _vt[:31] + "…"
+            _bars += (
+                f'<div style="margin:7px 0;cursor:pointer;" onclick="filterByType({json.dumps(_vt)})" '
+                f'title="Bu türe göre filtrele: {_escape(_vt)}">'
+                f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:2px;">'
+                f'<span style="color:var(--text-main);">{_escape(_vt_short)}</span>'
+                f'<span style="color:var(--text-muted);font-weight:600;">{_info["count"]}</span></div>'
+                f'<div style="background:var(--bg-body);border-radius:4px;height:12px;overflow:hidden;">'
+                f'<div style="width:{_w:.1f}%;height:100%;background:{_bc};border-radius:4px;"></div>'
+                f'</div></div>'
+            )
+    else:
+        _bars = '<p style="color:var(--text-muted);font-size:0.88rem;">Görüntülenecek bulgu türü yok.</p>'
+
+    charts_html = f"""
+    <div class="gallery">
+        <div class="card chart-card" style="text-align:left;">
+            <h3 style="margin-top:0;">Risk Seviyesi Dağılımı</h3>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:1.5rem;justify-content:center;">
+                <div>{_donut}</div>
+                <div style="min-width:180px;">{_legend_rows}</div>
+            </div>
+        </div>
+        <div class="card chart-card" style="text-align:left;">
+            <h3 style="margin-top:0;">En Sık Görülen Bulgu Türleri</h3>
+            <p style="color:var(--text-muted);font-size:0.82rem;margin:0 0 0.75rem;">Bir bara tıkla → tabloyu o türe göre filtreler.</p>
+            {_bars}
+        </div>
+    </div>
+    """
+
     _rem_rows_html = ""
-    for rank, (vtype, info) in enumerate(priority_rows[:20], 1):
+    for rank, (vtype, info) in enumerate(priority_rows[:25], 1):
         sev_lbl = info["sev_label"]
         effort  = info["effort"]
         ec      = _EFFORT_COLOR.get(effort, "var(--text-muted)")
         # Safe JS string: use JSON encoding to avoid quote/special-char issues
         vtype_js = json.dumps(vtype)  # produces "\"...\""  — safe inside onclick attr
         sev_js   = json.dumps(sev_lbl)
+
+        # Açılır detay satırı — etkilenen URL/parametre örnekleri ("oklara bilgi koy")
+        _ex_rows = ""
+        for _ex in info.get("examples", []):
+            _ex_url = _ex.get("url") or "-"
+            _ex_url_html = (
+                f"<a href='{_escape(_ex_url)}' target='_blank' rel='noopener' style='color:var(--accent);text-decoration:none;'>{_escape(_ex_url)}</a>"
+                if _ex_url and _ex_url != "-" else "-"
+            )
+            _ex_rows += (
+                f"<tr>"
+                f"<td><span class='tag {_escape(_ex.get('severity','Info'))}'>{_escape(_ex.get('severity','Info'))}</span></td>"
+                f"<td class='method'>{_escape(_ex.get('method','GET'))}</td>"
+                f"<td class='url' style='font-size:0.82rem'>{_ex_url_html}</td>"
+                f"<td><code style='font-size:0.8rem;color:var(--sev-high)'>{_escape(_ex.get('param','-'))}</code></td>"
+                f"</tr>"
+            )
+        _detail_block = (
+            f"<div style='padding:0.5rem 0;'>"
+            f"<div style='font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;'>"
+            f"Etkilenen yerler (ilk {len(info.get('examples', []))} örnek):</div>"
+            f"<table style='width:100%;'><thead><tr>"
+            f"<th width='90'>Severity</th><th width='70'>Method</th><th>URL</th><th width='130'>Parametre</th>"
+            f"</tr></thead><tbody>{_ex_rows}</tbody></table>"
+            f"<div style='margin-top:8px;'>"
+            f"<button class='btn' style='font-size:0.78rem;padding:3px 10px;' onclick=\"filterByType({vtype_js})\">Tabloda hepsini filtrele &#8594;</button>"
+            f"</div></div>"
+        )
+
         _rem_rows_html += (
-            f"<tr>"
+            f"<tr class='rem-main' onclick=\"toggleRemRow({rank})\" style='cursor:pointer;'>"
             f"<td style='text-align:center; color:var(--text-muted); font-weight:600'>{rank}</td>"
-            f"<td style='font-weight:500; cursor:pointer;' "
-            f"    onclick=\"filterByType({vtype_js})\" "
-            f"    title='Click to filter findings by type: {_escape(vtype)}'>"
-            f"  {_escape(vtype)} <span style='font-size:0.75rem; color:var(--accent);'>&#9660;</span>"
+            f"<td style='font-weight:500;'>"
+            f"  <span class='rem-caret' id='rem-caret-{rank}' style='display:inline-block;color:var(--accent);transition:transform 0.15s;font-size:0.8rem;'>&#9654;</span> "
+            f"  {_escape(vtype)}"
             f"</td>"
-            f"<td style='cursor:pointer;' "
-            f"    onclick=\"filterBySeverity({sev_js})\" "
-            f"    title='Click to filter by severity: {_escape(sev_lbl)}'>"
-            f"  <span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)} &#9660;</span>"
+            f"<td onclick=\"event.stopPropagation();filterBySeverity({sev_js})\" "
+            f"    title='Sadece {_escape(sev_lbl)} bulguları filtrele' style='cursor:pointer;'>"
+            f"  <span class='tag {_escape(sev_lbl)}'>{_escape(sev_lbl)}</span>"
             f"</td>"
             f"<td style='text-align:center; color:var(--accent); font-weight:600'>{info['count']}</td>"
             f"<td style='font-size:0.88rem; color:var(--text-muted)'>{_escape(info['advice'])}</td>"
             f"<td style='font-weight:600; color:{ec}'>{_escape(effort)}</td>"
+            f"</tr>"
+            f"<tr class='rem-detail' id='rem-detail-{rank}' style='display:none;'>"
+            f"<td colspan='6' style='background:var(--bg-body);'>{_detail_block}</td>"
             f"</tr>"
         )
 
@@ -563,18 +728,23 @@ def render_html_dashboard(results: dict) -> str:
     if _rem_rows_html:
         remediation_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">[target] Remediation Priority Matrix</h3>
-            <p style="color:var(--text-muted); font-size:0.88rem; margin:0 0 1rem;">Ordered by severity and frequency. Fix Critical/High items first.</p>
+            <h3 style="margin-top:0;">[target] Öncelikli Düzeltme Matrisi</h3>
+            <p style="color:var(--text-muted); font-size:0.88rem; margin:0 0 1rem;">
+                Önem (severity) ve sıklığa göre sıralı — önce Critical/High olanları düzelt.
+                <strong style="color:var(--text-main);">Satıra tıkla</strong> → etkilenen URL/parametreleri aç;
+                <strong style="color:var(--text-main);">severity etiketine tıkla</strong> → tabloyu o seviyeye filtrele.
+                <em>Çözüm Eforu</em> = düzeltmenin geliştirici maliyeti (severity ile aynı şey değildir).
+            </p>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
                             <th width="40">#</th>
-                            <th>Vulnerability Type</th>
-                            <th width="100">Max Severity</th>
-                            <th width="60">Count</th>
-                            <th>Recommended Fix</th>
-                            <th width="110">Fix Effort</th>
+                            <th>Zafiyet Türü</th>
+                            <th width="100">Maks. Severity</th>
+                            <th width="60">Adet</th>
+                            <th>Önerilen Çözüm</th>
+                            <th width="110">Çözüm Eforu</th>
                         </tr>
                     </thead>
                     <tbody>{_rem_rows_html}</tbody>
@@ -679,36 +849,100 @@ def render_html_dashboard(results: dict) -> str:
                  _scripts = p.get("scripts") or {}
                  _detail_parts = []
 
+                 def _first_line(text, *needles, limit=120):
+                     for _l in str(text).split("\n"):
+                         _ls = _l.strip()
+                         if not _ls:
+                             continue
+                         if not needles or any(n.lower() in _ls.lower() for n in needles):
+                             return _ls[:limit]
+                     return ""
+
+                 # Üst düzey servis bilgisi (CPE / OS guess)
+                 _cpe = p.get("cpe")
+                 if _cpe:
+                     _cpe_s = ", ".join(_cpe) if isinstance(_cpe, list) else str(_cpe)
+                     _detail_parts.append(f"<b>CPE:</b> {_escape(_cpe_s[:160])}")
+                 if p.get("os_guess"):
+                     _detail_parts.append(f"<b>OS Tahmini:</b> {_escape(str(p['os_guess'])[:120])}")
+
+                 if "http-title" in _scripts:
+                     _detail_parts.append(f"<b>Başlık:</b> {_escape(_scripts['http-title'][:120])}")
+
+                 _srv = _scripts.get("http-server-header") or _first_line(_scripts.get("http-headers", ""), "Server:")
+                 if _srv:
+                     _detail_parts.append(f"<b>Server:</b> {_escape(str(_srv)[:120])}")
+
+                 if "http-security-headers" in _scripts:
+                     _sh = [l.strip() for l in str(_scripts["http-security-headers"]).split("\n") if l.strip()]
+                     if _sh:
+                         _detail_parts.append(
+                             "<b>Güvenlik Header'ları:</b><br>" +
+                             "<br>".join(_escape(l[:90]) for l in _sh[:8])
+                         )
+
                  if "ssl-cert" in _scripts:
                      _cert_lines = [l.strip() for l in _scripts["ssl-cert"].split("\n")
-                                    if any(k in l for k in ("commonName", "Not valid", "Subject:", "Issuer:", "Public Key"))]
+                                    if any(k in l for k in ("commonName", "Not valid", "Subject:", "Issuer:", "Public Key", "bits"))]
                      if _cert_lines:
-                         _detail_parts.append("<b>SSL Cert:</b><br>" + "<br>".join(_escape(l) for l in _cert_lines[:6]))
+                         _detail_parts.append("<b>SSL Sertifikası:</b><br>" + "<br>".join(_escape(l[:110]) for l in _cert_lines[:7]))
 
                  if "ssl-enum-ciphers" in _scripts:
                      _ct = _scripts["ssl-enum-ciphers"]
-                     _ls = next((l.strip() for l in _ct.split("\n") if "least strength" in l.lower()), "")
-                     _tv = next((l.strip() for l in _ct.split("\n") if "TLSv" in l or "SSLv" in l), "")
+                     _ls = _first_line(_ct, "least strength")
+                     _tv = _first_line(_ct, "TLSv", "SSLv")
                      _cipher_summary = " | ".join(x for x in [_tv, _ls] if x)
                      if _cipher_summary:
-                         _detail_parts.append(f"<b>TLS:</b> {_escape(_cipher_summary)}")
+                         _detail_parts.append(f"<b>TLS Cipher:</b> {_escape(_cipher_summary)}")
 
-                 if "http-title" in _scripts:
-                     _detail_parts.append(f"<b>Title:</b> {_escape(_scripts['http-title'][:80])}")
+                 if "ssl-date" in _scripts:
+                     _sd = _first_line(_scripts["ssl-date"])
+                     if _sd:
+                         _detail_parts.append(f"<b>Sunucu Saati (TLS):</b> {_escape(_sd)}")
 
-                 if "http-server-header" in _scripts:
-                     _detail_parts.append(f"<b>Server:</b> {_escape(_scripts['http-server-header'][:80])}")
+                 _geo = _scripts.get("ip-geolocation-geoplugin") or _scripts.get("ip-geolocation-maxmind")
+                 if _geo:
+                     _geo_lines = [l.strip() for l in str(_geo).split("\n") if l.strip() and "coordinates" not in l.lower()]
+                     if _geo_lines:
+                         _detail_parts.append("<b>Coğrafi Konum:</b> " + _escape(" / ".join(_geo_lines[:3])[:160]))
+
+                 _asn = _scripts.get("asn-query")
+                 if _asn:
+                     _asn_l = _first_line(_asn, "BGP", "Country", "Origin", "AS")
+                     if _asn_l:
+                         _detail_parts.append(f"<b>ASN:</b> {_escape(_asn_l[:160])}")
+
+                 _whois = _scripts.get("whois-ip")
+                 if _whois:
+                     _wl = _first_line(_whois, "Organization", "OrgName", "netname", "descr", "inetnum")
+                     if _wl:
+                         _detail_parts.append(f"<b>WHOIS:</b> {_escape(_wl[:160])}")
 
                  for _sid in ("ssl-heartbleed", "ssl-poodle", "ssl-ccs-injection"):
-                     if _sid in _scripts and "VULNERABLE" in _scripts[_sid].upper():
-                         _detail_parts.append(f"<b style='color:var(--sev-critical)'>VULN: {_escape(_sid)}</b>")
+                     if _sid in _scripts and "VULNERABLE" in str(_scripts[_sid]).upper():
+                         _detail_parts.append(f"<b style='color:var(--sev-critical)'>ZAFİYET: {_escape(_sid)}</b>")
+
+                 # Geriye kalan, henüz gösterilmeyen script'leri de ham olarak ekle
+                 _shown = {"http-title", "http-server-header", "http-headers", "http-security-headers",
+                           "ssl-cert", "ssl-enum-ciphers", "ssl-date", "ip-geolocation-geoplugin",
+                           "ip-geolocation-maxmind", "asn-query", "whois-ip", "ssl-heartbleed",
+                           "ssl-poodle", "ssl-ccs-injection", "port-states", "fingerprint-strings"}
+                 _extra = []
+                 for _sk, _sv in _scripts.items():
+                     if _sk in _shown:
+                         continue
+                     _line = _first_line(_sv)
+                     if _line:
+                         _extra.append(f"<b>{_escape(_sk)}:</b> {_escape(_line[:120])}")
+                 if _extra:
+                     _detail_parts.append("<br>".join(_extra[:6]))
 
                  _details_html = ""
                  if _detail_parts:
                      _inner = "<br><br>".join(_detail_parts)
                      _details_html = (
                          f"<details style='cursor:pointer'>"
-                         f"<summary style='color:var(--accent);font-size:0.8rem;list-style:none'>&#9656; details</summary>"
+                         f"<summary style='color:var(--accent);font-size:0.8rem;list-style:none'>&#9656; ayrıntılar</summary>"
                          f"<div style='font-size:0.78rem;margin-top:6px;line-height:1.6;color:var(--text-muted)'>{_inner}</div>"
                          f"</details>"
                      )
@@ -727,10 +961,10 @@ def render_html_dashboard(results: dict) -> str:
         if rows:
              ports_html = f"""
              <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[web] Open Ports — Nmap ({len(rows)} found)</h3>
+                <h3 style="margin-top:0;">[web] Açık Portlar — Nmap ({len(rows)} bulundu)</h3>
                 <div class="table-container">
                     <table>
-                        <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Service</th><th>State</th><th>Details</th></tr></thead>
+                        <thead><tr><th>Host</th><th>Port</th><th>Proto</th><th>Servis</th><th>Durum</th><th>Ayrıntılar</th></tr></thead>
                         <tbody>{''.join(rows)}</tbody>
                     </table>
                 </div>
@@ -749,16 +983,34 @@ def render_html_dashboard(results: dict) -> str:
              """
 
     # --- WAF Detection Status ---
+    # Birincil kaynak: results["waf_detection"]; yedek: results["waf"] kovası (son kayıt).
     waf_raw = results.get("waf_detection") or {}
     if isinstance(waf_raw, list):
         waf_raw = next((x for x in waf_raw if isinstance(x, dict)), {})
+    if not waf_raw:
+        _waf_bucket = results.get("waf") or []
+        if isinstance(_waf_bucket, list):
+            # En yüksek confidence'lı / detected olan kaydı seç
+            _cand = [x for x in _waf_bucket if isinstance(x, dict)]
+            waf_raw = next((x for x in _cand if x.get("detected")),
+                           (_cand[-1] if _cand else {}))
+        elif isinstance(_waf_bucket, dict):
+            waf_raw = _waf_bucket
     waf_detected = bool(waf_raw.get("detected"))
-    waf_vendor = waf_raw.get("vendor") or "None"
+    _waf_vendor = waf_raw.get("vendor") or "Yok"
+    if isinstance(_waf_vendor, str) and _waf_vendor.lower() in ("unknown", "none", ""):
+        _waf_vendor = "Bilinmiyor" if waf_detected else "Yok"
     waf_confidence = waf_raw.get("confidence") or 0.0
     waf_badge_color = "var(--sev-critical)" if waf_detected else "var(--sev-low)"
-    waf_label = f"{_escape(waf_vendor)} ({int(float(waf_confidence)*100)}%)" if waf_detected else "Not Detected"
+    try:
+        _wc = int(float(waf_confidence) * 100)
+    except (TypeError, ValueError):
+        _wc = 0
+    waf_label = f"{_escape(_waf_vendor)} ({_wc}%)" if waf_detected else "Tespit Edilmedi"
 
     # --- Metrics / Traffic Data ---
+    # results içinde "metrics" yoksa (çoğu zaman yok — ayrı metrics.json'a yazılır)
+    # canlı HTTP sayaçlarına doğrudan başvur. Böylece pano her durumda dolar.
     _metrics_raw = results.get("metrics") or {}
     if isinstance(_metrics_raw, list):
         metrics = next((x for x in _metrics_raw if isinstance(x, dict)), {})
@@ -766,32 +1018,126 @@ def render_html_dashboard(results: dict) -> str:
         metrics = _metrics_raw
     else:
         metrics = {}
+    if not metrics.get("counters"):
+        try:
+            from websecure.core.http import get_http_metrics as _ghm
+            _live = _ghm()
+            if isinstance(_live, dict) and _live.get("counters"):
+                metrics = _live
+        except Exception as _mexc:
+            _logger.debug(f"[html_dashboard] live metrics fallback failed: {_mexc!r}")
     _counters_raw = metrics.get("counters") or {}
-    if isinstance(_counters_raw, list):
-        counters = next((x for x in _counters_raw if isinstance(x, dict)), {})
-    elif isinstance(_counters_raw, dict):
-        counters = _counters_raw
-    else:
-        counters = {}
-    total_req = counters.get("total", 0)
-    ok_2xx = counters.get("2xx", 0)
-    block_403 = counters.get("403", 0)
-    rate_429 = counters.get("429", 0)
+    counters = _counters_raw if isinstance(_counters_raw, dict) else {}
 
-    # Calculate "Successful" in terms of exploits (Severity > Low) vs "Failed" attempts
+    def _ci(*names):
+        for n in names:
+            v = counters.get(n)
+            if v:
+                return int(v)
+        return 0
+    total_req = _ci("total", "requests")
+    ok_2xx    = _ci("2xx", "ok_2xx")
+    block_403 = _ci("403", "ban_403")
+    rate_429  = _ci("429", "throttle_429")
+    err_4xx   = _ci("err_4xx")
+    err_5xx   = _ci("err_5xx")
+    redir_3xx = max(0, total_req - ok_2xx - err_4xx - err_5xx) if total_req else 0
+
+    # Per-location status ("nereden 2xx/3xx/403/429 aldık")
+    status_locations = metrics.get("status_locations") or {}
+    # Yedek: anti_block_event kovasından blok konumları
+    if not status_locations:
+        for _abe in (results.get("anti_block_event") or []):
+            if not isinstance(_abe, dict):
+                continue
+            _u = (_abe.get("url") or "").split("?", 1)[0]
+            if not _u:
+                continue
+            _cls = {403: "403", 429: "429"}.get(int(_abe.get("status") or 0), "other")
+            slot = status_locations.setdefault(_u, {})
+            slot[_cls] = int(slot.get(_cls, 0)) + 1
+
+    # Onaylı exploit = gerçekten doğrulanmış orta+ önemdeki bulgular
     exploit_count = stats["Critical"] + stats["High"] + stats["Medium"]
+
+    # Response-code dağılım barı
+    _dist = [
+        ("2xx", ok_2xx, "var(--sev-low)"),
+        ("3xx", redir_3xx, "var(--accent)"),
+        ("403", block_403, "var(--sev-high)"),
+        ("429", rate_429, "var(--sev-medium)"),
+        ("4xx", max(0, err_4xx - block_403 - rate_429), "#b06a2c"),
+        ("5xx", err_5xx, "var(--sev-critical)"),
+    ]
+    _dist_total = sum(v for _, v, _ in _dist) or 1
+    _dist_bar = "".join(
+        f'<div title="{lbl}: {val}" style="width:{100*val/_dist_total:.1f}%;background:{col};height:100%;"></div>'
+        for lbl, val, col in _dist if val > 0
+    )
+    _dist_legend = " ".join(
+        f'<span style="font-size:0.78rem;color:var(--text-muted);margin-right:10px;">'
+        f'<span style="display:inline-block;width:9px;height:9px;background:{col};border-radius:2px;margin-right:3px;"></span>'
+        f'{lbl}: <strong style="color:var(--text-main)">{val}</strong></span>'
+        for lbl, val, col in _dist if val > 0
+    )
+    _dist_html = (
+        f'<div style="margin-top:1rem;">'
+        f'<div style="display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--bg-body);">{_dist_bar}</div>'
+        f'<div style="margin-top:6px;">{_dist_legend}</div></div>'
+    ) if total_req else (
+        '<p style="color:var(--text-muted);font-size:0.86rem;margin-top:1rem;">'
+        'Bu taramada HTTP sayaçları kaydedilmedi (istekler sayaç yolundan geçmemiş olabilir). '
+        'Bir sonraki taramada bu pano otomatik dolacak.</p>'
+    )
+
+    # Konuma göre trafik tablosu
+    _loc_html = ""
+    if status_locations:
+        def _loc_score(kv):
+            s = kv[1]
+            return (int(s.get("403", 0)) + int(s.get("429", 0)), sum(int(v) for k, v in s.items() if k != "last"))
+        _loc_rows = ""
+        for _path, _s in sorted(status_locations.items(), key=_loc_score, reverse=True)[:40]:
+            def _cell(key, color):
+                v = int(_s.get(key, 0))
+                return f"<span style='color:{color};font-weight:600'>{v}</span>" if v else "<span style='color:var(--text-muted)'>0</span>"
+            _blocked = int(_s.get("403", 0)) + int(_s.get("429", 0))
+            _verdict = ("<span class='tag High'>WAF/Block</span>" if _blocked else "<span class='tag Low'>Geçti</span>")
+            _loc_rows += (
+                f"<tr>"
+                f"<td class='url' style='font-size:0.8rem'>{_escape(_path)}</td>"
+                f"<td style='text-align:center'>{_cell('2xx','var(--sev-low)')}</td>"
+                f"<td style='text-align:center'>{_cell('3xx','var(--accent)')}</td>"
+                f"<td style='text-align:center'>{_cell('403','var(--sev-high)')}</td>"
+                f"<td style='text-align:center'>{_cell('429','var(--sev-medium)')}</td>"
+                f"<td style='text-align:center'>{_cell('5xx','var(--sev-critical)')}</td>"
+                f"<td style='text-align:center'>{_verdict}</td>"
+                f"</tr>"
+            )
+        _loc_html = f"""
+        <h4 style="margin:1.25rem 0 0.5rem;">Konuma Göre Trafik — nereden geçtik / nerede engellendik</h4>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>Yol (path)</th><th width="60">2xx</th><th width="60">3xx</th>
+                    <th width="60">403</th><th width="60">429</th><th width="60">5xx</th><th width="110">Sonuç</th>
+                </tr></thead>
+                <tbody>{_loc_rows}</tbody>
+            </table>
+        </div>
+        """
 
     traffic_html = f"""
     <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-        <h3 style="margin-top:0;">[signal] Attack Traffic & Efficiency</h3>
+        <h3 style="margin-top:0;">[signal] Saldırı Trafiği & Verimlilik</h3>
         <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom:0;">
             <div class="stat-card" style="padding:1rem;">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--text-main)">{total_req}</span>
-                <span class="stat-label">Total Requests</span>
+                <span class="stat-label">Toplam İstek</span>
             </div>
             <div class="stat-card" style="padding:1rem;">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--sev-low)">{ok_2xx}</span>
-                <span class="stat-label">2xx (Passed)</span>
+                <span class="stat-label">2xx (Geçti)</span>
             </div>
              <div class="stat-card" style="padding:1rem;">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--sev-high)">{block_403}</span>
@@ -803,13 +1149,15 @@ def render_html_dashboard(results: dict) -> str:
             </div>
             <div class="stat-card" style="padding:1rem; border-color:var(--accent);">
                 <span class="stat-value" style="font-size:1.5rem; color:var(--accent)">{exploit_count}</span>
-                <span class="stat-label">Confirmed Exploits</span>
+                <span class="stat-label">Onaylı Exploit</span>
             </div>
             <div class="stat-card" style="padding:1rem; border-color:{waf_badge_color};">
                 <span class="stat-value" style="font-size:1rem; color:{waf_badge_color}; word-break:break-word">{waf_label}</span>
-                <span class="stat-label">WAF Detected</span>
+                <span class="stat-label">WAF Durumu</span>
             </div>
         </div>
+        {_dist_html}
+        {_loc_html}
     </div>
     """
 
@@ -843,7 +1191,7 @@ def render_html_dashboard(results: dict) -> str:
         )
         subdomain_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">[globe] Discovered Subdomains ({len(subdomains)})</h3>
+            <h3 style="margin-top:0;">[globe] Keşfedilen Subdomain'ler ({len(subdomains)})</h3>
             <div class="table-container">
                 <table>
                     <thead><tr><th>Subdomain</th></tr></thead>
@@ -881,18 +1229,37 @@ def render_html_dashboard(results: dict) -> str:
             if not _nc:
                 continue
             cert = _nc
-            # Augment with TLS version from ssl-enum-ciphers (first TLSvX.Y line)
+            # Augment with TLS versions + cipher sample from ssl-enum-ciphers
             _enum_text = _scripts.get("ssl-enum-ciphers") or ""
+            _tls_versions = []
+            _ciphers = []
+            _least = ""
             for _el in _enum_text.splitlines():
-                if re.match(r"\s*TLSv[0-9.]+\s*:", _el):
-                    cert.setdefault("tls_version", _el.strip().rstrip(":"))
-                    break
+                _els = _el.strip()
+                _m = re.match(r"(TLSv[0-9.]+|SSLv[0-9]+)\s*:?\s*$", _els)
+                if _m:
+                    _tls_versions.append(_m.group(1))
+                # cipher satırları genelde "TLS_..." içerir
+                if "TLS_" in _els and len(_ciphers) < 6:
+                    _ciphers.append(_els.split(" - ")[0].strip()[:70])
+                if "least strength" in _els.lower():
+                    _least = _els.split(":", 1)[-1].strip()
+            if _tls_versions:
+                cert["tls_version"] = ", ".join(dict.fromkeys(_tls_versions))
+            if _ciphers:
+                cert["ciphers"] = _ciphers
+            if _least:
+                cert["least_strength"] = _least
+            # ssl-date'ten sunucu saati
+            _sdt = _scripts.get("ssl-date") or ""
+            if _sdt:
+                cert.setdefault("server_time", _sdt.strip().split("\n")[0][:80])
             break  # use first port that has ssl-cert (usually 443)
 
     if cert:
-        valid_icon = "[OK] Valid" if cert.get("valid") else "[X] Invalid"
+        valid_icon = "[OK] Geçerli" if cert.get("valid") else "[X] Geçersiz"
         if cert.get("self_signed"):
-            valid_icon = "[!] Self-Signed"
+            valid_icon = "[!] Self-Signed (kendinden imzalı)"
 
         probs = cert.get("problems") or []
         probs_html = (
@@ -910,7 +1277,7 @@ def render_html_dashboard(results: dict) -> str:
         expiry_color = "var(--sev-critical)" if isinstance(days, int) and days < 0 else (
             "var(--sev-high)" if isinstance(days, int) and days < 30 else "var(--text-main)"
         )
-        days_label = f"{days} days" if isinstance(days, int) else "-"
+        days_label = f"{days} gün" if isinstance(days, int) else "-"
 
         # SAN (Subject Alternative Names = domain/subdomain list)
         san_list = cert.get("san") or []
@@ -922,22 +1289,48 @@ def render_html_dashboard(results: dict) -> str:
                 f"{_escape(s)}</span>"
                 for s in san_list
             )
-            san_html = f"<div class='label'>Alt Names (SAN)</div><div>{san_items}</div>"
+            san_html = f"<div class='label'>Alt Adlar (SAN)</div><div>{san_items}</div>"
 
-        hsts_icon = "[OK]" if (cert.get("hsts") or tls_data.get("hsts")) else "[X]"
+        # Cipher listesi + en zayıf güç
+        _ciphers = cert.get("ciphers") or []
+        cipher_html = ""
+        if _ciphers:
+            _ch_items = "".join(
+                f"<div style='font-family:monospace;font-size:0.8rem;color:var(--text-muted)'>{_escape(c)}</div>"
+                for c in _ciphers
+            )
+            cipher_html = f"<div class='label'>Cipher Suite'ler</div><div>{_ch_items}</div>"
+        least_html = ""
+        if cert.get("least_strength"):
+            least_html = (
+                f"<div class='label'>En Zayıf Güç</div>"
+                f"<div><span class='tag {'High' if str(cert.get('least_strength')).upper().startswith(('C','D','E','F')) else 'Low'}'>"
+                f"{_escape(str(cert.get('least_strength')))}</span></div>"
+            )
+        servertime_html = ""
+        if cert.get("server_time"):
+            servertime_html = f"<div class='label'>Sunucu Saati (TLS)</div><div>{_escape(str(cert.get('server_time')))}</div>"
+
+        hsts_on = bool(cert.get("hsts") or (isinstance(tls_data, dict) and tls_data.get("hsts")))
+        hsts_icon = "[OK]" if hsts_on else "[X]"
 
         ssl_html = f"""
         <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0;">[lock] SSL/TLS Certificate</h3>
+            <h3 style="margin-top:0;">[lock] SSL/TLS Sertifikası</h3>
             <div class="kv-grid" style="grid-template-columns: 200px 1fr; gap:0.5rem; margin-bottom:0;">
-                <div class="label">Status</div>     <div>{valid_icon} {probs_html}{warnings_html}</div>
-                <div class="label">HSTS</div>        <div>{hsts_icon} Strict-Transport-Security</div>
-                <div class="label">Subject CN</div>  <div><code>{_escape(cert.get('subject_CN') or '-')}</code></div>
-                <div class="label">Issuer</div>      <div>{_escape(cert.get('issuer_CN') or '-')} ({_escape(cert.get('issuer_O') or '-')})</div>
-                <div class="label">Validity</div>    <div>{_escape(str(cert.get('not_before') or ''))} &mdash; {_escape(str(cert.get('not_after') or ''))}</div>
-                <div class="label">Expires In</div>  <div style="color:{expiry_color}"><strong>{days_label}</strong></div>
-                <div class="label">Protocol</div>    <div>{_escape(cert.get('tls_version') or '-')}</div>
-                <div class="label">Fingerprint</div> <div style="font-family:monospace; font-size:0.82rem; word-break:break-all;">{_escape(cert.get('fingerprint') or '-')}</div>
+                <div class="label">Durum</div>        <div>{valid_icon} {probs_html}{warnings_html}</div>
+                <div class="label">HSTS</div>         <div>{hsts_icon} Strict-Transport-Security</div>
+                <div class="label">Subject CN</div>   <div><code>{_escape(cert.get('subject_CN') or '-')}</code></div>
+                <div class="label">Issuer (CA)</div>  <div>{_escape(cert.get('issuer_CN') or '-')}{(' (' + _escape(cert.get('issuer_O')) + ')') if cert.get('issuer_O') else ''}</div>
+                <div class="label">Geçerlilik</div>   <div>{_escape(str(cert.get('not_before') or ''))} &mdash; {_escape(str(cert.get('not_after') or ''))}</div>
+                <div class="label">Kalan Süre</div>   <div style="color:{expiry_color}"><strong>{days_label}</strong></div>
+                <div class="label">Protokol</div>     <div>{_escape(cert.get('tls_version') or '-')}</div>
+                {f'<div class="label">İmza Algoritması</div><div><code>{_escape(cert.get("sig_algo"))}</code></div>' if cert.get('sig_algo') else ''}
+                {f'<div class="label">Anahtar Boyutu</div><div>{cert.get("key_bits")} bit</div>' if cert.get('key_bits') else ''}
+                {least_html}
+                {cipher_html}
+                {servertime_html}
+                <div class="label">Fingerprint</div>  <div style="font-family:monospace; font-size:0.82rem; word-break:break-all;">{_escape(cert.get('fingerprint') or '-')}</div>
                 {san_html}
             </div>
         </div>
@@ -960,11 +1353,11 @@ def render_html_dashboard(results: dict) -> str:
         )
         phase_errors_html = f"""
         <div class="card" style="background:rgba(210,153,34,0.07); border:1px solid var(--sev-high); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-            <h3 style="margin-top:0; color:var(--sev-high);">[!] Scan Phase Errors ({len(phase_errors)})</h3>
-            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Some scan phases encountered errors. Results from these phases may be incomplete.</p>
+            <h3 style="margin-top:0; color:var(--sev-high);">[!] Tarama Faz Hataları ({len(phase_errors)})</h3>
+            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Bazı tarama fazları hata aldı. Bu fazlardan gelen sonuçlar eksik olabilir.</p>
             <div class="table-container">
                 <table>
-                    <thead><tr><th>Phase</th><th>Error Type</th><th>Message</th></tr></thead>
+                    <thead><tr><th>Faz</th><th>Hata Tipi</th><th>Mesaj</th></tr></thead>
                     <tbody>{err_rows}</tbody>
                 </table>
             </div>
@@ -976,7 +1369,7 @@ def render_html_dashboard(results: dict) -> str:
     sessions_json = json.dumps(sessions, default=str).replace("<", "\\u003c").replace(">", "\\u003e")
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1175,40 +1568,44 @@ def render_html_dashboard(results: dict) -> str:
 
 <header>
     <div>
-        <h1>[shield] WebSecure Report</h1>
+        <h1>[shield] WebSecure Raporu</h1>
     </div>
     <div style="display:flex; gap:10px; align-items:center;">
-        <button class="btn" onclick="showSessions()">[key] Captured Sessions ({len(sessions)})</button>
+        <button class="btn" onclick="showSessions()">[key] Yakalanan Oturumlar ({len(sessions)})</button>
         <div class="header-meta">
-            <div>Target: <strong>{ _escape(target) }</strong> <span style="font-family:monospace; color:var(--accent)">[{_escape(target_ip)}]</span></div>
-            <div>Date: { scan_date }</div>
+            <div>Hedef: <strong>{ _escape(target) }</strong> <span style="font-family:monospace; color:var(--accent)">[{_escape(target_ip)}]</span></div>
+            <div>Tarih: { scan_date }</div>
         </div>
     </div>
 </header>
 
 <div class="container">
 
-    <!-- Executive Summary — click any card to filter findings table -->
+    <!-- Yönetici Özeti — bir karta tıkla → bulgu tablosunu o severity'ye filtreler -->
     <div class="stats-grid">
-        <div class="stat-card" id="card-Critical" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Critical')" title="Click to filter Critical findings">
+        <div class="stat-card" id="card-Critical" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Critical')" title="Sadece Critical bulguları göster">
             <span class="stat-value c-critical">{ stats["Critical"] }</span>
             <span class="stat-label">Critical</span>
         </div>
-        <div class="stat-card" id="card-High" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('High')" title="Click to filter High findings">
+        <div class="stat-card" id="card-High" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('High')" title="Sadece High bulguları göster">
             <span class="stat-value c-high">{ stats["High"] }</span>
             <span class="stat-label">High</span>
         </div>
-        <div class="stat-card" id="card-Medium" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Medium')" title="Click to filter Medium findings">
+        <div class="stat-card" id="card-Medium" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Medium')" title="Sadece Medium bulguları göster">
             <span class="stat-value c-medium">{ stats["Medium"] }</span>
             <span class="stat-label">Medium</span>
         </div>
-        <div class="stat-card" id="card-Low" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Low')" title="Click to filter Low findings">
+        <div class="stat-card" id="card-Low" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Low')" title="Sadece Low bulguları göster">
             <span class="stat-value c-low">{ stats["Low"] }</span>
             <span class="stat-label">Low</span>
         </div>
-        <div class="stat-card" id="card-All" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('')" title="Show all findings">
+        <div class="stat-card" id="card-Info" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('Info')" title="Sadece Info (bilgilendirici) bulguları göster">
+            <span class="stat-value c-info">{ stats["Info"] }</span>
+            <span class="stat-label">Info</span>
+        </div>
+        <div class="stat-card" id="card-All" style="cursor:pointer; transition:border-color 0.15s;" onclick="filterBySeverity('')" title="Tüm bulguları göster">
              <span class="stat-value">{ total_issues }</span>
-             <span class="stat-label">All Findings</span>
+             <span class="stat-label">Tüm Bulgular</span>
         </div>
     </div>
 
@@ -1236,18 +1633,21 @@ def render_html_dashboard(results: dict) -> str:
     { phase_errors_html }
 
     <!-- Findings Table -->
-    <h2>[search] Findings ({total_issues} total)</h2>
+    <h2>[search] Bulgular (<span id="findingCount">{total_issues}</span> / {total_issues})</h2>
+    <p style="color:var(--text-muted); font-size:0.86rem; margin:-0.5rem 0 1rem;">
+        Arama kutusu URL, tür, parametre, payload, severity ve açıklamada arar. Severity menüsü ile birlikte çalışır.
+    </p>
     <div class="controls">
-        <input type="text" id="searchInput" class="search" placeholder="Filter by URL, type, param, severity..." oninput="applyFilters()">
+        <input type="text" id="searchInput" class="search" placeholder="URL, tür, parametre, payload veya severity ile filtrele..." oninput="applyFilters()">
         <select id="sevFilter" onchange="applyFilters()" style="background:var(--bg-header); border:1px solid var(--border); color:var(--text-main); padding:0.5rem 1rem; border-radius:6px;">
-            <option value="">All Severities</option>
+            <option value="">Tüm Severity'ler</option>
             <option value="Critical">Critical</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
             <option value="Info">Info</option>
         </select>
-        <button class="btn" onclick="filterBySeverity('')" title="Clear all filters">&#x2715; Clear</button>
+        <button class="btn" onclick="filterBySeverity('')" title="Tüm filtreleri temizle">&#x2715; Temizle</button>
     </div>
 
     <div class="table-container">
@@ -1255,11 +1655,11 @@ def render_html_dashboard(results: dict) -> str:
             <thead>
                 <tr>
                     <th width="90">Severity</th>
-                    <th width="180">Type</th>
-                    <th>URL / Risk Location</th>
+                    <th width="180">Tür</th>
+                    <th>URL / Risk Konumu</th>
                     <th width="80">Method</th>
-                    <th width="120">Parameter</th>
-                    <th width="80">Status</th>
+                    <th width="120">Parametre</th>
+                    <th width="80">Durum</th>
                 </tr>
             </thead>
             <tbody id="tableBody">
@@ -1274,7 +1674,7 @@ def render_html_dashboard(results: dict) -> str:
 <div id="detailModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2 id="modalTitle">Finding Detail</h2>
+            <h2 id="modalTitle">Bulgu Detayı</h2>
             <span class="close" onclick="closeModal('detailModal')">&times;</span>
         </div>
         <div class="modal-body" id="modalBody">
@@ -1287,7 +1687,7 @@ def render_html_dashboard(results: dict) -> str:
 <div id="sessionsModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>[key] Captured Sessions</h2>
+            <h2>[key] Yakalanan Oturumlar</h2>
             <span class="close" onclick="closeModal('sessionsModal')">&times;</span>
         </div>
         <div class="modal-body" id="sessionsBody">
@@ -1296,14 +1696,20 @@ def render_html_dashboard(results: dict) -> str:
     </div>
 </div>
 
+<!-- Veri, çalıştırılabilir script'ten AYRI tutulur. Böylece dev bir JSON içeriği
+     asla fonksiyon tanımlarını bozamaz → search/filter/modal her zaman çalışır. -->
+<script type="application/json" id="ws-findings-data">{ findings_json }</script>
+<script type="application/json" id="ws-sessions-data">{ sessions_json }</script>
+
 <script>
     // -----------------------------------------------------------------------
-    // Data — JSON-encoded by Python; safe unicode escapes for < >
+    // Data — application/json bloklarından güvenle parse edilir.
     // -----------------------------------------------------------------------
     var data = [];
     var sessions = [];
     try {{
-        data = { findings_json };
+        var _dEl = document.getElementById('ws-findings-data');
+        data = JSON.parse((_dEl && _dEl.textContent) || '[]');
     }} catch(e) {{
         console.error('[WebSecure] Failed to parse findings data ({_data_size_kb} KB):', e);
         // Show a visible error so the user knows why the table is empty
@@ -1311,13 +1717,14 @@ def render_html_dashboard(results: dict) -> str:
             var tb = document.getElementById('tableBody');
             if (tb) {{
                 tb.innerHTML = '<tr><td colspan="6" style="color:var(--sev-critical);padding:1.5rem;text-align:center;">'
-                    + '&#9888; Findings data parse error ({_data_size_kb} KB inline). '
-                    + 'Open browser DevTools (F12 &rarr; Console) for details.</td></tr>';
+                    + '&#9888; Bulgu verisi okunamadı ({_data_size_kb} KB). '
+                    + 'Tarayıcı konsolunu (F12 &rarr; Console) kontrol edin.</td></tr>';
             }}
         }})();
     }}
     try {{
-        sessions = { sessions_json };
+        var _sEl = document.getElementById('ws-sessions-data');
+        sessions = JSON.parse((_sEl && _sEl.textContent) || '[]');
     }} catch(e) {{
         console.error('[WebSecure] Failed to parse sessions data:', e);
     }}
@@ -1330,7 +1737,7 @@ def render_html_dashboard(results: dict) -> str:
         if (!tbody) return;
         tbody.innerHTML = '';
         if (!items || items.length === 0) {{
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">No findings match the current filter.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">Bu filtreyle eşleşen bulgu yok.</td></tr>';
             return;
         }}
         // Render in chunks to avoid blocking the UI on large datasets
@@ -1365,7 +1772,7 @@ def render_html_dashboard(results: dict) -> str:
                     '<td class="url">' + urlHtml + paramBadge + '</td>' +
                     '<td class="method">' + escapeHtml(item.method) + '</td>' +
                     '<td><code style="font-size:0.85rem">' + escapeHtml(item.param) + '</code></td>' +
-                    '<td><span class="tag Info">Open</span></td>';
+                    '<td><span class="tag Info">Açık</span></td>';
                 fragment.appendChild(tr);
             }} catch(e) {{
                 console.warn('[WebSecure] renderTable row error:', e, item);
@@ -1400,16 +1807,21 @@ def render_html_dashboard(results: dict) -> str:
             }});
             renderTable(filtered);
 
+            // Canlı sayaç güncelle
+            var fc = document.getElementById('findingCount');
+            if (fc) fc.textContent = filtered.length;
+
             // Highlight active severity stat card
             var sevColors = {{
                 'Critical': 'var(--sev-critical)',
                 'High':     'var(--sev-high)',
                 'Medium':   'var(--sev-medium)',
                 'Low':      'var(--sev-low)',
+                'Info':     'var(--sev-info)',
                 '':         'var(--border)'
             }};
-            ['Critical','High','Medium','Low','All'].forEach(function(s) {{
-                var card = document.getElementById('card-' + (s === '' ? 'All' : s));
+            ['Critical','High','Medium','Low','Info','All'].forEach(function(s) {{
+                var card = document.getElementById('card-' + (s === 'All' ? 'All' : s));
                 if (!card) return;
                 var activeSev = s === 'All' ? '' : s;
                 if (activeSev === sev) {{
@@ -1423,6 +1835,18 @@ def render_html_dashboard(results: dict) -> str:
         }} catch(e) {{
             console.error('[WebSecure] applyFilters error:', e);
         }}
+    }}
+
+    // Öncelikli Düzeltme Matrisi — satır aç/kapa
+    function toggleRemRow(rank) {{
+        try {{
+            var det = document.getElementById('rem-detail-' + rank);
+            var car = document.getElementById('rem-caret-' + rank);
+            if (!det) return;
+            var open = det.style.display !== 'none' && det.style.display !== '';
+            det.style.display = open ? 'none' : 'table-row';
+            if (car) car.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+        }} catch(e) {{ console.error('[WebSecure] toggleRemRow error:', e); }}
     }}
 
     function filterBySeverity(sev) {{
@@ -1452,7 +1876,7 @@ def render_html_dashboard(results: dict) -> str:
         const item = data.find(i => i.id === id);
         if(!item) return;
 
-        const d = item.detail;
+        const d = item.detail || {{}};
         const modal = document.getElementById('detailModal');
         document.getElementById('modalTitle').innerText = item.type;
 
@@ -1461,8 +1885,8 @@ def render_html_dashboard(results: dict) -> str:
         const confidence = d.confidence || d.score;
         const tool = d.tool || d.scanner || d.source;
         const verBadge = verified
-            ? `<span style="background:rgba(63,185,80,0.15); border:1px solid var(--sev-low); color:var(--sev-low); border-radius:4px; padding:2px 8px; font-size:0.8rem; font-weight:600;">✓ Verified</span>`
-            : `<span style="background:rgba(139,148,158,0.1); border:1px solid var(--text-muted); color:var(--text-muted); border-radius:4px; padding:2px 8px; font-size:0.8rem;">Unverified</span>`;
+            ? `<span style="background:rgba(63,185,80,0.15); border:1px solid var(--sev-low); color:var(--sev-low); border-radius:4px; padding:2px 8px; font-size:0.8rem; font-weight:600;">✓ Doğrulandı</span>`
+            : `<span style="background:rgba(139,148,158,0.1); border:1px solid var(--text-muted); color:var(--text-muted); border-radius:4px; padding:2px 8px; font-size:0.8rem;">Doğrulanmadı</span>`;
 
         // Build test URL (original URL + injected payload in param) for display only
         var testUrlHtml = '';
@@ -1484,13 +1908,13 @@ def render_html_dashboard(results: dict) -> str:
 
         let html = `
             <div class="kv-grid">
-                <div class="label">Target URL</div> <div><a href="${{escapeHtml(cleanUrl)}}" target="_blank" style="color:var(--accent)">${{escapeHtml(cleanUrl)}}</a></div>
+                <div class="label">Hedef URL</div> <div><a href="${{escapeHtml(cleanUrl)}}" target="_blank" style="color:var(--accent)">${{escapeHtml(cleanUrl)}}</a></div>
                 ${{testUrlHtml}}
                 <div class="label">Method</div> <div><code>${{escapeHtml(item.method)}}</code></div>
                 <div class="label">Severity</div> <div><span class="tag ${{item.severity}}">${{item.severity}}</span> ${{verBadge}}</div>
-                ${{d.location ? `<div class="label">Location</div> <div>${{escapeHtml(d.location)}}</div>` : ''}}
-                ${{paramVal0 ? `<div class="label">Parameter</div> <div><code style="color:var(--sev-high)">${{escapeHtml(paramVal0)}}</code></div>` : ''}}
-                ${{confidence ? `<div class="label">Confidence</div> <div>${{escapeHtml(String(confidence))}}</div>` : ''}}
+                ${{d.location ? `<div class="label">Konum</div> <div>${{escapeHtml(d.location)}}</div>` : ''}}
+                ${{paramVal0 ? `<div class="label">Parametre</div> <div><code style="color:var(--sev-high)">${{escapeHtml(paramVal0)}}</code></div>` : ''}}
+                ${{confidence ? `<div class="label">Güven</div> <div>${{escapeHtml(String(confidence))}}</div>` : ''}}
                 ${{tool ? `<div class="label">Scanner</div> <div><code>${{escapeHtml(tool)}}</code></div>` : ''}}
             </div>
         `;
@@ -1548,9 +1972,9 @@ def render_html_dashboard(results: dict) -> str:
         const wafBypass  = d.waf_bypass || d.bypass_technique || d.encoding;
         if (technique || scriptName || wafBypass) {{
             html += `<div style="background:rgba(88,166,255,0.07); border:1px solid rgba(88,166,255,0.3); border-radius:6px; padding:12px; margin:12px 0;">`;
-            html += `<div style="font-weight:600; color:var(--accent); margin-bottom:8px;">⚡ Attack Technique</div>`;
+            html += `<div style="font-weight:600; color:var(--accent); margin-bottom:8px;">⚡ Saldırı Tekniği</div>`;
             html += `<div class="kv-grid" style="margin:0;">`;
-            if(technique)   html += `<div class="label">Technique</div><div><code style="color:var(--sev-high)">${{escapeHtml(technique)}}</code></div>`;
+            if(technique)   html += `<div class="label">Teknik</div><div><code style="color:var(--sev-high)">${{escapeHtml(technique)}}</code></div>`;
             if(scriptName)  html += `<div class="label">Script / Template</div><div><code>${{escapeHtml(scriptName)}}</code></div>`;
             if(wafBypass)   html += `<div class="label">WAF Bypass</div><div><code>${{escapeHtml(wafBypass)}}</code></div>`;
             html += `</div></div>`;
@@ -1569,7 +1993,7 @@ def render_html_dashboard(results: dict) -> str:
         // --- 4. Reason / Message ---
         const reasonVal = d.reason || d.message || d.description;
         if (reasonVal) {{
-            html += `<div style="margin:12px 0;"><div style="font-weight:600; margin-bottom:4px;">📋 Reason</div><p style="color:var(--text-muted); margin:0;">${{escapeHtml(reasonVal)}}</p></div>`;
+            html += `<div style="margin:12px 0;"><div style="font-weight:600; margin-bottom:4px;">📋 Açıklama</div><p style="color:var(--text-muted); margin:0;">${{escapeHtml(reasonVal)}}</p></div>`;
         }}
 
         // --- 5. HTTP İstek / Yanıt ---
@@ -1577,16 +2001,16 @@ def render_html_dashboard(results: dict) -> str:
         const respVal = d.response || d.raw_response || (typeof d.evidence === 'object' && d.evidence && d.evidence.raw_response);
         if (reqVal || respVal) {{
             html += `<div style="margin:12px 0;">`;
-            html += `<div style="font-weight:600; margin-bottom:8px;">🌐 HTTP Traffic</div>`;
+            html += `<div style="font-weight:600; margin-bottom:8px;">🌐 HTTP Trafiği</div>`;
             if (reqVal) {{
                 let rq = typeof reqVal === 'object' ? JSON.stringify(reqVal, null, 2) : String(reqVal);
-                if (rq.length > 3000) rq = rq.substring(0, 3000) + "\n... [truncated]";
-                html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ Request</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rq)}}</pre></details>`;
+                if (rq.length > 3000) rq = rq.substring(0, 3000) + "\\n... [kısaltıldı]";
+                html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ İstek (Request)</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rq)}}</pre></details>`;
             }}
             if (respVal) {{
                 let rs = typeof respVal === 'object' ? JSON.stringify(respVal, null, 2) : String(respVal);
-                if (rs.length > 3000) rs = rs.substring(0, 3000) + "\n... [truncated]";
-                html += `<details><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ Response</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rs)}}</pre></details>`;
+                if (rs.length > 3000) rs = rs.substring(0, 3000) + "\\n... [kısaltıldı]";
+                html += `<details><summary style="cursor:pointer; color:var(--accent); font-size:0.88rem;">▶ Yanıt (Response)</summary><pre style="font-size:0.8rem; max-height:250px; overflow:auto; margin-top:4px;">${{escapeHtml(rs)}}</pre></details>`;
             }}
             html += `</div>`;
         }}
@@ -1596,7 +2020,7 @@ def render_html_dashboard(results: dict) -> str:
         const hasEvidence = Object.keys(ev).length > 0;
         if (hasEvidence) {{
             html += `<div style="margin-top:16px; border:1px solid var(--accent); border-radius:6px; overflow:hidden;">`;
-            html += `<div style="background:var(--accent); color:#000; padding:8px 12px; font-weight:bold; font-size:0.9rem;">🔎 Evidence Locker</div>`;
+            html += `<div style="background:var(--accent); color:#000; padding:8px 12px; font-weight:bold; font-size:0.9rem;">🔎 Kanıt Kasası</div>`;
             html += `<div style="padding:12px; background:var(--bg-card);">`;
             if (ev.database_banner || ev.dumped_data) {{
                 html += `<h4 style="color:var(--sev-high); margin-top:0;">🩸 DB Extraction</h4>`;
@@ -1633,7 +2057,7 @@ def render_html_dashboard(results: dict) -> str:
             "payload","poc","reason","message","description","request","raw_request","response","raw_response","evidence","ts"]);
         const extraKeys = Object.keys(d).filter(k => !handledKeys.has(k) && !k.startsWith("_"));
         if (extraKeys.length > 0) {{
-            html += `<details style="margin-top:12px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem;">▶ All Raw Fields (${{extraKeys.length}})</summary>`;
+            html += `<details style="margin-top:12px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem;">▶ Tüm Ham Alanlar (${{extraKeys.length}})</summary>`;
             html += `<div class="kv-grid" style="margin-top:8px; font-size:0.83rem;">`;
             extraKeys.forEach(k => {{
                 let val = d[k];
@@ -1650,120 +2074,128 @@ def render_html_dashboard(results: dict) -> str:
     function showSessions() {{
         const modal = document.getElementById('sessionsModal');
         const body = document.getElementById('sessionsBody');
+        // Önce modalı aç — render sırasında bir hata olsa bile pencere açılır.
+        if (modal) modal.style.display = 'block';
+        if (!body) return;
 
-        if (!sessions || sessions.length === 0) {{
-            body.innerHTML = `
-              <div style="text-align:center; padding:2rem; color:var(--text-muted);">
-                <div style="font-size:2rem;">🔒</div>
-                <p>Yakalanmış session yok.</p>
-                <p style="font-size:0.85rem;">XSS DOM doğrulaması veya credential recovery ile session yakalanabilir.</p>
-              </div>`;
-        }} else {{
-            let html = `<p style="color:var(--sev-critical); font-weight:bold; margin:0 0 1rem;">
-              ⚠️ ${{sessions.length}} adet session yakalandı — bunlar hedef kullanıcılara ait oturumlardır.
-            </p>`;
+        try {{
+            if (!sessions || sessions.length === 0) {{
+                body.innerHTML = `
+                  <div style="text-align:center; padding:2rem; color:var(--text-muted);">
+                    <div style="font-size:2rem;">🔒</div>
+                    <p>Yakalanmış oturum yok.</p>
+                    <p style="font-size:0.85rem;">XSS DOM doğrulaması, credential recovery veya kimlik doğrulamalı tarama ile oturum/cookie verisi yakalanabilir.</p>
+                  </div>`;
+                return;
+            }}
+
+            // Oturum türü: XSS/credential ile kurban oturumu mu, yoksa tarama oturumu mu?
+            const anyVictim = sessions.some(s => (s.source && /xss|credential/i.test(String(s.source))) || s.verified || s.xss_url);
+            let html = anyVictim
+                ? `<p style="color:var(--sev-critical); font-weight:bold; margin:0 0 1rem;">⚠️ ${{sessions.length}} oturum yakalandı — bunlar hedef kullanıcılara ait olabilir.</p>`
+                : `<p style="color:var(--text-muted); margin:0 0 1rem;">ℹ️ Tarama sırasında elde edilen ${{sessions.length}} oturum/cookie kaydı. Aşağıdaki cookie'ler hedefe karşı oturum tekrarı (replay) için kullanılabilir.</p>`;
 
             sessions.forEach((s, idx) => {{
-                const cookieObj  = s.cookies || {{}};
-                const lsObj      = s.local_storage || {{}};
-                const ssObj      = s.session_storage || {{}};
-                const cookieJson = JSON.stringify(cookieObj);
-                const verified   = s.verified || s.ato_verified || false;
-                const source     = s.source || 'credential';
-                var _srcMap = {{'xss_reflected':'🎯 XSS Reflected','xss_dom':'🎯 XSS DOM','xss_blind':'👁️ XSS Blind (OAST)','credential':'🔑 Credential Recovery'}};
+                s = s || {{}};
+                const cookieObj  = (s.cookies && typeof s.cookies === 'object') ? s.cookies : {{}};
+                const lsObj      = (s.local_storage && typeof s.local_storage === 'object') ? s.local_storage : {{}};
+                const hdrObj     = (s.headers && typeof s.headers === 'object') ? s.headers : {{}};
+                const drvList    = Array.isArray(s.driver_cookies) ? s.driver_cookies : [];
+                const verified   = !!(s.verified || s.ato_verified);
+                const authed     = !!s.authenticated;
+                const source     = s.source || (authed ? 'auth_session' : 'scan_session');
+                const userLbl    = s.user && s.user !== 'unknown' ? s.user : '';
+                var _srcMap = {{
+                    'xss_reflected':'🎯 XSS Reflected','xss_dom':'🎯 XSS DOM',
+                    'xss_blind':'👁️ XSS Blind (OAST)','credential':'🔑 Credential Recovery',
+                    'auth_session':'🔓 Kimlik Doğrulamalı Oturum','scan_session':'🧭 Tarama Oturumu'
+                }};
                 const sourceLabel = _srcMap[source] || source;
 
-                // Hijack script — DevTools konsoluna yapıştır
+                // Replay/hijack script — DevTools konsoluna yapıştır
                 const hijackScript = [
-                    `// ═══ WebSecure Session Hijack ═══`,
-                    `// Kaynak: ${{source}} | Zaman: ${{s.timestamp || ''}}`,
-                    `// XSS URL: ${{s.xss_url || s.origin_url || ''}}`,
+                    `// ═══ WebSecure Session Replay ═══`,
+                    `// Kaynak: ${{source}} | Zaman: ${{s.timestamp || s.ts || ''}}`,
                     `(function() {{`,
-                    `  var c = ${{cookieJson}};`,
+                    `  var c = ${{JSON.stringify(cookieObj)}};`,
                     `  for (var k in c) document.cookie = k+'='+c[k]+'; path=/; SameSite=Lax';`,
                     `  var ls = ${{JSON.stringify(lsObj)}};`,
                     `  for (var k in ls) localStorage.setItem(k, ls[k]);`,
                     `  console.log('%c[WebSecure] Session injected!', 'color:lime;font-size:14px;font-weight:bold');`,
                     `  setTimeout(() => location.reload(), 800);`,
                     `}})();`,
-                ].join('\n');
-
-                // Curl komutu
-                const curlCookies = Object.entries(cookieObj).map(([k,v]) => `${{k}}=${{v}}`).join('; ');
+                ].join('\\n');
+                const curlCookies = Object.entries(cookieObj).map(([k,v]) => `${{k}}=${{String(v)}}`).join('; ');
                 const curlCmd = `curl -s -b '${{curlCookies}}' '${{s.verification_url || s.origin_url || ''}}' -I`;
-
                 const hijackAttr = escapeHtml(hijackScript).replace(/"/g, '&quot;');
                 const curlAttr   = escapeHtml(curlCmd).replace(/"/g, '&quot;');
 
                 html += `
                 <div style="background:var(--bg-body); border:1px solid ${{verified ? 'var(--sev-critical)' : 'var(--border)'}}; border-radius:8px; padding:1rem; margin-bottom:1rem;">
-
-                  <!-- Header -->
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
-                    <div style="display:flex; align-items:center; gap:10px;">
-                      <span style="font-size:1.1rem; font-weight:700; color:var(--sev-critical);">#${{idx+1}}</span>
+                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                      <span style="font-size:1.1rem; font-weight:700; color:var(--accent);">#${{idx+1}}</span>
                       <span style="font-size:0.85rem; color:var(--accent);">${{sourceLabel}}</span>
-                      <span class="tag ${{verified ? 'Critical' : 'Info'}}" style="font-size:0.75rem;">
-                        ${{verified ? '✅ Doğrulandı (HTTP ' + s.verification_status + ')' : '⚠️ Doğrulanmamış'}}
-                      </span>
+                      <span class="tag ${{authed ? 'Low' : 'Info'}}" style="font-size:0.75rem;">${{authed ? '🔓 authenticated' : 'anonim'}}</span>
+                      ${{verified ? `<span class="tag Critical" style="font-size:0.75rem;">✅ Doğrulandı${{s.verification_status ? ' (HTTP ' + escapeHtml(String(s.verification_status)) + ')' : ''}}</span>` : ''}}
                     </div>
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
                       <button class="btn" style="font-size:0.78rem; padding:3px 8px; background:rgba(248,81,73,0.15); border-color:var(--sev-high);"
-                        onclick="navigator.clipboard.writeText(this.dataset.cmd).then(()=>{{this.textContent='✅ Kopyalandı!';setTimeout(()=>this.textContent='💉 JS Hijack',1500)}})"
-                        data-cmd="${{hijackAttr}}">💉 JS Hijack</button>
+                        onclick="navigator.clipboard.writeText(this.dataset.cmd).then(()=>{{this.textContent='✅ Kopyalandı!';setTimeout(()=>this.textContent='💉 JS Replay',1500)}})"
+                        data-cmd="${{hijackAttr}}">💉 JS Replay</button>
                       <button class="btn" style="font-size:0.78rem; padding:3px 8px;"
                         onclick="navigator.clipboard.writeText(this.dataset.cmd).then(()=>{{this.textContent='✅ Kopyalandı!';setTimeout(()=>this.textContent='🖥️ cURL',1500)}})"
                         data-cmd="${{curlAttr}}">🖥️ cURL</button>
-                      ${{s.verification_url ? `<a href="${{escapeHtml(s.verification_url)}}" target="_blank" class="btn" style="font-size:0.78rem; padding:3px 8px;">🔗 Test Et</a>` : ''}}
                     </div>
                   </div>
 
-                  <!-- Meta -->
                   <div style="display:grid; grid-template-columns:130px 1fr; gap:4px 12px; font-size:0.83rem; margin-bottom:10px;">
-                    <span style="color:var(--text-muted);">Zaman</span><span>${{s.timestamp || '-'}}</span>
+                    <span style="color:var(--text-muted);">Zaman</span><span>${{escapeHtml(s.timestamp || s.ts || '-')}}</span>
+                    ${{userLbl ? `<span style="color:var(--text-muted);">Kullanıcı</span><span><code style="color:var(--sev-high);">${{escapeHtml(userLbl)}}</code></span>` : ''}}
                     ${{s.xss_url ? `<span style="color:var(--text-muted);">XSS URL</span><span style="font-family:monospace; font-size:0.78rem; word-break:break-all;">${{escapeHtml(s.xss_url)}}</span>` : ''}}
-                    ${{s.xss_param ? `<span style="color:var(--text-muted);">Parametre</span><span><code style="color:var(--sev-high);">${{escapeHtml(s.xss_param)}}</code></span>` : ''}}
                     ${{s.origin_url ? `<span style="color:var(--text-muted);">Origin</span><span style="font-size:0.78rem; word-break:break-all;">${{escapeHtml(s.origin_url)}}</span>` : ''}}
                   </div>
 
-                  <!-- Cookies -->
                   <details open>
                     <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem; margin-bottom:6px;">
                       🍪 Cookies (${{Object.keys(cookieObj).length}})
                     </summary>
-                    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
-                      ${{Object.entries(cookieObj).map(([k,v]) =>
-                        `<div style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:0.78rem;">
+                    ${{Object.keys(cookieObj).length ? `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+                      ${{Object.entries(cookieObj).map(([k,v]) => {{
+                        var vs = String(v == null ? '' : v);
+                        return `<div style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:0.78rem;">
                           <span style="color:var(--sev-medium); font-weight:600;">${{escapeHtml(k)}}</span>
                           <span style="color:var(--text-muted);">=</span>
-                          <span style="color:var(--text-main); font-family:monospace; word-break:break-all;">${{escapeHtml(v.length>60?v.substring(0,60)+'…':v)}}</span>
-                        </div>`
-                      ).join('')}}
-                    </div>
+                          <span style="color:var(--text-main); font-family:monospace; word-break:break-all;">${{escapeHtml(vs.length>72?vs.substring(0,72)+'…':vs)}}</span>
+                        </div>`;
+                      }}).join('')}}
+                    </div>` : `<p style="color:var(--text-muted); font-size:0.8rem;">Cookie yok.</p>`}}
                   </details>
 
-                  <!-- localStorage -->
+                  ${{Object.keys(hdrObj).length ? `
+                  <details style="margin-top:6px;">
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem;">📑 Header'lar (${{Object.keys(hdrObj).length}})</summary>
+                    <pre style="font-size:0.76rem; max-height:140px; overflow:auto;">${{escapeHtml(JSON.stringify(hdrObj, null, 2))}}</pre>
+                  </details>` : ''}}
+
+                  ${{drvList.length ? `
+                  <details style="margin-top:6px;">
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem;">🌐 Driver Cookies (${{drvList.length}})</summary>
+                    <pre style="font-size:0.76rem; max-height:140px; overflow:auto;">${{escapeHtml(JSON.stringify(drvList, null, 2))}}</pre>
+                  </details>` : ''}}
+
                   ${{Object.keys(lsObj).length ? `
                   <details style="margin-top:6px;">
-                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem; margin-bottom:6px;">
-                      💾 localStorage (${{Object.keys(lsObj).length}} key)
-                    </summary>
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:0.85rem;">💾 localStorage (${{Object.keys(lsObj).length}} key)</summary>
                     <pre style="font-size:0.78rem; max-height:120px; overflow:auto;">${{escapeHtml(JSON.stringify(lsObj, null, 2))}}</pre>
                   </details>` : ''}}
-
-                  <!-- Raw cookie string -->
-                  ${{s.raw_cookie_str ? `
-                  <details style="margin-top:6px;">
-                    <summary style="cursor:pointer; color:var(--text-muted); font-size:0.8rem;">▶ Ham Cookie String</summary>
-                    <pre style="font-size:0.75rem; color:var(--sev-medium); margin-top:4px; max-height:80px; overflow:auto;">${{escapeHtml(s.raw_cookie_str)}}</pre>
-                  </details>` : ''}}
-
                 </div>`;
             }});
             body.innerHTML = html;
+        }} catch(e) {{
+            console.error('[WebSecure] showSessions error:', e);
+            body.innerHTML = '<p style="color:var(--sev-high); padding:1rem;">Oturumlar gösterilirken hata oluştu. Konsolu (F12) kontrol edin.</p>';
         }}
-
-        modal.style.display = 'block';
     }}
 
     function closeModal(id) {{
