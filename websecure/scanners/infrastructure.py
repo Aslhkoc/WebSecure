@@ -353,7 +353,18 @@ class HeaderScanner(BaseScanner):
 
     def scan_url(self, url: str, origin_for_cors: str = None, do_preflight: bool = False) -> t.Dict[str, t.Any]:
         h = {"Origin": origin_for_cors} if origin_for_cors else None
-        resp = self._do_get(url, h)
+        # ROBUSTNESS FIX: İlk GET korumasızdı — hedef timeout/connection-error
+        # verdiğinde scan_url (ve run) çöküp tüm header taramasını bozuyordu
+        # (diğer scanner'lar kendi ağ hatalarını yakalar). Artık zarifçe boş
+        # sonuç + hata notu döndürülür.
+        try:
+            resp = self._do_get(url, h)
+        except Exception as exc:
+            _logger.debug("[HeaderScanner] %s fetch failed: %r", url, exc)
+            return {
+                "url": url, "status": 0, "headers": {}, "coverage": None,
+                "findings": [], "pocs": [], "error": repr(exc),
+            }
 
         cov, fnds, pocs = analyze_response_headers(resp, origin_for_cors)
 
