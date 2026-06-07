@@ -18,9 +18,6 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urljoin
-
-import requests
 
 from websecure.core.http import hardened_session
 
@@ -361,8 +358,8 @@ class SessionLifecycleProber:
         s = hardened_session({})
         s.verify = False
         try:
-            # Step 1: Login
-            r_login = s.post(login_url, data=credentials, timeout=self.timeout, allow_redirects=True)
+            # Step 1: Login (yanıt gövdesi değil, oluşan oturum cookie'leri önemli)
+            s.post(login_url, data=credentials, timeout=self.timeout, allow_redirects=True)
             pre_logout_cookies = dict(s.cookies)
             if not pre_logout_cookies:
                 return {"error": "No cookies after login", "tested": False}

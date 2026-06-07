@@ -35,6 +35,12 @@ rich>=13.0
 #     playwright install chromium
 playwright>=1.46.0
 
-# --- Opsiyonel: PDF raporu. Windows'ta GTK/Pango sistem kütüphaneleri gerekir;
-#     yoksa HTML raporu otomatik kullanılır.
+# --- Opsiyonel: PDF raporu ---
+#  İki backend denenir (reporting.PDFReportBuilder fallback zinciri):
+#    1) weasyprint — CSS tabanlı, en iyi kalite; Windows'ta GTK/Pango sistem
+#       kütüphaneleri gerekir, yoksa OSError ile sessizce devre dışı kalır.
+#    2) reportlab  — saf Python, sistem kütüphanesi GEREKTİRMEZ; Windows'ta
+#       weasyprint kurulamadığında gerçek PDF üretebilen tek backend.
+#  İkisi de yoksa HTML raporu otomatik kullanılır.
 weasyprint>=61.0
+reportlab>=4.0.0

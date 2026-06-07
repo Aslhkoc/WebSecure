@@ -415,8 +415,6 @@ class AdvancedRedirectProber(BaseScanner):
 
     def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []
-        parsed = urlparse(target)
-        base = f"{parsed.scheme}://{parsed.netloc}"
 
         # Scope: probe ONLY the target the caller handed us. Previously this also
         # appended invented paths (/login, /redirect, /go, /out, /) to EVERY scan,

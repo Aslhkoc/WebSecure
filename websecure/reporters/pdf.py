@@ -22,8 +22,9 @@ except ImportError:
 try:
     import weasyprint
     _WEASYPRINT_AVAILABLE = True
-except (ImportError, OSError, Exception):
-    # OSError on Windows when GTK/Pango native libraries are missing
+except Exception:
+    # ImportError: paket yok / OSError: Windows'ta GTK/Pango native kütüphaneleri
+    # eksik. Exception tüm bunları kapsar; bu durumda reportlab veya HTML fallback'e düşülür.
     _WEASYPRINT_AVAILABLE = False
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"

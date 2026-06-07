@@ -459,7 +459,10 @@ class CMDiOOBDNSProber(BaseScanner):
 
         oast_domain = kwargs.get("oast_domain") or (self.results or {}).get("oast_domain")
         canary_domain = oast_domain if oast_domain else "burpcollaborator.net"
-        severity = "Critical" if oast_domain else "High"
+        # NOT: severity artık burada hesaplanmıyor. OOB tekniğinin tek geçerli
+        # kanıtı gerçek callback'tir; onaylı yol aşağıda severity="Critical" ile
+        # raporlar, onaysız yol HİÇ bulgu üretmez (FP fix). Önceden burada
+        # hesaplanan değişken hiçbir yerde kullanılmıyordu (ölü kod).
 
         parsed = urlparse(target)
         params = parse_qsl(parsed.query)

@@ -569,7 +569,7 @@ def _phase_httpx_port_fallback(ctx, host: str) -> None:
     def _probe_port(port: int):
         """Tek portu tara, açıksa bulgu döndür."""
         try:
-            with _socket.create_connection((host, port), timeout=1.5) as _s:
+            with _socket.create_connection((host, port), timeout=1.5):
                 pass
         except (ConnectionRefusedError, _socket.timeout, OSError):
             return None
@@ -1876,9 +1876,6 @@ def _runner_jwt(ctx) -> None:
         add_result("meta", {"stage": "jwt", "status": "skipped:no-url"})
         return
 
-    # JWT scanning is only worthwhile when tokens are observable
-    _jwt_indicators = ["jwt", "token", "bearer", "authorization", "auth"]
-    ctx_results = getattr(ctx, "results", {}) or {}
     sess = getattr(ctx, "session", None)
     debug = bool(getattr(ctx, "debug", False))
 
@@ -3860,7 +3857,6 @@ def run_offensive(ctx):
     """
     results = getattr(ctx, "results", {}) or {}
     endpoints = list(dict.fromkeys((results.get("endpoints") or [])))
-    ep_kw = {"endpoints": endpoints} if endpoints else {"endpoints": []}
 
     metrics = {}
 
@@ -4850,7 +4846,6 @@ def run_sqlmap_scan(ctx) -> None:
 
     # [Smart] Tech-aware extension hints from detected technologies
     techs = set(getattr(ctx, "technologies", []) or [])
-    tech_extra_args = []
     if "php" in techs:
         _logger.info("[Smart-SQLi] PHP detected — prioritizing PHP endpoints")
     if "java" in techs:
@@ -5213,7 +5208,7 @@ def run_ffuf_scan(ctx) -> None:
             add_result("ffuf", {"status": "skipped", "reason": "Binary not found"})
             return
 
-        _logger.info(f"Launching FFUF scan with MERGED wordlist...")
+        _logger.info("Launching FFUF scan with MERGED wordlist...")
 
         custom_args = []
         # [Check 5] Proxy
@@ -5777,9 +5772,19 @@ def run_fuzz_and_param_discovery(ctx) -> None:
         return
     try:
         from websecure.integrations.ffuf import ParamDiscoveryPipeline
+        # Oturum cookie'lerini ffuf'a aktar; aksi halde kimlik-doğrulamalı
+        # hedeflerde parametre keşfi anonim çalışıp auth-arkası parametreleri
+        # kaçırıyordu (session alınıyor ama discover'a HİÇ geçilmiyordu — kopuk).
         session = getattr(ctx, "session", None)
+        cookie_str = ""
+        _cookies = getattr(session, "cookies", None)
+        if _cookies:
+            try:
+                cookie_str = "; ".join(f"{c.name}={c.value}" for c in _cookies)
+            except Exception as _ck_exc:
+                _logger.debug("[phases] cookie serialize failed: %r", _ck_exc)
         pipeline = ParamDiscoveryPipeline()
-        result = pipeline.discover(url, method="GET")
+        result = pipeline.discover(url, method="GET", cookie=cookie_str)
         if result and result.params:
             add_result("discovery", {
                 "url": url,

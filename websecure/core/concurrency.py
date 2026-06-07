@@ -607,7 +607,7 @@ class AdaptiveThreadPool:
                 if self._eta:
                     self._eta.tick(elapsed_ms / 1000)
                 return result
-            except Exception as exc:
+            except Exception:
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 self._ctrl.record(elapsed_ms, is_error=True)
                 if self._eta:

@@ -305,7 +305,7 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
                 from websecure.reporters.pdf import PDFReporter
                 reporter = PDFReporter()
                 _pdf_ok = reporter.generate(results, cfg, pdf_path)
-            except (ImportError, Exception) as _pdf_exc:
+            except Exception as _pdf_exc:  # ImportError dahil tüm hatalar -> fallback
                 log_warn(f"[reporting] PDFReporter unavailable ({_pdf_exc!r}), falling back to PDFReportBuilder")
             if not _pdf_ok:
                 # Fallback: PDFReportBuilder (inline WeasyPrint/reportlab/HTML)

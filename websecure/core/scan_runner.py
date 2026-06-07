@@ -337,7 +337,10 @@ class ScanSession:
             return None
 
         manager = get_mgr(checkpoint_dir=checkpoint_dir)
-        state = manager.resume(scan_id, deduplicator) if deduplicator else None
+        # resume() tamamlanan görevleri deduplicator'a YAN ETKİ olarak enjekte
+        # eder; dönüş değeri kullanılmıyor (önceden 'state'e atanıp atılıyordu).
+        if deduplicator:
+            manager.resume(scan_id, deduplicator)
 
         cp = manager.get(scan_id)
         if cp is None:

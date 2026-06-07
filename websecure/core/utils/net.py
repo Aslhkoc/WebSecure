@@ -1,5 +1,5 @@
 import logging
-from urllib.parse import urlparse, urlunparse, urlsplit
+from urllib.parse import urlparse, urlunparse
 from typing import Dict, Any, List, Optional, Tuple, Mapping
 
 _logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def same_origin(url_a: str, url_b: str) -> bool:
         pa_port = pa.port or (443 if pa.scheme == "https" else 80)
         pb_port = pb.port or (443 if pb.scheme == "https" else 80)
         return (pa.scheme, pa.hostname, pa_port) == (pb.scheme, pb.hostname, pb_port)
-    except Exception as exc:
+    except Exception:
         return False
 
 # Bilinen çok-parçalı second-level domain'ler (eTLD+1 sezgiseli için).
@@ -222,5 +222,5 @@ def validate_url(url: str) -> Tuple[bool, Optional[str], Optional[str]]:
         if p.scheme and p.netloc:
             return True, url, p.scheme
         return False, None, None
-    except Exception as exc:
+    except Exception:
         return False, None, None
