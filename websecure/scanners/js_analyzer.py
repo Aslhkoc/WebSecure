@@ -163,10 +163,16 @@ class JSAnalyzer:
 
         # <script src="https://cdn...." > or <link href="https://cdn...." >
         # that do NOT have integrity=
+        # BUG FIX: capture grubu '(https?://...' kapanmıyordu — negatif lookahead'in
+        # ')' kapanışı yanlışlıkla grubu değil sadece lookahead'i kapatıyor, geriye
+        # dengesiz parantez kalıyordu → re.compile her BAŞARILI yanıtta PatternError
+        # fırlatıyordu (SRI + dependency-confusion kontrolleri HİÇ çalışmıyordu).
+        # Düzeltme: netloc'tan sonra lookahead'i ')' ile kapat, ardından grup gövdesi
+        # ve grup kapanışını ekle: (?!(?:NETLOC))[^"'>\s]+)
         cdn_pattern = _re.compile(
             r'<(?:script|link)[^>]+(?:src|href)=["\']?(https?://(?!(?:' + _re.escape(
                 __import__('urllib.parse', fromlist=['urlparse']).urlparse(url).netloc
-            ) + r')[^"\'>\s]+)["\']?[^>]*>',
+            ) + r'))[^"\'>\s]+)["\']?[^>]*>',
             _re.IGNORECASE | _re.DOTALL,
         )
         for match in cdn_pattern.finditer(html):
@@ -184,7 +190,11 @@ class JSAnalyzer:
                             "If the CDN is compromised, attackers can inject malicious code."
                         ),
                     })
-                    self.add("js", findings[-1])
+                    # NOT: bulgu zaten 'findings' listesine eklendi ve run() ile
+                    # döndürülüp bridge run()'da add_result ediliyor. self.add YOK
+                    # (JSAnalyzer BaseScanner değil) — eski self.add çağrısı her
+                    # başarılı yanıtta AttributeError fırlatıyordu (regex bug'ı
+                    # düzeltilince ortaya çıktı). Kaldırıldı.
                     if len(findings) >= 5:
                         break  # cap noise
 
@@ -231,7 +241,6 @@ class JSAnalyzer:
                                     "If internal registry is not configured, npm may resolve the public version."
                                 ),
                             })
-                            self.add("js", findings[-1])
                     elif npm_resp.status_code == 404:
                         # Package doesn't exist publicly yet — attacker could register it
                         findings.append({
@@ -244,7 +253,6 @@ class JSAnalyzer:
                                 "An attacker registering this name could achieve RCE on developer machines."
                             ),
                         })
-                        self.add("js", findings[-1])
                 except Exception:
                     pass
 

@@ -759,8 +759,19 @@ class SMTPHeaderInjectionProber(BaseScanner):
                         continue
 
                 text = resp.text or ""
-                # Success heuristics: form accepted (200/302) and no error about invalid email
-                if resp.status_code in (200, 201, 302, 303) and not any(
+                # FP FIX: Kör (blind) BCC enjeksiyonu SADECE status koduna bakılarak
+                # DOĞRULANAMAZ. Eskiden 200/302 dönen + "error" içermeyen HER yanıt
+                # (hatta e-posta ile İLGİSİZ parametreler — params[:3] fallback'i)
+                # "SMTP Header Injection [High]" raporluyordu → benign her endpoint'te
+                # sahte High. Gerçek SMTP header injection HTTP yanıtında görünmez; tek
+                # HTTP-gözlemlenebilir kanıt, enjekte edilen Bcc başlık satırının yanıtta
+                # YANSIMASIDIR (echo). Yansıma yoksa DOĞRULANAMAZ → bulgu üretme.
+                # (krş. cmdi/sqli OOB FP fix — onaysız blind teknik vuln raporlamaz.)
+                injected_header = f"Bcc: {canary_email}"
+                reflected = (injected_header.lower() in text.lower()) or (
+                    canary_email in text and "bcc" in text.lower()
+                )
+                if reflected and resp.status_code in (200, 201, 302, 303) and not any(
                     err in text.lower() for err in ("invalid email", "invalid address", "error")
                 ):
                     results.append({
@@ -769,8 +780,11 @@ class SMTPHeaderInjectionProber(BaseScanner):
                         "severity": "High",
                         "param": param,
                         "payload": payload[:120],
-                        "evidence": f"BCC injection accepted (status {resp.status_code}, seq={repr(seq)})",
-                        "description": "Email form parameter accepted CRLF-separated BCC header — spam relay possible.",
+                        "evidence": (
+                            f"Injected BCC header reflected in response "
+                            f"(status {resp.status_code}, seq={repr(seq)}, canary={canary_email})"
+                        ),
+                        "description": "Email form parameter reflected CRLF-separated BCC header — spam relay possible.",
                     })
                     return results
 
