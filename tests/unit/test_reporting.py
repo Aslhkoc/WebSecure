@@ -5,6 +5,7 @@ add_result thread-safety, redaction, finding schema testleri.
 """
 from __future__ import annotations
 
+import os
 import threading
 from unittest.mock import patch
 
@@ -110,6 +111,77 @@ class TestAddResultThreadSafety:
 
         results = get_global_results()
         assert len(results.get(bucket, [])) == num
+
+
+class TestResetClearsAllStores:
+    """REGRESYON: reset() hem _buckets hem _GLOBAL_RESULTS'u temizlemeli.
+
+    Eskiden yalnız _buckets temizleniyordu; _GLOBAL_RESULTS (get_global_results'un
+    okuduğu depo) temizlenmediğinden bir taramanın bulguları SONRAKİ taramaya
+    sızıyordu (çoklu-hedef/queue/API'de yanlış rapor; benchmark'ta sahte FP).
+    """
+
+    def test_reset_clears_global_and_bucket_stores(self):
+        from websecure.core.reporting import (
+            add_result, get_global_results, get_bucket_results, reset,
+        )
+
+        reset()
+        add_result("_leak_probe", {"type": "X", "severity": "High", "url": "http://x"})
+        # Yazıldığını doğrula (iki depoda da)
+        assert get_global_results().get("_leak_probe"), "add_result _GLOBAL_RESULTS'a yazmadı"
+        assert get_bucket_results().get("_leak_probe"), "add_result _buckets'a yazmadı"
+
+        reset()
+        # İki depo da temizlenmeli — sızıntı olmamalı
+        assert not get_global_results().get("_leak_probe"), \
+            "reset() _GLOBAL_RESULTS'u temizlemedi — bulgular sonraki taramaya sızar"
+        assert not get_bucket_results().get("_leak_probe"), \
+            "reset() _buckets'u temizlemedi"
+
+
+class TestPDFReportBuilder:
+    """REGRESYON: PDF üretimi her zaman bir çıktı üretmeli (gerçek PDF veya HTML
+    fallback) ve sessizce kaybolmamalı. reportlab kuruluysa gerçek %PDF beklenir
+    (Windows'ta weasyprint kurulamadığında çalışan tek backend)."""
+
+    def test_build_always_produces_output(self, tmp_path):
+        from websecure.core.reporting import PDFReportBuilder
+
+        findings = [
+            {"type": "SQL Injection", "severity": "Critical",
+             "url": "http://t.test/x?id=1", "cwe": "CWE-89"},
+            {"type": "XSS", "severity": "High", "url": "http://t.test/s?q=2"},
+        ]
+        out_pdf = str(tmp_path / "report.pdf")
+        path = PDFReportBuilder().build(findings, out_pdf)
+
+        assert path, "build() boş yol döndürdü"
+        assert os.path.exists(path), f"Çıktı dosyası üretilmedi: {path}"
+        assert os.path.getsize(path) > 0, "Çıktı dosyası boş"
+
+        with open(path, "rb") as fh:
+            head = fh.read(5)
+        # Bir backend varsa gerçek PDF; yoksa HTML fallback — ikisi de kabul.
+        assert head == b"%PDF-" or path.endswith(".html"), \
+            f"Ne gerçek PDF ne HTML fallback üretildi (head={head!r}, path={path})"
+
+    def test_reportlab_backend_makes_real_pdf_when_available(self, tmp_path):
+        import importlib.util
+        if importlib.util.find_spec("reportlab") is None:
+            import pytest
+            pytest.skip("reportlab kurulu değil — gerçek-PDF yolu doğrulanamaz")
+
+        from websecure.core.reporting import PDFReportBuilder
+        out_pdf = str(tmp_path / "real.pdf")
+        # weasyprint genelde Windows'ta yok; _try_reportlab devreye girmeli.
+        ok = PDFReportBuilder._try_reportlab(
+            [{"type": "X", "severity": "High", "url": "http://t/x"}], out_pdf,
+        )
+        assert ok is True, "reportlab backend PDF üretemedi"
+        assert os.path.exists(out_pdf)
+        with open(out_pdf, "rb") as fh:
+            assert fh.read(5) == b"%PDF-", "reportlab gerçek PDF üretmedi"
 
 
 class TestFindingSchema:

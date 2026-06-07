@@ -20,20 +20,36 @@ def nosqli(mock_session):
 
 class TestNoSQLiDetection:
     def test_operator_injection_detected(self, nosqli, mock_session):
-        """$ne operatör injection → farklı response body → finding."""
-        baseline_text = "Found 0 results"
-        injected_text = "Found 42 results"
+        """Payload'lı istek baseline'dan anlamlı farklılaşınca (200->500) NoSQLi
+        anomalisi RAPORLANMALI.
 
-        responses = [
-            mock_session._make_response(text=baseline_text),
-            mock_session._make_response(text=injected_text),
-        ]
-        mock_session.get.side_effect = responses
+        REGRESYON: Önceki sürüm report_finding'i patch'leyip HİÇBİR ŞEY assert
+        etmiyordu (yorum: 'Crash olmamalı'); detection tamamen bozulsa bile test
+        geçiyordu. Artık baseline→anomali deterministik kurgulanıp bulgu doğrulanır.
+        """
+        import threading
+        served_baseline = {"v": False}
+        lock = threading.Lock()
 
-        with patch.object(nosqli, "report_finding"):
-            nosqli.run("http://target.test/users?role=admin")
+        def _resp(url, *a, **kw):
+            # _fuzz_url_params'taki İLK GET fetch_baseline'dir (payload'sız);
+            # sonraki tüm prob'lar payload'lı → 500 anomali döndür (base 200->500).
+            with lock:
+                if not served_baseline["v"]:
+                    served_baseline["v"] = True
+                    return mock_session._make_response(text="Found 0 results", status_code=200)
+            return mock_session._make_response(text="MongoError: $ne", status_code=500)
 
-        # Crash olmamalı
+        mock_session.get.side_effect = _resp
+
+        with patch.object(nosqli, "report_finding") as mock_report:
+            # 'list' yolu _fuzz_json_body tetiklemez (api/user/... anahtarı yok),
+            # böylece test yalnız URL-param anomali yolunu ölçer.
+            nosqli.run("http://target.test/list?role=admin")
+
+        assert mock_report.called, "NoSQLi anomalisi tespit edilemedi (detection kopuk)"
+        vtypes = [str(c.kwargs.get("vuln_type", "")) for c in mock_report.call_args_list]
+        assert any("NoSQL" in t for t in vtypes), f"NoSQL bulgusu beklenildi, gelen: {vtypes}"
 
     def test_no_false_positive_same_response(self, nosqli, mock_session):
         """Baseline ve injection yanıtı aynıysa → finding olmamalı."""

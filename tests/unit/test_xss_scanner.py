@@ -19,22 +19,35 @@ def xss(mock_session):
 
 class TestXSSDetection:
     def test_reflected_xss_detected(self, xss, mock_session):
-        """Payload response'da reflect edilince finding oluşturulmalı."""
-        payload = "<script>alert(1)</script>"
-        mock_session.get.return_value = mock_session._make_response(
-            text=f"<html>Search: {payload}</html>"
-        )
+        """Enjekte edilen değer yanıtta HAM (executable) yansıyınca XSS raporlanmalı.
+
+        REGRESYON: Önceki sürüm 'if mock_report.called:' ile KOŞULLU assert ediyordu
+        — detection bozulup hiç çağrılmasa bile test geçiyordu (kopuk). Ayrıca sabit
+        yanıt, scanner'ın rastgele canary'sini yansıtmadığından tetiklemiyordu. Artık
+        yansıtıcı (echo) mock canary'yi ve payload'ları HAM geri verir → koşulsuz doğrulama.
+        """
+        from urllib.parse import urlparse as _up, parse_qsl as _pq
+
+        def _echo(url, *a, **kw):
+            reflected = " ".join(v for _, v in _pq(_up(url).query, keep_blank_values=True))
+            return mock_session._make_response(
+                text=f"<html><body>Results for {reflected}</body></html>"
+            )
+
+        mock_session.get.side_effect = _echo
 
         with patch.object(xss, "report_finding") as mock_report:
             xss.scan_url("http://target.test/search?q=test")
 
-        # report_finding herhangi bir XSS için çağrılmış olmalı
-        if mock_report.called:
-            call_kwargs = mock_report.call_args[1]
-            assert call_kwargs.get("vuln_type", "").lower() in ("xss", "reflected xss", "cross-site scripting")
+        assert mock_report.called, "Reflected XSS tespit edilemedi (detection kopuk)"
 
     def test_no_false_positive_on_clean_response(self, xss, mock_session):
-        """Temiz yanıt → finding olmamalı."""
+        """Enjekte edilen değeri YANSITMAYAN temiz yanıt → XSS bulgusu olmamalı.
+
+        REGRESYON: Önceki sürümün döngü gövdesi 'pass' idi — hiçbir şey doğrulamıyor,
+        her durumda geçiyordu. Canary hiç yansımadığından scanner fuzzing'e geçmemeli
+        ve report_finding ASLA çağrılmamalı.
+        """
         mock_session.get.return_value = mock_session._make_response(
             text="<html><body>Hello World</body></html>"
         )
@@ -42,11 +55,7 @@ class TestXSSDetection:
         with patch.object(xss, "report_finding") as mock_report:
             xss.scan_url("http://target.test/search?q=test")
 
-        # Temiz sayfada false positive olmamalı
-        for call in mock_report.call_args_list:
-            # Eğer çağrıldıysa, payload henüz kanıtlanmamış olabilir
-            # Burada sadece kritik false-positive kontrolü yapıyoruz
-            pass
+        mock_report.assert_not_called()
 
     def test_scan_url_handles_timeout_gracefully(self, xss, mock_session):
         """Timeout durumunda exception fırlatılmamalı."""

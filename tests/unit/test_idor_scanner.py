@@ -20,18 +20,30 @@ def idor(mock_session):
 
 class TestIDORDetection:
     def test_different_content_signals_idor(self, idor, mock_session):
-        """İki farklı ID için farklı yanıt → IDOR sinyali."""
-        call_count = {"n": 0}
+        """Komşu ID (/user/2) HASSAS veri içeren yeterince FARKLI yanıt verince
+        sıralı-numaralandırma IDOR'u raporlanmalı.
 
-        def side_effect(*args, **kwargs):
-            call_count["n"] += 1
-            # İlk çağrı: kendi kaynağı, ikinci: başka kullanıcı kaynağı
-            text = "user_data_owner" if call_count["n"] == 1 else "user_data_other_user"
-            return mock_session._make_response(text=text)
+        REGRESYON: Önceki sürüm yalnız 'crash olmasın' diyor, sonucu doğrulamıyordu;
+        üstelik yanıtlar (user_data_owner/other) _contains_sensitive ile eşleşmediği
+        için detection zaten hiç tetiklenmezdi. Artık /user/2 yanıtı e-posta+SSN
+        içerir (hassas), baseline'dan farklıdır → finding deterministik doğrulanır.
+        """
+        def _resp(url, *a, **kw):
+            # Path-enum /user/1 -> /user/2 dener; komşu kaynak başkasının PII'sini sızdırır.
+            if url.rstrip("/").endswith("/user/2"):
+                return mock_session._make_response(
+                    text="<html>Other user: victim@example.com SSN 123-45-6789</html>"
+                )
+            return mock_session._make_response(text="<html>Your own profile</html>")
 
-        mock_session.get.side_effect = side_effect
-        # Sadece crash olmamasını ve metodun çağrılabilir olduğunu doğrularız
-        idor.run("http://target.test/user/1", urls=["http://target.test/user/1"])
+        mock_session.get.side_effect = _resp
+
+        with patch.object(idor, "report_finding") as mock_report:
+            idor.run("http://target.test/user/1")
+
+        assert mock_report.called, "Sıralı IDOR tespit edilemedi (detection kopuk)"
+        vtypes = [str(c.kwargs.get("vuln_type", "")) for c in mock_report.call_args_list]
+        assert any("IDOR" in t for t in vtypes), f"IDOR bulgusu beklenildi, gelen: {vtypes}"
 
     def test_same_content_no_idor(self, idor, mock_session):
         """Aynı yanıt → IDOR bulunmamalı."""

@@ -20,16 +20,33 @@ def ssti(mock_session):
 
 class TestSSTIDetection:
     def test_polyglot_marker_detected(self, ssti, mock_session):
-        """Şablon sonucu (örn. 49) yanıtta bulunursa finding oluşturulmalı."""
-        # {{7*7}} → 49
-        mock_session.get.return_value = mock_session._make_response(
-            text="<html>Result: 49 items found</html>"
-        )
+        """Sunucu {{A*B}} ifadesini DEĞERLENDİRİP rastgele-canary çarpımını yanıta
+        koyunca SSTI raporlanmalı.
 
-        with patch.object(ssti, "report_finding"):
+        REGRESYON: Önceki sürüm sabit '49' döndürüp report_finding'i patch'liyor
+        ama HİÇBİR ŞEY assert etmiyordu (yorum bile 'engine'e bağlı, crash olmasın'
+        diyordu). SSTI rastgele-canary doğrulaması kullandığından sabit '49' zaten
+        tetiklemez; gerçek tespiti ölçmek için mock şablonu değerlendirir. Düz sayı
+        (reflection-check) yansıtılmaz → canary 'eval != reflection' kontrolü geçer.
+        """
+        import re as _re
+        from urllib.parse import urlparse as _up, parse_qsl as _pq
+
+        def _tmpl_eval(url, *a, **kw):
+            products = []
+            for _, v in _pq(_up(url).query, keep_blank_values=True):
+                m = _re.search(r"[{$#]\{?\s*(\d+)\s*\*\s*(\d+)\s*\}?\}", v)
+                if m:
+                    products.append(str(int(m.group(1)) * int(m.group(2))))
+            body = ("<html>=" + " ".join(products) + "</html>") if products else "<html>ok</html>"
+            return mock_session._make_response(text=body)
+
+        mock_session.get.side_effect = _tmpl_eval
+
+        with patch.object(ssti, "report_finding") as mock_report:
             ssti._scan_url("http://target.test/page?name=test")
 
-        # En az bir çağrı veya hiç çağrı (SSTI motoruna bağlı), crash olmamalı
+        assert mock_report.called, "SSTI canary-onaylı tespit edilemedi (detection kopuk)"
 
     def test_no_crash_on_timeout(self, ssti, mock_session):
         mock_session.get.side_effect = requests.exceptions.Timeout("timed out")
