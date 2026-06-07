@@ -1939,8 +1939,12 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
 
     results_bucket = _ensure_results_bucket(ctx)
 
+    # B2 FIX: ws_fuzz.run(url, ...) `url`'i ZORUNLU positional alır; runner sadece
+    # `base_url` veriyordu → _filter_kwargs `url`'i bulamayıp düşürüyor, her çağrı
+    # `TypeError: run() missing 1 required positional argument: 'url'` ile çöküyordu
+    # (scanner hiç çalışmıyordu). Hem `url` hem `base_url` sun — imzaya göre filtrele.
     kw_all = dict(session=sess, endpoints=endpoints, results=results_bucket,
-                  base_url=base_url, debug=debug)
+                  url=base_url, base_url=base_url, debug=debug)
     run(**_filter_kwargs(run, kw_all))
 
     # normalize & rapor
@@ -5154,7 +5158,12 @@ def run_ffuf_scan(ctx) -> None:
                 _logger.info(f"[Login-Audit] Found {len(forms_meta)} potential login forms. Starting Smart Audit (1000+ words)...")
                 
                 # Resolve wordlist path
-                import os
+                # NOT: burada `import os` YAPMA. Modül seviyesinde zaten import edildi
+                # (satır 19). Fonksiyon-içi koşullu `import os`, `os`'u TÜM fonksiyon
+                # için local değişken yapıyordu; forms_meta boşsa (SPA/login formu statik
+                # HTML'de yoksa) bu satır hiç çalışmaz ve aşağıdaki `os.path.join` (API
+                # wordlist dalı) `UnboundLocalError: 'os'` ile çökerdi → ffuf fazı komple
+                # düşüyordu. Modül-düzeyi import'a güven.
                 wl_path = os.path.join(os.getcwd(), "websecure/wordlists/passwords_top1000.txt")
                 if not os.path.exists(wl_path):
                      _logger.warning("[Login-Audit] Wordlist not found, generating default...")

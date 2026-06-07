@@ -391,8 +391,26 @@ def _smart_request(self, method, url, **kwargs):
             except (ImportError, AttributeError) as exc:
                 _logger.debug(f"[HTTP] Live monitor log_request failed: {exc!r}")
 
+            _req_t0 = time.monotonic()
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
+
+            # Metrics wiring FIX: scanner'ların (Tor dahil) kullandığı bu hardened
+            # session wrapper, isteği canlı monitöre (log_request) yazıyordu ama
+            # HTTP_METRICS'e HİÇ işlemiyordu. Sonuç: 1897 gerçek istekte bile rapordaki
+            # "Saldırı Trafiği & Verimlilik" panosu Toplam İstek/2xx/403/429 = 0
+            # gösteriyordu (metrics.json counters tamamen sıfır). Yanıtı burada
+            # metriklere işle — canlı sayaçla aynı granülerlik (deneme başına). Kullanılan
+            # anahtarlar (total/ok_2xx/ban_403/throttle_429/err_4xx/err_5xx) response-hook
+            # record_status'un anahtarlarından (2xx/403/429) AYRI; çift sayım olmaz.
+            try:
+                _rt_ms = int((time.monotonic() - _req_t0) * 1000)
+                _st = int(status or 0)
+                note_http_response(_st, _rt_ms)
+                note_status_location(url, _st)
+                record_timing_ms(_rt_ms, _st)
+            except Exception as _mx:
+                _logger.debug(f"[HTTP] metrics record failed: {_mx!r}")
 
             # Feed status into circuit breaker
             _cb_record(status)

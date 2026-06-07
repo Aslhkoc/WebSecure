@@ -55,6 +55,55 @@ def _load_sensitive_files() -> List[str]:
 
 SENSITIVE_FILES: List[str] = _load_sensitive_files()
 
+# --- Soft-404 / SPA-fallback aware sensitive-file probing -------------------
+# Many modern targets (Angular/React SPAs, or catch-all frameworks) reply with
+# HTTP 200 and the SAME app-shell HTML for EVERY path — including files that do
+# NOT exist. A naive "status == 200 → exposed" check then flags hundreds of
+# non-existent files. In a real juice-shop scan this produced 436 false
+# positives (every /.env, /wp-config.php, /error.log … returned index.html).
+# Three layers defend against this: (1) a catch-all baseline probe, (2) app-shell
+# (HTML) detection, (3) per-file positive content signatures.
+
+# Markers that identify an HTML application shell / SPA index page (NOT a leaked
+# config/secret file). Checked against the response body's head, case-insensitive.
+_HTML_SHELL_MARKERS = (
+    "<!doctype html", "<html", "<head>", "<head ", "<body", "<app-root",
+    "<title>", "ng-version", "__nuxt__", "data-reactroot", "id=\"root\"",
+    "id='root'", "<base href",
+)
+
+# Positive content signatures. Each rule = (filename predicate, required body
+# regex). The FIRST predicate that matches the filename decides; the body must
+# then match the regex for the file to count as a genuine exposure. A regex of
+# None means "type recognised but not content-verifiable" (caller suppresses it
+# on catch-all servers, accepts it on well-behaved servers). Specific filenames
+# precede generic extensions so e.g. security.txt is not swallowed by ".txt".
+_FILE_CONTENT_SIGNATURES = [
+    (lambda f: f.endswith("security.txt"),            r"(?im)^\s*contact\s*:"),
+    (lambda f: f.endswith(("crossdomain.xml", "clientaccesspolicy.xml")),
+                                                       r"(?i)<(cross-domain-policy|access-policy)"),
+    (lambda f: f.endswith("git/head"),                r"(?im)^(ref:\s*refs/|[0-9a-f]{40}\b)"),
+    (lambda f: f.endswith("git/config"),              r"(?i)\[core\]|repositoryformatversion"),
+    (lambda f: f.endswith(("git/commit_editmsg", "svn/entries", "svn/wc.db",
+                            ".ds_store", "thumbs.db")), None),
+    (lambda f: ".env" in f,                            r"(?m)^\s*[A-Za-z_][A-Za-z0-9_]*\s*="),
+    (lambda f: f.endswith((".json",)),                 r"^\s*[\{\[]"),
+    (lambda f: f.endswith((".yml", ".yaml")),          r"(?m)^\s*[\w.\-]+\s*:"),
+    (lambda f: f.endswith((".php",)),                  r"<\?php|=\s*['\"][^'\"]+['\"]\s*;"),
+    (lambda f: f.endswith((".sql",)),                  r"(?i)(create table|insert into|drop table|alter table|--\s)"),
+    (lambda f: f.endswith((".map",)),                  r'"version"\s*:|"sources"\s*:|"mappings"\s*:'),
+    (lambda f: f.endswith(("id_rsa", ".key")) or "/id_rsa" in f or "private" in f,
+                                                       r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
+    (lambda f: f.endswith((".config", "web.config")), r"(?i)<\?xml|<configuration"),
+    (lambda f: f.endswith((".xml",)),                  r"(?i)<\?xml|<\w+[\s>]"),
+    (lambda f: f.endswith((".zip", ".gz", ".tar", ".tgz", ".rar", ".7z")),
+                                                       r"^PK\x03\x04|^\x1f\x8b|^Rar!|^7z\xbc"),
+    # Plain-text / log files: real content varies too much to fingerprint
+    # reliably, so they carry no positive signature (None → suppressed on
+    # catch-all servers, accepted on servers that return a real 404 for misses).
+    (lambda f: f.endswith((".log", ".txt", ".bak", ".old", ".save", ".swp", "~")), None),
+]
+
 class PassiveJSScanner(BaseScanner):
     """
     Scans JavaScript files for hardcoded secrets, endpoints, emails, and source maps.
@@ -257,8 +306,76 @@ class ContentDiscoveryScanner(BaseScanner):
             logger.debug(f"[scanners.passive_recon] {type(exc).__name__}: {exc!r}")
         return subdomains
 
+    def _looks_like_html_shell(self, content: str, content_type: str) -> bool:
+        """True if the body is an HTML application shell (SPA index / catch-all
+        page) rather than the requested raw config/secret file."""
+        ct = (content_type or "").lower()
+        head = (content or "")[:2048].lower()
+        if "text/html" in ct or "application/xhtml" in ct:
+            return True
+        return any(m in head for m in _HTML_SHELL_MARKERS)
+
+    def _catch_all_baseline(self, base_url: str) -> Optional[List[tuple]]:
+        """Detect a soft-404 / catch-all server by requesting random paths that
+        cannot exist. Returns a list of (length, body_prefix) for the random
+        probes that still returned 200 (→ server serves a catch-all page for
+        every path); None if the server correctly 404s missing files."""
+        samples: List[tuple] = []
+        for ext in (".env", ".txt", ".json", ".bak"):
+            rnd = "ws-nonexistent-" + os.urandom(8).hex() + ext
+            try:
+                r = self.session.get(urljoin(base_url, f"/{rnd}"), timeout=4,
+                                     allow_redirects=False)
+            except Exception as exc:
+                logger.debug(f"[scanners.passive_recon] baseline probe: {exc!r}")
+                continue
+            if r.status_code == 200:
+                body = r.text or ""
+                samples.append((len(body), body[:512]))
+        return samples or None
+
+    def _matches_baseline(self, content: str, baseline: List[tuple]) -> bool:
+        """True if the response closely matches a catch-all baseline sample
+        (same page the server returns for non-existent paths)."""
+        body = content or ""
+        ln = len(body)
+        prefix = body[:512]
+        for b_len, b_prefix in baseline:
+            # Near-identical length (SPA shells are byte-identical) OR identical
+            # leading bytes ⇒ this is the catch-all page, not the real file.
+            if abs(ln - b_len) <= max(64, int(b_len * 0.05)):
+                return True
+            if prefix and prefix == b_prefix:
+                return True
+        return False
+
+    def _content_signature(self, fname: str, content: str):
+        """Positive content validation. Returns True (body matches the known
+        signature), False (known type but body does not match → false positive),
+        or None (no signature known for this file type)."""
+        f = fname.lower()
+        head = (content or "")[:4096]
+        for predicate, sig in _FILE_CONTENT_SIGNATURES:
+            try:
+                if not predicate(f):
+                    continue
+            except Exception:
+                continue
+            if sig is None:
+                return None
+            return bool(re.search(sig, head))
+        return None
+
     def _probe_files(self, base_url: str) -> List[Dict]:
         findings = []
+        # Establish whether the server serves a catch-all page for missing files.
+        # On such servers a bare 200 proves nothing — every probe "succeeds".
+        baseline = self._catch_all_baseline(base_url)
+        if baseline:
+            logger.info(
+                "[PassiveRecon] Catch-all/soft-404 tespit edildi (%d örnek) — "
+                "duyarlı dosya bulguları içerik imzasıyla doğrulanacak.", len(baseline)
+            )
         for f in SENSITIVE_FILES:
             url = urljoin(base_url, f"/{f}")
             try:
@@ -267,6 +384,35 @@ class ContentDiscoveryScanner(BaseScanner):
                     continue
 
                 content = resp.text or ""
+                ctype = resp.headers.get("Content-Type", "")
+
+                # Empty 200 → nothing actually exposed.
+                if not content.strip():
+                    continue
+
+                # (1) Catch-all server: response equal to the random-path page ⇒
+                #     the file does not exist, the server just echoes its shell.
+                if baseline and self._matches_baseline(content, baseline):
+                    continue
+
+                # (2) We asked for a config/secret file but got an HTML app shell
+                #     (SPA index / framework catch-all). Not the file itself.
+                _is_markup = f.lower().endswith((".html", ".htm", ".xml", "crossdomain.xml",
+                                                 "clientaccesspolicy.xml"))
+                if not _is_markup and self._looks_like_html_shell(content, ctype):
+                    continue
+
+                # (3) Positive content signature gate.
+                sig = self._content_signature(f, content)
+                if sig is False:
+                    # Known file type whose body does not look like that file.
+                    continue
+                if sig is None and baseline:
+                    # Unverifiable type on a catch-all server → suppress to avoid
+                    # the false-positive flood. Real, verifiable leaks (sig True)
+                    # still get through on the same server.
+                    continue
+
                 severity = "Medium"
                 details = f"Sensitive file '{f}' is publicly accessible"
 

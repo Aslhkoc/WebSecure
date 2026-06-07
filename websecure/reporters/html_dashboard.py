@@ -1337,16 +1337,61 @@ def render_html_dashboard(results: dict) -> str:
         """
 
     # --- Phase Errors Section ---
+    # Faz hataları İKİ ayrı kovaya yazılıyordu ve rapor yalnızca birini okuyordu:
+    #   • results["phase_error"]  → runner-seviyesi yakalanan hatalar (ssrf/idor/…)
+    #   • results["errors"]       → watchdog timeout'ları (type="phase_timeout") ve
+    #                                yakalanmamış thread çökmeleri (type="phase_error")
+    # Eski kod sadece "phase_error" kovasını gösterdiği için sqlmap/waf_detect/ffuf
+    # gibi TIMEOUT'a düşen ~18 faz raporda görünmüyordu (terminalde "exceeded …s —
+    # skipped" yazsa da). Artık her iki kaynağı birleştir, normalize et, tekilleştir.
+    def _norm_phase_errs(res):
+        out = []
+        seen = set()
+
+        def _push(phase, exc_type, message):
+            phase = (phase or "-").strip() or "-"
+            exc_type = (exc_type or "").strip()
+            message = (message or "").strip()
+            key = (phase, exc_type, message)
+            if key in seen:
+                return
+            seen.add(key)
+            out.append({"phase": phase, "exc_type": exc_type, "message": message})
+
+        # 1) Dedicated phase_error bucket (already in {meta:{phase,exc_type}, message})
+        for e in (res.get("phase_error") or []):
+            if not isinstance(e, dict):
+                continue
+            m = e.get("meta") if isinstance(e.get("meta"), dict) else {}
+            _push(m.get("phase") or e.get("phase"), m.get("exc_type"), e.get("message"))
+
+        # 2) errors bucket: surface phase_timeout + phase_error entries too
+        for e in (res.get("errors") or []):
+            if not isinstance(e, dict):
+                continue
+            etype = str(e.get("type") or "").strip().lower()
+            if etype == "phase_timeout":
+                secs = e.get("timeout_secs")
+                _push(
+                    e.get("phase"),
+                    "PhaseTimeout",
+                    f"phase exceeded {secs}s — skipped to prevent hang" if secs
+                    else "phase timed out — skipped to prevent hang",
+                )
+            elif etype == "phase_error":
+                m = e.get("meta") if isinstance(e.get("meta"), dict) else {}
+                raw = str(e.get("error") or e.get("message") or "")
+                exc = m.get("exc_type") or (raw.split(":", 1)[0] if ":" in raw else "")
+                _push(e.get("phase") or m.get("phase"), exc, raw or e.get("message"))
+        return out
+
+    phase_errors = _norm_phase_errs(results)
     phase_errors_html = ""
-    phase_errors = [e for e in (results.get("phase_error") or []) if isinstance(e, dict)]
     if phase_errors:
-        def _safe_meta(e):
-            m = e.get("meta")
-            return m if isinstance(m, dict) else {}
         err_rows = "".join(
             f"<tr>"
-            f"<td style='font-family:monospace; color:var(--sev-high)'>{_escape(_safe_meta(e).get('phase') or e.get('type', '-'))}</td>"
-            f"<td style='color:var(--sev-medium)'>{_escape(_safe_meta(e).get('exc_type', ''))}</td>"
+            f"<td style='font-family:monospace; color:var(--sev-high)'>{_escape(e.get('phase', '-'))}</td>"
+            f"<td style='color:var(--sev-medium)'>{_escape(e.get('exc_type', ''))}</td>"
             f"<td style='font-size:0.85rem; color:var(--text-muted)'>{_escape(e.get('message', ''))}</td>"
             f"</tr>"
             for e in phase_errors
@@ -1354,7 +1399,7 @@ def render_html_dashboard(results: dict) -> str:
         phase_errors_html = f"""
         <div class="card" style="background:rgba(210,153,34,0.07); border:1px solid var(--sev-high); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
             <h3 style="margin-top:0; color:var(--sev-high);">[!] Tarama Faz Hataları ({len(phase_errors)})</h3>
-            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Bazı tarama fazları hata aldı. Bu fazlardan gelen sonuçlar eksik olabilir.</p>
+            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;">Bazı tarama fazları hata aldı veya zaman aşımına uğradı. Bu fazlardan gelen sonuçlar eksik olabilir.</p>
             <div class="table-container">
                 <table>
                     <thead><tr><th>Faz</th><th>Hata Tipi</th><th>Mesaj</th></tr></thead>

@@ -2413,9 +2413,28 @@ def _run_scan_phases(
                 globals().get("run_oast_on_target")):
             print("[•] OAST (out-of-band) testleri…")
             t = mark("oast")
+            # B4 FIX (süre anomalisi): OAST döngüsünün TOPLAM duvar-saati bütçesi yoktu
+            # ve her hedef için call_timeout=900s (15 dk!) veriliyordu. Tor gibi yavaş
+            # taşımalarda her OAST isteği ~50-70s sürünce, 20 hedef × ~6 param × 3 varyant
+            # tek bir taramada OAST fazını 67 DAKİKAYA (4018s) çıkardı — üstelik 0 bulgu.
+            # Artık: (1) faz için toplam bütçe (varsayılan 300s, config'ten ayarlanır),
+            # (2) hedef başına bütçe-farkındalıklı makul timeout. Bütçe dolunca kalan
+            # hedefler atlanır ve durum meta'ya yazılır.
+            _oast_budget = float(oast_cfg.get("phase_budget_secs", 300) or 300)
+            _oast_per_call = float(oast_cfg.get("per_target_timeout_secs", 120) or 120)
             ok_client, client = _safe_call(OASTClient, session, oast_cfg, call_timeout=30.0)
             if ok_client:
+                _oast_done = 0
                 for u in _inj_endpoints[:20]:
+                    _elapsed = time.time() - t
+                    if _elapsed >= _oast_budget:
+                        print(f"[i] OAST bütçesi ({int(_oast_budget)}s) doldu — "
+                              f"{_oast_done} hedef tarandı, kalanlar atlandı.")
+                        if callable(globals().get("add_result")):
+                            add_result("meta", {"stage": "oast",
+                                                "status": f"budget_exceeded:{int(_oast_budget)}s",
+                                                "targets_scanned": _oast_done})
+                        break
                     disc = {"query": discovered.get("query", []), "body": [], "json": [], "headers": [],
                             "cookies": []}
                     limits = {"max_injections_per_loc": int(oast_cfg.get("max_injections_per_loc", 3))}
@@ -2430,7 +2449,10 @@ def _run_scan_phases(
                         auth_ctx=auth_ctx,
                     )
                     fkw = _kw_filter(run_oast_on_target, **kw)
-                    ok_oast, findings = _safe_call(run_oast_on_target, **fkw, call_timeout=900.0)
+                    # Hedef başına timeout: per-call tavanı ile kalan bütçenin küçüğü.
+                    _call_to = max(15.0, min(_oast_per_call, _oast_budget - _elapsed))
+                    ok_oast, findings = _safe_call(run_oast_on_target, **fkw, call_timeout=_call_to)
+                    _oast_done += 1
                     if ok_oast and findings:
                         for f in findings:
                             if callable(globals().get("add_result")):
@@ -2450,20 +2472,45 @@ def _run_scan_phases(
         t = mark("reporting")
         buckets = get_bucket_results()
 
-        all_findings = []
+        all_dicts = []
         for _k, _lst in (buckets or {}).items():
             if isinstance(_lst, list):
                 for _it in _lst:
                     if isinstance(_it, dict):
-                        all_findings.append(_it)
+                        all_dicts.append(_it)
 
+        # OAST event'lerini TÜM kayıtlardan topla (filtrelemeden önce — event
+        # taşıyan kayıt elensin istemeyiz).
         oast_events = []
-        for _it in all_findings:
+        for _it in all_dicts:
             evs = _it.get("events")
             if isinstance(evs, list):
                 for _ev in evs:
                     if isinstance(_ev, dict):
                         oast_events.append(_ev)
+
+        # B3 FIX (saçmalayan kayıt): get_bucket_results() TÜM kovaları döndürür —
+        # "errors", "meta", "oast" timeout kayıtları dahil. Eskiden bunların hepsi
+        # skorlanıp `final`'e (ve SARIF/JUnit/results.json'a) sahte CVSS 6.1/Medium
+        # ile giriyordu: 142 adet type'sız/severity'siz hayalet "bulgu" (ör.
+        # {stage:oast, error:timeout}). HTML rapor bunları _has_label ile zaten
+        # eliyordu ama makine-okur çıktılar kirleniyordu. Gerçek bulgu en az bir
+        # kimlik alanı taşır (type/title/severity/name/vuln); taşımayan saf hata/
+        # meta/timeout kayıtlarını skorlamadan önce ele.
+        # Tutma kümesi HTML raporun _has_label filtresiyle (type/title/message)
+        # hizalı — artı severity/name/vuln. Böylece rapor ile final/SARIF tutarlı:
+        # raporun göstereceği hiçbir bulgu elenmez, kimliksiz hata/meta/timeout
+        # kayıtları (message dahil hiçbir kimlik alanı yok) ise elenir.
+        def _is_real_finding(it: dict) -> bool:
+            return any(it.get(k) for k in ("type", "title", "message", "severity", "name", "vuln"))
+
+        all_findings = [_it for _it in all_dicts if _is_real_finding(_it)]
+        _n_dropped = len(all_dicts) - len(all_findings)
+        if _n_dropped:
+            _logger.debug(
+                "[main] %d bulgu-olmayan kayıt (errors/meta/timeout) skorlamadan elendi",
+                _n_dropped,
+            )
 
         final = verify_and_score(all_findings, oast_events)
 
