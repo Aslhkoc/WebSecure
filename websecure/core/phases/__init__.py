@@ -1206,17 +1206,16 @@ _PHASE_TO_GROUP: Dict[str, int] = {
 def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     """
     Her fazı ayrı bir thread'de çalıştırır. İstisnalar main thread'i bozmaz.
-    Hatalar threading.excepthook ile toplanıp raporlanır.
+
+    Hata yakalama, fazın çalıştığı worker thread'in İÇİNDE try/except ile yapılır;
+    process-global ``threading.excepthook`` KULLANILMAZ. Sebep: fazlar paralel
+    gruplar halinde (bkz. _PARALLEL_GROUPS) eşzamanlı çalışır ve tek bir global
+    excepthook'u her _safe çağrısı ezerdi — böylece bir fazın thread'inde oluşan
+    hata YANLIŞ faza atfedilirdi (gerçek örnek: run_ffuf_scan'in 'os'
+    UnboundLocalError'u 'owasp_and_nuclei' altına kaydedilmişti). Closure içindeki
+    ``err`` dict'i thread'e özeldir; yarış (race) ve restore-sırası tehlikesi yok.
     """
     err: Dict[str, str] = {}
-
-    def _hook(args: threading.ExceptHookArgs):
-        err["type"] = getattr(args.exc_type, "__name__", "Exception")
-        err["error"] = str(args.exc_value)
-        err["trace"] = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))[-2000:]
-
-    old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
 
     phase_timeout = _PHASE_TIMEOUTS.get(phase_id, _DEFAULT_PHASE_TIMEOUT)
 
@@ -1238,7 +1237,17 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
             _set_ap(phase_id)
         except Exception:
             pass
-        fn()
+        # Hata yakalama bu thread'in içinde yapılır → thread-local, race-free.
+        # BaseException (KeyboardInterrupt/SystemExit dahil) yakalanır ki main
+        # thread'e sızıp taramayı bozmasın; yalnızca err dict'ine yazılır.
+        try:
+            fn()
+        except BaseException as e:  # noqa: BLE001 — kasıtlı: faz hatasını izole et
+            err["type"] = type(e).__name__
+            err["error"] = str(e)
+            err["trace"] = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )[-2000:]
 
     t = threading.Thread(target=_phase_fn, name=f"phase::{phase_id}", daemon=True)
     t.start()
@@ -1250,8 +1259,6 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
         elapsed += 1.0
         if _SCAN_CANCEL.is_set():
             break
-
-    threading.excepthook = old_hook  # restore
 
     if t.is_alive():
         if _SCAN_CANCEL.is_set():
@@ -2013,39 +2020,42 @@ def _runner_graphql(ctx) -> None:
     if hasattr(att_mod, "probe_introspection_bypass") and callable(getattr(att_mod, "probe_introspection_bypass")):
         probes.append(("IntrospectionBypass", getattr(att_mod, "probe_introspection_bypass")))
 
+    # Hata yakalama her probe thread'inin İÇİNDE yapılır; process-global
+    # threading.excepthook KULLANILMAZ (bu fonksiyonun kendisi de offensive
+    # paralel grubunda bir _safe thread'inde koşar — global hook'u ezmek
+    # kardeş fazların hatalarını yanlış faza atfederdi). list.append CPython'da
+    # GIL altında atomiktir, findings_acc gibi errors da kilitsiz toplanır.
     errors: List[Dict[str, Any]] = []
-
-    def _hook(args: threading.ExceptHookArgs):
-        errors.append({
-            "name": getattr(args.thread, "name", "gql-probe"),
-            "error": f"{getattr(args.exc_type, '__name__', 'Exception')}: {str(args.exc_value)}",
-            "trace": "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))[-1000:]
-        })
-
-    old_hook = getattr(threading, "excepthook", None)
-    threading.excepthook = _hook  # type: ignore[assignment]  # signature varies across Python 3.8+
-
     ts: List[threading.Thread] = []
     findings_acc: List[Dict[str, Any]] = []
 
     for name, func in probes:
         def _runner(call: Callable = func, label: str = name):
-            # İmza-keşfi ile kwargs filtrele
-            kw = _filter_kwargs(call, dict(client=client, url=gql_url, endpoint=gql_url,
-                                           session=getattr(ctx, "session", None),
-                                           debug=bool(getattr(ctx, "debug", False))))
-            out = call(**kw)
-            for f in list(out or []):
-                findings_acc.append({
-                    "type": f"GraphQL {label}",
-                    "severity": f.get("severity", "Informational"),
-                    "url": f.get("endpoint", gql_url),
-                    "reason": f.get("issue"),
-                    "proof": redact_sensitive({
-                        "payload": f.get("payload"),
-                        "extra": f.get("extra", {}),
-                        "body_hint": f.get("body_hint")
+            try:
+                # İmza-keşfi ile kwargs filtrele
+                kw = _filter_kwargs(call, dict(client=client, url=gql_url, endpoint=gql_url,
+                                               session=getattr(ctx, "session", None),
+                                               debug=bool(getattr(ctx, "debug", False))))
+                out = call(**kw)
+                for f in list(out or []):
+                    findings_acc.append({
+                        "type": f"GraphQL {label}",
+                        "severity": f.get("severity", "Informational"),
+                        "url": f.get("endpoint", gql_url),
+                        "reason": f.get("issue"),
+                        "proof": redact_sensitive({
+                            "payload": f.get("payload"),
+                            "extra": f.get("extra", {}),
+                            "body_hint": f.get("body_hint")
+                        })
                     })
+            except BaseException as e:  # noqa: BLE001 — kasıtlı: probe hatasını izole et
+                errors.append({
+                    "name": f"graphql::{label}",
+                    "error": f"{type(e).__name__}: {e}",
+                    "trace": "".join(
+                        traceback.format_exception(type(e), e, e.__traceback__)
+                    )[-1000:]
                 })
 
         t = threading.Thread(target=_runner, name=f"graphql::{name}", daemon=True)
@@ -2054,7 +2064,6 @@ def _runner_graphql(ctx) -> None:
 
     for t in ts:
         t.join()
-    threading.excepthook = old_hook  # restore
 
     for it in findings_acc:
         add_result("offensive", it)
