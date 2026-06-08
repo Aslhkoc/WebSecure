@@ -604,9 +604,17 @@ class BaseScanner:
             payloads = get_payloads_v2(
                 category,
                 tech_tags=list(tech_stack) if tech_stack else None,
-                apply_mutations=waf_present,   # WAF-bypass variants only when a WAF is detected
-                limit=400 if waf_present else 250,
+                apply_mutations=waf_present,   # WAF-bypass mutation variants when a WAF/blocking is seen
+                apply_encoding=waf_present,    # URL/double/unicode/hex/utf16 encoding variants too
+                limit=600 if waf_present else 250,
             )
+            # Escalate with the creative WAF-bypass arsenal (core.mutator.Mutator):
+            # MySQL version-comments, boolean equivalents, fullwidth/confusables,
+            # base85/zlib, protocol obfuscation, polyglots — the "unexpected"
+            # evasions signature WAFs miss. Only when blocking is actually happening
+            # so non-WAF scans stay fast and clean.
+            if waf_present:
+                payloads = self._apply_creative_waf_bypass(category, payloads)
         except Exception as exc:
             self.logger.debug(f"[SmartPayload] PayloadEngine v2 unavailable, flat list: {exc!r}")
             payloads = []
@@ -638,9 +646,82 @@ class BaseScanner:
                     for x in v
                 ):
                     return True
-            return bool(r.get("waf_present"))
+            if r.get("waf_present"):
+                return True
+            # OBSERVED blocking is itself a reason to escalate to bypass payloads —
+            # WAF fingerprinting frequently misses edge WAFs (e.g. the wild scan
+            # logged "No WAF Detected" while the target was firing a 403 storm).
+            if len(r.get("anti_block_event") or []) >= 3:
+                return True
+            try:
+                from websecure.core.http import HTTP_METRICS as _M
+                blocked = (int(_M.get("403", 0) or 0)
+                           + int(_M.get("429", 0) or 0)
+                           + int(_M.get("ban_403", 0) or 0))
+                if blocked >= 5:
+                    return True
+            except Exception:
+                pass
+            return False
         except Exception:
             return False
+
+    def _apply_creative_waf_bypass(self, category: str, payloads: List[str]) -> List[str]:
+        """
+        Fold the creative WAF-bypass arsenal (core.mutator.Mutator) onto the base
+        payloads. These category-specific transforms are exactly the evasions a
+        signature WAF normalises/decodes but its regex misses: MySQL inline
+        version-comments (/*!50000UNION*/), boolean equivalents (1 IN (1), 1=1e0),
+        fullwidth & unicode confusables, base85/zlib/XOR encodings, JS protocol
+        obfuscation (java\\tscript:, j&#97;vascript:), and multi-context polyglots.
+
+        Bounded (mutates only the top base payloads) and dedup-preserving so it
+        enriches without exploding the request count unboundedly.
+        """
+        try:
+            from websecure.core.mutator import Mutator
+        except Exception as exc:
+            self.logger.debug(f"[SmartPayload] Mutator unavailable: {exc!r}")
+            return payloads
+
+        cat = (category or "").lower()
+        if "sql" in cat:
+            mut_fn = Mutator.mutate_sql
+        elif "xss" in cat:
+            mut_fn = Mutator.mutate_xss
+        elif "cmd" in cat or "rce" in cat:
+            mut_fn = Mutator.mutate_rce
+        elif "nosql" in cat:
+            mut_fn = Mutator.mutate_nosql
+        else:
+            mut_fn = None
+
+        out: List[str] = list(payloads)
+        seen: set = set(payloads)
+        # Mutate only the top-N base payloads to bound the explosion.
+        for base in payloads[:25]:
+            if not base:
+                continue
+            try:
+                variants = mut_fn(base, max_variants=12) if mut_fn else []
+            except Exception:
+                variants = []
+            for v in variants:
+                if v and v not in seen:
+                    seen.add(v)
+                    out.append(v)
+        # Always fold in a few famous multi-context polyglots (one-shot bypass).
+        try:
+            for pg in Mutator.mutate_polyglot("", max_variants=6):
+                if pg and pg not in seen:
+                    seen.add(pg)
+                    out.append(pg)
+        except Exception:
+            pass
+        self.logger.debug(
+            f"[SmartPayload] creative WAF-bypass: {len(payloads)} -> {len(out)} payload ({category})"
+        )
+        return out
 
     # ------------------------------------------------------------------
     # prepare_injection (unchanged — used by form submission logic)

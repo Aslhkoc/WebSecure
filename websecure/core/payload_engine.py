@@ -1641,6 +1641,7 @@ def get_payloads_v2(
     tech_tags: Optional[List[str]] = None,
     cve_ids: Optional[List[str]] = None,
     apply_mutations: bool = False,
+    apply_encoding: bool = False,
     limit: int = 500,
     callback_url: str = "{{CALLBACK}}",
 ) -> List[str]:
@@ -1648,12 +1649,15 @@ def get_payloads_v2(
     PayloadEngine üzerinden kapsamlı payload listesi al.
 
     get_payloads() ile geriye uyumlu; ek parametre destekli.
+    apply_encoding=True iken EncodingVariantGenerator ile URL/double-URL/unicode/
+    hex/utf16 WAF-bypass encoding varyantları da eklenir (önceden dışa açılmamıştı).
     """
     return get_engine().get(
         category=category,
         tech_tags=tech_tags,
         cve_ids=cve_ids,
         apply_mutations=apply_mutations,
+        apply_encoding=apply_encoding,
         limit=limit,
         callback_url=callback_url,
     )
