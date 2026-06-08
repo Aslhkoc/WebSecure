@@ -201,6 +201,44 @@ def anomaly_score(baseline: BaselineMeta, current: CurrentMeta, thresholds: Opti
         "metrics": {"size_delta": sd, "time_stddev": tsd, "lev_ratio": lev, "semantic_ratio": sem}
     }
 
+_SENSITIVE_ACTION_HINTS = (
+    "login", "signin", "sign-in", "register", "signup", "sign-up", "auth",
+    "password", "reset", "forgot", "checkout", "payment", "subscribe", "account",
+)
+_SENSITIVE_INPUT_NAMES = (
+    "password", "passwd", "pwd", "email", "mail", "card", "cardnumber", "cardno",
+    "cc-number", "cvv", "cvc", "iban", "username", "user", "login",
+)
+
+
+def infer_form_method(action: str, inputs, declared_method: str = "GET") -> str:
+    """
+    Resolve the REAL submission method of a form.
+
+    An HTML <form> with no explicit ``method`` defaults to GET — but auth /
+    registration / payment forms in SPAs (React/Next/Vue) submit via an
+    onSubmit→fetch POST and leave the attribute unset. Treating them as GET makes
+    every scanner inject into the URL *query string* instead of the request body,
+    so the fields that actually matter (name/email/password/card) never receive a
+    payload (observed in the wild: /auth/login & /auth/register recorded as GET).
+    We infer POST when the form is clearly sensitive; an explicit non-GET method
+    is always respected.
+    """
+    dm = (declared_method or "GET").upper()
+    if dm in ("POST", "PUT", "PATCH", "DELETE"):
+        return dm
+    act = (action or "").lower()
+    if any(h in act for h in _SENSITIVE_ACTION_HINTS):
+        return "POST"
+    for i in (inputs or []):
+        if str(i.get("type", "")).lower() == "password":
+            return "POST"
+        nm = str(i.get("name", "") or "").lower()
+        if any(s == nm or s in nm for s in _SENSITIVE_INPUT_NAMES):
+            return "POST"
+    return dm
+
+
 def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, *, fetcher: Optional[callable] = None) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     # Canonicalize
     url = normalize_url(url)
@@ -225,10 +263,11 @@ def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, 
                     "type": inp.get("type", "text"),
                     "value": inp.get("value", "")
                 })
+            _action = form.get("action") or url
             forms.append({
                 "index": idx,
-                "action": form.get("action") or url,
-                "method": (form.get("method") or "GET").upper(),
+                "action": _action,
+                "method": infer_form_method(_action, inputs_meta, form.get("method")),
                 "inputs": inputs_meta
             })
             

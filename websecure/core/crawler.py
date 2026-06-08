@@ -301,6 +301,11 @@ class HTTPCrawler(CrawlerBase):
             inputs = [{"name": inp.group(1), "type": "text"}
                       for inp in _INPUT_RE.finditer(body)]
             if inputs:
+                try:
+                    from websecure.core.analysis import infer_form_method as _ifm
+                    method = _ifm(action, inputs, method)
+                except Exception:
+                    pass
                 result.forms.append({
                     "action": action,
                     "method": method,

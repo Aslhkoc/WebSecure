@@ -787,3 +787,35 @@ class BaseScanner:
             req_kwargs["json"] = new_json
 
         return req_kwargs
+
+    # ------------------------------------------------------------------
+    # Form submission across content types (form-encoded + JSON)
+    # ------------------------------------------------------------------
+
+    def submit_form_variants(self, action: str, data: Dict[str, Any], method: str,
+                             timeout: int = 8) -> List[Tuple[str, Any]]:
+        """
+        Submit *data* to *action* and return a list of ``(strategy, response)``.
+
+        For POST/PUT/PATCH this sends the body BOTH as
+        ``application/x-www-form-urlencoded`` AND as ``application/json`` — because
+        SPA auth / registration / payment APIs (React/Next/Vue) very often accept
+        ONLY JSON: a classic form-encoded POST there returns 400/415 and the
+        injected field (name/email/password/card) never reaches the application.
+        GET is sent as a query string. Scanners loop the returned responses and run
+        their own detection on each. All network errors are swallowed (debug-logged).
+        """
+        out: List[Tuple[str, Any]] = []
+        m = (method or "GET").upper()
+        if m == "GET":
+            try:
+                out.append(("get", self.session.get(action, params=data, timeout=timeout)))
+            except _requests.exceptions.RequestException as exc:
+                self.logger.debug(f"[{self.name}] form GET failed for {action}: {exc!r}")
+            return out
+        for strat, kw in (("form", {"data": data}), ("json", {"json": data})):
+            try:
+                out.append((strat, self.session.request(m, action, timeout=timeout, **kw)))
+            except _requests.exceptions.RequestException as exc:
+                self.logger.debug(f"[{self.name}] form {strat} {m} failed for {action}: {exc!r}")
+        return out

@@ -16,6 +16,29 @@ from urllib.parse import urljoin, urlparse
 
 _logger = logging.getLogger(__name__)
 
+
+def _infer_form_methods(forms, page_url: str) -> None:
+    """
+    Fix browser-extracted form methods in place. The DOM ``f.method`` is GET when a
+    form has no explicit ``method`` attribute — which is the norm for SPA auth /
+    registration / payment forms that submit via onSubmit→fetch. Left as GET, the
+    injection scanners would fuzz these fields in the URL query instead of the
+    request body, so name/email/password/card never get the payload. Re-infer POST
+    for sensitive forms (shared logic with the static extractor).
+    """
+    try:
+        from websecure.core.analysis import infer_form_method as _ifm
+    except Exception:
+        return
+    for f in (forms or []):
+        if not isinstance(f, dict):
+            continue
+        try:
+            f["method"] = _ifm(f.get("action") or page_url, f.get("inputs"), f.get("method"))
+        except Exception:
+            pass
+
+
 try:
     from websecure.core.utils.net import same_site as _same_site
 except Exception:  # pragma: no cover - import güvenliği
@@ -367,6 +390,7 @@ class BrowserCrawler:
                         }))
                     """)
                     if forms_data:
+                        _infer_form_methods(forms_data, url)
                         self._result.forms_meta.append({"url": url, "forms": forms_data})
 
                     # SPA: shadow DOM traversal + React/Angular/Vue loose inputs
@@ -413,6 +437,7 @@ class BrowserCrawler:
                             }
                         """)
                         if spa_forms:
+                            _infer_form_methods(spa_forms, url)
                             self._result.forms_meta.append({"url": url + "#spa", "forms": spa_forms})
                     except Exception as _fix_e:
                         _logger.debug(f"[core.browser_crawler] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -529,6 +554,7 @@ class BrowserCrawler:
                 }))
             """)
             if new_forms:
+                _infer_form_methods(new_forms, route_url)
                 self._result.forms_meta.append({"url": route_url + "#spa-nav", "forms": new_forms})
 
             if route_url not in self._result.spa_routes:

@@ -946,51 +946,35 @@ class XSSScanner(BaseScanner):
         def probe(payload: str) -> Optional[Dict]:
             form_data = dict(base_data)
             form_data[p_name] = payload
-            req_kw = self.prepare_injection(action, p_name, payload, method, data=form_data)
-            try:
-                if method == "POST":
-                    res = self.session.post(
-                        req_kw.get("url", action),
-                        data=req_kw.get("data"),
-                        timeout=8,
-                    )
-                else:
-                    res = self.session.get(req_kw.get("url", action), timeout=8)
-            except _requests.exceptions.Timeout as exc:
-                logger.debug(f"[XSS] Form probe timed out for {action}: {exc!r}")
-                return None
-            except _requests.exceptions.ConnectionError as exc:
-                logger.debug(f"[XSS] Form probe connection error for {action}: {exc!r}")
-                return None
-            except _requests.exceptions.RequestException as exc:
-                logger.warning(f"[XSS] Form probe failed for {action}: {exc!r}")
-                return None
-
             if payload in baseline_text:
                 return None
-
-            # Detect reflection context then use strict verification
-            form_context = _detect_reflection_context(res.text, payload)
-            reflection = self._verify_xss_reflection(res.text, payload, form_context)
-
-            if not reflection["reflected"]:
-                return None
-            if reflection["encoded"]:
-                return None
-            if reflection["confidence"] == "none":
-                return None
-            if not _is_xss_executable(payload, res.text):
-                return None
-
-            return {
-                "vuln_type": "Reflected XSS (Form)",
-                "url": action,
-                "param": p_name,
-                "payload": payload,
-                "detection_method": "reflection_form",
-                "confidence": reflection["confidence"],
-                "_executable": reflection["executable"],
-            }
+            # Submit across content types — form-encoded AND JSON for POST — so SPA
+            # JSON-only auth/registration/payment endpoints are actually reached and
+            # the field (name/email/password/card) receives the payload in the body.
+            for _strat, res in self.submit_form_variants(action, form_data, method):
+                if res is None:
+                    continue
+                try:
+                    _rtext = res.text
+                except Exception:
+                    continue
+                form_context = _detect_reflection_context(_rtext, payload)
+                reflection = self._verify_xss_reflection(_rtext, payload, form_context)
+                if (not reflection["reflected"] or reflection["encoded"]
+                        or reflection["confidence"] == "none"):
+                    continue
+                if not _is_xss_executable(payload, _rtext):
+                    continue
+                return {
+                    "vuln_type": "Reflected XSS (Form)",
+                    "url": action,
+                    "param": p_name,
+                    "payload": payload,
+                    "detection_method": f"reflection_form_{_strat}",
+                    "confidence": reflection["confidence"],
+                    "_executable": reflection["executable"],
+                }
+            return None
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
         for hit in hits:

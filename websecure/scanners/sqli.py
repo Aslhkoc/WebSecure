@@ -1031,53 +1031,50 @@ class SQLInjectionScanner(BaseScanner):
         def probe(payload: str) -> Optional[Dict]:
             form_data = dict(base_data)
             form_data[p_name] = payload
-            t0 = time.time()
-            try:
-                if method == "POST":
-                    res = self.session.post(action, data=form_data, timeout=12)
-                else:
-                    res = self.session.get(action, params=form_data, timeout=12)
-                elapsed = time.time() - t0
-            except _requests.exceptions.Timeout as exc:
-                logger.debug(f"[SQLi] Form probe timed out for {action}: {exc!r}")
-                return None
-            except _requests.exceptions.ConnectionError as exc:
-                logger.debug(f"[SQLi] Form probe connection error for {action}: {exc!r}")
-                return None
-            except _requests.exceptions.RequestException as exc:
-                logger.warning(f"[SQLi] Form probe failed for {action}: {exc!r}")
-                return None
+            # Submit across content types — form-encoded AND JSON for POST — so
+            # SPA JSON-only auth/payment endpoints are reached and the field gets
+            # the injection in the request BODY (not the URL).
+            for _strat, res in self.submit_form_variants(action, form_data, method, timeout=12):
+                if res is None:
+                    continue
+                try:
+                    _rtext = res.text
+                except Exception:
+                    continue
+                try:
+                    elapsed = res.elapsed.total_seconds()
+                except Exception:
+                    elapsed = 0.0
 
-            new_errors = self._extract_error_fingerprints(res.text) - baseline_errors
-            if new_errors:
-                db = next(iter(new_errors))[0]
-                return {
-                    "vuln_type": "SQLi (Form/Error)",
-                    "url": action,
-                    "param": p_name,
-                    "payload": payload,
-                    "evidence": f"DB: {db}",
-                    "detection_method": "error_based",
-                    "confidence": "high",
-                }
-
-            if self._is_time_payload(payload) and elapsed > time_threshold:
-                # Cross-validate before reporting — mirrors URL-parameter time-based
-                # detection to prevent single-spike false positives in form fields.
-                if self._verify_time_based(action, p_name, payload, time_threshold):
+                new_errors = self._extract_error_fingerprints(_rtext) - baseline_errors
+                if new_errors:
+                    db = next(iter(new_errors))[0]
                     return {
-                        "vuln_type": "SQLi (Form/Time)",
+                        "vuln_type": "SQLi (Form/Error)",
                         "url": action,
                         "param": p_name,
                         "payload": payload,
-                        "evidence": (
-                            f"Time-based (cross-validated): first={elapsed:.2f}s, "
-                            f"threshold={time_threshold:.2f}s"
-                        ),
-                        "detection_method": "time_based",
+                        "evidence": f"DB: {db}",
+                        "detection_method": "error_based",
                         "confidence": "high",
-                        "verified": True,
                     }
+
+                if self._is_time_payload(payload) and elapsed > time_threshold:
+                    # Cross-validate before reporting — prevents single-spike FPs.
+                    if self._verify_time_based(action, p_name, payload, time_threshold):
+                        return {
+                            "vuln_type": "SQLi (Form/Time)",
+                            "url": action,
+                            "param": p_name,
+                            "payload": payload,
+                            "evidence": (
+                                f"Time-based (cross-validated): first={elapsed:.2f}s, "
+                                f"threshold={time_threshold:.2f}s"
+                            ),
+                            "detection_method": "time_based",
+                            "confidence": "high",
+                            "verified": True,
+                        }
             return None
 
         hits = self.run_parallel_probes(probe, payloads, max_workers=self.MAX_WORKERS)
