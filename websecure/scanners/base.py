@@ -662,6 +662,16 @@ class BaseScanner:
                     return True
             except Exception:
                 pass
+            # Circuit-breaker trips capture BOTH 403/429 floods AND silent blocking
+            # (connection resets/timeouts trip it via consecutive errors) — so a
+            # target that drops us without a clear 403 still escalates to bypass.
+            try:
+                from websecure.core.circuit_breaker import get_circuit_breaker
+                cb = get_circuit_breaker()
+                if hasattr(cb, "get_trip_log") and cb.get_trip_log():
+                    return True
+            except Exception:
+                pass
             return False
         except Exception:
             return False
@@ -678,46 +688,39 @@ class BaseScanner:
         Bounded (mutates only the top base payloads) and dedup-preserving so it
         enriches without exploding the request count unboundedly.
         """
-        try:
-            from websecure.core.mutator import Mutator
-        except Exception as exc:
-            self.logger.debug(f"[SmartPayload] Mutator unavailable: {exc!r}")
-            return payloads
-
-        cat = (category or "").lower()
-        if "sql" in cat:
-            mut_fn = Mutator.mutate_sql
-        elif "xss" in cat:
-            mut_fn = Mutator.mutate_xss
-        elif "cmd" in cat or "rce" in cat:
-            mut_fn = Mutator.mutate_rce
-        elif "nosql" in cat:
-            mut_fn = Mutator.mutate_nosql
-        else:
-            mut_fn = None
-
         out: List[str] = list(payloads)
         seen: set = set(payloads)
-        # Mutate only the top-N base payloads to bound the explosion.
-        for base in payloads[:25]:
-            if not base:
-                continue
-            try:
-                variants = mut_fn(base, max_variants=12) if mut_fn else []
-            except Exception:
-                variants = []
-            for v in variants:
-                if v and v not in seen:
-                    seen.add(v)
-                    out.append(v)
-        # Always fold in a few famous multi-context polyglots (one-shot bypass).
+        _CAP = 1000
+        # Famous multi-context polyglots first (high-value one-shot bypass) so they
+        # are never crowded out by the mutation cap.
         try:
+            from websecure.core.mutator import Mutator
             for pg in Mutator.mutate_polyglot("", max_variants=6):
                 if pg and pg not in seen:
                     seen.add(pg)
                     out.append(pg)
         except Exception:
             pass
+        # AdaptiveMutationEngine combines the generic tricks (case/comment/whitespace/
+        # URL/double-URL/hex/concat) + UNICODE CONFUSABLES (Cyrillic look-alikes that
+        # visually match but differ at byte level) + the full core.mutator.Mutator
+        # category arsenal — in one call. Strictly richer than calling Mutator alone.
+        try:
+            from websecure.core.waf_bypass import AdaptiveMutationEngine
+            engine = AdaptiveMutationEngine()
+            for base in payloads[:20]:
+                if not base or len(out) >= _CAP:
+                    break
+                try:
+                    variants = engine.mutate(base, category=category)
+                except Exception:
+                    variants = []
+                for v in variants:
+                    if v and v not in seen and len(out) < _CAP:
+                        seen.add(v)
+                        out.append(v)
+        except Exception as exc:
+            self.logger.debug(f"[SmartPayload] AdaptiveMutationEngine unavailable: {exc!r}")
         self.logger.debug(
             f"[SmartPayload] creative WAF-bypass: {len(payloads)} -> {len(out)} payload ({category})"
         )
