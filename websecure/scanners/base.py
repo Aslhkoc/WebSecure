@@ -582,6 +582,14 @@ class BaseScanner:
         1. Checks if we have context for this parameter (from Crawler).
         2. Adjusts payload list based on context.
         3. Uses technology stack if provided.
+
+        Uses the advanced PayloadEngine (v2) rather than the flat wordlist so every
+        scanner gets: the base wordlist + CMS-specific PoCs + score-ranking (highest
+        signal payloads first) and, when a WAF is in play, WAF-bypass MUTATION
+        variants (case/comment/encoding tricks). This is what turns the engine from
+        "generic wordlist spray" into context- and defence-aware attacking. Falls
+        back to the flat wordlist if the engine is unavailable, so detection (and the
+        100%-recall benchmark) never regresses.
         """
         contexts = self.results.get("param_contexts", {})
         ctx_result = contexts.get(param_name)
@@ -589,14 +597,50 @@ class BaseScanner:
         if tech_stack is None:
             tech_stack = set(self.results.get("tech_stack", []))
 
-        payloads = get_payloads(category, tech_tags=tech_stack)
+        payloads: List[str] = []
+        try:
+            from websecure.core.payload_engine import get_payloads_v2
+            waf_present = self._waf_detected()
+            payloads = get_payloads_v2(
+                category,
+                tech_tags=list(tech_stack) if tech_stack else None,
+                apply_mutations=waf_present,   # WAF-bypass variants only when a WAF is detected
+                limit=400 if waf_present else 250,
+            )
+        except Exception as exc:
+            self.logger.debug(f"[SmartPayload] PayloadEngine v2 unavailable, flat list: {exc!r}")
+            payloads = []
+        if not payloads:
+            payloads = get_payloads(category, tech_tags=tech_stack)
 
         if ctx_result and self.debug:
             self.logger.debug(
                 f"[SmartPayload] {param_name} ({ctx_result.context.name}) "
-                f"fetching {category} payloads."
+                f"fetching {category} payloads ({len(payloads)} adet)."
             )
         return payloads
+
+    def _waf_detected(self) -> bool:
+        """Best-effort: has a WAF been fingerprinted / inferred for this target?
+
+        Used to decide whether to spend extra requests on WAF-bypass payload
+        mutations. Conservative — returns False on any uncertainty so non-WAF
+        scans stay fast and low-noise.
+        """
+        try:
+            r = self.results or {}
+            for key in ("waf", "waf_detection", "waf_fingerprint", "waf_detect"):
+                v = r.get(key)
+                if isinstance(v, dict) and (v.get("detected") or v.get("vendor") or v.get("name")):
+                    return True
+                if isinstance(v, list) and any(
+                    isinstance(x, dict) and (x.get("vendor") or x.get("name") or x.get("detected"))
+                    for x in v
+                ):
+                    return True
+            return bool(r.get("waf_present"))
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # prepare_injection (unchanged — used by form submission logic)
