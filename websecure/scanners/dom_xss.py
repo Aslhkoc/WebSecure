@@ -355,20 +355,35 @@ class DOMXSSScanner(BaseScanner):
             if dom_check:
                 return f"DOM context: {dom_check}"
 
-            # Test postMessage injection
-            post_check = await page.evaluate(f"""
-                async () => {{
-                    return new Promise(resolve => {{
-                        let fired = false;
-                        const handler = e => {{ if (String(e.data).includes('{canary}')) fired = true; }};
-                        window.addEventListener('message', handler);
-                        window.postMessage('{canary}', '*');
-                        setTimeout(() => {{ window.removeEventListener('message', handler); resolve(fired); }}, 500);
-                    }});
+            # Test postMessage injection — post the canary, then check whether the
+            # PAGE's OWN handler routes it into a dangerous sink (JS execution via
+            # console, or written into the DOM/innerHTML). Mere receipt of the
+            # message is NOT a vulnerability.
+            #
+            # FALSE-POSITIVE FIX: the old code added its OWN 'message' listener,
+            # posted the canary to the same window, then returned a "High DOM XSS"
+            # whenever that listener fired — which it ALWAYS does on every page
+            # (a window receives messages it posts to itself). That made every
+            # crawled HTML URL a confirmed DOM XSS (e.g. /_next, /auth/reset-password
+            # were both flagged here with identical evidence). It proved nothing
+            # about the page's handling. We now only flag a real sink.
+            await page.evaluate(f"""
+                () => {{ try {{ window.postMessage('{canary}', '*'); }} catch (e) {{}} }}
+            """)
+            await page.wait_for_timeout(400)
+            if console_hits:
+                return f"postMessage -> JS execution: {console_hits[0]}"
+            post_dom = await page.evaluate(f"""
+                () => {{
+                    const canary = '{canary}';
+                    const body = document.body ? document.body.innerHTML : '';
+                    // HIT only if the page's handler wrote our canary INTO the DOM
+                    // (innerHTML sink) — i.e. a real, attacker-controllable sink.
+                    return body.includes(canary) ? 'canary_written_to_dom' : null;
                 }}
             """)
-            if post_check:
-                return "postMessage handler reflects canary"
+            if post_dom:
+                return f"postMessage DOM sink: {post_dom}"
 
         except Exception as exc:
             _logger.debug(f"[DOMXSSScanner] Navigate error on {url}: {exc!r}")

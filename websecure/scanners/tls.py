@@ -455,12 +455,33 @@ class TLSROBOTProber(BaseScanner):
 
     def _probe_timing(self, host: str, port: int) -> Optional[Dict]:
         """
-        Simplified ROBOT timing probe:
-        Send RSA-based ClientHello and measure handshake times.
-        Large variance in timing suggests PKCS1.5 oracle.
+        Heuristic ROBOT timing probe — reports an UNCONFIRMED signal only.
+
+        IMPORTANT: pure TLS-handshake timing variance CANNOT confirm a
+        Bleichenbacher/ROBOT padding oracle. Real detection sends malformed
+        PKCS#1 v1.5 ciphertexts and looks for distinguishable server responses
+        (see the sslyze ScanCommand.ROBOT path below). This heuristic merely
+        flags a *possible* anomaly for manual verification, so it is reported at
+        LOW severity — never Critical.
+
+        The previous rule (``variance = max-min; variance > avg*0.5``) fired on a
+        SINGLE slow handshake out of 5 — a guaranteed false positive on any real
+        network and especially over Tor. We now: (1) skip entirely over Tor/high
+        latency where timing is meaningless, (2) take more samples and trim the
+        single fastest+slowest (outliers), (3) use coefficient of variation
+        (stdev/mean) with a far stricter threshold instead of the outlier-driven
+        range.
         """
+        # Timing is meaningless over an onion circuit — skip rather than FP.
+        try:
+            from websecure.core.http import tor_active as _tor_active
+            if _tor_active():
+                return None
+        except Exception:
+            pass
+        import statistics as _stats
         times = []
-        for i in range(5):
+        for i in range(9):
             t0 = time.time()
             try:
                 ctx = ssl.create_default_context()
@@ -477,24 +498,37 @@ class TLSROBOTProber(BaseScanner):
                     with ctx.wrap_socket(raw, server_hostname=host):
                         times.append(time.time() - t0)
             except Exception:
-                times.append(time.time() - t0)
-        if len(times) < 3:
+                # A failed handshake is not a valid timing sample — skip it
+                # (the old code appended the elapsed time of the failure, which
+                # polluted the variance and helped trigger the false positive).
+                continue
+        if len(times) < 6:
             return None
-        avg = sum(times) / len(times)
-        variance = max(times) - min(times)
-        if variance > avg * 0.5 and avg < 2.0:
+        # Outlier-trim: drop the single fastest and slowest sample so one network
+        # hiccup cannot drive the verdict.
+        trimmed = sorted(times)[1:-1]
+        avg = _stats.fmean(trimmed)
+        stdev = _stats.pstdev(trimmed)
+        cov = (stdev / avg) if avg > 0 else 0.0
+        # Require a genuinely high AND consistent coefficient of variation plus a
+        # meaningful absolute spread — far stricter than the old heuristic.
+        if cov > 0.40 and stdev > 0.05 and avg < 2.0:
             return {
-                "vuln_type": "TLS ROBOT — RSA Padding Oracle (Timing)",
-                "url": f"https://{host}:{port}", "severity": "Critical",
+                "vuln_type": "TLS ROBOT — RSA Padding Oracle (timing anomaly, UNCONFIRMED)",
+                "url": f"https://{host}:{port}", "severity": "Low",
                 "description": (
-                    "High timing variance in RSA TLS handshakes detected. "
-                    "Possible ROBOT (Bleichenbacher) padding oracle. "
-                    "An attacker may decrypt TLS sessions or forge RSA signatures."
+                    "Elevated, consistent RSA TLS handshake timing variance — a "
+                    "POSSIBLE Bleichenbacher/ROBOT padding-oracle signal. Timing "
+                    "alone CANNOT confirm the oracle; verify manually with a PKCS#1 "
+                    "ciphertext oracle test (sslyze --robot / testssl.sh) before "
+                    "treating this as exploitable."
                 ),
                 "evidence": {
                     "avg_ms": round(avg * 1000, 1),
-                    "variance_ms": round(variance * 1000, 1),
-                    "samples": [round(t * 1000, 1) for t in times],
+                    "stdev_ms": round(stdev * 1000, 1),
+                    "cov": round(cov, 3),
+                    "samples_ms": [round(t * 1000, 1) for t in times],
+                    "method": "handshake-timing-heuristic (outlier-trimmed)",
                 },
             }
         return None
@@ -1290,10 +1324,15 @@ class CertificateValidationProber(BaseScanner):
                             "evidence": {"not_after": not_after_str, "host": host},
                         })
                     elif delta.days < 30:
+                        # Near-expiry is an OPERATIONAL notice, not a directly
+                        # exploitable security flaw — 23 days left is ample time to
+                        # renew. Graduate: urgent (<7d) = Medium, otherwise Low.
+                        # (Was a flat Medium, which over-rated a 23-day warning.)
+                        _exp_sev = "Medium" if delta.days < 7 else "Low"
                         findings.append({
                             "vuln_type": "Certificate Expiring Soon",
                             "url": f"https://{host}:{port}",
-                            "severity": "Medium",
+                            "severity": _exp_sev,
                             "description": (
                                 f"TLS certificate expires in {delta.days} days ({not_after_str}). "
                                 "Renew the certificate before expiry to avoid service disruption."

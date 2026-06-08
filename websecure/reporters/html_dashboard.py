@@ -259,6 +259,21 @@ def render_html_dashboard(results: dict) -> str:
             if str(item.get("type") or "").strip().lower() in _proc_noise:
                 continue
 
+            # Drop contentless "ghost" findings: a category marker that leaked into
+            # the findings stream carrying only a type+severity but NO url, NO
+            # evidence, NO description/message and NO count (e.g. the empty
+            # "File Upload" / "GraphQL Attacks" Info entries observed in the wild).
+            # A real finding always has at least a target or some evidence; these
+            # are pure placeholders that inflate the count and clutter the table.
+            _has_substance = bool(
+                item.get("url") or item.get("target") or item.get("host")
+                or item.get("evidence") or item.get("description")
+                or item.get("message") or item.get("payload") or item.get("count")
+                or item.get("port") or item.get("parameter") or item.get("param")
+            )
+            if not _has_substance:
+                continue
+
             # Skip status/meta-only items
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
                 continue
@@ -309,7 +324,11 @@ def render_html_dashboard(results: dict) -> str:
     _dedup_map: dict = {}
     for _f in findings:
         _base = _f["type"].split(" (")[0].strip()
-        _key = (_base, _f["url"], _f["param"])
+        # Normalize URL (strip trailing slash) so the same finding on "host/" and
+        # "host" is not double-counted — e.g. the duplicate "Teknoloji Tespiti —
+        # HSTS, Vercel" rows on https://site/ and https://site.
+        _url_norm = (_f["url"] or "").rstrip("/")
+        _key = (_base, _url_norm, _f["param"])
         _ex = _dedup_map.get(_key)
         if _ex is None:
             _dedup_map[_key] = _f
