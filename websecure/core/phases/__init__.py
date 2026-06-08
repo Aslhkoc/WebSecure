@@ -321,22 +321,81 @@ def _detect_technologies(resp) -> set:
     if "flask" in body and "werkzeug" in body: techs.add("python"); techs.add("flask")
     if "graphql" in body or "/graphql" in body or "graphiql" in body:
         techs.add("graphql")
+    if "apollo" in body or "__apollo_client" in body or "relaystore" in body:
+        techs.add("graphql")
     if "swagger" in body or "openapi" in body:
         techs.add("rest_api")
     if "/api/v" in body or "/api/" in body:
         techs.add("rest_api")
+    # --- WebSocket / realtime signals ---
+    if ("socket.io" in body or "ws://" in body or "wss://" in body
+            or "new websocket(" in body or "websocket(" in body or "sockjs" in body):
+        techs.add("websocket")
 
     # --- Content-type based ---
     ct = headers.get("content-type", "")
     if "application/json" in ct:   techs.add("rest_api")
+    if "application/graphql" in ct: techs.add("graphql")
+    # WebSocket upgrade advertised on the base response
+    if "upgrade" in headers.get("connection", "").lower() and "websocket" in headers.get("upgrade", "").lower():
+        techs.add("websocket")
 
     return techs
 
 
+def _probe_attack_surface(sess, base_url: str) -> set:
+    """
+    Active attack-surface fingerprint — the part a single homepage GET CANNOT see.
+
+    A REST API, a GraphQL endpoint or a WebSocket rarely link themselves from the
+    landing page, so the homepage-only probe used to miss them and the Smart-Tactics
+    tech-triggers (rest_api / graphql / websocket) never fired → tech-gated
+    escalation (CMS/CVE payloads, NoSQL/JWT/GraphQL/WS suites) stayed generic. We
+    now actively knock on a handful of high-signal endpoints. Bounded (short
+    timeouts, all failures swallowed) so it stays a *quick* probe.
+    """
+    found: set = set()
+    try:
+        from urllib.parse import urljoin
+    except Exception:
+        return found
+
+    # --- REST / OpenAPI ---
+    for path in ("/api", "/api/v1", "/api/v2", "/swagger.json", "/openapi.json",
+                 "/v2/api-docs", "/api/swagger.json", "/api-docs", "/rest"):
+        try:
+            r = sess.get(urljoin(base_url, path), timeout=6, allow_redirects=True)
+            if int(getattr(r, "status_code", 0) or 0) >= 500:
+                continue
+            ct = (r.headers.get("content-type", "") or "").lower()
+            snippet = (r.text[:2000] or "").lower()
+            if "json" in ct or "swagger" in snippet or "openapi" in snippet or '"paths"' in snippet:
+                found.add("rest_api")
+                break
+        except Exception as exc:
+            _logger.debug(f"[TechProbe] api probe {path}: {exc!r}")
+
+    # --- GraphQL: POST a tiny introspection query, look for a real GraphQL reply ---
+    for path in ("/graphql", "/api/graphql", "/v1/graphql", "/query", "/graphiql"):
+        try:
+            r = sess.post(urljoin(base_url, path),
+                          json={"query": "{__typename}"}, timeout=6, allow_redirects=True)
+            body = (r.text[:2000] or "").lower()
+            # A GraphQL server answers __typename or returns a GraphQL-style errors array
+            if "__typename" in body or ('"errors"' in body and "graphql" in body) \
+                    or '"data"' in body and "__typename" in body:
+                found.add("graphql")
+                break
+        except Exception as exc:
+            _logger.debug(f"[TechProbe] graphql probe {path}: {exc!r}")
+
+    return found
+
+
 def _quick_tech_probe(ctx) -> set:
     """
-    Makes a fast HEAD/GET to the target and populates ctx.technologies.
-    Called at build_plan() time so _flag(tech_trigger=...) works correctly.
+    Makes a fast GET to the target + active attack-surface probes and populates
+    ctx.technologies. Called at build_plan() time so _flag(tech_trigger=...) works.
     """
     url = getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
     if not url:
@@ -345,9 +404,14 @@ def _quick_tech_probe(ctx) -> set:
     if existing:
         return set(existing)
     try:
-        sess = hardened_session({})
+        sess = getattr(ctx, "session", None) or hardened_session({})
         resp = sess.get(url, timeout=8, allow_redirects=True)
         techs = _detect_technologies(resp)
+        # Active surface probing — makes rest_api/graphql/websocket triggers real.
+        try:
+            techs |= _probe_attack_surface(sess, url)
+        except Exception as exc:
+            _logger.debug(f"[TechProbe] attack-surface probe failed: {exc!r}")
         ctx.technologies = list(techs)
         if techs:
             _logger.info(f"[TechProbe] Detected: {', '.join(sorted(techs))}")
@@ -3086,6 +3150,17 @@ def _offensive_phases(ctx) -> List[Phase]:
     mode = str(getattr(ctx, "mode", getattr(getattr(ctx, "config", {}), "mode", "")).upper())
     if mode in ("AGGRESSIVE","DEEP"):
         base_enabled = True
+    # Max-power / no_timeout (default ON): the smart scan must run the FULL
+    # offensive suite — never silently downgrade to a recon-only pass. An explicit
+    # offensive.enabled=False in config is still honored (handled per-phase by the
+    # user_val check inside _flag), so this only lifts the *implicit* gate.
+    if base_enabled is not True and _get(off, "enabled") is not False:
+        try:
+            from websecure.core.http import no_timeout_enabled as _nt_full
+            if _nt_full():
+                base_enabled = True
+        except Exception:
+            pass
     # [Smart Tactics] "Avcı" Modu ve Derinlemesine Analiz
     detected_techs = getattr(ctx, "technologies", []) or []
     
