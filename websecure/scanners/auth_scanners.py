@@ -646,6 +646,50 @@ class OAuth2AttackSurface(BaseScanner):
         return results
 
     # -- helpers
+    # OAuth/OIDC yanıtlarını ele veren imzalar — bir yolun GERÇEKTEN bir OAuth
+    # authorize/token endpoint'i olduğunu doğrulamak için (yalnız "404 değil" yetmez).
+    _OAUTH_MARKERS = (
+        "error=invalid_request", "unsupported_response_type", "unauthorized_client",
+        "invalid_client", "invalid_grant", "invalid_scope", "redirect_uri",
+        "response_type", "code_challenge", "grant_type", "access_token", "id_token",
+        "authorization_endpoint", "token_endpoint", "well-known/openid",
+    )
+
+    def _looks_like_oauth_endpoint(self, r, path: str) -> bool:
+        """Bir yanıtın gerçekten bir OAuth/OIDC endpoint'inden geldiğini doğrula.
+
+        FP FIX: eski kod "status 404/410 değil" olan HER yolu OAuth endpoint sayıyor,
+        hiçbiri bulunmazsa kök URL'e (`[base]`) düşüyordu. CDN/SPA her yola 200/redirect
+        dönen karekod.com gibi sitelerde bu, sahte OAuth authorize endpoint'leri
+        üretiyor → implicit/PKCE/state kontrolleri jenerik 200/redirect üzerinde
+        çalışıp 3 adet sahte High bulgu çıkarıyordu. Artık pozitif OAuth imzası şart.
+        """
+        # openid-configuration: authorization_endpoint içeren geçerli JSON olmalı
+        if "openid-configuration" in path:
+            try:
+                j = r.json()
+                return isinstance(j, dict) and bool(
+                    j.get("authorization_endpoint") or j.get("token_endpoint")
+                )
+            except Exception:
+                return False
+        try:
+            loc = (r.headers.get("location") or "").lower()
+            body = (getattr(r, "text", "") or "").lower()[:2000]
+        except Exception:
+            return False
+        if any(m in loc for m in self._OAUTH_MARKERS) or any(m in body for m in self._OAUTH_MARKERS):
+            return True
+        # /token endpoint'i çoğu zaman 401 + WWW-Authenticate: Bearer döner
+        try:
+            if int(getattr(r, "status_code", 0)) == 401 and "bearer" in (
+                r.headers.get("www-authenticate", "").lower()
+            ):
+                return True
+        except Exception:
+            pass
+        return False
+
     def _discover_oauth_endpoints(self, base: str) -> List[str]:
         common_paths = [
             "/.well-known/openid-configuration", "/oauth/authorize",
@@ -657,11 +701,14 @@ class OAuth2AttackSurface(BaseScanner):
             url = urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5, allow_redirects=False)
-                if r.status_code not in (404, 410):
+                # FP FIX: yalnız "404 değil" YETMEZ — gerçek OAuth imzası ara.
+                if r.status_code not in (404, 410) and self._looks_like_oauth_endpoint(r, path):
                     found.append(url)
             except Exception as _fix_e:
                 _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
-        return found or [base]
+        # FP FIX: gerçek OAuth endpoint'i bulunamazsa kök URL'e DÜŞME. Aksi halde
+        # implicit/PKCE/state kontrolleri OAuth olmayan kök üzerinde sahte High üretir.
+        return found
 
     def _inject_redirect_uri(self, endpoint: str, bypass: str) -> str:
         parsed = urlparse(endpoint)
@@ -686,8 +733,14 @@ class OAuth2AttackSurface(BaseScanner):
             no_state_url = self._inject_redirect_uri(endpoint, "https://legit.example.com/cb")
             r1 = self.session.get(no_state_url, timeout=8, allow_redirects=False)
             loc = r1.headers.get("location", "")
-            # If no 'state' mismatch error and redirected = potential CSRF
-            if r1.status_code in (301, 302, 303, 307, 308) and "state" not in loc.lower():
+            _loc_l = loc.lower()
+            # FP FIX: "30x + Location'da state yok" tek başına CSRF kanıtı DEĞİL — her
+            # CDN/SPA redirect'i bunu sağlar. Gerçek kanıt: authorize endpoint state
+            # OLMADAN bizim redirect_uri'mize bir authorization yanıtı (code=/error=)
+            # döndürmesidir. Location gerçekten enjekte ettiğimiz redirect_uri'ye
+            # (legit.example.com) ya da bir auth-code/error'a gitmeli.
+            if (r1.status_code in (301, 302, 303, 307, 308) and "state" not in _loc_l
+                    and ("legit.example.com" in _loc_l or "code=" in _loc_l or "error=" in _loc_l)):
                 return {
                     "vuln_type": "OAuth2 State CSRF — missing state",
                     "url": no_state_url, "severity": "High",
@@ -827,9 +880,12 @@ class OAuth2AttackSurface(BaseScanner):
             test_url = urlunparse(parsed._replace(query=urlencode(qs)))
             r = self.session.get(test_url, timeout=8, verify=False, allow_redirects=False)
             loc = r.headers.get("location", "")
-            # If redirected with access_token in fragment → implicit flow confirmed
-            if "access_token" in loc or r.status_code in (200, 302, 303):
-                if "error" not in loc.lower() and "unsupported_response_type" not in loc.lower():
+            # FP FIX: implicit flow KANITI = redirect Location'da gerçek access_token
+            # (#access_token=…) olmasıdır. Eski koşul `... or r.status_code in (200,302,303)`
+            # jenerik bir 200/redirect'i bile "implicit kabul edildi" sayıyordu → OAuth
+            # olmayan kökte sahte High. Artık yalnız access_token artefaktı kabul edilir.
+            if "access_token" in loc.lower() and "error" not in loc.lower():
+                if "unsupported_response_type" not in loc.lower():
                     return {
                         "vuln_type": "OAuth2 Implicit Flow Accepted",
                         "url": test_url, "severity": "High",
@@ -864,11 +920,15 @@ class OAuth2AttackSurface(BaseScanner):
             r = self.session.get(test_url, timeout=8, verify=False, allow_redirects=False)
             loc = r.headers.get("location", "")
             body = (r.text or "").lower()
-            # Server should reject with error=invalid_request + code_challenge_required
-            if r.status_code in (200, 302, 303) and "code_challenge" not in body and "pkce" not in body:
-                if "error" not in loc.lower():
-                    return {
-                        "vuln_type": "OAuth2 PKCE Downgrade — code_challenge Not Enforced",
+            # FP FIX: gerçek PKCE downgrade KANITI = authorize endpoint'in PKCE
+            # code_challenge OLMADAN bir authorization CODE vermesidir (Location'da
+            # `code=`). Eski koşul yalnız "200/redirect + body'de code_challenge yok"
+            # idi → OAuth olmayan herhangi bir 200 sayfası sahte High üretiyordu.
+            # Artık Location'da gerçekten `code=` (verilmiş yetki kodu) aranır.
+            if "code=" in loc.lower() and "error" not in loc.lower() \
+                    and "code_challenge" not in body and "pkce" not in body:
+                return {
+                    "vuln_type": "OAuth2 PKCE Downgrade — code_challenge Not Enforced",
                         "url": test_url, "severity": "High",
                         "description": (
                             "Authorization endpoint accepted a request without PKCE code_challenge. "

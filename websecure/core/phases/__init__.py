@@ -3827,9 +3827,30 @@ def run_portscan(ctx):
                 "detail": {"raw": scripts["http-server-header"]},
             })
 
-        # Genel zafiyet keyword'u taşıyan scriptleri vulnerability bucket'ına ekle
+        # NSE script çıktısında GERÇEK zafiyet sinyali taşıyanları vulnerability'e ekle.
+        # B1/B3 FIX (FP): eski kod "vuln" SUBSTRING'ini arıyordu → http-xssed'in benign
+        # çıktısı "No previously reported XSS vuln." içinde "vuln" geçtiği için HIGH
+        # false-positive üretiyordu (kanıt "zafiyet YOK" diyor, severity HIGH diyordu).
+        # Artık: (a) negatif/benign çıktıları ele, (b) yalnız nmap'in standart vuln
+        # state'i olan TAM KELİME "vulnerable" (NOT VULNERABLE hariç) ya da gerçek bir
+        # CVE-id (cve-YYYY-NNNN) sinyalini zafiyet say. Bilgilendirici scriptler
+        # (http-xssed/http-title/...) artık yanlış alarm üretmez.
+        _NSE_BENIGN = (
+            "not vulnerable", "no previously reported", "couldn't find",
+            "could not find", "no relevant", "no findings", "no cve",
+            "none found", "no xss", "0 vulnerabilities",
+        )
         for script_id, script_out in scripts.items():
-            if script_out and any(kw in script_out.lower() for kw in ("vuln", "vulnerable", "cve-", "exploit")):
+            if not script_out:
+                continue
+            _low = script_out.lower()
+            if any(_neg in _low for _neg in _NSE_BENIGN):
+                continue
+            _is_vuln = bool(
+                (re.search(r"\bvulnerable\b", _low) and "not vulnerable" not in _low)
+                or re.search(r"cve-\d{4}-\d{3,}", _low)
+            )
+            if _is_vuln:
                 add_result("vulnerability", {
                     "severity": "High", "type": f"NSE: {script_id}",
                     "tool": "nmap-nse", "script": script_id,
