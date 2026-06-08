@@ -2346,14 +2346,20 @@ def _run_scan_phases(
         _run_sqli = _opt_import('websecure.scanners.sqli', 'run')
         if callable(_run_sqli) and (cfg.get("scanners") or {}).get("sqli"):
             print(f"[•] SQL Enjeksiyon taraması (Robust) - {len(merged_eps)} hedefe...")
-            # Note: sqli.run takes (url, session, debug) where url can be a list
-            _safe_call(_run_sqli, merged_eps, session=session, debug=debug)
+            # Note: sqli.run takes (url, session, results, debug) where url can be a list.
+            # results MUST be passed so the scanner can read forms_meta and fuzz the
+            # discovered login/register/payment FORM fields (name/email/password/card)
+            # via POST/JSON — without it self.results is empty and scan_forms is a no-op
+            # (only URL-query params got tested → the "input fields untested" gap).
+            _safe_call(_run_sqli, merged_eps, session=session, results=results, debug=debug)
 
         # 4. Reflected XSS (New Robust Module)
         _run_xss = _opt_import('websecure.scanners.xss', 'run')
         if callable(_run_xss) and (cfg.get("scanners") or {}).get("xss"):
             print(f"[•] XSS taraması (Reflected) - {len(merged_eps)} hedefe...")
-            _safe_call(_run_xss, merged_eps, session=session, debug=debug)
+            # results MUST be passed (forms_meta) so XSS also fuzzes form fields, not
+            # just URL-query params (see SQLi note above).
+            _safe_call(_run_xss, merged_eps, session=session, results=results, debug=debug)
 
         # 5. CSRF (New Module)
         if csrf and (cfg.get("scanners") or {}).get("csrf"):
