@@ -55,6 +55,52 @@ def is_open(host: str, port: int, timeout: float = 0.4) -> bool:
 
 ACTIVE_PHASE = contextvars.ContextVar("ACTIVE_PHASE", default="discovery")
 
+# ---- Last HTTP exchange capture (per-finding request/response evidence) -------
+# Every request through _smart_request records a compact snapshot here, scoped to
+# the current thread / async context. scanners/base.report_finding() then attaches
+# it to a finding so the report can show, for each vuln: the exact payload, WHERE
+# it was injected, and the response that came back ("şu payload şu kısma uygulandı
+# şu cevap geldi"). Snapshot is intentionally small (2 KB body snippet).
+_LAST_EXCHANGE = contextvars.ContextVar("_LAST_EXCHANGE", default=None)
+
+
+def get_last_exchange():
+    """Most recent HTTP exchange snapshot for the current context (or None)."""
+    return _LAST_EXCHANGE.get()
+
+
+def _record_exchange(method, url, kwargs, resp, elapsed_ms) -> None:
+    """Store a compact snapshot of the just-completed request/response. Never raises."""
+    try:
+        _hdrs = {}
+        _rh = getattr(resp, "headers", {}) or {}
+        for _h in ("Content-Type", "Server", "Content-Length", "Location",
+                   "Set-Cookie", "WWW-Authenticate", "X-Powered-By"):
+            try:
+                _v = _rh.get(_h)
+            except Exception:
+                _v = None
+            if _v:
+                _hdrs[_h] = str(_v)[:300]
+        try:
+            _body = resp.text or ""
+        except Exception:
+            _body = ""
+        _params = kwargs.get("params")
+        _data = kwargs.get("data")
+        _LAST_EXCHANGE.set({
+            "method": str(method).upper(),
+            "url": url,
+            "status": int(getattr(resp, "status_code", 0) or 0),
+            "elapsed_ms": int(elapsed_ms),
+            "req_params": dict(_params) if isinstance(_params, dict) else {},
+            "req_data": _data if isinstance(_data, (dict, str)) else None,
+            "resp_headers": _hdrs,
+            "resp_snippet": _body[:2048],
+        })
+    except Exception:
+        pass
+
 # ---- Abandoned-phase cooperative cancellation ----------------------------
 # A phase that exceeds its watchdog timeout is logged as "skipped", but Python
 # cannot force-kill its daemon thread — so the thread KEEPS issuing throttled
@@ -499,6 +545,9 @@ def _smart_request(self, method, url, **kwargs):
                 kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
+            # Capture this exchange so a finding reported right after can show the
+            # exact response that came back (per-finding exploit evidence).
+            _record_exchange(method, url, kwargs, resp, (time.monotonic() - _req_t0) * 1000)
 
             # Metrics wiring FIX: scanner'ların (Tor dahil) kullandığı bu hardened
             # session wrapper, isteği canlı monitöre (log_request) yazıyordu ama

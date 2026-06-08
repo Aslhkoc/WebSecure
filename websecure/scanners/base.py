@@ -258,11 +258,99 @@ class BaseScanner:
         if extra:
             entry.update(extra)
 
+        # Per-finding exploit evidence — attach exactly WHAT was sent (payload +
+        # injection point, reconstructed) and WHAT came back (captured response).
+        # Centralised here so every scanner gets it without per-scanner changes.
+        self._attach_exchange_evidence(entry, resolved_type, url, param, payload)
+
         self.add("offensive", entry)
         self.logger.warning(
             f"[{self.name.upper()}] {resolved_type} FOUND: {url} [{entry['severity']}]"
             + (f" (param={param})" if param else "")
         )
+
+    # ------------------------------------------------------------------
+    # Per-finding exploit evidence (request sent + response received)
+    # ------------------------------------------------------------------
+
+    def _attach_exchange_evidence(self, entry: Dict[str, Any], vuln_type: str,
+                                  url: str, param: str, payload: str) -> None:
+        """
+        Attach human-readable request/response evidence to a finding so the report
+        can show exactly what the scanner did. Best-effort; never raises.
+
+          • ``request``  — reconstructed from the known injection point (method,
+                           url, param, payload). Always deterministic.
+          • ``response`` — the most recent HTTP exchange captured for this thread
+                           (status + headers + body snippet), but only attached if
+                           it actually corresponds to this finding (same endpoint
+                           or the payload is visible in it) so we never show a
+                           misleading baseline response.
+
+        Existing request/response/raw_* fields a scanner already set are preserved.
+        """
+        try:
+            method = str(entry.get("method") or "GET").upper()
+            if not entry.get("request") and not entry.get("raw_request"):
+                entry["request"] = self._reconstruct_request(method, url, param, payload)
+
+            if not entry.get("response") and not entry.get("raw_response"):
+                try:
+                    from ..core.http import get_last_exchange
+                    ex = get_last_exchange()
+                except Exception:
+                    ex = None
+                if isinstance(ex, dict):
+                    same_endpoint = False
+                    try:
+                        fp, ep = urlparse(url), urlparse(str(ex.get("url", "")))
+                        same_endpoint = (fp.netloc == ep.netloc and fp.path == ep.path)
+                    except Exception:
+                        same_endpoint = False
+                    payload_seen = bool(payload) and (
+                        payload in str(ex.get("url", ""))
+                        or payload in str(ex.get("req_params", ""))
+                        or payload in str(ex.get("req_data", ""))
+                    )
+                    if same_endpoint or payload_seen:
+                        entry["response"] = self._format_response(ex)
+                        entry.setdefault("http_status", ex.get("status"))
+        except Exception as exc:  # evidence is best-effort, never break reporting
+            self.logger.debug(f"[{self.name}] exchange evidence attach failed: {exc!r}")
+
+    @staticmethod
+    def _reconstruct_request(method: str, url: str, param: str, payload: str) -> str:
+        """Build a readable HTTP request showing the exact injection point."""
+        try:
+            p = urlparse(url)
+        except Exception:
+            return f"{method} {url}"
+        path = p.path or "/"
+        query = f"?{p.query}" if p.query else ""
+        lines = [f"{method} {path}{query} HTTP/1.1"]
+        if p.netloc:
+            lines.append(f"Host: {p.netloc}")
+        if param and payload:
+            lines.append("")
+            lines.append(f"[*] Enjeksiyon noktası: parametre '{param}'")
+            lines.append(f"[*] Gönderilen payload: {payload}")
+        elif payload:
+            lines.append("")
+            lines.append(f"[*] Gönderilen payload: {payload}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_response(ex: Dict[str, Any]) -> str:
+        """Format a captured exchange snapshot into a readable response block."""
+        lines = [f"HTTP {ex.get('status', '?')}  ({ex.get('elapsed_ms', '?')} ms)"]
+        for k, v in (ex.get("resp_headers") or {}).items():
+            lines.append(f"{k}: {v}")
+        snippet = (ex.get("resp_snippet") or "").strip()
+        if snippet:
+            lines.append("")
+            lines.append("--- Yanıt gövdesi (ilk 2KB) ---")
+            lines.append(snippet)
+        return "\n".join(lines)
 
     def verify_finding(
         self,
