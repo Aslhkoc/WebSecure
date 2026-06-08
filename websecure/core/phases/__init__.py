@@ -2689,11 +2689,18 @@ def _runner_verify_and_score(ctx) -> None:
                     f"[phases] Korelasyon: {len(matches)} zincir tespit edildi — "
                     + ", ".join(report.get("chains", []))
                 )
-                # Kritik zincirleri offensive bucket'a da ekle
+                # Kritik zincirleri offensive bucket'a da ekle.
+                # B3 FIX: url alanı yoktu → raporda `url=-` hayalet/placeholder bulgu
+                # gibi görünüyordu. Korelasyon hedefin kendisiyle ilgili olduğundan
+                # taban URL'i ekle (boşsa zincirdeki bulgu URL'lerinden ilkini kullan).
+                _chain_url = (getattr(ctx, "url", None) or getattr(ctx, "base_url", None)
+                              or getattr(ctx, "target", None) or "")
                 for m in matches:
+                    _m_url = _chain_url or getattr(m, "url", "") or ""
                     add_result("offensive", {
                         "type": "Exploit Chain",
                         "severity": "High",
+                        "url": _m_url,
                         "chain": m.chain_name,
                         "confidence": m.confidence,
                         "description": m.description,
