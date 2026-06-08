@@ -706,19 +706,41 @@ class BaseScanner:
         # visually match but differ at byte level) + the full core.mutator.Mutator
         # category arsenal — in one call. Strictly richer than calling Mutator alone.
         try:
-            from websecure.core.waf_bypass import AdaptiveMutationEngine
+            from websecure.core.waf_bypass import (
+                AdaptiveMutationEngine,
+                classify_bypass_strategy as _cbs,
+                get_global_scorer as _ggs,
+            )
             engine = AdaptiveMutationEngine()
+            # Generate variants, grouped by evasion strategy.
+            groups: Dict[str, List[str]] = {}
             for base in payloads[:20]:
-                if not base or len(out) >= _CAP:
-                    break
+                if not base:
+                    continue
                 try:
                     variants = engine.mutate(base, category=category)
                 except Exception:
                     variants = []
                 for v in variants:
-                    if v and v not in seen and len(out) < _CAP:
-                        seen.add(v)
-                        out.append(v)
+                    if not v or v in seen:
+                        continue
+                    seen.add(v)
+                    groups.setdefault(_cbs(v) or "_plain", []).append(v)
+            # ML-scorer ordering: evasions that have actually been getting THROUGH
+            # this target's WAF (epsilon-greedy, learned live from 403/200 outcomes)
+            # are emitted first → with stop-on-first probing the working bypass is
+            # found sooner and the scorer keeps adapting.
+            strat_names = [s for s in groups if s != "_plain"]
+            try:
+                ranked = _ggs().rank_strategies(strat_names)
+            except Exception:
+                ranked = strat_names
+            ordered = ranked + [s for s in groups if s not in ranked]
+            for strat in ordered:
+                for v in groups.get(strat, []):
+                    if len(out) >= _CAP:
+                        break
+                    out.append(v)
         except Exception as exc:
             self.logger.debug(f"[SmartPayload] AdaptiveMutationEngine unavailable: {exc!r}")
         self.logger.debug(

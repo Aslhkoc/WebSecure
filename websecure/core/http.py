@@ -98,6 +98,31 @@ def _record_exchange(method, url, kwargs, resp, elapsed_ms) -> None:
             "resp_headers": _hdrs,
             "resp_snippet": _body[:2048],
         })
+        # Feed the WAF-bypass ML scorer: if this request carried a creative bypass
+        # payload, learn whether it got through (200) or was blocked (403/406/429…)
+        # so later requests prioritise the evasions that work on THIS target's WAF.
+        try:
+            _txt = url
+            _p = kwargs.get("params")
+            _d = kwargs.get("data")
+            if _p:
+                _txt += " " + str(_p)
+            if _d:
+                _txt += " " + str(_d)
+            from websecure.core.waf_bypass import (
+                classify_bypass_strategy as _cbs,
+                get_global_scorer as _ggs,
+                WAF_BLOCK_STATUS as _WBS,
+            )
+            _strat = _cbs(_txt)
+            if _strat:
+                _st = int(getattr(resp, "status_code", 0) or 0)
+                _ggs().record_attempt(
+                    _strat, blocked=(_st in _WBS),
+                    status_code=_st, response_time_ms=float(elapsed_ms),
+                )
+        except Exception:
+            pass
     except Exception:
         pass
 

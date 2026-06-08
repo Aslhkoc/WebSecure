@@ -2299,6 +2299,59 @@ def get_global_scorer() -> WAFBypassMLScorer:
     return _GLOBAL_ML_SCORER
 
 
+# Status codes that indicate the WAF blocked the request (feeds the scorer).
+WAF_BLOCK_STATUS = (403, 406, 419, 429, 501, 503)
+
+
+def classify_bypass_strategy(text):
+    """
+    Identify which WAF-bypass evasion family a payload uses, from its surface form.
+
+    Returns a strategy name (str) or None for a plain / un-mutated payload. Pure
+    cheap substring checks so it can run on the request hot path. Used on BOTH
+    sides of the online-learning loop:
+      • LEARN  — http._record_exchange classifies each outgoing payload and feeds
+                 block/success to the global WAFBypassMLScorer.
+      • USE    — scanners.base._apply_creative_waf_bypass orders creative variants
+                 by the scorer's ranking so the strategies that actually get
+                 through THIS target's WAF are tried first.
+    Most-distinctive signatures are checked first (first match wins).
+    """
+    if not text:
+        return None
+    t = str(text)
+    tl = t.lower()
+    # Cyrillic / confusable look-alike letters (а е о і ѕ с р х …)
+    if any(ch in t for ch in ("а", "е", "о", "і", "ѕ",
+                              "ӏ", "с", "р", "х")):
+        return "cyrillic_confusable"
+    # Fullwidth ASCII (U+FF01..U+FF5E)
+    if any("！" <= ch <= "～" for ch in t):
+        return "fullwidth"
+    # Double URL-encoding (%25XX)
+    if "%25" in t:
+        return "double_url_encode"
+    # Inline SQL/comment injection
+    if "/**/" in t or "/*!" in t:
+        return "comment_injection"
+    # Null byte
+    if "%00" in t or "\x00" in t:
+        return "nullbyte"
+    # Polyglot signatures
+    if "</script><xss>" in tl or "javascript://%250a" in tl:
+        return "polyglot"
+    # Whitespace substitution / bash IFS
+    if "%09" in tl or "%0a" in tl or "%0d" in tl or "${ifs}" in tl:
+        return "whitespace_sub"
+    # HTML entity encoding
+    if "&#" in t or "&colon;" in tl:
+        return "html_entity"
+    # Plain URL-encoding of dangerous chars
+    if "%3c" in tl or "%3e" in tl or "%27" in t or "%22" in t:
+        return "url_encode"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # AdaptiveMutationEngine — payload mutation on 403/429 response
 # ---------------------------------------------------------------------------
