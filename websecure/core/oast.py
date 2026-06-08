@@ -573,6 +573,52 @@ def run_oast_on_target(
                     attempted.append({"url": url, "param": k, "injected": val, "oast_token": tok})
                 except Exception as exc:
                     _logger.debug("[oast] Suppressed exception: %r", exc)
+
+        # --- CVE PoC OOB payloads (Log4Shell / Shellshock / ...) ----------------
+        # Wire the previously-orphaned CVEPayloadMap into the OOB correlation: give
+        # each OOB-capable CVE its OWN token, substitute the token's callback host
+        # into the PoC, and fire it via the CVE's natural injection points (headers
+        # like User-Agent/X-Forwarded-For for Log4Shell/Shellshock + a query param).
+        # Only payloads that actually carry our callback after substitution are kept
+        # (path-traversal / reverse-shell PoCs that can't produce an OOB hit are
+        # skipped), so a callback on a CVE token is a near-zero-FP, OOB-CONFIRMED
+        # critical finding. The existing poll+correlate block below handles the hit.
+        try:
+            from websecure.core.payload_engine import CVEPayloadMap as _CVEMap
+            _cmap = _CVEMap()
+            _root = (getattr(cfg, "root_domain", "") or "").strip(".")
+            for _cve_id in _cmap.list_cves():
+                _info = _cmap.get_info(_cve_id) or {}
+                _cve_tok = await client.new_token()
+                _cb_host = (f"{_cve_tok}.{_root}" if _root else _cve_tok)
+                _plds = [p for p in _cmap.get_payloads(_cve_id, callback_url=_cb_host)
+                         if _cb_host in p]   # keep only OOB-detectable (callback present)
+                if not _plds:
+                    continue
+                tokens.append(_cve_tok)
+                _name = _info.get("name", _cve_id)
+                _sev = _info.get("severity", "Critical")
+                _hdrs = _info.get("headers") or []
+                _label = f"{_cve_id} {_name} (OOB confirmed)"
+                for _pl in _plds[:3]:
+                    for _h in _hdrs[:4]:
+                        try:
+                            _effective_session.get(url, headers={_h: _pl}, timeout=6, verify=True)
+                            attempted.append({"url": url, "param": f"header:{_h}", "injected": _pl,
+                                              "oast_token": _cve_tok, "label": _label,
+                                              "severity": _sev, "cve": _cve_id})
+                        except Exception as _e:
+                            _logger.debug("[oast] CVE header inject: %r", _e)
+                    try:
+                        _k = params[0] if params else "q"
+                        _effective_session.get(inject_query(url, _k, _pl), timeout=6, verify=True)
+                        attempted.append({"url": url, "param": _k, "injected": _pl,
+                                          "oast_token": _cve_tok, "label": _label,
+                                          "severity": _sev, "cve": _cve_id})
+                    except Exception as _e:
+                        _logger.debug("[oast] CVE param inject: %r", _e)
+        except Exception as _e:
+            _logger.debug("[oast] CVE OOB injection skipped: %r", _e)
     
     # Run async injection sync
     with ThreadPoolExecutor(max_workers=1) as ex:
@@ -593,10 +639,18 @@ def run_oast_on_target(
     # Correlate
     results = []
     found_tokens = {str(ev.get("token")): ev for ev in found}
+    _seen_cve_tokens: set = set()   # report each CVE (one token) once, not per inject point
     for att in attempted:
         tok = att["oast_token"]
         ev = found_tokens.get(tok)
         if ev:
+            # A CVE token bundles several inject points (headers + param) under one
+            # token; a single callback confirms the CVE — emit it once.
+            _cve = att.get("cve")
+            if _cve:
+                if tok in _seen_cve_tokens:
+                    continue
+                _seen_cve_tokens.add(tok)
             # Determine confidence based on how the token was matched
             ev_token = str(
                 ev.get("token") or ev.get("unique-id") or ev.get("unique_id") or ""
@@ -611,17 +665,20 @@ def run_oast_on_target(
                 else "Probable" if confidence >= 0.6
                 else "Possible"
             )
-            results.append({
-                "type": "OAST",
-                "severity": "High",
+            _res = {
+                "type": att.get("label") or "OAST",
+                "severity": att.get("severity") or "High",
                 "url": att["url"],
                 "param": att["param"],
                 "injected": att["injected"],
                 "details": ev,
                 "confidence": confidence,
                 "confidence_label": confidence_label,
-            })
-            
+            }
+            if _cve:
+                _res["cve"] = _cve
+            results.append(_res)
+
     if report_cb:
         for r in results: report_cb(r)
 
