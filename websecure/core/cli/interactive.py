@@ -101,6 +101,20 @@ def setup_tor(cfg: dict, args: Namespace) -> None:
             cfg.setdefault("privacy", {}).setdefault("tor", {})["enabled"] = True
             cfg["privacy"]["tor"]["socks_url"] = _socks
             cfg["_tor_proxy"] = _socks
+            # Tor is slow (onion latency) and target WAFs answer payloads with 403.
+            # Flag Tor active so the HTTP layer raises its per-request timeout floor
+            # and the circuit breaker switches to tolerant thresholds — otherwise a
+            # 4-5s read timeout + 50 % 403 ratio aborts whole phases on every run.
+            try:
+                from websecure.core.http import set_power_flags
+                set_power_flags(tor_active=True)
+            except Exception:
+                pass
+            try:
+                from websecure.core.circuit_breaker import reset_circuit_breaker
+                reset_circuit_breaker()  # cfg=None → picks up tolerant env defaults
+            except Exception:
+                pass
             print(f"  [+] Tor aktif: {_socks}")
             print("  [+] Python HTTP trafiği + SQLMap, FFUF, Nuclei, Katana -> Tor (gercek IP gizli).")
             print("  [!] ISTISNA — NMAP: Port taramasi raw-socket/dogrudan TCP kullanir.")

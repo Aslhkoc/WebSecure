@@ -37,6 +37,8 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
+    no_timeout_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -451,7 +453,7 @@ def _run_nmap(binary: str, args: List[str], target: str,
         stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
         stderr_thread.start()
 
-        deadline = time.monotonic() + timeout
+        deadline = float("inf") if no_timeout_mode() else (time.monotonic() + timeout)
         try:
             for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()

@@ -34,6 +34,8 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
+    no_timeout_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,7 +217,7 @@ class KatanaWrapper(ToolIntegration):
             timed_out = False
             stderr_b = b""
             try:
-                _, stderr_b = proc.communicate(timeout=self.crawl_duration_s)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(self.crawl_duration_s))
             except subprocess.TimeoutExpired:
                 timed_out = True
                 logger.warning(
@@ -305,8 +307,10 @@ class KatanaWrapper(ToolIntegration):
         ]
 
         # Katana'nın kendi toplam süre limitini ekle — graceful exit sağlar
-        # subprocess timeout'dan 5s önce katana'nın kendisi durur
-        ct_seconds = max(10, self.crawl_duration_s - 5)
+        # subprocess timeout'dan 5s önce katana'nın kendisi durur.
+        # Max-power modunda crawl süresi sınırı kaldırılır (24s = effektif sınırsız);
+        # katana site keşfini tamamen tüketene kadar tarar, süreyle kesilmez.
+        ct_seconds = 86400 if no_timeout_mode() else max(10, self.crawl_duration_s - 5)
         _supported = self._get_supported_flags()
 
         # -ct / -crawl-duration — toplam tarama süresi sınırı (en kritik fix)

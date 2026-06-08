@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import os
 import time
 import random
 import contextvars
@@ -86,6 +87,89 @@ def is_phase_abandoned(name: Optional[str] = None) -> bool:
     with _ABANDONED_LOCK:
         return nm in _ABANDONED_PHASES
 
+
+# ---------------------------------------------------------------------------
+# Global "max power" / timeout-free runtime flags
+# ---------------------------------------------------------------------------
+# Set once at scan startup from config (settings.no_timeout) and from the
+# interactive Tor setup. Two orthogonal switches:
+#
+#   • no_timeout  — disable the per-phase watchdog skip, the global scan
+#                   deadline, and every external-tool subprocess timeout, so
+#                   NOTHING is skipped just because it ran long. Ctrl+C remains
+#                   the single cooperative stop signal.
+#   • tor_active  — SOCKS/Tor egress is in use. The onion circuit adds seconds
+#                   of latency, so a 4-5s read timeout (passed by individual
+#                   probes) guarantees a flood of ReadTimeoutError → the circuit
+#                   breaker trips → whole phases abort early. When Tor is active
+#                   we raise every per-request timeout to a sane floor.
+#
+# Modules that live in separate import graphs (integrations/*, circuit_breaker)
+# read the mirror env vars instead of importing this module (avoids cycles).
+_NO_TIMEOUT: bool = False
+_TOR_ACTIVE: bool = False
+# (connect, read) seconds enforced as a MINIMUM when Tor is active.
+_TOR_TIMEOUT_FLOOR: tuple[float, float] = (20.0, 45.0)
+
+
+def set_power_flags(no_timeout: Optional[bool] = None,
+                    tor_active: Optional[bool] = None,
+                    tor_floor: Optional[tuple] = None) -> None:
+    """Update the process-global power flags. Mirrors to env for cross-module use."""
+    global _NO_TIMEOUT, _TOR_ACTIVE, _TOR_TIMEOUT_FLOOR
+    if no_timeout is not None:
+        _NO_TIMEOUT = bool(no_timeout)
+        os.environ["WEBSECURE_NO_TIMEOUT"] = "1" if _NO_TIMEOUT else "0"
+    if tor_active is not None:
+        _TOR_ACTIVE = bool(tor_active)
+        os.environ["WEBSECURE_TOR_ACTIVE"] = "1" if _TOR_ACTIVE else "0"
+    if tor_floor is not None and isinstance(tor_floor, (tuple, list)) and len(tor_floor) == 2:
+        try:
+            _TOR_TIMEOUT_FLOOR = (float(tor_floor[0]), float(tor_floor[1]))
+        except (TypeError, ValueError):
+            pass
+
+
+def no_timeout_enabled() -> bool:
+    """True when the scan is running in timeout-free 'max power' mode."""
+    return _NO_TIMEOUT or os.environ.get("WEBSECURE_NO_TIMEOUT") == "1"
+
+
+def tor_active() -> bool:
+    """True when SOCKS/Tor egress is active for this scan."""
+    return _TOR_ACTIVE or os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
+
+
+def _floor_request_timeout(timeout):
+    """
+    Raise a too-small per-request timeout to the Tor floor when Tor is active.
+
+    Accepts the same shapes ``requests``/``httpx`` accept: ``None`` (no timeout),
+    a scalar, or a ``(connect, read)`` pair — and returns the same shape so it is
+    a drop-in for the ``timeout`` kwarg. A no-op when Tor is not active, so
+    direct-connection scans keep their original (tight, fast) timeouts.
+    """
+    if not _TOR_ACTIVE:
+        return timeout
+    cmin, rmin = _TOR_TIMEOUT_FLOOR
+    if timeout is None:
+        # No explicit timeout: impose the floor so a stuck onion circuit cannot
+        # hang forever, but stay generous.
+        return (cmin, rmin)
+    if isinstance(timeout, (tuple, list)) and len(timeout) == 2:
+        c, r = timeout
+        try:
+            c = max(float(c), cmin) if c else cmin
+            r = max(float(r), rmin) if r else rmin
+            return (c, r)
+        except (TypeError, ValueError):
+            return (cmin, rmin)
+    try:
+        return max(float(timeout), rmin)
+    except (TypeError, ValueError):
+        return (cmin, rmin)
+
+
 _IDENTITY_POOLS = {
     "user_agents": [],
     "accept_language": [],
@@ -159,6 +243,22 @@ def install_http_phase_policies(cfg: dict) -> None:
     for k in _HTTP_POLICY["idempotent_first"].keys():
         if k in idem:
             _HTTP_POLICY["idempotent_first"][k] = idem[k]
+
+    # Max-power / timeout-free mode (settings.no_timeout, default ON): disables the
+    # per-phase watchdog skip, the global scan deadline and every external-tool
+    # subprocess timeout so no work is skipped for running long. Tor activeness is
+    # normally wired by the interactive setup_tor() (which runs AFTER this call),
+    # but if Tor is already pinned in config we honor it here too.
+    _settings = cfg.get("settings", {}) if isinstance(cfg, dict) else {}
+    _floor = _settings.get("tor_timeout_floor")
+    _tor_pinned = bool(cfg.get("_tor_proxy")) or bool(
+        ((cfg.get("privacy") or {}).get("tor") or {}).get("enabled")
+    )
+    set_power_flags(
+        no_timeout=bool(_settings.get("no_timeout", True)),
+        tor_active=True if _tor_pinned else None,
+        tor_floor=tuple(_floor) if isinstance(_floor, (list, tuple)) and len(_floor) == 2 else None,
+    )
 
 # Gerçekçi tarayıcı kimliği fallback'i — config http.identity_pools BOŞ olduğunda
 # kullanılır. Eskiden çıplak "Mozilla/5.0" + Accept "*/*" gönderiliyordu; bu
@@ -392,6 +492,11 @@ def _smart_request(self, method, url, **kwargs):
                 _logger.debug(f"[HTTP] Live monitor log_request failed: {exc!r}")
 
             _req_t0 = time.monotonic()
+            # Tor floor: a 4-5s read timeout over an onion circuit is a guaranteed
+            # ReadTimeoutError → circuit-breaker trip → whole phase aborts. Raise
+            # any too-tight per-request timeout to the floor (no-op off Tor).
+            if _TOR_ACTIVE:
+                kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
 
@@ -1197,6 +1302,8 @@ class _RequestsDriver:
 
         kw.pop("verify", None)
         kw.setdefault("timeout", self.timeout_pair)
+        if _TOR_ACTIVE:
+            kw["timeout"] = _floor_request_timeout(kw.get("timeout"))
         headers = dict(kw.pop("headers", {}) or {})
         for k, v in self._default_headers.items():
             headers.setdefault(k, v)
@@ -2250,6 +2357,8 @@ class AntiBlockingHTTP:
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
         self.rl.acquire()
         self._sleep_policy(method)
+        if _TOR_ACTIVE:
+            kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
         t0 = time.monotonic()
         resp = self.s.request(method=method, url=url, **kwargs)
         rt_ms = int((time.monotonic() - t0)*1000)

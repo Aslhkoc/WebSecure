@@ -31,6 +31,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,7 @@ class DalfoxWrapper(ToolIntegration):
             if _register_cp:
                 _register_cp(proc)
             try:
-                _, stderr_b = proc.communicate(timeout=_timeout_df)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(_timeout_df))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
@@ -339,7 +340,7 @@ class DalfoxWrapper(ToolIntegration):
             except Exception as _fix_e:
                 logger.debug(f"[integrations.dalfox] {type(_fix_e).__name__}: {_fix_e!r}")
             try:
-                _, stderr_b = proc.communicate(timeout=_pipe_timeout)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(_pipe_timeout))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:

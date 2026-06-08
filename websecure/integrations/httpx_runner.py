@@ -33,6 +33,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,7 @@ class HttpxWrapper(ToolIntegration):
             except Exception:
                 pass
             try:
-                _, stderr_b = proc.communicate(timeout=_timeout)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(_timeout))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:

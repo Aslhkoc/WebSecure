@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import threading
 import time
@@ -25,6 +26,30 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Max-power / timeout-free mode helper (shared by every external-tool wrapper)
+# ---------------------------------------------------------------------------
+# core.http.set_power_flags() mirrors the no_timeout flag into this env var so
+# the integration subpackage can honor it WITHOUT importing core.http (which
+# would create an import cycle). When on, every tool's subprocess wait becomes
+# unbounded (None) so nmap/ffuf/nuclei/katana/sqlmap/amass/dalfox/... are never
+# cut off mid-scan and reported as "timeout/skipped".
+
+def no_timeout_mode() -> bool:
+    """True when the scan runs in timeout-free 'max power' mode."""
+    return os.environ.get("WEBSECURE_NO_TIMEOUT") == "1"
+
+
+def effective_timeout(default):
+    """
+    Resolve a subprocess/communicate timeout. Returns ``None`` (wait until the
+    tool finishes on its own) in max-power mode, otherwise the supplied default.
+    Drop-in for every ``proc.communicate(timeout=...)`` / subprocess timeout in
+    the integration wrappers.
+    """
+    return None if no_timeout_mode() else default
 
 
 # ---------------------------------------------------------------------------

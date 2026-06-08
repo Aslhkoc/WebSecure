@@ -34,6 +34,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ class FFUFWrapper(ToolIntegration):
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             try:
-                _, stderr_b = process.communicate(timeout=600)
+                _, stderr_b = process.communicate(timeout=effective_timeout(600))
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate()
@@ -438,7 +439,7 @@ class FFUFWrapper(ToolIntegration):
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             try:
-                proc.communicate(timeout=120)
+                proc.communicate(timeout=effective_timeout(120))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
@@ -512,7 +513,7 @@ class FFUFWrapper(ToolIntegration):
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             try:
-                proc.communicate(timeout=120)
+                proc.communicate(timeout=effective_timeout(120))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
@@ -645,7 +646,7 @@ class FeroxbusterWrapper(ToolIntegration):
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
             )
             try:
-                _, stderr_b = proc.communicate(timeout=600)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(600))
                 if proc.returncode not in (0, 1) and stderr_b:
                     logger.warning(f"[Feroxbuster] rc={proc.returncode} stderr={stderr_b.decode('utf-8','ignore')[:300]}")
             except subprocess.TimeoutExpired:

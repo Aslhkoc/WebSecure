@@ -32,6 +32,7 @@ Integration
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -65,6 +66,35 @@ class CBConfig:
     recovery_timeout: float = 30.0
     # How many probe requests are allowed in HALF_OPEN before auto-re-open
     half_open_probe_limit: int = 3
+
+
+def _default_cbconfig() -> "CBConfig":
+    """
+    Default config, but TOLERANT when Tor/max-power mode is active.
+
+    Over Tor the onion circuit is slow and target WAFs answer injection probes
+    with 403 — both are EXPECTED, not a reason to halt the whole scan. The tight
+    defaults (5 consecutive errors, 50 % 403 ratio) trip almost immediately on a
+    Tor run, aborting entire phases and starving later scanners. When the env
+    mirror flags (set by http.set_power_flags) say Tor / no-timeout is on, we
+    widen every threshold so the breaker only fires on genuine total failure.
+    Order-independent: read from env so it applies even if reset_circuit_breaker()
+    runs after Tor was enabled.
+    """
+    tolerant = (
+        os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
+        or os.environ.get("WEBSECURE_NO_TIMEOUT") == "1"
+    )
+    if not tolerant:
+        return CBConfig()
+    return CBConfig(
+        forbidden_ratio_threshold=0.92,   # WAF 403 on payloads is expected
+        window_size=60,
+        max_consecutive_429=30,
+        max_consecutive_errors=30,        # Tor timeouts are routine, not fatal
+        recovery_timeout=10.0,            # probe back quickly
+        half_open_probe_limit=8,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +131,7 @@ class ScanCircuitBreaker:
     """
 
     def __init__(self, cfg: Optional[CBConfig] = None) -> None:
-        self._cfg   = cfg or CBConfig()
+        self._cfg   = cfg or _default_cbconfig()
         self._lock  = threading.Lock()
 
         self._state: CBState = CBState.CLOSED

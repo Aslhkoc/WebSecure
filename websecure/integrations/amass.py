@@ -32,6 +32,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,7 @@ class AmassWrapper(ToolIntegration):
             stderr=subprocess.PIPE,
         )
         try:
-            _, stderr_b = proc.communicate(timeout=timeout_s)
+            _, stderr_b = proc.communicate(timeout=effective_timeout(timeout_s))
         except subprocess.TimeoutExpired:
             proc.kill()
             try:
@@ -495,7 +496,7 @@ class SubfinderIntegration(ToolIntegration):
                 stderr=subprocess.PIPE,
             )
             try:
-                _, stderr_b = proc.communicate(timeout=timeout_s)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(timeout_s))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:

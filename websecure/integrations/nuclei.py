@@ -34,6 +34,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -451,7 +452,7 @@ class NucleiWrapper(ToolIntegration):
             timed_out = False
             stderr_b = b""
             try:
-                _, stderr_b = proc.communicate(timeout=timeout)
+                _, stderr_b = proc.communicate(timeout=effective_timeout(timeout))
             except subprocess.TimeoutExpired:
                 timed_out = True
                 proc.kill()

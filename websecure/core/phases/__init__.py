@@ -1228,6 +1228,17 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     ):
         phase_timeout = int(phase_timeout * 3)
 
+    # Max-power / timeout-free mode: the watchdog never SKIPS a phase — it runs to
+    # completion. We keep the 1s poll loop below (so Ctrl+C / _SCAN_CANCEL still
+    # interrupts), but make the deadline effectively infinite so no scanner is
+    # cut off mid-work. This is the user-facing "nothing gets skipped" guarantee.
+    try:
+        from websecure.core.http import no_timeout_enabled as _nt_enabled
+        if _nt_enabled():
+            phase_timeout = float("inf")
+    except Exception:
+        pass
+
     def _phase_fn():
         # Each phase thread sets its own active-phase context so that http.py's
         # idempotent-first policy uses the correct phase name (not a stale one
@@ -4043,8 +4054,20 @@ def run_plan_if_needed(ctx: dict):
     if not isinstance(_global_cfg, dict):
         _global_cfg = {}
     _global_timeout_s = int(_global_cfg.get("global_timeout_s", 90 * 60))  # 90 min default
-    _global_deadline = _t.monotonic() + _global_timeout_s
-    _logger.info("[phases] Global scan budget: %d min", _global_timeout_s // 60)
+    # Max-power / timeout-free mode: no global deadline — the scan runs every phase
+    # to completion. Ctrl+C (_SCAN_CANCEL) remains the single cooperative stop.
+    _no_timeout_mode = False
+    try:
+        from websecure.core.http import no_timeout_enabled as _nt_enabled
+        _no_timeout_mode = bool(_nt_enabled())
+    except Exception:
+        _no_timeout_mode = False
+    if _no_timeout_mode:
+        _global_deadline = float("inf")
+        _logger.info("[phases] Global scan budget: SINIRSIZ (no_timeout aktif — hicbir faz atlanmaz)")
+    else:
+        _global_deadline = _t.monotonic() + _global_timeout_s
+        _logger.info("[phases] Global scan budget: %d min", _global_timeout_s // 60)
 
     _is_debug = ctx.get("debug") if isinstance(ctx, dict) else getattr(ctx, "debug", False)
 

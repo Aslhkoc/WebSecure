@@ -21,6 +21,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    effective_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,7 @@ class SQLMapWrapper(ToolIntegration):
             except Exception:
                 pass
             try:
-                stdout_b, stderr_b = proc.communicate(timeout=_run_timeout)
+                stdout_b, stderr_b = proc.communicate(timeout=effective_timeout(_run_timeout))
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:

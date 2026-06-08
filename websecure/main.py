@@ -2433,10 +2433,21 @@ def _run_scan_phases(
             # hedefler atlanır ve durum meta'ya yazılır.
             _oast_budget = float(oast_cfg.get("phase_budget_secs", 300) or 300)
             _oast_per_call = float(oast_cfg.get("per_target_timeout_secs", 120) or 120)
+            # Max-power: OAST faz bütçesini ve 20-hedef sınırını kaldır — tüm enjeksiyon
+            # endpoint'lerinde OOB testi yapılır, hiçbiri "kalanlar atlandı" ile geçilmez.
+            _oast_unlimited = False
+            try:
+                from websecure.core.http import no_timeout_enabled as _nt
+                _oast_unlimited = bool(_nt())
+            except Exception:
+                _oast_unlimited = False
+            if _oast_unlimited:
+                _oast_budget = float("inf")
+                _oast_per_call = max(_oast_per_call, 180.0)
             ok_client, client = _safe_call(OASTClient, session, oast_cfg, call_timeout=30.0)
             if ok_client:
                 _oast_done = 0
-                for u in _inj_endpoints[:20]:
+                for u in (_inj_endpoints if _oast_unlimited else _inj_endpoints[:20]):
                     _elapsed = time.time() - t
                     if _elapsed >= _oast_budget:
                         print(f"[i] OAST bütçesi ({int(_oast_budget)}s) doldu — "

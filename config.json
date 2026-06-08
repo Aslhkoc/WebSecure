@@ -37,6 +37,10 @@
       }
     },
     "scan_profile": "aggressive",
+    "_no_timeout_comment": "TAM GUC modu: true iken faz-watchdog skip, 90dk global deadline ve TUM harici arac (nmap/ffuf/nuclei/katana/sqlmap/amass/dalfox...) subprocess timeout'lari devre disi kalir — hicbir tarama 'timeout/skipped' ile atlanmaz. Tek durdurma yolu Ctrl+C. Hizli/CI taramasi icin false yapin.",
+    "no_timeout": true,
+    "_tor_timeout_floor_comment": "Tor/SOCKS aktifken her HTTP istegine uygulanan minimum (connect, read) saniye. Onion gecikmesi 4-5s timeout'u patlatip circuit breaker'i acmasin diye.",
+    "tor_timeout_floor": [20, 45],
     "wordlists": {
       "root": "./websecure/wordlists",
       "defaults": [
