@@ -104,6 +104,7 @@ class _VulnHandler(BaseHTTPRequestHandler):
                 "/download?file=readme.txt", "/ping?host=127.0.0.1",
                 "/safe_product?id=1", "/safe_search?q=test",
                 "/api/users", "/.env",
+                "/login_page", "/register_page", "/json_login_page",
             ]
             body = "<html><body><h1>VulnApp</h1>" + "".join(
                 f'<a href="{l}">{l}</a><br>' for l in links
@@ -201,6 +202,31 @@ class _VulnHandler(BaseHTTPRequestHandler):
                 "<input type='submit' value='Giriş'>"
                 "</form></body></html>")
 
+        # === SPA register formu — method ATTRIBUTE YOK (HTML default GET) ===
+        # infer_form_method bunu POST'a çevirmeli (action 'register' + password alanı).
+        # /auth/register `name` alanını HAM yansıtır → form-alanı Reflected XSS.
+        if path == "/register_page":
+            return self._send(200,
+                "<html><body><h2>Register</h2>"
+                "<form action='/auth/register'>"   # method YOK → GET sanılır, POST çıkarılmalı
+                "<input type='text' name='name' value=''>"
+                "<input type='email' name='email' value=''>"
+                "<input type='password' name='password' value=''>"
+                "<input type='submit' value='Kayıt'>"
+                "</form></body></html>")
+
+        # === SPA login formu — method YOK, action JSON-only API ===
+        # /api/auth/login YALNIZ JSON gövdede SQLi tetikler → submit_form_variants'ın
+        # JSON stratejisi olmadan tespit edilemez.
+        if path == "/json_login_page":
+            return self._send(200,
+                "<html><body><h2>Sign in</h2>"
+                "<form action='/api/auth/login'>"   # method YOK
+                "<input type='email' name='email' value=''>"
+                "<input type='password' name='password' value=''>"
+                "<input type='submit' value='Giriş'>"
+                "</form></body></html>")
+
         # === Info Disclosure — ZAFİYETLİ: .env açıkta ===
         if path == "/.env":
             return self._send(200, _DOTENV, ctype="text/plain; charset=utf-8")
@@ -214,6 +240,23 @@ class _VulnHandler(BaseHTTPRequestHandler):
             )
 
         return self._send(404, "<html><body>Not Found</body></html>")
+
+    def _read_body(self):
+        """POST gövdesini oku; form-encoded VEYA JSON ayrıştır. (data_dict, content_type)."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        ctype = (self.headers.get("Content-Type", "") or "").lower()
+        if "application/json" in ctype:
+            import json as _json
+            try:
+                obj = _json.loads(raw) if raw.strip() else {}
+            except Exception:
+                obj = {}
+            if not isinstance(obj, dict):
+                obj = {}
+            return {k: (v if isinstance(v, str) else str(v)) for k, v in obj.items()}, "json"
+        fields = parse_qs(raw)
+        return {k: (v[0] if v else "") for k, v in fields.items()}, "form"
 
     def do_POST(self):
         # Basit login (auth testleri için yer tutucu) — vuln değil
@@ -234,6 +277,32 @@ class _VulnHandler(BaseHTTPRequestHandler):
                     f"'{html.escape(username)}'</pre></body></html>",
                 )
             return self._send(200, "<html><body>Login failed</body></html>")
+
+        # === Reflected XSS via FORM/JSON body — ZAFİYETLİ (name alanı HAM yansır) ===
+        # form-encoded VE JSON gövdenin İKİSİNDE de tetikler → form-alanı XSS ispatı.
+        if path == "/auth/register":
+            data, _ct = self._read_body()
+            name = data.get("name", "")
+            return self._send(
+                200,
+                f"<html><body>Welcome <b>{name}</b>! "
+                f"(email: {html.escape(data.get('email', ''))})</body></html>",
+            )
+
+        # === SQLi via JSON body ONLY — ZAFİYETLİ (email alanı, YALNIZ JSON) ===
+        # form-encoded gönderim güvenli döner; sadece JSON gövde hata sızdırır →
+        # submit_form_variants'ın JSON stratejisi çalışmazsa BULUNAMAZ.
+        if path == "/api/auth/login":
+            data, ct = self._read_body()
+            email = data.get("email", "")
+            if ct == "json" and _sqli_marks(email):
+                return self._send(
+                    500,
+                    f"<html><body><h2>Database Error</h2><pre>{_MARIADB_SQL_ERROR} "
+                    f"'{html.escape(email)}'</pre></body></html>",
+                )
+            return self._send(200, '{"status":"login failed"}', ctype="application/json")
+
         return self.do_GET()
 
 

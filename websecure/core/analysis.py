@@ -263,7 +263,11 @@ def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, 
                     "type": inp.get("type", "text"),
                     "value": inp.get("value", "")
                 })
-            _action = form.get("action") or url
+            # Resolve relative actions to absolute — otherwise a form with
+            # action="/auth/login" is stored without a host and scanners cannot
+            # submit to it (form fuzzing silently no-ops on relative actions).
+            _raw_action = form.get("action")
+            _action = urljoin(url, _raw_action) if _raw_action else url
             forms.append({
                 "index": idx,
                 "action": _action,
