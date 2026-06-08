@@ -1383,6 +1383,25 @@ def render_html_dashboard(results: dict) -> str:
                 raw = str(e.get("error") or e.get("message") or "")
                 exc = m.get("exc_type") or (raw.split(":", 1)[0] if ":" in raw else "")
                 _push(e.get("phase") or m.get("phase"), exc, raw or e.get("message"))
+            else:
+                # 3) type'sız ama gerçek başarısızlık taşıyan kayıtlar — main.py'nin
+                #    offensive bölümü hataları {stage:X, error:Y} (type YOK) olarak
+                #    yazıyor (ör. ssrf_xxe "missing ctx", bizlogic "'str'.items()",
+                #    "module_missing"). Eskiden bunlar HİÇBİR yerde görünmüyordu →
+                #    "çalışmayan tarama" raporda gizli kalıyordu. error/message taşıyan
+                #    her errors-kovası kaydını yüzeye çıkar (stage→phase).
+                raw = e.get("error") or e.get("message")
+                if not raw:
+                    continue
+                raw = str(raw)
+                phase = e.get("phase") or e.get("stage")
+                if not phase:
+                    continue
+                exc = raw.split(":", 1)[0].strip() if ":" in raw else "ScanError"
+                # Çok uzun exc_type (aslında düz mesaj) → kısalt
+                if len(exc) > 40 or " " in exc:
+                    exc = "ScanError"
+                _push(phase, exc, raw)
         return out
 
     phase_errors = _norm_phase_errs(results)

@@ -106,9 +106,19 @@ def _apply_extractors(text: str, extractors: List[Dict[str, Any]], state: Dict[s
         if m:
             state[var] = m.group(1) if m.groups() else m.group(0)
 
+def _as_dict(v: Any) -> Dict[str, Any]:
+    """Hatalı yapılandırılmış config değerini güvenle dict'e indirger.
+
+    Bir flow step'inde `headers`/`json` yanlışlıkla string/list olarak verilirse
+    (ör. `headers: "Authorization: Bearer x"`), üzerinde `.items()` çağırmak
+    `'str' object has no attribute 'items'` ile TÜM bizlogic_flows fazını
+    çökertiyordu. Dict değilse boş dict döndür → faz çökmeden devam eder.
+    """
+    return v if isinstance(v, dict) else {}
+
 def _merge_headers(base: Dict[str, str], add: Dict[str, str]) -> Dict[str,str]:
     h = dict(base or {})
-    for k, v in (add or {}).items():
+    for k, v in _as_dict(add).items():
         h[str(k)] = str(v)
     return h
 
@@ -141,7 +151,7 @@ def run_business_logic_flows_legacy(session: requests.Session, base_url: str, cf
             url = st.get("url") or "/"
             url = url if url.startswith("http") else urljoin(base_url if base_url.endswith("/") else base_url+"/", url.lstrip("/"))
             url = _tpl(url, state)
-            headers = _merge_headers(base_headers, {k:_tpl(str(v), state) for k,v in (st.get("headers") or {}).items()})
+            headers = _merge_headers(base_headers, {k:_tpl(str(v), state) for k,v in _as_dict(st.get("headers")).items()})
             data = st.get("body")
             jsn = st.get("json")
             if isinstance(data, str): data = _tpl(data, state)
@@ -209,7 +219,7 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
         for idx, step in enumerate(steps, 1):
             method = str(step.get("method", "GET")).upper()
             url = _ws_normalize_url(base_url, _tpl(str(step.get("url") or "/"), ctx_store))
-            headers = {k: _tpl(str(v), ctx_store) for k, v in (step.get("headers") or {}).items()}
+            headers = {k: _tpl(str(v), ctx_store) for k, v in _as_dict(step.get("headers")).items()}
 
             body = step.get("body")
             if isinstance(body, str):

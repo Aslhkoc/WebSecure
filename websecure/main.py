@@ -2024,16 +2024,18 @@ def _run_scan_phases(
         print("[•] SSRF/XXE sezgisel kontroller…")
         t = mark("ssrf_xxe")
         if callable(globals().get("ssrf_xxe_scan")):
-            kw = dict(session=session, endpoints=_inj_endpoints[:40], oast_cfg=oast_cfg, results=results,
-                      debug=debug,
-                      auth_ctx=auth_ctx)
-            # imza uyumu için anahtar adlarını fonskiyon imzasına göre filtrele
+            # B1 FIX: ssrf_xxe_scan = run_ssrf_xxe_scan(ctx, oast_cfg=None, **kwargs).
+            # `ctx` ZORUNLU positional ve scanner session/endpoints/results/config'i
+            # ctx'ten okur. Eskiden kw'de ctx YOKTU → _kw_filter yalnız `oast_cfg`'yi
+            # eşliyor, çağrı run_ssrf_xxe_scan(oast_cfg=...) oluyordu → her seferinde
+            # "missing 1 required positional argument: 'ctx'" ile çöküyordu (ssrf_xxe
+            # fazı 0.0s — hiç çalışmadı). ctx'i kw'ye ekle; eski imza için pozisyonel
+            # ctx fallback'i de düzeltildi (önceki fallback session'ı ctx sanıyordu).
+            kw = dict(ctx=ctx, session=session, endpoints=_inj_endpoints[:40], oast_cfg=oast_cfg,
+                      results=results, debug=debug, auth_ctx=auth_ctx)
             fk = _kw_filter(ssrf_xxe_scan, **kw)
-            # bazı sürümlerde 'endpoints' yerine yalnızca pozisyonel kullanılıyor olabilir:
-            if not fk:
-                # minimum pozisyonel: (session, endpoints, oast_cfg, results)
-                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, session, _inj_endpoints[:40], oast_cfg, results,
-                                               call_timeout=900.0)
+            if "ctx" not in fk:
+                ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, ctx, oast_cfg, call_timeout=900.0)
             else:
                 ok_ssrf, res_ssrf = _safe_call(ssrf_xxe_scan, **fk, call_timeout=900.0)
             if not ok_ssrf and callable(globals().get("add_result")):

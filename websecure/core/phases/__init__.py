@@ -1569,9 +1569,27 @@ def _runner_http_crawler_orchestrator(ctx) -> None:
                 ctx.results = ctx_results
             except AttributeError:
                 pass
+        # B1 FIX: CrawlResult.api_endpoints = List[EndpointMeta] (hashable DEĞİL —
+        # plain @dataclass + mutable `params: List` → __hash__ = None). Eskiden bu
+        # nesneler doğrudan set'e ekleniyordu:
+        #   (a) `existing.update(result.api_endpoints)` → TypeError: unhashable type:
+        #       'EndpointMeta' → TÜM http_crawler fazı çöküyordu (API/OpenAPI/GraphQL
+        #       endpoint keşfi KAYBOLUYORDU — kimlikli taramada enjeksiyon hedefleri
+        #       eksik kalıyordu),
+        #   (b) çökmese bile `endpoints` (URL-string havuzu) içine nesne karışıp
+        #       downstream urlparse/is_static_asset'i bozardı.
+        # Çözüm: EndpointMeta'dan .url çıkar; api_endpoints'i url-string olarak
+        # (url'e göre tekilleştirilmiş) sakla.
+        def _ep_url(e):
+            if hasattr(e, "url"):
+                return e.url
+            if isinstance(e, dict):
+                return e.get("url")
+            return str(e)
+
         existing = set(ctx_results.get("endpoints", []))
         existing.update(result.endpoints)
-        existing.update(result.api_endpoints)
+        existing.update(_ep_url(e) for e in result.api_endpoints if _ep_url(e))
         ctx_results["endpoints"] = list(existing)
         if result.discovered_params:
             ctx_results.setdefault("discovered_params", {}).update(result.discovered_params)
@@ -1579,9 +1597,12 @@ def _runner_http_crawler_orchestrator(ctx) -> None:
             ctx_results["sitemap"] = result.sitemap
         if result.api_endpoints:
             ctx_results.setdefault("api_endpoints", [])
-            ctx_results["api_endpoints"] = list(set(
-                ctx_results["api_endpoints"] + result.api_endpoints
-            ))
+            _api_seen = {_ep_url(e) for e in ctx_results["api_endpoints"]}
+            for _e in result.api_endpoints:
+                _u = _ep_url(_e)
+                if _u and _u not in _api_seen:
+                    _api_seen.add(_u)
+                    ctx_results["api_endpoints"].append(_u)
         add_result("meta", {
             "stage": "http_crawler",
             "status": "ok",
