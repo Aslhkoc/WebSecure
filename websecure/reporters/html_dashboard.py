@@ -453,35 +453,100 @@ def render_html_dashboard(results: dict) -> str:
             </div>
             """
 
-    # --- katana Crawl Results ---
+    # --- Keşfedilen Endpoint'ler & Dizinler (crawl + katana + ffuf/feroxbuster) ---
+    # KRİTİK FIX: eski `results.get("katana") or results.get("crawl") or
+    # results.get("endpoints")` zinciri 'crawl' kovasına düşüyordu — ama 'crawl'
+    # endpoint DEĞİL, METADATA tutar ({"browser": {"new": 137}}). url'i olmadığı
+    # için filtre hepsini eliyor ve katana_html boş kalıyordu → gerçekte keşfedilen
+    # 136 endpoint rapora HİÇ yansımıyordu. Ayrıca ffuf/feroxbuster dizin/yol
+    # brute-force sonuçları (gobuster/dirbuster eşdeğeri) 'discovery' kovasına
+    # type'sız düşüp bulgu tablosundan eleniyor, hiçbir yerde gösterilmiyordu.
+    # Artık tüm gerçek endpoint kaynaklarını URL bazında birleştirip iki ayrı
+    # tablo üretiyoruz: (1) keşfedilen endpoint'ler, (2) dizin/yol brute-force.
     katana_html = ""
-    katana_items = results.get("katana") or results.get("crawl") or results.get("endpoints") or []
-    if isinstance(katana_items, list) and katana_items:
-        # Filter to show only endpoint strings or dicts
-        _kat_eps = []
-        for _ke in katana_items:
-            if isinstance(_ke, str) and "://" in _ke:
-                _kat_eps.append({"url": _ke, "method": "GET", "source": "crawl"})
-            elif isinstance(_ke, dict) and _ke.get("url"):
-                _kat_eps.append(_ke)
-        if _kat_eps:
-            _kat_rows = "".join(
-                f"<tr>"
-                f"<td class='url' style='font-size:0.85rem'>"
-                f"  <a href='{_escape(ep.get('url',''))}' target='_blank' style='color:var(--accent)'>{_escape(ep.get('url',''))}</a>"
-                f"</td>"
-                f"<td style='font-family:monospace; font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('method','GET'))}</td>"
-                f"<td style='font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('source','') or ep.get('tag',''))}</td>"
-                f"</tr>"
-                for ep in _kat_eps[:200]  # cap at 200 for readability
-            )
-            katana_html = f"""
+    _disc_eps = {}
+
+    def _add_ep(_u, _method="GET", _source=""):
+        if not _u or not isinstance(_u, str) or "://" not in _u:
+            return
+        _cur = _disc_eps.get(_u)
+        if _cur is None:
+            _disc_eps[_u] = {"url": _u, "method": (_method or "GET"), "source": (_source or "")}
+        elif _source and _source not in (_cur.get("source") or ""):
+            _cur["source"] = (((_cur.get("source") or "") + "," + _source).strip(","))
+
+    for _src_bucket in ("endpoints", "katana"):
+        _lst = results.get(_src_bucket)
+        if isinstance(_lst, list):
+            for _e in _lst:
+                if isinstance(_e, str):
+                    _add_ep(_e, "GET", "crawl")
+                elif isinstance(_e, dict) and _e.get("url"):
+                    _add_ep(_e.get("url"), _e.get("method", "GET"),
+                            (_e.get("source") or _e.get("tag") or "crawl"))
+
+    # ffuf / feroxbuster dizin & yol brute-force hit'leri (gobuster/dirbuster eşdeğeri)
+    _dir_hits = []
+    _disc_bucket = results.get("discovery")
+    if isinstance(_disc_bucket, list):
+        for _e in _disc_bucket:
+            if not isinstance(_e, dict):
+                continue
+            _tool = str(_e.get("tool") or "").lower()
+            _u = _e.get("url")
+            if _u and _tool in ("ffuf", "feroxbuster") and not (_e.get("type") or _e.get("title")):
+                _dir_hits.append({
+                    "url": _u,
+                    "status": _e.get("status") or _e.get("status_code") or "",
+                    "length": _e.get("length") or _e.get("content_length") or _e.get("words") or "",
+                    "tool": _e.get("tool") or "",
+                })
+                _add_ep(_u, _e.get("method", "GET"), _tool)
+
+    if _disc_eps:
+        _eps_sorted = sorted(_disc_eps.values(), key=lambda x: x["url"])
+        _kat_rows = "".join(
+            f"<tr>"
+            f"<td class='url' style='font-size:0.85rem'>"
+            f"  <a href='{_escape(ep.get('url',''))}' target='_blank' style='color:var(--accent)'>{_escape(ep.get('url',''))}</a>"
+            f"</td>"
+            f"<td style='font-family:monospace; font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('method','GET'))}</td>"
+            f"<td style='font-size:0.83rem; color:var(--text-muted)'>{_escape(ep.get('source','') or ep.get('tag',''))}</td>"
+            f"</tr>"
+            for ep in _eps_sorted[:300]  # cap at 300 for readability
+        )
+        katana_html += f"""
             <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[globe] Taranan Endpoint'ler — katana ({len(_kat_eps)} bulundu{', ilk 200 gösteriliyor' if len(_kat_eps) > 200 else ''})</h3>
+                <h3 style="margin-top:0;">[globe] Keşfedilen Endpoint'ler ({len(_disc_eps)} bulundu{', ilk 300 gösteriliyor' if len(_disc_eps) > 300 else ''})</h3>
                 <div class="table-container">
                     <table>
                         <thead><tr><th>URL</th><th>Method</th><th>Kaynak</th></tr></thead>
                         <tbody>{_kat_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
+    if _dir_hits:
+        _dir_hits_sorted = sorted(_dir_hits, key=lambda x: str(x["url"]))
+        _dir_rows = "".join(
+            f"<tr>"
+            f"<td class='url' style='font-size:0.85rem'>"
+            f"  <a href='{_escape(str(h.get('url','')))}' target='_blank' style='color:var(--accent)'>{_escape(str(h.get('url','')))}</a>"
+            f"</td>"
+            f"<td style='font-family:monospace; font-size:0.83rem; color:var(--sev-low)'>{_escape(str(h.get('status','')))}</td>"
+            f"<td style='font-family:monospace; font-size:0.83rem; color:var(--text-muted)'>{_escape(str(h.get('length','')))}</td>"
+            f"<td style='font-size:0.83rem; color:var(--text-muted)'>{_escape(str(h.get('tool','')))}</td>"
+            f"</tr>"
+            for h in _dir_hits_sorted[:300]
+        )
+        katana_html += f"""
+            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                <h3 style="margin-top:0;">[dir] Keşfedilen Dizinler & Yollar — ffuf / feroxbuster ({len(_dir_hits)} bulundu{', ilk 300 gösteriliyor' if len(_dir_hits) > 300 else ''})</h3>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>URL</th><th>HTTP Kodu</th><th>Boyut</th><th>Araç</th></tr></thead>
+                        <tbody>{_dir_rows}</tbody>
                     </table>
                 </div>
             </div>
