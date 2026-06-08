@@ -1688,6 +1688,15 @@ def _run_scan_phases(
             except Exception as _fpr_exc:
                 _logger.debug(f"[PlanB] FPR reset error: {_fpr_exc!r}")
 
+        # Soft-404/catch-all baseline cache is per-origin and MUST be cleared per
+        # scan (queue/API/multi-target mode reuses the process) — otherwise a stale
+        # baseline from a previous target would gate the next one.
+        try:
+            from websecure.core.fp_reducer import SoftNotFoundBaseline as _SNFB
+            _SNFB.reset()
+        except Exception as _snfb_exc:
+            _logger.debug(f"[PlanB] SoftNotFoundBaseline reset error: {_snfb_exc!r}")
+
         # Plan B: Wire AdaptiveRateController into results so scanners can use it
         if _PLAN_B_AVAILABLE and _AdaptiveRateController is not None:
             try:

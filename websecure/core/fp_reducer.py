@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urljoin, urlparse
 
 _logger = logging.getLogger(__name__)
 
@@ -284,8 +286,176 @@ class FalsePositiveReducer:
         _GlobalFindingRegistry.reset()
 
 
+# ---------------------------------------------------------------------------
+# Soft-404 / catch-all baseline — shared across scanners
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _NotFoundSample:
+    """One observed 'response for a path that cannot exist'."""
+    status: int
+    length: int
+    prefix: str
+    location: str = ""
+
+
+class SoftNotFoundBaseline:
+    """Per-target soft-404 / catch-all detector — compute ONCE, reuse everywhere.
+
+    Many targets (Angular/React SPAs, parked domains, catch-all CDNs/load balancers)
+    return HTTP 200 (or a 3xx redirect) with the SAME page for EVERY path — including
+    paths that cannot exist. Scanners that infer "endpoint exists" from
+    ``status_code not in (404, 410)`` then fire on hundreds of phantom paths
+    (this is exactly what flooded the karekod.com parked-domain scan). This class
+    probes a few random impossible paths ONCE per origin to learn what the server's
+    "not found" answer looks like, then lets callers ask whether a real response is
+    a GENUINE hit or just the catch-all page.
+
+    Safety contract (so this is a strict no-op on normal servers and test stubs):
+      * ``is_catch_all`` is True ONLY when random impossible paths come back as
+        *non-trivial* successes — body >= ``_MIN_BODY`` bytes, or a redirect with a
+        Location. Empty/short responses (e.g. unit-test mocks returning empty 200)
+        never count → callers behave exactly like the old status check.
+      * When not catch-all, ``is_genuine_hit`` returns True for any non-404 — i.e.
+        identical to the legacy ``status_code not in (404, 410)`` behaviour.
+      * Any probing failure leaves ``samples`` empty → not catch-all → no-op.
+
+    Cached per origin (thread-safe) and cleared per scan session via ``reset()``.
+    """
+
+    _MIN_BODY = 50
+    _PROBE_EXTS = (".env", ".txt", ".json", ".bak")
+
+    _cache: Dict[str, "SoftNotFoundBaseline"] = {}
+    _cache_lock = threading.Lock()
+    _origin_locks: Dict[str, threading.Lock] = {}
+
+    def __init__(self, session: Any = None, origin: str = "", *,
+                 timeout: int = 5, _probe: bool = True) -> None:
+        self.origin = origin
+        self.samples: List[_NotFoundSample] = []
+        if _probe and session is not None and origin:
+            self._probe(session, timeout)
+
+    def _probe(self, session: Any, timeout: int) -> None:
+        for ext in self._PROBE_EXTS:
+            rnd = "ws-nonexistent-" + os.urandom(8).hex() + ext
+            try:
+                r = session.get(urljoin(self.origin + "/", rnd),
+                                timeout=timeout, allow_redirects=False)
+            except Exception as exc:  # network error → just skip this probe
+                _logger.debug("[SoftNotFound] probe failed (%s): %r", rnd, exc)
+                continue
+            try:
+                st = int(getattr(r, "status_code", 0) or 0)
+            except Exception:
+                continue
+            if st in (0, 404, 410):
+                continue
+            body = getattr(r, "text", "") or ""
+            loc = ""
+            try:
+                loc = (getattr(r, "headers", {}) or {}).get("Location", "") or ""
+            except Exception:
+                loc = ""
+            self.samples.append(_NotFoundSample(st, len(body), body[:512], loc))
+
+    @property
+    def is_catch_all(self) -> bool:
+        return any(
+            (s.length >= self._MIN_BODY) or (300 <= s.status < 400 and bool(s.location))
+            for s in self.samples
+        )
+
+    def matches_baseline(self, resp: Any) -> bool:
+        """True if ``resp`` is (near-)identical to the catch-all not-found page."""
+        if not self.is_catch_all:
+            return False
+        try:
+            st = int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            return False
+        body = getattr(resp, "text", "") or ""
+        ln = len(body)
+        prefix = body[:512]
+        loc = ""
+        try:
+            loc = (getattr(resp, "headers", {}) or {}).get("Location", "") or ""
+        except Exception:
+            loc = ""
+        for s in self.samples:
+            if st != s.status:
+                continue
+            if 300 <= st < 400:
+                if loc and s.location and loc == s.location:
+                    return True
+                continue
+            tol = max(64, int(s.length * 0.05))
+            if abs(ln - s.length) <= tol:
+                return True
+            if prefix and prefix == s.prefix:
+                return True
+        return False
+
+    def is_genuine_hit(self, resp: Any) -> bool:
+        """True if ``resp`` represents a real resource (not 404/soft-404/catch-all)."""
+        try:
+            st = int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            return False
+        if st in (0, 404, 410):
+            return False
+        if not self.is_catch_all:
+            return True  # normal server → legacy behaviour (any non-404 = exists)
+        return not self.matches_baseline(resp)
+
+    @staticmethod
+    def _origin(url: str) -> str:
+        try:
+            p = urlparse(url or "")
+            if p.scheme and p.netloc:
+                return f"{p.scheme}://{p.netloc}"
+        except Exception:
+            pass
+        return ""
+
+    @classmethod
+    def for_target(cls, session: Any, url: str) -> "SoftNotFoundBaseline":
+        """Return the cached baseline for ``url``'s origin, computing it once.
+
+        Thread-safe; only same-origin computations serialise (different origins
+        never block each other). On an unparseable URL returns an empty (no-op)
+        baseline so callers can use the result unconditionally.
+        """
+        origin = cls._origin(url)
+        if not origin:
+            return cls(_probe=False)
+        with cls._cache_lock:
+            inst = cls._cache.get(origin)
+            if inst is not None:
+                return inst
+            olock = cls._origin_locks.setdefault(origin, threading.Lock())
+        with olock:
+            with cls._cache_lock:
+                inst = cls._cache.get(origin)
+                if inst is not None:
+                    return inst
+            inst = cls(session, origin)
+            with cls._cache_lock:
+                cls._cache[origin] = inst
+            return inst
+
+    @classmethod
+    def reset(cls) -> None:
+        """Clear the per-origin cache (call at the start of every scan session)."""
+        with cls._cache_lock:
+            cls._cache.clear()
+            cls._origin_locks.clear()
+
+
 __all__ = [
     "FindingVerification",
     "ReproducibilityVerifier",
     "FalsePositiveReducer",
+    "SoftNotFoundBaseline",
 ]

@@ -151,6 +151,33 @@ class BaseScanner:
         finding.update(kwargs)
         return finding
 
+    def path_exists(self, resp: Any) -> bool:
+        """Robust replacement for the ``status_code not in (404, 410)`` existence test.
+
+        On a normal server this is identical to the legacy check (any non-404/410
+        status ⇒ exists). On a soft-404 / catch-all server (SPA, parked domain,
+        catch-all CDN that answers 200/redirect for EVERY path) it additionally
+        requires the response to differ from the server's learned "not found" page,
+        which kills the phantom-endpoint false-positive class project-wide.
+
+        Fails safe: any error, or an undetermined origin, preserves legacy behaviour
+        (returns True for non-404/410) — it never suppresses on uncertainty.
+        """
+        try:
+            st = int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            return False
+        if st in (404, 410) or st == 0:
+            return False
+        try:
+            from websecure.core.fp_reducer import SoftNotFoundBaseline
+            url = getattr(resp, "url", "") or ""
+            baseline = SoftNotFoundBaseline.for_target(self.session, url)
+            return baseline.is_genuine_hit(resp)
+        except Exception as exc:  # any failure → legacy behaviour, never over-suppress
+            self.logger.debug(f"[{self.name}] path_exists fallback: {exc!r}")
+            return True
+
     def run(self, target: str, **kwargs) -> Any:
         raise NotImplementedError("Scanners must implement run()")
 

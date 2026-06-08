@@ -1121,7 +1121,7 @@ class SAMLInjector(BaseScanner):
             url = urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5, allow_redirects=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     return url
             except Exception as _fix_e:
                 _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -1291,7 +1291,7 @@ class TwoFABypassProber(BaseScanner):
             url = urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5, allow_redirects=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     return url
             except Exception as _fix_e:
                 _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -1453,7 +1453,7 @@ class PasswordResetAttacker(BaseScanner):
             url = urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5, allow_redirects=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     return url
             except Exception as _fix_e:
                 _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -1788,7 +1788,7 @@ class BOLAIDORChain(BaseScanner):
                 url = urljoin(base.rstrip("/") + "/", tpl.replace("{id}", str(test_id)).lstrip("/"))
                 try:
                     r = self.session.get(url, headers=headers, timeout=5)
-                    if r.status_code not in (404, 410):
+                    if self.path_exists(r):
                         # Store the template
                         found.append(url)
                         break

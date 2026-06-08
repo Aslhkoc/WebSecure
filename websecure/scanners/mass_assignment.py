@@ -91,7 +91,7 @@ class MassAssignmentScanner(BaseScanner):
             target = base + path
             try:
                 r = self.session.get(target, timeout=4)
-                if r.status_code not in (404, 405, 501):
+                if self.path_exists(r) and r.status_code not in (405, 501):
                     found.append(target)
             except requests.exceptions.RequestException as exc:
                 logger.debug(f"[MassAssign] Endpoint discovery probe failed for {target!r}: {exc!r}")
@@ -122,7 +122,7 @@ class MassAssignmentScanner(BaseScanner):
         ]:
             try:
                 r = method_fn(url, json={"__probe__": True}, timeout=4)
-                if r.status_code not in (404, 405, 501):
+                if self.path_exists(r) and r.status_code not in (405, 501):
                     working.append((method_fn, method_name))
             except requests.exceptions.RequestException as exc:
                 logger.debug(f"[MassAssign] Method probe {method_name} failed for {url!r}: {exc!r}")

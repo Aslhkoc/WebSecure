@@ -84,7 +84,9 @@ class CORSWildcardProber(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                # path_exists: soft-404/catch-all farkındalı varlık kontrolü
+                # (normal sunucuda eski `status_code not in (404,410)` ile aynı).
+                if self.path_exists(r):
                     found.append(url)
             except Exception as _fix_e:
                 logger.debug(f"[scanners.cors] {type(_fix_e).__name__}: {_fix_e!r}")

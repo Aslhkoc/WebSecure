@@ -521,7 +521,7 @@ class GateTechniqueExploiter(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     found.append(path)
             except Exception as _fix_e:
                 logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -645,7 +645,7 @@ class RaceAuthBypassProber(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     return url
             except Exception as _fix_e:
                 logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -1070,7 +1070,7 @@ class TOCTOUProber(BaseScanner):
             url = base.rstrip("/") + path
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410, 401):
+                if self.path_exists(r) and r.status_code != 401:
                     balance_url = url
                     break
             except Exception as _fix_e:
@@ -1082,7 +1082,7 @@ class TOCTOUProber(BaseScanner):
             url = base.rstrip("/") + path
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     spend_url = url
                     spend_data = data
                     break
@@ -1160,7 +1160,7 @@ class TOCTOUProber(BaseScanner):
             url = base.rstrip("/") + path
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     upload_url = url
                     break
             except Exception as _fix_e:
@@ -1306,7 +1306,7 @@ class SessionFixationRaceProber(BaseScanner):
             url = base.rstrip("/") + path
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     login_url = url
                     break
             except Exception as _fix_e:
@@ -1358,7 +1358,7 @@ class SessionFixationRaceProber(BaseScanner):
             url = base.rstrip("/") + path
             try:
                 r = self.session.get(url, timeout=4)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     reset_url = url
                     break
             except Exception as _fix_e:

@@ -326,11 +326,20 @@ def _detect_xml_endpoints(base_url: str, session) -> List[str]:
     found = []
     parsed = urlparse(base_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
+    # soft-404/catch-all farkındalı varlık kontrolü (modül fonksiyonu olduğundan
+    # BaseScanner.path_exists yerine paylaşılan baseline doğrudan kullanılır).
+    try:
+        from websecure.core.fp_reducer import SoftNotFoundBaseline as _SNFB
+        _bl = _SNFB.for_target(session, base)
+    except Exception:
+        _bl = None
     for path in _XML_PATHS:
         url = urljoin(base + "/", path.lstrip("/"))
         try:
             r = session.get(url, timeout=5, verify=False)
-            if r.status_code not in (404, 410):
+            _ok = (_bl.is_genuine_hit(r) if _bl is not None
+                   else r.status_code not in (404, 410))
+            if _ok:
                 found.append(url)
         except Exception as _fix_e:
             logger.debug(f"[scanners.ssrf_xxe] {type(_fix_e).__name__}: {_fix_e!r}")

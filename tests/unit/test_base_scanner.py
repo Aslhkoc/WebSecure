@@ -195,3 +195,101 @@ class TestThreadSafety:
                 t.join()
 
         assert len(scanner.results.get("xss", [])) == num_threads
+
+
+# ---------------------------------------------------------------------------
+# Soft-404 / catch-all baseline (SoftNotFoundBaseline) + BaseScanner.path_exists
+# ---------------------------------------------------------------------------
+
+class _Resp:
+    """Minimal response stub for baseline tests."""
+    def __init__(self, status, text="", headers=None, url="https://t.example/x"):
+        self.status_code = status
+        self.text = text
+        self.content = text.encode("utf-8")
+        self.headers = headers or {}
+        self.url = url
+
+
+class _Sess:
+    """Session stub whose .get() is driven by a callable."""
+    def __init__(self, fn):
+        self._fn = fn
+
+    def get(self, url, **kwargs):
+        return self._fn(url)
+
+
+class TestSoftNotFoundBaseline:
+    def setup_method(self):
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        SoftNotFoundBaseline.reset()
+
+    def teardown_method(self):
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        SoftNotFoundBaseline.reset()
+
+    def test_normal_server_is_not_catch_all(self):
+        """A server that 404s missing paths is never catch-all → genuine non-op."""
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        b = SoftNotFoundBaseline(_Sess(lambda u: _Resp(404, "not found")), "https://t.example")
+        assert b.is_catch_all is False
+        assert b.is_genuine_hit(_Resp(200, "real page content here")) is True
+
+    def test_catch_all_suppresses_soft404_but_allows_distinct(self):
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        big = "<!doctype html><html>" + ("x" * 500) + "</html>"
+        b = SoftNotFoundBaseline(_Sess(lambda u: _Resp(200, big)), "https://spa.example")
+        assert b.is_catch_all is True
+        # The catch-all page itself is NOT a genuine hit
+        assert b.is_genuine_hit(_Resp(200, big)) is False
+        # A meaningfully different resource IS a genuine hit
+        distinct = '{"api":"clearly different json body of another length"}' * 5
+        assert b.is_genuine_hit(_Resp(200, distinct)) is True
+
+    def test_empty_200_mock_is_not_catch_all(self):
+        """Trivial/empty 200 (typical test stub) must NOT trigger catch-all."""
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        b = SoftNotFoundBaseline(_Sess(lambda u: _Resp(200, "")), "https://mock.test")
+        assert b.is_catch_all is False
+        assert b.is_genuine_hit(_Resp(200, "")) is True
+
+    def test_404_is_never_genuine(self):
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        b = SoftNotFoundBaseline(_Sess(lambda u: _Resp(404)), "https://t.example")
+        assert b.is_genuine_hit(_Resp(404)) is False
+        assert b.is_genuine_hit(_Resp(410)) is False
+
+    def test_redirect_catch_all(self):
+        """A server that 302s every path to the same Location is catch-all."""
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        b = SoftNotFoundBaseline(
+            _Sess(lambda u: _Resp(302, "", {"Location": "https://t.example/home"})),
+            "https://t.example",
+        )
+        assert b.is_catch_all is True
+        assert b.is_genuine_hit(_Resp(302, "", {"Location": "https://t.example/home"})) is False
+        assert b.is_genuine_hit(_Resp(200, "actual distinct page body here xxxx")) is True
+
+    def test_for_target_caches_per_origin(self):
+        from websecure.core.fp_reducer import SoftNotFoundBaseline
+        calls = {"n": 0}
+
+        def fn(u):
+            calls["n"] += 1
+            return _Resp(404)
+
+        s = _Sess(fn)
+        b1 = SoftNotFoundBaseline.for_target(s, "https://t.example/a")
+        n_after_first = calls["n"]
+        b2 = SoftNotFoundBaseline.for_target(s, "https://t.example/b")
+        assert b1 is b2  # same origin → cached instance
+        assert calls["n"] == n_after_first  # no re-probing
+
+    def test_path_exists_noop_on_normal_server(self, mock_session):
+        """BaseScanner.path_exists behaves like the legacy status check by default."""
+        scanner = BaseScanner(session=mock_session, results={}, debug=False)
+        assert scanner.path_exists(_Resp(200, "x")) is True
+        assert scanner.path_exists(_Resp(404)) is False
+        assert scanner.path_exists(_Resp(410)) is False
+        assert scanner.path_exists(_Resp(0)) is False

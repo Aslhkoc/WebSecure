@@ -821,7 +821,7 @@ class PolyglotFileUploader(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     found.append((url, self._UPLOAD_FIELD_NAMES[0]))
             except Exception as _fix_e:
                 logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")
@@ -930,7 +930,7 @@ class ImageTragickExploiter(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     found.append((url, "image"))
             except Exception as _fix_e:
                 logger.debug(f"[scanners.file_upload] {type(_fix_e).__name__}: {_fix_e!r}")

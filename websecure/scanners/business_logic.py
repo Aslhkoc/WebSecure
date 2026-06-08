@@ -748,7 +748,7 @@ class LimitBypassProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=4, verify=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     test_endpoints.append((url, "POST", {"username": "admin", "password": "wrong"}))
                     break
             except Exception as exc:
@@ -758,7 +758,7 @@ class LimitBypassProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=4, verify=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     test_endpoints.append((url, "POST", {"email": "test@test.com"}))
                     break
             except Exception as exc:

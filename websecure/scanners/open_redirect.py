@@ -655,7 +655,7 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
             url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
             try:
                 r = self.session.get(url, timeout=5, allow_redirects=False)
-                if r.status_code not in (404, 410):
+                if self.path_exists(r):
                     found.append(url)
             except Exception as _fix_e:
                 logger.debug(f"[scanners.open_redirect] {type(_fix_e).__name__}: {_fix_e!r}")
