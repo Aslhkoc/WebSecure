@@ -115,7 +115,26 @@ def setup_tor(cfg: dict, args: Namespace) -> None:
                 reset_circuit_breaker()  # cfg=None → picks up tolerant env defaults
             except Exception:
                 pass
+            # KRİTİK gizlilik: yalnız proxied requests.Session Tor'dan geçiyordu; ham
+            # socket.create_connection (TLS scanner ~12 probe, ws_fuzz, port kontrolü)
+            # ve proxy'siz doğrudan requests çağrıları GERÇEK IP ile bağlanıyordu +
+            # DNS lokal sızıyordu. Tüm process socket'lerini Tor'a + uzak-DNS'e zorla.
+            _sock_routed = False
+            try:
+                from urllib.parse import urlparse as _up
+                from websecure.core.egress import enable_global_tor_socket, disable_global_tor_socket
+                _pp = _up(_socks)
+                _sock_routed = enable_global_tor_socket(_pp.hostname or "127.0.0.1", _pp.port or 9050)
+                if _sock_routed:
+                    import atexit as _atx
+                    _atx.register(disable_global_tor_socket)
+            except Exception as _e_sock:
+                print(f"  [!] Socket-seviyesi Tor zorlaması kurulamadı: {_e_sock}")
             print(f"  [+] Tor aktif: {_socks}")
+            if _sock_routed:
+                print("  [+] HAM SOCKET + DNS de Tor'dan geçer (TLS/ws_fuzz IP+DNS sızıntısı kapatıldı; localhost bypass).")
+            else:
+                print("  [!] UYARI: PySocks yok — ham socket bağlantıları (TLS analizi/ws_fuzz) GERÇEK IP ile gidebilir!")
             print("  [+] Python HTTP trafiği + SQLMap, FFUF, Nuclei, Katana -> Tor (gercek IP gizli).")
             print("  [!] ISTISNA — NMAP: Port taramasi raw-socket/dogrudan TCP kullanir.")
             print("      Tor yalnizca TCP stream tasir; SYN/UDP/OS tespiti ve ping")

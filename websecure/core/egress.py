@@ -23,6 +23,108 @@ TOR_SOCKS_DEFAULT = "socks5h://127.0.0.1:9050"
 TOR_CONTROL_PORT = 9051
 
 
+# ---------------------------------------------------------------------------
+# Global socket-level Tor enforcement (kills raw-socket / direct-request IP leaks)
+# ---------------------------------------------------------------------------
+# PROBLEM: only the proxied requests.Session goes through Tor. Raw
+# socket.create_connection() (TLS scanner's ~12 probes, ws_fuzz, port checks) and
+# direct module-level requests.* calls (utils/net, analysis) connect with the REAL
+# IP even when Tor is on. And socket.create_connection resolves DNS LOCALLY → DNS
+# leak. This forces EVERY socket in the Python process through Tor with remote DNS,
+# EXCEPT localhost/private destinations (Tor SOCKS port itself, SQLMap API,
+# interactsh, Tor control) which must stay direct or everything deadlocks.
+import ipaddress as _ipaddress
+
+_TOR_SOCKET_STATE: Dict[str, Any] = {
+    "patched": False, "orig_socket": None, "orig_getaddrinfo": None,
+}
+
+
+def _ws_is_local_host(host) -> bool:
+    """localhost / private / link-local → bypass Tor (stay direct)."""
+    try:
+        h = str(host).strip("[]").lower()
+        if h in ("localhost", "localhost.localdomain", ""):
+            return True
+        try:
+            ip = _ipaddress.ip_address(h)
+            return ip.is_loopback or ip.is_private or ip.is_link_local
+        except ValueError:
+            return False  # hostname → treat as remote, route via Tor (rdns)
+    except Exception:
+        return False
+
+
+def enable_global_tor_socket(host: str = "127.0.0.1", port: int = 9050) -> bool:
+    """
+    Route ALL process sockets through Tor (raw TLS sockets included) with remote
+    DNS, bypassing only localhost/private. Reversible + idempotent + guarded.
+    Returns True if enforcement is active.
+    """
+    try:
+        import socks  # PySocks
+    except ImportError:
+        _logger.warning(
+            "[egress] PySocks yok — socket seviyesi Tor zorlaması YAPILAMADI; "
+            "ham socket'ler (TLS/ws_fuzz) ve proxy'siz requests GERÇEK IP ile bağlanır."
+        )
+        return False
+    import socket as _socket
+    if _TOR_SOCKET_STATE["patched"]:
+        return True
+
+    orig_socket = _socket.socket
+    orig_gai = _socket.getaddrinfo
+
+    class _WSTorSocket(socks.socksocket):  # type: ignore[misc]
+        def connect(self, address):
+            try:
+                if address and _ws_is_local_host(address[0]):
+                    self.set_proxy(None)  # localhost/private → direct (no Tor)
+            except Exception:
+                pass
+            return super().connect(address)
+
+    def _ws_getaddrinfo(host_, *a, **kw):
+        # Remote host → defer resolution to the SOCKS proxy (rdns) by returning the
+        # hostname unresolved → no DNS leak to ISP. Local host → resolve normally.
+        try:
+            if host_ is not None and not _ws_is_local_host(host_):
+                _port = a[0] if a else (kw.get("port") or 0)
+                return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", (host_, _port))]
+        except Exception:
+            pass
+        return orig_gai(host_, *a, **kw)
+
+    try:
+        socks.set_default_proxy(socks.SOCKS5, host, int(port), rdns=True)
+        _socket.socket = _WSTorSocket
+        _socket.getaddrinfo = _ws_getaddrinfo
+        _TOR_SOCKET_STATE.update(patched=True, orig_socket=orig_socket, orig_getaddrinfo=orig_gai)
+        _logger.info(
+            "[egress] Global Tor socket yönlendirmesi AKTİF — ham socket + DNS Tor'dan "
+            "geçer (localhost bypass)."
+        )
+        return True
+    except Exception as exc:
+        _logger.warning(f"[egress] Global Tor socket zorlaması kurulamadı: {exc!r}")
+        return False
+
+
+def disable_global_tor_socket() -> None:
+    """Restore the original socket / getaddrinfo (e.g. at scan end)."""
+    if not _TOR_SOCKET_STATE["patched"]:
+        return
+    import socket as _socket
+    try:
+        if _TOR_SOCKET_STATE["orig_socket"] is not None:
+            _socket.socket = _TOR_SOCKET_STATE["orig_socket"]
+        if _TOR_SOCKET_STATE["orig_getaddrinfo"] is not None:
+            _socket.getaddrinfo = _TOR_SOCKET_STATE["orig_getaddrinfo"]
+    finally:
+        _TOR_SOCKET_STATE.update(patched=False, orig_socket=None, orig_getaddrinfo=None)
+
+
 def _tor_is_running() -> bool:
     """Tor SOCKS5 proxy'nin dinlediğini kontrol et."""
     try:
