@@ -1534,18 +1534,35 @@ def _runner_browser_crawler(ctx) -> None:
 
         crawler = BrowserCrawler(config)
         import asyncio as _asyncio
-        try:
+
+        def _run(coro):
             # Python 3.10+ deprecates get_event_loop() outside async context.
-            # Use get_event_loop_policy().get_event_loop() for sync callers, which
-            # falls back gracefully; wrap in try/except for final safety.
-            loop = _asyncio.get_event_loop_policy().get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("event loop is closed")
-            result = loop.run_until_complete(crawler.crawl(url))
-        except RuntimeError:
-            loop = _asyncio.new_event_loop()
-            _asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(crawler.crawl(url))
+            # get_event_loop_policy().get_event_loop() degrades gracefully; if it
+            # raises or the loop is closed, build a fresh loop.
+            try:
+                loop = _asyncio.get_event_loop_policy().get_event_loop()
+                if loop.is_closed():
+                    raise RuntimeError("event loop is closed")
+            except RuntimeError:
+                loop = _asyncio.new_event_loop()
+                _asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro)
+
+        # Son kalkan: crawl içindeki bütçe normalde önce devreye girip KISMİ sonuç
+        # döndürür; bu sert tavan (bütçe + 120sn) crawl'ın HER DURUMDA geri
+        # dönmesini garanti eder — no_timeout faz-watchdog'unu kapattığı için tek
+        # bir donmuş await aksi halde tüm taramayı sonsuza dek kilitler.
+        _hard_cap = crawler.overall_budget_seconds() + 120
+        try:
+            result = _run(_asyncio.wait_for(crawler.crawl(url), timeout=_hard_cap))
+        except _asyncio.TimeoutError:
+            _logger.warning(
+                "[phases] BrowserCrawler sert süre tavanını (%ss) aştı — "
+                "faz sonlandırıldı, tarama devam ediyor", int(_hard_cap)
+            )
+            add_result("meta", {"stage": "browser_crawler", "status": "skipped:timeout",
+                                 "hard_cap_secs": int(_hard_cap)})
+            return
 
         # Endpoint'leri ctx.results'a ekle.
         # Defense-in-depth: browser_crawler kapsam dışı host'ları zaten elemeli,

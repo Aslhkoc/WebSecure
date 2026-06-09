@@ -10,6 +10,7 @@ import json
 import logging
 import random as _random
 import re
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse
@@ -82,6 +83,13 @@ class BrowserCrawlConfig:
     max_pages: int = 50
     timeout_ms: int = 15000
     wait_after_load_ms: int = 1500
+    # Tüm browser-crawl için duvar-saati üst sınırı (sn). 0 => varsayılan mantık
+    # (_effective_budget_seconds): normalde 300sn, no_timeout açıkken 900sn.
+    # Browser crawler doğası gereği SINIRSIZ bir keşiftir (link/JS bundle buldukça
+    # devam eder); Tor üzerinde tek bir sayfa-içi fetch veya 50-sayfalık SPA crawl'ı
+    # onlarca dakika sürebilir. no_timeout faz-watchdog'unu kaldırdığından, crawl'ın
+    # kendisi BİTMEYİ garanti etmeli — yoksa tüm tarama burada sonsuza dek donar.
+    max_total_seconds: int = 0
     proxy_url: Optional[str] = None
     auth_cookies: List[Dict] = field(default_factory=list)
     auth_storage_state: Optional[str] = None  # path to playwright storage state JSON
@@ -191,6 +199,27 @@ class BrowserCrawler:
         self._api_requests: List[str] = []
         self._intercepted_requests: List[Dict[str, Any]] = []
 
+    def overall_budget_seconds(self) -> float:
+        """
+        Tüm browser-crawl için duvar-saati üst sınırı (sn). Browser crawler bir
+        keşif yardımcısıdır (doğrudan zafiyet bulmaz) ama sınırsız bir crawl'dır;
+        no_timeout faz-watchdog'unu kaldırdığından bu sınır crawl'ın BİTMESİNİ
+        garanti eder. no_timeout açıkken sınır cömertçe büyütülür ama SONLU kalır
+        — böylece tarama burada asla sonsuza dek donmaz (faz atlanmaz, bulunanlar
+        döndürülür).
+        """
+        base = float(getattr(self.config, "max_total_seconds", 0) or 0)
+        if base > 0:
+            return base  # açık kullanıcı tercihi — aynen onurlandır
+        base = 300.0
+        try:
+            from websecure.core.http import no_timeout_enabled as _nt
+            if _nt():
+                base = 900.0
+        except Exception:
+            pass
+        return base
+
     def crawl_sync(self, base_url: str) -> BrowserCrawlResult:
         """Synchronous wrapper for use in non-async contexts."""
         if not _PLAYWRIGHT_AVAILABLE:
@@ -241,8 +270,24 @@ class BrowserCrawler:
                 "Test adımlarını, form doldurmayı ve payload denemelerini izleyebilirsiniz."
             )
 
+        # Duvar-saati bütçesi: crawl'ın BİTMESİNİ garanti eder (no_timeout açıkken
+        # bile). Sınırsız bir keşif + Tor yavaşlığı = aksi halde sonsuz donma.
+        budget = self.overall_budget_seconds()
+        deadline = (_time.monotonic() + budget) if budget > 0 else None
+
+        def _over_budget() -> bool:
+            return deadline is not None and _time.monotonic() > deadline
+
         async with async_playwright() as pw:
-            browser: Browser = await pw.chromium.launch(**launch_opts)
+            # launch yerel bir işlemdir ama Chromium kurulu değilse/bozuksa asılı
+            # kalabilir — sınırlı bekle ki burada sonsuza dek takılmasın.
+            try:
+                browser: Browser = await asyncio.wait_for(
+                    pw.chromium.launch(**launch_opts), timeout=90
+                )
+            except Exception as e:
+                _logger.error(f"[BrowserCrawler] Chromium başlatılamadı/zaman aşımı: {e}")
+                return self._result
             ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state
@@ -341,8 +386,23 @@ class BrowserCrawler:
 
             page.on("console", _on_console)
 
+            # Tor/proxy üzerinde 15sn navigation timeout fazla dardır (Tor HTTP
+            # tabanı 20-45sn) → hem networkidle hem domcontentloaded patlar, sayfa
+            # hiç yüklenmez (keşif boş döner). Proxy varsa tavanı yükselt.
+            nav_timeout = (
+                max(self.config.timeout_ms, 30000)
+                if self.config.proxy_url else self.config.timeout_ms
+            )
+
             page_count = 0
             while to_visit and page_count < self.config.max_pages:
+                if _over_budget():
+                    _logger.info(
+                        "[BrowserCrawler] Süre bütçesi (%.0fs) doldu — %d sayfa sonrası "
+                        "keşif durduruluyor; bulunanlar döndürülüyor (faz atlanmıyor).",
+                        budget, page_count,
+                    )
+                    break
                 url = to_visit.pop(0)
                 if url in self._visited:
                     continue
@@ -351,11 +411,11 @@ class BrowserCrawler:
 
                 try:
                     try:
-                        await page.goto(url, timeout=self.config.timeout_ms, wait_until="networkidle")
+                        await page.goto(url, timeout=nav_timeout, wait_until="networkidle")
                     except Exception:
                         # networkidle can timeout on SPAs — fall back to domcontentloaded
                         try:
-                            await page.goto(url, timeout=self.config.timeout_ms, wait_until="domcontentloaded")
+                            await page.goto(url, timeout=nav_timeout, wait_until="domcontentloaded")
                         except Exception as nav_err:
                             _logger.debug(f"[BrowserCrawler] Navigation failed for {url}: {nav_err}")
                             continue
@@ -456,23 +516,45 @@ class BrowserCrawler:
                     _logger.debug(f"[BrowserCrawler] Error on {url}: {e}")
 
             # -- Phase 2: SPA route extraction from JS bundles --------------
+            # KRİTİK: sayfa-içi fetch()'in timeout'u YOKTUR; Tor üzerinde asılı bir
+            # JS-bundle indirmesi page.evaluate'i (kendisi de timeout'suz) sonsuza
+            # dek bekletir → tüm tarama donar. İki katmanlı sınır: (1) sayfa-içi
+            # AbortController 20sn'de fetch'i iptal eder, (2) Python tarafında
+            # asyncio.wait_for donmuş bir sekme/evaluate'e karşı son kalkan.
             spa_routes_discovered: List[str] = []
             for js_url in self._result.js_files[:15]:
+                if _over_budget():
+                    break
+                js_content = ""
                 try:
-                    js_content = await page.evaluate(
-                        f"async () => {{ "
-                        f"try {{ return await (await fetch({json.dumps(js_url)})).text(); }}"
-                        f" catch(e) {{ return ''; }} }}"
+                    js_content = await asyncio.wait_for(
+                        page.evaluate(
+                            "async (u) => {"
+                            "  try {"
+                            "    const c = new AbortController();"
+                            "    const t = setTimeout(() => c.abort(), 20000);"
+                            "    const r = await fetch(u, {signal: c.signal});"
+                            "    const txt = await r.text();"
+                            "    clearTimeout(t);"
+                            "    return txt;"
+                            "  } catch(e) { return ''; }"
+                            "}",
+                            js_url,
+                        ),
+                        timeout=25,
                     )
-                    if js_content:
-                        for route in self._extract_spa_routes_from_js(js_content, base_url):
-                            if route not in spa_routes_discovered:
-                                spa_routes_discovered.append(route)
                 except Exception as exc:
                     _logger.debug(f"[BrowserCrawler] JS route extraction {js_url}: {exc}")
+                    js_content = ""
+                if js_content:
+                    for route in self._extract_spa_routes_from_js(js_content, base_url):
+                        if route not in spa_routes_discovered:
+                            spa_routes_discovered.append(route)
 
             # -- Phase 3: Navigate to newly discovered SPA routes ------------
             for route in spa_routes_discovered[:25]:
+                if _over_budget():
+                    break
                 if urlparse(route).netloc != base_domain:
                     continue
                 if route in self._visited:
