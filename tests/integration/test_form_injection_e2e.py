@@ -110,6 +110,100 @@ def test_form_field_injection_end_to_end():
         httpd.server_close()
 
 
+def _reset_report():
+    try:
+        import websecure.core.reporting as _rep
+        _rep.reset()
+    except Exception:
+        pass
+
+
+def test_cmdi_form_field_injection():
+    """CMDi'nin keşfedilen form alanlarını (message) test ettiğini kanıtlar."""
+    httpd, base = start_vulnapp()
+    try:
+        sess = requests.Session()
+        forms_meta = _discover_forms(sess, base, ["/contact_page"])
+        all_forms = [f for p in forms_meta for f in p["forms"]]
+        assert all_forms, "contact form keşfedilemedi"
+        _reset_report()
+        import websecure.scanners.cmdi as cmdimod
+        results = {"forms_meta": forms_meta, "endpoints": [base + "/"], "tech_stack": []}
+        cmdimod.run(base + "/", session=sess, results=results,
+                    urls=[base + "/"], forms=all_forms, debug=False)
+        hits = _offensive(results)
+        cmdi_form = [
+            f for f in hits
+            if "command injection" in str(f.get("type", "")).lower()
+            and "form" in str(f.get("type", "")).lower()
+        ]
+        assert cmdi_form, (
+            "FORM-ALANI CMDi bulunamadı — message alanına komut enjeksiyonu denenmiyor. "
+            f"Tüm CMDi bulguları: {[(f.get('type'), f.get('param')) for f in hits]}"
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_ssti_form_field_injection():
+    """SSTI'nin form alanını (nickname) template-eval ile test ettiğini kanıtlar."""
+    httpd, base = start_vulnapp()
+    try:
+        sess = requests.Session()
+        forms_meta = _discover_forms(sess, base, ["/profile_page"])
+        all_forms = [f for p in forms_meta for f in p["forms"]]
+        assert all_forms, "profile form keşfedilemedi"
+        _reset_report()
+        import websecure.scanners.ssti as sstimod
+        results = {"forms_meta": forms_meta, "endpoints": [base + "/"], "tech_stack": []}
+        sstimod.run(base + "/", session=sess, results=results,
+                    endpoints=[base + "/"], forms=all_forms, debug=False)
+        hits = _offensive(results)
+        ssti_form = [
+            f for f in hits
+            if "template" in str(f.get("type", "")).lower() or "ssti" in str(f.get("type", "")).lower()
+        ]
+        assert ssti_form, (
+            "FORM-ALANI SSTI bulunamadı — nickname alanı template olarak işlenip {{7*7}} "
+            f"tespit edilmiyor. Tüm bulgular: {[(f.get('type'), f.get('param')) for f in hits]}"
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_nosqli_form_field_injection():
+    """NoSQLi'nin form alanlarını (username/password) operatörle test ettiğini kanıtlar."""
+    httpd, base = start_vulnapp()
+    try:
+        sess = requests.Session()
+        forms_meta = _discover_forms(sess, base, ["/nosql_login_page"])
+        all_forms = [f for p in forms_meta for f in p["forms"]]
+        assert all_forms, "nosql login form keşfedilemedi"
+        _reset_report()
+        import websecure.scanners.nosqli as nosqlimod
+        results = {"forms_meta": forms_meta, "endpoints": [base + "/"], "tech_stack": []}
+        nosqlimod.run(base + "/", session=sess, results=results,
+                      endpoints=[base + "/"], forms=all_forms, debug=False)
+        hits = _offensive(results)
+        nosqli_form = [
+            f for f in hits
+            if "nosql" in str(f.get("type", "")).lower()
+            and "form" in str(f.get("type", "")).lower()
+        ]
+        assert nosqli_form, (
+            "FORM-ALANI NoSQLi bulunamadı — username/password operatörle test edilmiyor. "
+            f"Tüm NoSQLi bulguları: {[(f.get('type'), f.get('param')) for f in hits]}"
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 if __name__ == "__main__":
     test_form_field_injection_end_to_end()
-    print("[OK] Form-alanı enjeksiyon uçtan-uca doğrulandı.")
+    test_cmdi_form_field_injection()
+    test_ssti_form_field_injection()
+    test_nosqli_form_field_injection()
+    print("[OK] Form-alanı enjeksiyon uçtan-uca doğrulandı (XSS+SQLi+CMDi+SSTI+NoSQLi).")

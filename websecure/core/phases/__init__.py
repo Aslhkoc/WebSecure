@@ -2482,10 +2482,22 @@ def _runner_cmdi(ctx) -> None:
     url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or getattr(ctx, "target", "")
     sess = getattr(ctx, "session", None)
     results = _ensure_results_bucket(ctx)
+    # CMDi önceden YALNIZ base url'yi alıyordu — ne keşfedilen endpoint'ler ne de
+    # formlar geçiliyordu. Artık prioritize edilmiş endpoint listesi + form alanları
+    # (login/feedback/search) da test edilir.
+    _eps = results.get("endpoints", [url]) if results else [url]
+    try:
+        _eps = _prioritize_urls(_eps)[:40] or [url]
+    except Exception:
+        _eps = list(_eps)[:40] or [url]
+    _forms = []
+    for _page in (results.get("forms_meta", []) if results else []):
+        if isinstance(_page, dict):
+            _forms.extend(_page.get("forms", []))
     try:
         run_fn = getattr(mod, "run", None)
         if callable(run_fn):
-            run_fn(url, session=sess, results=results, debug=False)
+            run_fn(url, session=sess, results=results, debug=False, urls=_eps, forms=_forms)
     except Exception as e:
         _logger.warning(f"[phases] CMDi runner error: {e}")
         _report_phase_error("cmdi", "phases._runner_cmdi", e)

@@ -100,6 +100,14 @@ class CmdiScanner(BaseScanner):
         for url in urls:
             self.scan_url(url)
 
+        # Form-field command injection — login/feedback/search FORM alanları.
+        # Önceden CMDi yalnız URL query param'larını + onlardan TÜRETİLEN gövdeyi
+        # test ediyordu; keşfedilen gerçek form alanları (host/cmd/comment) HİÇ
+        # denenmiyordu. submit_form_variants ile form-encoded + JSON gönderir.
+        forms = kwargs.get("forms") or []
+        if forms:
+            self._scan_forms(forms)
+
         # --- Adım 5: RCE chain — komut çıktısını raporla -----------------
         self._run_rce_chain(urls)
 
@@ -279,6 +287,78 @@ class CmdiScanner(BaseScanner):
             if hits >= min_hits:
                 return True
         return False
+
+    def _scan_forms(self, forms: List[Dict]) -> None:
+        """
+        OS command injection in discovered FORM fields (POST form-encoded + JSON).
+
+        Reuses the same output-based detection as URL params: a _CMDI_SUCCESS_PATTERN
+        (uid=0…, etc.) present in the attack response but NOT in the benign baseline.
+        Bounded: output-based payloads only (time-based is unreliable per-field), top
+        N payloads, dedup via report_finding.
+        """
+        skipped = {"submit", "button", "image", "reset", "file", "checkbox", "radio", "hidden"}
+        payloads = [(p, t) for (p, t) in _CMDI_PAYLOADS if "time" not in str(t).lower()]
+        payloads = (payloads or list(_CMDI_PAYLOADS))[:12]
+        for form in forms:
+            if not isinstance(form, dict):
+                continue
+            action = form.get("action")
+            method = (form.get("method") or "POST").upper()
+            inputs = form.get("inputs") or []
+            if not action or not inputs:
+                continue
+            fuzzable = [i for i in inputs
+                        if str(i.get("type", "text")).lower() not in skipped and i.get("name")]
+            if not fuzzable:
+                continue
+            base_data = {i["name"]: (i.get("value") or "test") for i in inputs if i.get("name")}
+            # Benign baseline across both content types (form + JSON).
+            base_text = ""
+            try:
+                for _s, _r in self.submit_form_variants(action, base_data, method, timeout=REQUEST_TIMEOUT):
+                    if _r is not None:
+                        try:
+                            base_text += (_r.text or "")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            for inp in fuzzable:
+                p_name = inp["name"]
+                if self._should_skip_param(p_name, "rce", str(base_data.get(p_name, ""))):
+                    continue
+                reported = False
+                for payload, technique in payloads:
+                    if reported:
+                        break
+                    data = dict(base_data)
+                    data[p_name] = str(base_data.get(p_name, "")) + payload
+                    try:
+                        responses = self.submit_form_variants(action, data, method, timeout=REQUEST_TIMEOUT)
+                    except Exception:
+                        responses = []
+                    for strat, r in responses:
+                        if r is None:
+                            continue
+                        try:
+                            atk = r.text or ""
+                        except Exception:
+                            continue
+                        for pattern, description in _CMDI_SUCCESS_PATTERNS:
+                            if re.search(pattern, atk, re.I | re.S) and not re.search(pattern, base_text, re.I | re.S):
+                                self.report_finding(
+                                    vuln_type="OS Command Injection (Form)",
+                                    url=action,
+                                    param=p_name,
+                                    payload=payload,
+                                    severity="Critical",
+                                    evidence=f"{description} (form field, {strat}, technique={technique})",
+                                )
+                                reported = True
+                                break
+                        if reported:
+                            break
 
     # ------------------------------------------------------------------
     # Additional injection surfaces
@@ -837,7 +917,7 @@ def run(
 ) -> None:
     scanner = CmdiScanner(session=session, results=results, debug=debug)
     targets = urls or [url]
-    scanner.run(targets[0], urls=targets)
+    scanner.run(targets[0], urls=targets, forms=kwargs.get("forms") or [])
 
 
 # ===========================================================================

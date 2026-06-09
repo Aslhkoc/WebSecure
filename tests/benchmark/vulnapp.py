@@ -105,6 +105,7 @@ class _VulnHandler(BaseHTTPRequestHandler):
                 "/safe_product?id=1", "/safe_search?q=test",
                 "/api/users", "/.env",
                 "/login_page", "/register_page", "/json_login_page",
+                "/contact_page", "/profile_page", "/nosql_login_page",
             ]
             body = "<html><body><h1>VulnApp</h1>" + "".join(
                 f'<a href="{l}">{l}</a><br>' for l in links
@@ -227,6 +228,34 @@ class _VulnHandler(BaseHTTPRequestHandler):
                 "<input type='submit' value='Giriş'>"
                 "</form></body></html>")
 
+        # === CMDi form sayfası — message alanı /contact'a POST edilir ===
+        if path == "/contact_page":
+            return self._send(200,
+                "<html><body><h2>Contact</h2>"
+                "<form method='POST' action='/contact'>"
+                "<input type='text' name='message' value=''>"
+                "<input type='submit' value='Gönder'>"
+                "</form></body></html>")
+
+        # === SSTI form sayfası — nickname alanı /profile'a POST edilir ===
+        if path == "/profile_page":
+            return self._send(200,
+                "<html><body><h2>Profile</h2>"
+                "<form method='POST' action='/profile'>"
+                "<input type='text' name='nickname' value=''>"
+                "<input type='submit' value='Kaydet'>"
+                "</form></body></html>")
+
+        # === NoSQLi form sayfası — username/password /nosql_auth'a POST edilir ===
+        if path == "/nosql_login_page":
+            return self._send(200,
+                "<html><body><h2>Account Login</h2>"
+                "<form method='POST' action='/nosql_auth'>"
+                "<input type='text' name='username' value=''>"
+                "<input type='password' name='password' value=''>"
+                "<input type='submit' value='Giriş'>"
+                "</form></body></html>")
+
         # === Info Disclosure — ZAFİYETLİ: .env açıkta ===
         if path == "/.env":
             return self._send(200, _DOTENV, ctype="text/plain; charset=utf-8")
@@ -302,6 +331,45 @@ class _VulnHandler(BaseHTTPRequestHandler):
                     f"'{html.escape(email)}'</pre></body></html>",
                 )
             return self._send(200, '{"status":"login failed"}', ctype="application/json")
+
+        # === CMDi via FORM/JSON body — ZAFİYETLİ (message alanı) ===
+        if path == "/contact":
+            data, _ct = self._read_body()
+            msg = data.get("message", "")
+            if _cmdi_marks(msg):
+                out = (f"{_CMD_ID_OUTPUT}\n"
+                       if any(s in msg.lower() for s in ("id", "whoami", "uname"))
+                       else f"{_ETC_PASSWD}")
+                return self._send(200, f"Message sent.\n{out}", ctype="text/plain; charset=utf-8")
+            return self._send(200, "Message sent. Thank you.", ctype="text/plain; charset=utf-8")
+
+        # === SSTI via FORM/JSON body — ZAFİYETLİ (nickname template olarak işlenir) ===
+        # {{a*b}} / ${a*b} / #{a*b} / <%= a*b %> ifadelerini DEĞERLENDİRİR (motor taklidi).
+        if path == "/profile":
+            import re as _re
+            data, _ct = self._read_body()
+            nick = data.get("nickname", "")
+
+            def _eval(m):
+                try:
+                    return str(int(m.group(1)) * int(m.group(2)))
+                except Exception:
+                    return m.group(0)
+            rendered = _re.sub(r"\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}", _eval, nick)
+            rendered = _re.sub(r"\$\{\s*(\d+)\s*\*\s*(\d+)\s*\}", _eval, rendered)
+            rendered = _re.sub(r"#\{\s*(\d+)\s*\*\s*(\d+)\s*\}", _eval, rendered)
+            rendered = _re.sub(r"<%=\s*(\d+)\s*\*\s*(\d+)\s*%>", _eval, rendered)
+            return self._send(200, f"<html><body>Hello, {rendered}</body></html>")
+
+        # === NoSQLi via FORM/JSON body — ZAFİYETLİ (operatör → auth bypass) ===
+        # baseline (normal kullanıcı) 401; NoSQL operatörü içeren alan 200 "admin" →
+        # _is_anomaly (durum 401->200) tetiklenir.
+        if path == "/nosql_auth":
+            data, _ct = self._read_body()
+            blob = " ".join(str(v) for v in data.values())
+            if any(op in blob for op in ("$ne", "$gt", "$regex", "$where", "$nin", '{"$', "[$")):
+                return self._send(200, "<html><body>Welcome admin — authenticated.</body></html>")
+            return self._send(401, "<html><body>login failed</body></html>")
 
         return self.do_GET()
 

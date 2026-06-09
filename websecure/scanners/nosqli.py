@@ -487,9 +487,17 @@ def run_nosqli_scan(ctx):
                 endpoints.add(u)
 
     targets = list(endpoints)
+    # forms_meta'dan keşfedilen form alanlarını da geçir — önceden NoSQLi yalnız
+    # endpoint'leri alıyordu, login/signup form alanları (username/password) hiç
+    # NoSQL operatörüyle test edilmiyordu.
+    forms = []
+    for _page in (results.get("forms_meta", []) or []):
+        if isinstance(_page, dict):
+            forms.extend(_page.get("forms", []))
     scanner = NoSQLiScanner(session=session, results=results)
-    if targets:
-        scanner.run(targets[0], endpoints=targets)
+    if targets or forms:
+        _t0 = targets[0] if targets else (getattr(ctx, "url", "") or getattr(ctx, "base_url", ""))
+        scanner.run(_t0, endpoints=targets, forms=forms)
 
 
 def run(url: str, session=None, results: dict = None, debug: bool = False,
