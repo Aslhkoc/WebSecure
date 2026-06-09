@@ -2218,7 +2218,12 @@ def _run_scan_phases(
 
             t = mark("offensive")
             off_root = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
-            if bool(off_root.get("enabled", False)):
+            # KONSOLİDASYON: faz planı (run_plan_if_needed) bu offensive scanner'ların
+            # HEPSİNİ zaten çalıştırdı (_runner_request_smuggling/mass_assignment/jwt/
+            # nosqli/ws_fuzz). Plan çalıştıysa legacy tekrarı atlanır → ~2x süre tasarrufu,
+            # sıfır kapsam kaybı. (chain_reactor/authorization/business_logic faz planında
+            # YOK → aşağıda koşulsuz çalışmaya devam eder.)
+            if bool(off_root.get("enabled", False)) and not results.get("_plan_ran"):
                 # Request Smuggling
                 if _off_enabled(cfg, "request_smuggling") and _profile_allows("request_smuggling"):
                     _run_offensive(offensive_request_smuggling, url=url, session=session, debug=debug,
@@ -2299,13 +2304,13 @@ def _run_scan_phases(
 
         # 1. NoSQL Injection
         _nosqli_fn = getattr(nosqli, "run_nosqli_scan", None) if nosqli else None
-        if callable(_nosqli_fn) and (cfg.get("scanners") or {}).get("nosqli"):
+        if callable(_nosqli_fn) and (cfg.get("scanners") or {}).get("nosqli") and not results.get("_plan_ran"):
             print("[•] NoSQL Enjeksiyon taraması…")
             _safe_call(_nosqli_fn, ctx=ctx)
 
         # 2. SSRF / XXE
         _ssrf_fn = getattr(_ssrf_mod, "run_ssrf_xxe_scan", None) if _ssrf_mod else None
-        if callable(_ssrf_fn) and (cfg.get("scanners") or {}).get("ssrf_xxe"):
+        if callable(_ssrf_fn) and (cfg.get("scanners") or {}).get("ssrf_xxe") and not results.get("_plan_ran"):
             print("[•] SSRF & XXE taraması…")
             _safe_call(_ssrf_fn, ctx=ctx)
 
@@ -2344,7 +2349,7 @@ def _run_scan_phases(
         # 3. SQL Injection (New Robust Module)
         # Import dynamically to handle 'shim' modules
         _run_sqli = _opt_import('websecure.scanners.sqli', 'run')
-        if callable(_run_sqli) and (cfg.get("scanners") or {}).get("sqli"):
+        if callable(_run_sqli) and (cfg.get("scanners") or {}).get("sqli") and not results.get("_plan_ran"):
             print(f"[•] SQL Enjeksiyon taraması (Robust) - {len(merged_eps)} hedefe...")
             # Note: sqli.run takes (url, session, results, debug) where url can be a list.
             # results MUST be passed so the scanner can read forms_meta and fuzz the
@@ -2355,14 +2360,14 @@ def _run_scan_phases(
 
         # 4. Reflected XSS (New Robust Module)
         _run_xss = _opt_import('websecure.scanners.xss', 'run')
-        if callable(_run_xss) and (cfg.get("scanners") or {}).get("xss"):
+        if callable(_run_xss) and (cfg.get("scanners") or {}).get("xss") and not results.get("_plan_ran"):
             print(f"[•] XSS taraması (Reflected) - {len(merged_eps)} hedefe...")
             # results MUST be passed (forms_meta) so XSS also fuzzes form fields, not
             # just URL-query params (see SQLi note above).
             _safe_call(_run_xss, merged_eps, session=session, results=results, debug=debug)
 
         # 5. CSRF (New Module)
-        if csrf and (cfg.get("scanners") or {}).get("csrf"):
+        if csrf and (cfg.get("scanners") or {}).get("csrf") and not results.get("_plan_ran"):
             print("[•] CSRF taraması…")
             try:
                 csrf.run_scan(ctx.url, session, results)
