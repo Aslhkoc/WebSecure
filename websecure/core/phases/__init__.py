@@ -1198,6 +1198,7 @@ _PHASE_TIMEOUTS: Dict[str, int] = {
     "races":              120,
     "race_condition":     120,
     "mass_assignment":    120,
+    "polyglot_probe":     120,   # values.txt polyglot surface triage
     "auth_matrix":        120,
     "prototype_pollution": 90,
     "scanners.ssrf_xxe":  120,
@@ -3334,6 +3335,13 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("nosqli", default=True, tech_trigger="rest_api"), # API varsa NoSQL riski yüksek
             runner=lambda c: _safe(c, lambda: _runner_nosqli(c), "nosqli"),
             tags=["api", "query"],
+        ),
+        Phase(
+            id="polyglot_probe",
+            title="Polyglot Injection-Surface Probe",
+            enabled=_flag("polyglot_probe", default=True),
+            runner=lambda c: _safe(c, lambda: run_polyglot_probe(c), "polyglot_probe"),
+            tags=["active", "triage", "fuzz"],
         ),
         Phase(
             id="scanners.file_upload",
@@ -5689,6 +5697,138 @@ def run_feroxbuster_scan(ctx) -> None:
         if len(existing) > before_count:
              _logger.info(f"[Feroxbuster] Added {len(existing) - before_count} new endpoints to offensive context.")
         ctx.results = current_res
+
+
+def run_polyglot_probe(ctx) -> None:
+    """
+    Generic Polyglot Injection-Surface Probe — paketli wordlists/values.txt'yi (polyglot
+    saldırı-değerleri: SSRF metadata, XXE, sleep, traversal, JWT…) keşfedilen HER query
+    parametresine püskürtür ve REAKTİF parametreleri bir TRİYAJ sinyali olarak işaretler:
+      • saldırı-şekilli girdide sunucu HATASI (5xx, baseline 5xx değilken)  -> Low
+      • payload'ın HAM (escape'siz) YANSIMASI (<...> içeren payload aynen dönerse) -> Info
+    Dedike tarayıcılarla (sqli/xss/lfi…) YARIŞMAZ — onaylı zafiyet iddia etmez, yalnız
+    "şu parametre saldırı girdisine tepkili, derinlemesine bakılmalı" der. Tor-farkında
+    cap'ler ile istek sayısı sınırlı. (Eskiden orphan olan values.txt'nin evi.)
+    """
+    try:
+        url = (getattr(ctx, "base_url", None) or getattr(ctx, "url", None)
+               or getattr(ctx, "target", None))
+        if not url:
+            return
+        if not _get_config(ctx, "offensive.polyglot_probe.enabled", True):
+            return
+        session = getattr(ctx, "session", None)
+        if session is None:
+            import requests as _rq
+            session = _rq.Session()
+
+        from websecure.core.payloads import load_external_payloads
+        polyglots = [p.strip() for p in (load_external_payloads("values") or [])
+                     if p and p.strip() and not p.strip().startswith("#")]
+        if not polyglots:
+            add_result("meta", {"stage": "polyglot_probe", "status": "skipped:no-values"})
+            return
+
+        tor = bool(_resolve_proxy(ctx)) or os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
+        max_params = 15 if tor else 40
+        max_vals = 8 if tor else 15
+        polyglots = polyglots[:max_vals]
+
+        from urllib.parse import urlparse, parse_qsl, urlencode
+
+        results = getattr(ctx, "results", {}) or {}
+        endpoints = list(results.get("endpoints", []) or [])
+        if url not in endpoints:
+            endpoints.insert(0, url)
+
+        # Aday (endpoint, param) çiftleri — yalnız query parametresi olanlar
+        candidates = []
+        seen_pairs = set()
+        for ep in endpoints:
+            try:
+                pr = urlparse(ep)
+                for (k, _v) in parse_qsl(pr.query, keep_blank_values=True):
+                    key = (pr.scheme, pr.netloc, pr.path, k)
+                    if key in seen_pairs:
+                        continue
+                    seen_pairs.add(key)
+                    candidates.append((ep, k))
+                    if len(candidates) >= max_params:
+                        break
+            except Exception:
+                continue
+            if len(candidates) >= max_params:
+                break
+        if not candidates:
+            add_result("meta", {"stage": "polyglot_probe", "status": "completed",
+                                "params_probed": 0, "flagged": 0})
+            return
+
+        _to = 12
+        flagged = 0
+        for ep, param in candidates:
+            try:
+                pr = urlparse(ep)
+                base_q = dict(parse_qsl(pr.query, keep_blank_values=True))
+                # baseline (benign deger)
+                bq = dict(base_q); bq[param] = "wsbenign1"
+                try:
+                    b_resp = session.get(pr._replace(query=urlencode(bq)).geturl(),
+                                         timeout=_to, allow_redirects=False)
+                    base_status = b_resp.status_code
+                except Exception:
+                    base_status = None
+
+                hit = None
+                for v in polyglots:
+                    q = dict(base_q); q[param] = v
+                    try:
+                        r = session.get(pr._replace(query=urlencode(q)).geturl(),
+                                        timeout=_to, allow_redirects=False)
+                    except Exception:
+                        continue
+                    # 1) error-reactive (en guclu sinyal)
+                    if r.status_code >= 500 and (base_status is None or base_status < 500):
+                        hit = ("error", v, r.status_code); break
+                    # 2) HAM (escape'siz) yansima: <...> iceren payload aynen donduyse
+                    if ("<" in v and ">" in v) and v in (r.text or ""):
+                        hit = ("reflect", v, r.status_code)
+                        # error daha guclu — taramaya devam, error bulunca ustune yaz
+                        continue
+                if hit:
+                    kind, v, code = hit
+                    sev = "Low" if kind == "error" else "Info"
+                    signal = ("saldırı girdisinde sunucu hatası (5xx)" if kind == "error"
+                              else "payload ham/escape'siz yansıdı (olası enjeksiyon yüzeyi)")
+                    add_result("offensive", {
+                        "type": "Injection Surface (Polyglot Probe)",
+                        "severity": sev,
+                        "url": ep,
+                        "param": param,
+                        "tool": "polyglot_probe",
+                        "verified": False,
+                        "evidence": {
+                            "signal": signal,
+                            "payload": v[:120],
+                            "status": code,
+                            "baseline_status": base_status,
+                        },
+                        "message": (
+                            f"Parametre '{param}' polyglot saldırı girdisine tepki verdi: {signal}. "
+                            "TRİYAJ sinyali — onaylı zafiyet DEĞİL; dedike tarayıcı doğrulamalı."
+                        ),
+                    })
+                    flagged += 1
+            except Exception as exc:
+                _logger.debug(f"[polyglot_probe] {ep} [{param}]: {exc!r}")
+
+        add_result("meta", {"stage": "polyglot_probe", "status": "completed",
+                            "params_probed": len(candidates), "flagged": flagged})
+        _logger.info(f"[polyglot_probe] {len(candidates)} parametre tarandı, {flagged} reaktif")
+    except Exception as e:
+        _logger.debug(f"[polyglot_probe] error: {e!r}")
+        add_result("meta", {"stage": "polyglot_probe", "status": "skipped:error",
+                            "error": str(e)[:200]})
 
 
 def run_nuclei_scan(ctx) -> None:
