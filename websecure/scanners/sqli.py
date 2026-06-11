@@ -11,7 +11,7 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
-from websecure.core.response_analyzer import ResponseBehaviorAnalyzer
+from websecure.core.response_analyzer import ResponseBehaviorAnalyzer, SQLErrorDetector
 from websecure.core.timing_analyzer import TimingAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -63,67 +63,6 @@ class SQLInjectionScanner(BaseScanner):
     _NAT_VAR_CACHE_TTL = 300  # seconds before natural-variation cache expires
     _TIMING_CACHE_TTL  = 300  # seconds before baseline-timing cache expires
 
-    # Signatures for Error-Based SQLi
-    ERRORS = {
-        "MySQL": (
-            r"SQL syntax.*MySQL", r"Warning.*mysql_.*",
-            r"valid MySQL result", r"MySqlClient\.",
-        ),
-        "PostgreSQL": (
-            r"PostgreSQL.*ERROR", r"Warning.*\Wpg_.*",
-            r"valid PostgreSQL result", r"Npgsql\.",
-        ),
-        "Microsoft SQL Server": (
-            r"Driver.* SQL[\-\_\ ]*Server", r"OLE DB.* SQL Server",
-            r"(\W|\A)SQL Server.*Driver", r"Warning.*mssql_.*",
-            r"(\W|\A)SQL Server.*[0-9a-fA-F]{8}",
-            r"(?s)Exception.*\WSystem\.Data\.SqlClient\.",
-        ),
-        "Microsoft Access": (
-            r"Microsoft Access Driver", r"JET Database Engine",
-            r"Access Database Engine",
-        ),
-        "Oracle": (
-            r"\bORA-[0-9][0-9][0-9][0-9]", r"Oracle error",
-            r"Oracle.*Driver", r"Warning.*\Woci_.*", r"Warning.*\Wora_.*",
-        ),
-        "IBM DB2": (r"CLI Driver.*DB2", r"DB2 SQL error", r"\bdb2_\w+\("),
-        "SQLite": (
-            r"SQLite/JDBCDriver", r"SQLite.Exception",
-            r"System.Data.SQLite.SQLiteException", r"Warning.*sqlite_.*",
-            r"Warning.*SQLite3::", r"\[SQLITE_ERROR\]",
-        ),
-        "Sybase": (
-            r"(?i)Sybase message", r"Sybase.*Server message",
-            r"SybSQLException",
-        ),
-        "MariaDB": (
-            r"You have an error in your SQL syntax.*MariaDB",
-            r"Warning.*mariadb_",
-            r"valid MariaDB result",
-        ),
-        "H2": (
-            r"Syntax error in SQL statement",
-            r"Column .* not found",
-        ),
-        "HSQL": (
-            r"Unexpected token.*in statement",
-        ),
-        "Firebird": (
-            r"Dynamic SQL Error",
-            r"SQL error code = -\d+",
-        ),
-        "Informix": (
-            r"A syntax error has occurred",
-            r"Informix",
-        ),
-        "MongoDB": (
-            r"MongoError",
-            r"Failed to parse",
-            r"\"errmsg\"",
-        ),
-    }
-
     def __init__(self, session=None, results=None, debug=False):
         super().__init__(session, results, debug)
         self.payloads = self._load_payloads()
@@ -164,13 +103,18 @@ class SQLInjectionScanner(BaseScanner):
         ]
 
     def _extract_error_fingerprints(self, text: str) -> set:
-        """Returns the set of (db, regex) pairs matching the given text."""
-        found = set()
-        for db, regexes in self.ERRORS.items():
-            for r in regexes:
-                if re.search(r, text, re.I):
-                    found.add((db, r))
-        return found
+        """Return the set of (db, label) DB-error fingerprints in ``text``.
+
+        Delegates to the canonical ``SQLErrorDetector`` (16-DB library shared with
+        ResponseBehaviorAnalyzer) instead of a private copy. ``label`` is the stable
+        ``"<DB>:<index>"`` token from the detector, so set-differencing an injected
+        response against the baseline stays consistent; consumers read element ``[0]``
+        for the DB name exactly as before.
+        """
+        return {
+            (label.split(":", 1)[0], label)
+            for label in SQLErrorDetector.extract_fingerprints(text)
+        }
 
     def _is_time_payload(self, payload: str) -> bool:
         p = payload.upper()

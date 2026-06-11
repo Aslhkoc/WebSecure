@@ -138,6 +138,7 @@ class SQLErrorDetector:
         "MariaDB": [
             r"You have an error in your SQL syntax.*MariaDB",
             r"Warning.*mariadb_",
+            r"valid MariaDB result",
         ],
         "PostgreSQL": [
             r"PostgreSQL.*ERROR",

@@ -306,3 +306,58 @@ CVSS/scoring tekrarı) ya da batch-FLAG dedicated risky pas (T3-encoding/TLS/JWT
 **T8 SONUÇ:** 1 gerçek konsolidasyon (#6 CVSS band, 3→1, low-bound standarda hizalandı); CVSS scoring
 sınıfları (farklı amaç), bildirim 3-modalite, finalize facade, redaction = tekrar DEĞİL, KORUNDU.
 Benchmark FP=0/Recall=100%, 325 test. **T8 TAMAM.**
+
+---
+
+## ═══ T5 (core analiz/FP — 5 dosya) ═══
+
+> Kapsam: response_analyzer, fp_reducer, fp_learner, correlation_engine, timing_analyzer (Madde 3 = analiz).
+> ADIM 0/1 sonucu: katman İYİ AYRIŞIK — 3 farklı baseline (içerik-diff / timing / soft-404), 3 farklı
+> FP/dedup ölçeği (oturum-içi exact dedup / öğrenilmiş-regex kural / çapraz-tarama korelasyon), her biri
+> AYRI amaç. Tek gerçek Madde-3 tekrarı: **SQL/DB hata-pattern kütüphanesi**.
+
+### [T5][Madde 3] #7 — SQL/DB hata-pattern kütüphanesi: sqli kopyası → tek kaynak (SQLErrorDetector)
+- **KAZANAN (tek kaynak):** `core/response_analyzer.py:SQLErrorDetector` (16-DB, ~70 pattern, compile+cache,
+  thread-safe, 64KB ReDoS-cap, `extract_fingerprints`→stabil `"<DB>:<idx>"` etiketleri). Zaten
+  `ResponseBehaviorAnalyzer`'ın motoru; sqli onu (RBA üzerinden) zaten import ediyordu.
+- **KAYBEDEN (kaldırılan kopya):** `scanners/sqli.py:ERRORS` dict (13-DB, ~45 pattern) — `SQLErrorDetector`'ın
+  ALT KÜMESİ. `_extract_error_fingerprints` artık SQLErrorDetector'a delege.
+- **AKTARILAN (ADIM 2 merge manifest — sqli'de olup canonical'da OLMAYAN):** `MariaDB: "valid MariaDB result"`
+  TEK benzersiz pattern → `SQLErrorDetector._RAW["MariaDB"]`'e eklendi (2→3 pattern). Geri kalan tüm sqli
+  pattern'leri canonical'da zaten vardı (canonical superset).
+- **DAVRANIŞ KORUNDU:** `_extract_error_fingerprints` dönüş şekli `(db, label)` tuple kaldı → 5 tüketici
+  (`db = next(iter(new_errors))[0]`) AYNEN çalışır. label artık stabil `idx` tabanlı → injected−baseline
+  set-farkı tutarlı (eskiden ham regex string'iydi, yine stabildi). KAZANÇ: 13→16 DB (Redis/Cassandra/
+  ElasticSearch + her DB'de daha fazla pattern); baseline-diff + reproducibility gate FP'yi tutar.
+- **SİLİNEN/YÖNLENDİRİLEN:** `ERRORS` class-attr (60 satır) silindi. `_extract_error_fingerprints` gövdesi
+  delegasyona indi. `import` satırına `SQLErrorDetector` eklendi. `sqli._ERROR_PATTERNS` (7-pattern, ayrı
+  LOAD_FILE okuma-prober'ı, bool döner) DOKUNULMADI — farklı dar amaç, recall-kritik değil (not edildi).
+- **Doğrulama:** pyflakes temiz (sqli+response_analyzer) · import smoke OK (MariaDB=3 pattern) · **benchmark
+  TP=5 FP=0 FN=0 Recall=100% Precision=100%, SQLi=3 (baseline'la BİREBİR aynı)** · integration 13/13 + sqli
+  unit (25 passed).
+- **Commit:** (bu commit)
+
+### T5 HARİTA + KAPANIŞ
+- **3 BASELINE — TEKRAR DEĞİL (farklı ölçüm), KORUNDU:** `response_analyzer.BaselineCapture` (içerik
+  fingerprint: hash/uzunluk/başlık/hata-fp → differential) ↔ `timing_analyzer.TimingBaseline` (istatistik
+  zamanlama profili: mean/stdev/dinamik-eşik) ↔ `fp_reducer.SoftNotFoundBaseline` (soft-404/catch-all). Üçü
+  farklı şey ölçer, farklı algoritma tüketir.
+- **FP/DEDUP/KORELASYON — TEKRAR DEĞİL (farklı kapsam), KORUNDU:** `fp_reducer._GlobalFindingRegistry`
+  (oturum-içi exact-key dedup + reproducibility) ↔ `fp_learner.FPLearner` (kalıcı öğrenilmiş regex-kural FP
+  filtresi, API-only) ↔ `correlation_engine` (çapraz-tarama ilişki tespiti: repeat/escalation/chain/
+  persistence, API-only). Üç ayrı mekanizma/kapsam. Hash key'leri (fp_reducer vuln|url|param|payload,
+  fp_learner title|url|sev|tool) FARKLI alan setleri → tekrar değil.
+- **anomaly_score (T4 analysis.py) ↔ ResponseDifferential (T5):** FARKLI seviye/sinyal — anomaly_score
+  jenerik BaseScanner sinyali (semantic/levenshtein, `base.check_anomaly`), RBA SQLi-özel hata-fp
+  differential. Tamamlayıcı, tekrar değil. (analysis.py zaten T4 dosyası → cross-layer, kaynak T4'te.)
+- **correlation_engine._CHAIN_PAIRS ↔ chain_reactor zincirleri (T2):** FARKLI amaç — _CHAIN_PAIRS post-hoc
+  anahtar-kelime ÇİFTİ tespiti (raporlanan bulgularda potansiyel zincir işaretle), chain_reactor AKTİF
+  çok-adımlı sömürü. Tekrar değil.
+- **🚩 AÇIK FLAG (recall-kritik, gerekirse ileride):** `graphql._ERROR_SIGS` (Mongo/BSON/$-operatör, dar
+  GraphQL-enjeksiyon seti) + `ws_fuzz` çok-vuln marker tablosu + `sqli._ERROR_PATTERNS` (LFI-via-SQLi okuma
+  prober'ı) = küçük domain-özel setler; SQLErrorDetector'a zorla taşımak YANLIŞ olur (farklı seviye/amaç).
+
+**T5 SONUÇ:** 1 gerçek konsolidasyon (#7 SQL/DB hata kütüphanesi, sqli→SQLErrorDetector tek kaynak,
+"valid MariaDB result" aktarıldı, 13→16 DB kazanç); 3 baseline + FP/dedup/korelasyon üçlüsü +
+anomaly/RBA + chain-pair = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, SQLi=3 birebir, 25 test.
+**T5 TAMAM.** ➜ Sıradaki: T4 (crawl) ya da T2 (exploit core kalan) ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).
