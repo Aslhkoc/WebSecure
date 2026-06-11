@@ -5323,6 +5323,29 @@ def run_xss_scan(ctx) -> None:
              add_result("xss", {"status": "skipped", "reason": "ALL XSS modules missing"})
 
 
+# ffuf DİZİN/DOSYA keşfine UYGUN OLMAYAN wordlist ad-ipuçları. Bunlar başka
+# tarayıcıların PAYLOAD listeleri (sqli/xss/lfi/ssrf…) ya da param/parola/subdomain
+# listeleridir; bir dizin adı olarak denenince hep 404 döner → bütçeyi boşa harcar.
+# (SecLists kurulu DEĞİLSE collect_all_wordlists tüm paketli payload listelerini
+#  döndürür; süzmezsek ffuf'un ~%80'i çöp olur.) Path-keşfi havuzundan ele.
+_FFUF_NON_DISCOVERY_HINTS = (
+    "sqli", "xss", "lfi", "rfi", "cmdi", "command", "ssrf", "ssti", "xxe",
+    "nosqli", "payload", "deserial", "smuggl", "prototype", "jwt", "secret",
+    "redirect", "passwd", "password", "cred", "param", "subdomain", "graphql",
+    "values", "special-char", "special_char", "fuzz",
+)
+
+
+def _is_ffuf_discovery_wordlist(path: str) -> bool:
+    """
+    ffuf dizin/dosya keşfi için UYGUN bir wordlist mi? Payload/param/parola/subdomain
+    listelerini (path-keşfinde hep 404) basit dosya-adı sezgisiyle eler. Gerçek path
+    listeleri (dirs/files/api_paths/common/raft/directory-list…) korunur.
+    """
+    base = os.path.basename(path or "").lower()
+    return not any(h in base for h in _FFUF_NON_DISCOVERY_HINTS)
+
+
 def _ffuf_budgeted_wordlist(sources, tor_active: bool, max_words_override: int = 0):
     """
     ffuf'a verilecek wordlist'i BÜTÇEYE + TAŞIMAYA göre boyutlandırır: dedup eder ve
@@ -5490,8 +5513,12 @@ def run_ffuf_scan(ctx) -> None:
         #  zaman aşımına/boş JSON'a sokuyordu — asıl bug buydu.)
         _tor_active = bool(_resolve_proxy(ctx)) or os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
         _ffuf_max_words = int(_get_config(ctx, "offensive.ffuf.max_words", 0) or 0)
-        # Öncelik: curated discovery listeleri ÖNCE (targeted), sonra diğerleri cap'e kadar.
-        _wl_sources = list(curated.get("discovery", [])) + list(all_wls)
+        # Öncelik: curated discovery listeleri ÖNCE (targeted), sonra paketli/dış
+        # listelerin YALNIZ path-keşfine uygun olanları (payload/param/parola/subdomain
+        # listeleri elenir — yoksa ffuf'un çoğu çöp denemeye gider, özellikle SecLists
+        # kurulu değilken). Curated zaten vetted, doğrudan; all_wls süzülür.
+        _disc_from_all = [w for w in all_wls if _is_ffuf_discovery_wordlist(w)]
+        _wl_sources = list(curated.get("discovery", [])) + _disc_from_all
         _built_wl = _ffuf_budgeted_wordlist(_wl_sources, _tor_active, _ffuf_max_words)
         if not _built_wl:
             add_result("ffuf", {"status": "skipped", "reason": "wordlist build failed"})
