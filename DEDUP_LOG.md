@@ -148,4 +148,50 @@
   imza/BaseScanner mirası AYNI → test_passive_recon (BaseScanner+run callable) bozulmadı.
 - **Doğrulama:** pyflakes temiz (paket 69→69) · smoke (31 pattern yüklü, AWS key tespiti) ·
   `test_passive_recon.py`+`test_js_analyzer.py` 8/8 · benchmark TP=5 FP=0 FN=0 Recall=100% Precision=100%.
-- **Commit:** (aşağıdaki)
+- **Commit:** e0c6d98cc
+
+---
+
+## ═══ T1 (scanners/ — 37 dosya) KAPANIŞ ÖZETİ ═══
+
+**Gerçek konsolidasyonlar (3):**
+- #1 subfinder wrapper → SubfinderIntegration (c5dc7facb)
+- #2 XSS→ATO orchestrator → scanners.xss.XSSToATOChain (30a94717b)
+- #3 JS sır-pattern havuzu → tek kaynak js_analyzer (e0c6d98cc)
+
+**Denetlendi — TEKRAR DEĞİL, korundu:**
+- report_generator.py (facade/delege), tls.py TLSAdim9+TLSDeepScanner (tamamlayıcı prober grupları),
+  headers.py (legacy stub→infrastructure), 8 ExploitStrategy (LFI/SSRF/JWT/GraphQL/XXE/CORS/IDOR/Deser
+  = post-tespit sömürü, scanner tespitinden ayrı rol).
+- **OOB/OAST ortak altyapı:** cmdi/ssrf_xxe/sqli/xss hepsi `core/oast.py` (get_oast_poller/OASTClient/
+  OASTScannerMixin) paylaşıyor → callback tekrarı YOK, zaten konsolide.
+- **BaseScanner:** 36 scanner tek `scanners/base.py` abstract'ını implement ediyor → arayüz tek.
+
+**FLAG — gerçek tekrar ama YÜKSEK RİSK, ayrı dikkatli pas (körü körüne yapılmadı):**
+- **TLS/cert (Madde 2):** `scan_tls` İKİ dosyada (tls.py:104 derin ↔ infrastructure.py:1220 hafif),
+  cert-çıkarımı da iki yerde (tls._get_cert_details ↔ infrastructure.check_ssl_certificate/
+  _extract_cert_details). public API (`scanners/__init__` ihraç) + çok faz-çağıranı + 2 büyük dosya.
+  Ayrıca scan_tls cipher/protokol ↔ TLSDeepScanner WeakCipher/Downgrade prober mükerrer-bulgu olası.
+- **JWT forge primitifleri (Madde 1):** scanners.jwt prober'ları (12 alg:none variant) ↔
+  JWTExploitStrategy (kendi forge'u) — ortak `jwt_forge` util'e çıkarılabilir.
+- **LFI RCE primitifleri (Madde 1):** LFIExploitStrategy log-poison/PHP-filter ↔ scanners.lfi
+  LFILogPoisoningChain/LFIPHPFilterChain. **LFI benchmark'ta → recall riski, özel dikkat.**
+
+**Scanner↔core tekrarları (T1 değil, kaynak fazında işlenecek):** baseline/response analizi
+(→T5 response_analyzer), payload/encoding (→T3), HTTP/session (→T6). Kazanan core'da olduğu için
+ilgili çekirdek fazında konsolide edilecek — T1'de değil.
+
+**⚠️ ÖNCEDEN VAR OLAN FLAKY TEST (dedup DEĞİL — T1 sırasında keşfedildi):**
+`tests/unit/test_xss_scanner.py::test_reflected_xss_detected` 5'te ~1 düşüyor. Kök neden:
+`scanners/xss.py:scan_url` payload seçiminde rastgelelik — `random.sample(rest_pool)` (612) +
+`if random.random()<0.2: mutate` (617) — minimal echo-mock'a karşı bazen executable XSS üretmiyor.
+KANIT bu BENİM değişikliğim DEĞİL: izole test_xss çalıştırmasında passive_recon (#3) hiç import
+edilmiyor, #2 xss.py'ye dokunmadı, başlangıç tabanı da bu flaky'nin şanslı geçişiydi. Benchmark
+(gerçek vulnapp, 25 XSS TP) etkilenmiyor — orada çok payload + gerçek yansıma var. **XSS
+benchmark-kritik olduğu için dedup işi içinde reaktif düzeltilmedi**; ayrı görev olarak flag'lendi
+(deterministik test: mutasyonu patch'le / seed'le, scanner mantığına dokunmadan).
+
+**T1 SONUÇ:** Saf scanner↔scanner temiz tekrarları konsolide edildi; ortak altyapı (OAST/BaseScanner)
+doğrulandı; yüksek-riskli yapısal örtüşmeler özgül kanıtla flag'lendi. Üç dedup değişikliğinin HİÇBİRİ
+test kırmadı (295 deterministik geçiyor + 1 önceden-flaky XSS). Benchmark FP=0/Recall=100% korundu.
+**T1 TAMAM.** ➜ Sıradaki: T3 (WAF/payload/encoding — Madde-4 yoğun) ya da flag'li TLS/JWT/LFI özel pasları.
