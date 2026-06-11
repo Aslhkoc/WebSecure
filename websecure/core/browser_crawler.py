@@ -45,6 +45,12 @@ try:
 except Exception:  # pragma: no cover - import güvenliği
     _same_site = None
 
+try:
+    from websecure.core.utils.net import is_junk_url as _is_junk_url
+except Exception:  # pragma: no cover - import güvenliği
+    def _is_junk_url(_u: str) -> bool:  # type: ignore
+        return False
+
 
 def _in_scope(url: str, base_url: str) -> bool:
     """
@@ -598,8 +604,13 @@ class BrowserCrawler:
                     continue
                 seen.add(path)
                 full_url = urljoin(base_url, path)
-                if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                    routes.append(full_url)
+                if urlparse(full_url).netloc != urlparse(base_url).netloc:
+                    continue
+                # /[pagePath] route-şablonları ve özyinelemeli urljoin çöpünü
+                # kaynakta ele — fuzz havuzuna sızmasın.
+                if _is_junk_url(full_url):
+                    continue
+                routes.append(full_url)
         return routes
 
     async def _simulate_spa_navigation(

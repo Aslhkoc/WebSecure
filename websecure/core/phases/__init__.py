@@ -1476,6 +1476,14 @@ def _runner_katana(ctx) -> None:
         unique_urls = result.extra.get("unique_urls", [])
         endpoints_data = result.extra.get("endpoints", [])
         timed_out = result.extra.get("timed_out", False)
+        # Katana, Next.js/GitBook gibi SPA'larda relative-urljoin özyinelemesi ve
+        # /[pagePath] gibi route-şablonlarından çöp URL üretebilir (docs.kick.com
+        # taramasında görüldü). Havuza girmeden ele — yoksa Tor üzerinde boşa
+        # istek harcanır ve rapor şişer.
+        try:
+            from websecure.core.utils import is_junk_url as _is_junk
+        except Exception:
+            _is_junk = lambda _u: False  # noqa: E731 — import güvenliği
         # ctx.results["endpoints"] 'a katana URL'lerini ekle
         if unique_urls:
             ctx_results = getattr(ctx, "results", None)
@@ -1486,12 +1494,12 @@ def _runner_katana(ctx) -> None:
                 except AttributeError:
                     pass
             existing = set(ctx_results.get("endpoints", []))
-            existing.update(unique_urls)
+            existing.update(u for u in unique_urls if not _is_junk(u))
             ctx_results["endpoints"] = list(existing)
         # endpoints bucket'a yaz
         for ep_dict in endpoints_data:
             ep_url = ep_dict.get("url", "")
-            if ep_url:
+            if ep_url and not _is_junk(ep_url):
                 add_result("endpoints", {
                     "url": ep_url,
                     "method": ep_dict.get("method", "GET"),
@@ -1596,10 +1604,10 @@ def _runner_browser_crawler(ctx) -> None:
         # beacon URL'lerinin (analytics.google.com vb.) fuzz havuzuna sızıp
         # taramayı şişirmesini ikinci kez engeller.
         try:
-            from websecure.core.utils import same_site as _same_site
+            from websecure.core.utils import same_site as _same_site, is_junk_url as _is_junk
             new_urls = {
                 u for u in (result.endpoints + result.api_endpoints + result.spa_routes)
-                if _same_site(u, url)
+                if _same_site(u, url) and not _is_junk(u)
             }
         except Exception:
             new_urls = set(result.endpoints + result.api_endpoints + result.spa_routes)

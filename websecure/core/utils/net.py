@@ -1,4 +1,6 @@
 import logging
+import re as _re
+from collections import Counter as _Counter
 from urllib.parse import urlparse, urlunparse
 from typing import Dict, Any, List, Optional, Tuple, Mapping
 
@@ -113,6 +115,56 @@ def build_response_head(status_code: int, reason: str, headers: Dict[str, str], 
 def normalize_url(url: str) -> str:
     p = urlparse(url)
     return urlunparse(p)
+
+
+# Path segment that is a framework route TEMPLATE placeholder rather than a real
+# path — Next.js/React Router dynamic segments: /[pagePath]/, /[id]/, /[...slug]/,
+# Angular/Express :param style /:id/. These are never fetchable endpoints.
+_TEMPLATE_SEG_RE = _re.compile(r'/(?:\[[^/\]]*\]|:[A-Za-z_][\w-]*)(?=/|$)')
+
+
+def is_junk_url(url: str) -> bool:
+    """
+    True if a discovered URL is almost certainly a CRAWLER ARTIFACT, not a real
+    endpoint — so callers drop it before it pollutes the endpoint pool and wastes
+    requests (especially costly over Tor). High-precision: only flags shapes that
+    do not occur in legitimate URLs.
+
+    Catches (seen in the wild on Next.js / GitBook SPAs, e.g. docs.kick.com):
+      • route templates:   /[pagePath]/static/...  /:id/...
+      • backslash junk:     ...2k\\\\  or %5c%5c%5c  (broken JS string escapes)
+      • recursive urljoin:  …/static/chunks/static/chunks/app/static/chunks/…
+                            (a segment repeated 3+ times, or a deep path whose
+                             segments are mostly duplicates)
+      • absurd depth/length (runaway recursion)
+    """
+    if not url or not isinstance(url, str):
+        return True
+    if len(url) > 2048:
+        return True
+    # Backslash never appears in a well-formed URL path (raw or %5c-encoded).
+    if "\\" in url or "%5c" in url.lower():
+        return True
+    try:
+        path = urlparse(url).path or ""
+    except Exception:
+        return True
+    if _TEMPLATE_SEG_RE.search(path):
+        return True
+    segs = [s for s in path.split("/") if s]
+    if len(segs) > 25:
+        return True
+    if segs:
+        counts = _Counter(segs)
+        # A single path segment repeated 3+ times → recursion artifact
+        # (real URLs effectively never repeat the same segment thrice).
+        if any(c >= 3 for c in counts.values()):
+            return True
+        # Deep path that is mostly duplicate segments → urljoin recursion
+        # (…/static/chunks/app/static/chunks/… : "static"×2, "chunks"×2).
+        if len(segs) >= 5 and (len(segs) - len(counts)) >= 2:
+            return True
+    return False
 
 def resolve_canonical_base(url: str) -> str:
     return normalize_url(url)

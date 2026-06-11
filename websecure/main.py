@@ -1864,6 +1864,23 @@ def _run_scan_phases(
 
         endpoints = list(results.get("endpoints", [])) or [url]
 
+        # Defense-in-depth: crawler artefaktı çöp URL'leri (özyinelemeli urljoin,
+        # /[pagePath] route-şablonları, %5c kaçışları) enjeksiyon havuzuna sokma —
+        # ingestion'da elenmiş olmalı ama burada da süz ki Tor üzerinde boşa
+        # istek/zaman harcanmasın. Hepsi çöpse url'e düş (boş bırakma).
+        try:
+            from websecure.core.utils import is_junk_url as _is_junk
+            _clean_eps = [e for e in endpoints if not _is_junk(e)]
+            if _clean_eps:
+                if len(_clean_eps) != len(endpoints):
+                    _logger.info(
+                        "[main] %d crawler-artefaktı çöp endpoint elendi (%d→%d)",
+                        len(endpoints) - len(_clean_eps), len(endpoints), len(_clean_eps)
+                    )
+                endpoints = _clean_eps
+        except Exception as _je:
+            _logger.debug(f"[main] is_junk_url filtresi atlandı: {_je!r}")
+
         # Plan B (B8): Smart endpoint prioritization — re-rank after crawl
         if _PLAN_B_AVAILABLE and _EndpointPrioritizer is not None and len(endpoints) > 1:
             try:
