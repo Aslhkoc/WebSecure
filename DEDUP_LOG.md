@@ -61,4 +61,20 @@
 - **Doğrulama:** pyflakes temiz (paket 69→69, yeni undefined yok) · import smoke
   (SubfinderWrapper→SubfinderIntegration, is_available=True) · `test_subdomain_scanner.py` 9/9 ·
   benchmark TP=5 FP=0 FN=0 Recall=100% Precision=100%.
-- **Commit:** (aşağıdaki commit)
+- **Commit:** c5dc7facb
+
+---
+
+### [Ön-inceleme] tls.py: TLSAdim9Scanner + TLSDeepScanner — TEKRAR DEĞİL (tamamlayıcı)
+- **Sonuç:** KORUNDU. `scan_tls()` (tek orkestratör giriş, tls.py:104) İKİSİNİ DE çağırır;
+  farklı prober grupları: TLSAdim9Scanner = BEAST/POODLE/CRIME/ROBOT/HTTP2/HTTP3/CDN,
+  TLSDeepScanner = WeakCipher/HSTS/ProtocolDowngrade/CertValidation/Compression. Rakip değil.
+- **AÇIK FLAG (derin TLS fazına):** scan_tls 2-3. adım `check_protocol_support`/`check_weak_ciphers`
+  ile TLSDeepScanner'ın WeakCipherSuiteProber/TLSProtocolDowngradeProber ve infrastructure
+  cert kontrolü (PySSLCertChecker) ↔ TLSDeepScanner.CertificateValidationProber arasında
+  OLASI mükerrer-bulgu örtüşmesi var → ileride mükerrer-finding kontrolü gerek (Madde 2/3).
+
+### [Ön-inceleme] scanners/headers.py — TEKRAR DEĞİL (legacy compat stub)
+- **Sonuç:** KORUNDU. `infrastructure.get_security_headers`'a delege eden 25-satırlık stub;
+  config `modules: ['headers']` dinamik importu için duruyor. Rakip logic yok. (Config'den
+  'headers' modülü kalkarsa ölü-kod olur → o zaman kaldırılabilir; şimdilik bağlı.)
