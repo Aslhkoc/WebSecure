@@ -821,11 +821,6 @@ class UnicodeConfuser:
                 character insertion, Unicode tag block encoding.
     """
 
-    # ASCII printable → fullwidth (Ａ = U+FF21 etc.)
-    _FULLWIDTH: Dict[str, str] = {
-        chr(i): chr(i + 0xFF00 - 0x20) for i in range(0x21, 0x7F)
-    }
-
     _HOMOGLYPHS: Dict[str, List[str]] = {
         "a": ["а", "ɑ", "α"],    # Cyrillic а / Latin alpha / Greek alpha
         "e": ["е", "ε", "ë"],
@@ -840,8 +835,10 @@ class UnicodeConfuser:
     }
 
     def fullwidth(self, text: str) -> str:
-        """Convert ASCII printable characters to Unicode fullwidth equivalents."""
-        return "".join(self._FULLWIDTH.get(c, c) for c in text)
+        """Convert ASCII printable characters to Unicode fullwidth equivalents.
+        Tek kaynak: core.mutator.to_fullwidth (önceki yerel _FULLWIDTH dict ile byte-identical)."""
+        from websecure.core.mutator import to_fullwidth as _tf
+        return _tf(text)
 
     def homoglyph_substitute(self, text: str, *, max_subs: int = 3) -> str:
         """Substitute up to *max_subs* characters with their first available homoglyph."""

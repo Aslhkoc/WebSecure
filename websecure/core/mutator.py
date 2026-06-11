@@ -21,6 +21,18 @@ import html
 
 _logger = logging.getLogger(__name__)
 
+
+def to_fullwidth(text: str) -> str:
+    """ASCII yazdırılabilir (0x21–0x7E) → Unicode fullwidth (kod + 0xFEE0); diğerleri aynı.
+    WAF normalizasyon-bypass'ı. TEK KAYNAK: core/evasion ve fullwidth ihtiyacı olan her yer
+    buna delege eder (önceden evasion._FULLWIDTH dict'i ile byte-identical tekrarıydı)."""
+    res = []
+    for char in text:
+        code = ord(char)
+        res.append(chr(code + 0xFEE0) if 33 <= code <= 126 else char)
+    return "".join(res)
+
+
 class Mutator:
     @staticmethod
     def _common_polymorph(payload: str) -> set:
@@ -85,15 +97,9 @@ class Mutator:
 
     @staticmethod
     def _to_fullwidth(payload: str) -> str:
-        """Converts ASCII characters to Fullwidth equivalents (WAF normalization bypass)."""
-        res = ""
-        for char in payload:
-            code = ord(char)
-            if 33 <= code <= 126:
-                res += chr(code + 0xFEE0)
-            else:
-                res += char
-        return res
+        """Converts ASCII characters to Fullwidth equivalents (WAF normalization bypass).
+        Tek kaynak: module-level to_fullwidth()."""
+        return to_fullwidth(payload)
 
     @staticmethod
     def _insert_nulls(payload: str) -> str:

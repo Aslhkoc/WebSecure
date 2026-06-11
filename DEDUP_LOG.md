@@ -195,3 +195,43 @@ benchmark-kritik olduğu için dedup işi içinde reaktif düzeltilmedi**; ayrı
 doğrulandı; yüksek-riskli yapısal örtüşmeler özgül kanıtla flag'lendi. Üç dedup değişikliğinin HİÇBİRİ
 test kırmadı (295 deterministik geçiyor + 1 önceden-flaky XSS). Benchmark FP=0/Recall=100% korundu.
 **T1 TAMAM.** ➜ Sıradaki: T3 (WAF/payload/encoding — Madde-4 yoğun) ya da flag'li TLS/JWT/LFI özel pasları.
+
+---
+
+## ═══ T3 (core WAF/payload/encoding — 7 dosya) ═══
+
+### [T3][Madde 4] #4 — fullwidth encoding: 2 byte-identical implementasyon → tek kaynak
+- **KAZANAN (tek kaynak):** `core/mutator.py:to_fullwidth()` (yeni module-level fonksiyon, algoritmik
+  +0xFEE0). `Mutator._to_fullwidth` artık buna delege eder.
+- **KAYBEDEN (kaldırılan):** `core/evasion.py:UnicodeConfuser._FULLWIDTH` dict
+  (`chr(i+0xFF00-0x20) for i in range(0x21,0x7F)`) — mutator'ın +0xFEE0'i ile **BYTE-IDENTICAL**
+  (kanıt: smoke'ta module==static==evasion). UnicodeConfuser.fullwidth() artık mutator.to_fullwidth'a delege.
+- **AKTARILAN:** yok (birebir aynı, kayıp yetenek yok). **SİLİNEN:** `_FULLWIDTH` dict + dict-lookup gövdesi.
+- **Doğrulama:** byte-identical kanıtlandı (A→0xff21, non-ASCII korunur) · pyflakes 69→69 · benchmark
+  TP=5 FP=0 Recall=100% · 296 test. **Saf refactor — davranış değişmedi (benchmark-güvenli).**
+- **Commit:** (aşağıdaki)
+
+### T3 HARİTA + FLAG'ler (kanıta dayalı)
+- **evasion.py — TEKRAR DEĞİL (farklı SEVİYE), KORUNDU:** REQUEST/transport-seviyesi WAF-bypass
+  toolkit'i (ChunkedBodyBuilder/OverlongUTF8Encoder/CRLFInjector/EncodingChain/PathMutator/
+  ParamFragmentor/JSONUnicodeEscaper/HTTP2EvasionHelper). `waf_bypass.WAFBypassAdapter` çıkan HTTP
+  isteğini (path/body/header/chunk/HTTP2) `_evasion_*` flag'leriyle dönüştürür. mutator/payload_engine
+  PAYLOAD-string seviyesi; evasion onların tekrarı değil.
+- **WAF tespiti — TEKRAR DEĞİL (katmanlı), KORUNDU:** `waf_fingerprint.WAFFingerprinter` zaten
+  `waf_bypass.WAFDetector`'a delege ediyor + davranış-probları ekliyor; `analysis.detect_waf_from_response`
+  passive fallback. (Küçük yerel `_detect_waf`: param_pollution + tech_fingerprint — başka faz dosyaları,
+  dar yerel ihtiyaç; T3 değil.)
+- **payloads.py — FACADE, KORUNDU:** payload_engine'i re-export eden hub (pyflakes "imported but unused"
+  satırları kasıtlı). report_generator gibi.
+- **🚩 FLAG — ASIL T3 TEKRARI (Madde 4, YÜKSEK RİSK, ayrı benchmark-validated pas):** payload
+  encoding/mutation **5 implementasyona dağılmış**: `mutator.Mutator` (base primitifler) ↔
+  `waf_bypass.AdaptiveMutationEngine` (Mutator'ı sarar + confusable) ↔ `payload_engine.EncodingVariantGenerator`
+  (_enc_url/double/html/base64/hex/unicode) ↔ `payload_engine.PayloadMutationEngine` (strateji) ↔
+  `human_adapter._mutate_payload` (mini). **İKİ PARALEL YIĞIN base.get_smart_payloads'ta BİRLİKTE CANLI:**
+  `get_payloads_v2`(PayloadEngine→EncodingVariantGenerator) + `_apply_creative_waf_bypass`(AdaptiveMutationEngine→
+  Mutator) — aynı payload'a örtüşen URL/double-url/hex/html encoding uygulayıp dedup ediyor. **SQLi/XSS
+  BENCHMARK-KRİTİK + implementasyonlar byte-identical DEĞİL → birleştirme variant-set'i değiştirir = recall
+  riski.** Doğru yol: kanonik encoding-primitif modülü çıkar, tüm motorları ona bağla, HER primitiften sonra
+  benchmark (SQLi/XSS recall=100%) doğrula. Aceleyle YAPILMADI ("çöp olur" riski).
+- **T3 SONUÇ:** 1 güvenli konsolidasyon (#4 fullwidth, byte-identical); evasion/WAF-detect/payloads
+  facade KORUNDU (tekrar değil); asıl encoding-motor tekrarı kanıtla FLAG'lendi (dedicated pas gerek).
