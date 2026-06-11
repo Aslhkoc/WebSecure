@@ -361,3 +361,34 @@ Benchmark FP=0/Recall=100%, 325 test. **T8 TAMAM.**
 "valid MariaDB result" aktarıldı, 13→16 DB kazanç); 3 baseline + FP/dedup/korelasyon üçlüsü +
 anomaly/RBA + chain-pair = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, SQLi=3 birebir, 25 test.
 **T5 TAMAM.** ➜ Sıradaki: T4 (crawl) ya da T2 (exploit core kalan) ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).
+
+---
+
+## ═══ T4 (core crawl/analiz — 6 dosya) ═══
+
+> Kapsam: crawler, browser_crawler, form_parser, analysis, endpoint_prioritizer, tech_fingerprint (Madde 2 tarama + 3 analiz).
+> ADIM 0/1: 3 crawler WIRED + FARKLI rol (root `crawler.py:WebCrawler` üretim HTTP+browser [main.py];
+> `core/crawler.py:CrawlerOrchestrator` API/şema keşfi fazı [phases:1674]; `browser_crawler.BrowserCrawler`
+> Playwright SPA fazı) — PROJECT_MAP "farklı roller" doğrulandı, körü körüne BİRLEŞTİRİLMEZ. Extraction
+> primitifleri (link/form/JS) bağlam-özel (kırık-HTML fuzz regex / static BS4 / SPA DOM), farklı sonuç
+> şekline besler. `infer_form_method` ZATEN tek kaynak (analysis.py, commit 948b9406d).
+
+### [T4][Madde 3] #8 — Sır (secret) pattern havuzu: browser_crawler kopyası → tek kaynak (js_analyzer)
+- **KAZANAN (tek kaynak):** `scanners/js_analyzer.py:_SECRET_PATTERNS` (derlenmiş, capture-grup'lu; T1 #3'te
+  passive_recon da buna bağlanmıştı). 31→**32** pattern.
+- **KAYBEDEN (fallback'e indirildi):** `core/browser_crawler.py:_SECRET_PATTERNS` (5-pattern dict) →
+  `_scan_for_secrets` artık canonical `_JS_SECRET_PATTERNS`'i kullanır (modül yoksa yerel dict fallback —
+  passive_recon ile birebir aynı desen). Sır taraması 5→32 pattern'e yükseldi.
+- **AKTARILAN (ADIM 2 merge manifest):** browser_crawler-benzersiz TEK pattern `"Bearer Token"`
+  (`[Bb]earer\s+(...)` inline form; js_analyzer'da yalnız `bearer_token` key=value vardı) → canonical'e
+  eklendi. Diğer 4 (API Key/JWT/AWS Key/Private Key) canonical'da zaten daha geniş haliyle vardı.
+- **DAVRANIŞ:** finding şekli (`type/url/value_preview[:20]/severity:High`) korundu; canonical capture-grup
+  varsa onu (`match.lastindex`) alır → gerçek sır değeri (eskisi tam-eşleşme alıyordu, iyileşme).
+- **İmport güvenliği:** core→scanners import'u modül-seviyesi `try/except` ile (cycle olursa ImportError
+  yakalanır → fallback). js_analyzer yalnız `core.reporting` (leaf) import eder → cycle yok; smoke doğruladı.
+- **SİLİNEN/YÖNLENDİRİLEN:** hiçbir şey silinmedi (5-pattern dict bilinçli fallback olarak kaldı, passive_recon
+  precedent'i). Canlı yol artık TEK kaynak. PROJECT_MAP browser_crawler deps += js_analyzer.
+- **Doğrulama:** pyflakes temiz (browser_crawler+js_analyzer) · import/cycle smoke OK (canonical=32, görünür) ·
+  fonksiyonel (AWS Key + Bearer canonical yoldan tespit) · benchmark TP=5 FP=0 Recall=100% · integration 13/13 ·
+  passive_recon 17 + js_analyzer 6 unit yeşil (canonical'in diğer tüketicileri Bearer eklemesinden bozulmadı).
+- **Commit:** (bu commit)

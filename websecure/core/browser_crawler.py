@@ -51,6 +51,14 @@ except Exception:  # pragma: no cover - import güvenliği
     def _is_junk_url(_u: str) -> bool:  # type: ignore
         return False
 
+# Sır pattern havuzu tek kaynağı: scanners.js_analyzer._SECRET_PATTERNS (32 derlenmiş
+# pattern). Aşağıdaki sınıf-içi _SECRET_PATTERNS yalnız bu import başarısız olursa (ör.
+# scanners paketi yoksa) devreye giren yerel fallback'tir. [[plan_dedup_konsolidasyon]]
+try:
+    from websecure.scanners.js_analyzer import _SECRET_PATTERNS as _JS_SECRET_PATTERNS
+except Exception:  # pragma: no cover - tek kaynak yoksa yerel fallback'e düşer
+    _JS_SECRET_PATTERNS = None
+
 
 def _in_scope(url: str, base_url: str) -> bool:
     """
@@ -190,6 +198,8 @@ class BrowserCrawler:
         "Svelte": [r"svelte/internal"],
     }
 
+    # FALLBACK ONLY — canlı tarama js_analyzer._SECRET_PATTERNS (tek kaynak, 32 pattern)
+    # kullanır; bu küçük set yalnız o modül import edilemezse devreye girer.
     _SECRET_PATTERNS = {
         "API Key": r'(?:api[_-]?key|apikey)\s*[=:]\s*["\']([A-Za-z0-9\-_]{20,})["\']',
         "JWT Token": r'eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+',
@@ -679,15 +689,28 @@ class BrowserCrawler:
         return detected
 
     def _scan_for_secrets(self, content: str, url: str) -> None:
-        for name, pattern in self._SECRET_PATTERNS.items():
-            for match in re.finditer(pattern, content):
-                secret_val = match.group(0)
-                self._result.secrets_found.append({
-                    "type": name,
-                    "url": url,
-                    "value_preview": secret_val[:20] + "...",
-                    "severity": "High",
-                })
+        # Tek kaynak: js_analyzer._SECRET_PATTERNS (derlenmiş, capture-grup'lu, 32 pattern).
+        # capture-grup varsa onu (gerçek sır) al, yoksa tam eşleşme. Modül yoksa yerel dict.
+        if _JS_SECRET_PATTERNS:
+            for name, rx in _JS_SECRET_PATTERNS:
+                for match in rx.finditer(content):
+                    secret_val = match.group(match.lastindex) if match.lastindex else match.group(0)
+                    self._result.secrets_found.append({
+                        "type": name,
+                        "url": url,
+                        "value_preview": secret_val[:20] + "...",
+                        "severity": "High",
+                    })
+        else:
+            for name, pattern in self._SECRET_PATTERNS.items():
+                for match in re.finditer(pattern, content):
+                    secret_val = match.group(0)
+                    self._result.secrets_found.append({
+                        "type": name,
+                        "url": url,
+                        "value_preview": secret_val[:20] + "...",
+                        "severity": "High",
+                    })
 
 
 def should_use_browser_crawler(http_result: Dict) -> bool:

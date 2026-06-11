@@ -72,6 +72,7 @@ _SECRET_PATTERNS: List[tuple] = [
     ("API Key",             re.compile(r"""(?:apiKey|api_key|apikey|API_KEY)\s*[:=]\s*["'`]([A-Za-z0-9_\-]{16,})["'`]""", re.I)),
     ("Access Token",        re.compile(r"""(?:access_token|accessToken|ACCESS_TOKEN)\s*[:=]\s*["'`]([A-Za-z0-9_\-\.]{16,})["'`]""", re.I)),
     ("Auth Token",          re.compile(r"""(?:auth_token|authToken|AUTH_TOKEN|bearer_token)\s*[:=]\s*["'`]([A-Za-z0-9_\-\.]{16,})["'`]""", re.I)),
+    ("Bearer Token",        re.compile(r"""[Bb]earer\s+([A-Za-z0-9\-_\.]{20,})""")),
     ("Secret Key",          re.compile(r"""(?:secret_key|secretKey|SECRET_KEY|app_secret|APP_SECRET)\s*[:=]\s*["'`]([A-Za-z0-9_\-\.!@#]{10,})["'`]""", re.I)),
     ("Password",            re.compile(r"""(?:password|passwd|pwd|PASSWORD|PASSWD)\s*[:=]\s*["'`]([^\s"'`]{6,})["'`]""", re.I)),
     ("Database URL",        re.compile(r"""(?:DATABASE_URL|db_url|DB_URL|connection_string)\s*[:=]\s*["'`]((?:postgres|mysql|mongodb|redis|mssql)://[^\s"'`]{8,})["'`]""", re.I)),
