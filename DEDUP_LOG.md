@@ -128,3 +128,24 @@
   benchmark'ta → bu refactor benchmark-LFI recall'ı riske atar, ÖZEL dikkat gerekir.** Şimdi YAPILMADI.
 - **Sonuç:** Strateji-delegasyon dedup partisi #2 ile KAPANDI (1 gerçek düzeltme; 4 zaten doğru;
   8 ayrı-rol korundu). Körü körüne hiçbir sömürü kodu silinmedi.
+
+---
+
+### [T1][Madde 3] #3 — JS sır-tarama: iki pattern havuzu → tek kaynak (js_analyzer)
+- **KAZANAN (korunan):** `scanners/js_analyzer.py:_SECRET_PATTERNS` (31 compiled pattern, capture-group
+  destekli, Shannon-entropy FP filtresi). Tek sır-pattern kaynağı.
+- **KAYBEDEN (aktif yoldan çıkarılan):** `scanners/passive_recon.py:PassiveJSScanner.SECRET_PATTERNS`
+  (18 pattern alt-küme — JSAnalyzer'ın subseti). İki fazda (run_js_analysis + passive_recon) iki
+  ayrı sır-tarayıcı çalışıyordu.
+- **AKTARILAN (merge manifest):**
+  1. Shannon-entropy FP filtresi (`_is_false_positive`) → PassiveJSScanner'da KORUNDU (zaten js_analyzer'
+     da da var, benzersiz değildi). 2. BaseScanner finding şekli (`create_finding`) → KORUNDU.
+  3. capture-group desteği → eklendi (`match.lastindex` ile bare-secret çıkarımı).
+  4. Endpoint çıkarımı (`_find_endpoints`) → ayrı sorumluluk, DOKUNULMADI.
+- **SİLİNEN/YÖNLENDİRİLEN:** PassiveJSScanner aktif yolu artık `_JS_SECRET_PATTERNS` (js_analyzer'dan
+  import) kullanıyor → sır havuzu TEK yerde bakımlanıyor; passive tarama 18→31 pattern'e yükseldi.
+  Yerel `SECRET_PATTERNS` dict SİLİNMEDİ, ImportError fallback'ine indirildi (house-style). Sınıf adı/
+  imza/BaseScanner mirası AYNI → test_passive_recon (BaseScanner+run callable) bozulmadı.
+- **Doğrulama:** pyflakes temiz (paket 69→69) · smoke (31 pattern yüklü, AWS key tespiti) ·
+  `test_passive_recon.py`+`test_js_analyzer.py` 8/8 · benchmark TP=5 FP=0 FN=0 Recall=100% Precision=100%.
+- **Commit:** (aşağıdaki)

@@ -104,9 +104,21 @@ _FILE_CONTENT_SIGNATURES = [
     (lambda f: f.endswith((".log", ".txt", ".bak", ".old", ".save", ".swp", "~")), None),
 ]
 
+# Sır-pattern TEK KAYNAĞI: js_analyzer._SECRET_PATTERNS (30+ compiled pattern, capture-group
+# destekli). PassiveJSScanner artık bunu kullanır → secret listesi tek yerde bakımlanır (dedup,
+# Madde 3). Import edilemezse sınıf-içi SECRET_PATTERNS (18 pattern alt-küme) fallback olur.
+try:
+    from websecure.scanners.js_analyzer import _SECRET_PATTERNS as _JS_SECRET_PATTERNS
+except Exception:  # pragma: no cover - defensive
+    _JS_SECRET_PATTERNS = None
+
+
 class PassiveJSScanner(BaseScanner):
     """
     Scans JavaScript files for hardcoded secrets, endpoints, emails, and source maps.
+
+    Sır pattern havuzu js_analyzer._SECRET_PATTERNS'ten gelir (tek kaynak, daha geniş);
+    aşağıdaki SECRET_PATTERNS yalnız o modül import edilemezse fallback'tir.
     """
     SECRET_PATTERNS = {
         "AWS Access Key":       r"AKIA[0-9A-Z]{16}",
@@ -141,18 +153,32 @@ class PassiveJSScanner(BaseScanner):
 
     def _analyze_content(self, url: str, content: str) -> List[Dict]:
         results = []
-        # Secret Scan
-        for name, pattern in self.SECRET_PATTERNS.items():
-            for match in re.finditer(pattern, content):
-                secret = match.group(0)
-                if not self._is_false_positive(secret):
-                    results.append(self.create_finding(
-                        type=f"JS Secret Exposure ({name})",
-                        url=url,
-                        severity="High",
-                        details=f"Found potential {name}: {secret[:10]}...",
-                        evidence={"snippet": secret}
-                    ))
+        # Secret Scan — güçlü js_analyzer pattern havuzunu (tek kaynak) kullan; capture-group
+        # varsa onu al (yoksa tam eşleşme). Modül yoksa yerel SECRET_PATTERNS fallback.
+        if _JS_SECRET_PATTERNS:
+            for name, rx in _JS_SECRET_PATTERNS:
+                for match in rx.finditer(content):
+                    secret = match.group(match.lastindex) if match.lastindex else match.group(0)
+                    if not self._is_false_positive(secret):
+                        results.append(self.create_finding(
+                            type=f"JS Secret Exposure ({name})",
+                            url=url,
+                            severity="High",
+                            details=f"Found potential {name}: {secret[:10]}...",
+                            evidence={"snippet": secret}
+                        ))
+        else:
+            for name, pattern in self.SECRET_PATTERNS.items():
+                for match in re.finditer(pattern, content):
+                    secret = match.group(0)
+                    if not self._is_false_positive(secret):
+                        results.append(self.create_finding(
+                            type=f"JS Secret Exposure ({name})",
+                            url=url,
+                            severity="High",
+                            details=f"Found potential {name}: {secret[:10]}...",
+                            evidence={"snippet": secret}
+                        ))
         
         # Endpoint Scan
         endpoints = self._find_endpoints(content)
