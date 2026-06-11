@@ -78,3 +78,31 @@
 - **Sonuç:** KORUNDU. `infrastructure.get_security_headers`'a delege eden 25-satırlık stub;
   config `modules: ['headers']` dinamik importu için duruyor. Rakip logic yok. (Config'den
   'headers' modülü kalkarsa ölü-kod olur → o zaman kaldırılabilir; şimdilik bağlı.)
+
+---
+
+### [T2/T1][Madde 1] #2 — XSS→ATO: orchestrator'ın zayıf simülasyonu → güçlü scanner motoruna delege
+- **KAZANAN (korunan):** `scanners/xss.py:XSSToATOChain` — gerçek ATO motoru: XSSCallbackServer
+  (127.0.0.1) + 3 PoC payload (cookie_steal / localstorage_steal / email-change ATO CSRF) +
+  Playwright/Selenium/requests sürüş + callback doğrulama. (chain_reactor:2307 zaten buna
+  delege ediyordu — şimdi exploit_orchestrator da ediyor.)
+- **KAYBEDEN (kaldırılan aktif logic):** `core/exploit_orchestrator.py:XSSToATOStrategy`'nin
+  kendi tek `_COOKIE_STEALER_TEMPLATE`'i + yansıma-only simülasyonu (gerçek callback yok).
+- **AKTARILAN (merge manifest — güçsüzde olup korunması gerekenler):**
+  1. **ExploitStrategy arayüzü** (can_handle/name/ExploitResult) → sınıf wrapper KORUNDU,
+     sadece execute() içi delegasyona çevrildi (SQLiExploitStrategy deseniyle birebir).
+  2. **cvss_amplification** skorları (stored=2.0, reflected/dom=1.5) → KORUNDU.
+  3. **stored XSS yansıma-doğrulama** sinyali (sayfada payload hâlâ yansıyor mu) → KORUNDU.
+  4. **reflected crafted-URL doğrulama** → KORUNDU; ama artık güçlü `cookie_steal` (img/onerror)
+     payload'unu enjekte ediyor → regex `<script>`'ten `onerror=|<script>`'e genişletildi
+     (yoksa güçlü payload yansıması asla eşleşmezdi — payload swap'ı kırmamak için kritik düzeltme).
+  5. **DOM impact dokümantasyonu** + **OOB host** (ctx.extra oob_host/lhost) → KORUNDU,
+     oob_host artık generate_poc'a attacker_host olarak geçiyor.
+  6. `_COOKIE_STEALER_TEMPLATE` SİLİNMEDİ → yalnız motor import'u başarısızsa fallback'e indirildi.
+- **SİLİNEN/YÖNLENDİRİLEN:** XSSToATOStrategy sınıf adı + strateji kaydı (orchestrator:2135) +
+  __all__ AYNI kaldı. Yeni bağ: `from websecure.scanners.xss import XSSToATOChain` (method-içi
+  lazy, cycle yok — SQLi stratejisi de aynısını yapıyor). PROJECT_MAP entry değişmedi (sınıf adı sabit).
+- **Doğrulama:** pyflakes temiz (paket 69→69) · offline execute smoke (reflected graceful-fail,
+  DOM güçlü PoC'u evidence'a koyuyor) · `test_chaining.py`+`test_xss_scanner.py`+`test_dom_xss.py`
+  40/40 · benchmark TP=5 FP=0 FN=0 Recall=100% Precision=100%.
+- **Commit:** (aşağıdaki)
