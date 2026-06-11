@@ -261,3 +261,14 @@ test kırmadı (295 deterministik geçiyor + 1 önceden-flaky XSS). Benchmark FP
   `session_factory.ensure_session` onu sarıp instrument ekler; `waf_bypass.build_bypass_session`/
   `human_adapter.make_human_session` üstüne katman; `scan_runner.make_human_session` zaten human_adapter'a
   delege (ince shim). `ensure_session` auth_flow↔session_factory = isim-çakışması, FARKLI anlam (canlı-mı? vs inşa-et).
+- **Concurrency havuzları — TEKRAR DEĞİL (farklı bağlam), KORUNDU:** `concurrency.AdaptiveThreadPool`
+  (genel adaptif scan pool + PriorityTaskQueue) ↔ `bl_concurrency` (RaceEngine/ThreadEngine/AsyncioEngine =
+  race-condition eşzamanlı burst) ↔ `async_runner.AsyncScanRunner` (aiohttp async). Hepsi stdlib
+  ThreadPoolExecutor'ı FARKLI amaçla kullanıyor (genel/race/async) → ortak primitif zaten stdlib, dup değil.
+- **Circuit breaker — TEK KAYNAK, KORUNDU:** `circuit_breaker.py` (ScanCircuitBreaker + cb_check/cb_record);
+  `http.py:271` onu import edip kullanıyor (reimplement etmiyor). Zaten konsolide.
+
+**T6 SONUÇ:** 1 gerçek konsolidasyon (#5 token-bucket, rate_controller tek kaynak); session-builder'lar
+(layered), RateGate (farklı mekanizma), concurrency havuzları (farklı bağlam), circuit-breaker (tek kaynak)
+= tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 296 test. **T6 TAMAM.** ➜ Sıradaki: T8 (rapor/skor —
+CVSS/scoring tekrarı) ya da batch-FLAG dedicated risky pas (T3-encoding/TLS/JWT/LFI).
