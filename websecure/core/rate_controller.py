@@ -195,6 +195,11 @@ class _TokenBucket:
             return self._rate
 
 
+# Public alias: TEK-KAYNAK token bucket. http.RateLimiter bu sınıfa delege eder
+# (eski kopyalanmış bucket algoritması kaldırıldı). AdaptiveRateController da _TokenBucket'i kullanır.
+TokenBucket = _TokenBucket
+
+
 # ---------------------------------------------------------------------------
 # AdaptiveRateController — main public API
 # ---------------------------------------------------------------------------

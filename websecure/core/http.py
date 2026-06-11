@@ -2354,28 +2354,21 @@ def note_http_response(status: int, rt_ms: int) -> None:
 
 
 class RateLimiter:
-    def __init__(self, rps: float, burst: int = 4):
-        self.capacity = max(1, int(burst))
-        self.tokens = float(self.capacity)
-        self.rps = max(0.1, float(rps))
-        self.last = time.monotonic()
-        self._lock = threading.Lock()
+    """Token-bucket rate limiter.
 
-    def _add_tokens(self, now: float) -> None:
-        delta = now - self.last
-        self.tokens = min(self.capacity, self.tokens + delta * self.rps)
-        self.last = now
+    DEDUP (Madde 4): bucket algoritması artık TEK kaynakta — `rate_controller.TokenBucket`.
+    Bu sınıf onu sarar; kendi (önceden kopyalanmış _add_tokens/acquire) bucket döngüsünü
+    TAŞIMAZ. http'ye özgü clamp'ler korundu (rps>=0.1, capacity>=1). TokenBucket ayrıca
+    capped-sleep (min(wait,0.5)) ile daha responsive bekleme sunar (aynı efektif rate).
+    """
+    def __init__(self, rps: float, burst: int = 4):
+        from websecure.core.rate_controller import TokenBucket
+        self.rps = max(0.1, float(rps))
+        self.capacity = max(1, int(burst))
+        self._bucket = TokenBucket(rate=self.rps, burst=self.capacity)
 
     def acquire(self) -> None:
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                self._add_tokens(now)
-                if self.tokens >= 1.0:
-                    self.tokens -= 1.0
-                    return
-                need = (1.0 - self.tokens) / self.rps
-            time.sleep(need)
+        self._bucket.acquire(block=True)
 
 def jitter_delay(jitter_range_ms: list[int] | tuple[int,int] | int | None) -> float:
     if jitter_range_ms is None:

@@ -235,3 +235,29 @@ test kırmadı (295 deterministik geçiyor + 1 önceden-flaky XSS). Benchmark FP
   benchmark (SQLi/XSS recall=100%) doğrula. Aceleyle YAPILMADI ("çöp olur" riski).
 - **T3 SONUÇ:** 1 güvenli konsolidasyon (#4 fullwidth, byte-identical); evasion/WAF-detect/payloads
   facade KORUNDU (tekrar değil); asıl encoding-motor tekrarı kanıtla FLAG'lendi (dedicated pas gerek).
+
+---
+
+## ═══ T6 (core HTTP/session/rate/concurrency — 10 dosya) ═══
+
+### [T6][Madde 4] #5 — token-bucket: 2 implementasyon → tek kaynak (rate_controller)
+- **KAZANAN (tek kaynak):** `core/rate_controller.py:_TokenBucket` (public alias `TokenBucket` eklendi).
+  DAHA GÜÇLÜ: adaptif `set_rate()`, `block` param, capped-sleep `min(wait,0.5)` (daha responsive).
+- **KAYBEDEN (algoritması kaldırılan):** `core/http.py:RateLimiter`'ın kendi kopyalanmış bucket'ı
+  (`_add_tokens` + acquire döngüsü) — `_TokenBucket` ile algoritmik AYNI (tokens=min(cap,tokens+
+  elapsed*rate), consume-or-wait).
+- **AKTARILAN (merge manifest):** RateLimiter'a özgü clamp'ler → KORUNDU (rps `max(0.1,..)`,
+  capacity `max(1,..)`); `acquire()->None` imzası + `rps`/`capacity` attribute'ları KORUNDU.
+  RateLimiter artık TokenBucket'ı sarıyor → capped-sleep responsiveness'ı da kazandı (aynı efektif rate).
+- **SİLİNEN/YÖNLENDİRİLEN:** `RateLimiter._add_tokens` + manuel bucket döngüsü silindi; AntiBlockingHTTP
+  (`self.rl.acquire()`, http.py:1626/2432) DEĞİŞMEDİ (yalnız .acquire() kullanıyordu). `bl_concurrency.
+  RateGate` (interval-gate + inflight semaphore, race/concurrency) FARKLI mekanizma → tekrar değil, dokunulmadı.
+- **Doğrulama:** pyflakes 69→69 · smoke (TokenBucket delegasyon, clamp'ler, 4 hızlı acquire, AdaptiveRateController
+  bozulmadı) · benchmark TP=5 FP=0 Recall=100% (17.8s) · 296 test. (rate-limiting timing'i, tespiti değil → benchmark-güvenli.)
+- **Commit:** (aşağıdaki)
+
+### T6 HARİTA (devam ediyor)
+- **Session builder'lar — TEKRAR DEĞİL (layered), KORUNDU:** `http.hardened_session` = TABAN;
+  `session_factory.ensure_session` onu sarıp instrument ekler; `waf_bypass.build_bypass_session`/
+  `human_adapter.make_human_session` üstüne katman; `scan_runner.make_human_session` zaten human_adapter'a
+  delege (ince shim). `ensure_session` auth_flow↔session_factory = isim-çakışması, FARKLI anlam (canlı-mı? vs inşa-et).
