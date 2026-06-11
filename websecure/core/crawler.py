@@ -621,9 +621,38 @@ class ParameterMiner:
         "pass", "pwd", "secret", "apikey", "appid", "app_id",
     ]
 
+    _WL_CACHE: Optional[List[str]] = None
+
     def __init__(self, chunk_size: int = 15, threshold_bytes: int = 25):
         self.chunk_size = chunk_size
         self.threshold_bytes = threshold_bytes
+
+    @classmethod
+    def _resolve_wordlist(cls) -> List[str]:
+        """
+        Paketli wordlists/params.txt (769 ad) — eskiden ORPHAN'dı: ParameterMiner yalnız
+        yukarıdaki ~90 hardcoded adı kullanıyordu. params.txt'yi yükle, hardcoded çekirdeği
+        ÖNDE tutarak (yüksek-sinyal adlar önce) dedup'lı ekle, makul bir tavanda kes
+        (Tor'da istek patlamasını önle). Sonuç cache'lenir.
+        """
+        if cls._WL_CACHE is not None:
+            return cls._WL_CACHE
+        names = list(cls._WORDLIST)
+        seen = {n.lower() for n in names}
+        try:
+            from websecure.core.payloads import load_external_payloads
+            for w in load_external_payloads("params") or []:
+                wl = (w or "").strip()
+                if not wl or wl.startswith("#") or wl.lower() in seen:
+                    continue
+                seen.add(wl.lower())
+                names.append(wl)
+                if len(names) >= 300:   # tavan: çekirdek + ~210 ek ad
+                    break
+        except Exception:
+            pass
+        cls._WL_CACHE = names
+        return names
 
     def mine(
         self,
@@ -633,7 +662,7 @@ class ParameterMiner:
         methods: Optional[List[str]] = None,
     ) -> Dict[str, List[str]]:
         """Returns {url: [active_param_names]} for GET and POST."""
-        wl = wordlist or self._WORDLIST
+        wl = wordlist or self._resolve_wordlist()
         active: List[str] = []
         for method in (methods or ["GET", "POST"]):
             for param in self._mine_method(url, session, method, wl):

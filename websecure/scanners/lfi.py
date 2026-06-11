@@ -47,6 +47,33 @@ _SENSITIVE_FILES = [
     "C:\\Windows\\System32\\drivers\\etc\\hosts",
 ]
 
+
+def _augment_sensitive_files() -> None:
+    """
+    Paketli wordlists/lfi.txt (491 hedef) — eskiden ORPHAN'dı: lfi.py yalnız yukarıdaki
+    hardcoded çekirdeği kullanıyordu, wordlist hiç yüklenmiyordu. Kanonik hedefleri
+    (passwd/shadow…) ÖNDE tutarak (tespit/benchmark değişmez) wordlist'in ek mutlak-yol
+    hedeflerini havuzun SONUNA dedup'lı ekle → derin LFI taramasında kullanılabilir,
+    wordlist artık kod değişmeden düzenlenebilir tek kaynak.
+    """
+    try:
+        from websecure.core.payloads import load_external_payloads
+        extra = load_external_payloads("lfi")
+    except Exception:
+        return
+    seen = set(_SENSITIVE_FILES)
+    for line in extra or []:
+        t = (line or "").strip()
+        if not t or t.startswith("#") or t in seen:
+            continue
+        # yalnız dosya-hedefi gibi görünenler (mutlak Linux yolu / Windows sürücüsü)
+        if t.startswith("/") or (len(t) > 2 and t[1] == ":"):
+            _SENSITIVE_FILES.append(t)
+            seen.add(t)
+
+
+_augment_sensitive_files()
+
 # Extended log files for log-poisoning attempts
 _LOG_POISON_FILES = [
     "/var/log/apache2/access.log",
@@ -166,7 +193,7 @@ class LFIDirectoryTraversalProber(BaseScanner):
 
     def run(self, target: str, **kwargs) -> List[Dict]:
         results: List[Dict] = []
-        for tfile in _SENSITIVE_FILES[:6]:
+        for tfile in _SENSITIVE_FILES[:10]:  # ilk 6 kanonik + wordlist'ten 4 ek hedef
             for prefix in _TRAVERSAL_PREFIXES[:10]:
                 payload = prefix + tfile.lstrip("/")
                 for test_url in _inject_lfi(target, payload)[:2]:
