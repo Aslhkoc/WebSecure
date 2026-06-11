@@ -44,6 +44,26 @@ _LIVE_DRIVERS: "list[_weakref.ref]" = []
 _DRIVER_LOCK = threading.Lock()
 _REAPER_INSTALLED = False
 
+# Paylaşılan TEK tarayıcı (singleton). Tarama boyunca birçok faz (selenium
+# fallback crawl, dom_xss, auth) tarayıcı ister; her biri kendi Chrome'unu
+# açarsa 10+ pencere oluşur ve görünür modda kullanıcı kaosa boğulur. Bunun
+# yerine ilk başlatılan sürücü cache'lenir ve sonraki tüm çağrılar AYNI pencereyi
+# yeniden kullanır. Yalnız tarama sonunda (reap_drivers / atexit) kapanır →
+# kullanıcı yaptığı işlemleri tüm tarama boyunca izleyebilir.
+_SHARED_DRIVER = None
+_SHARED_DRIVER_LOCK = threading.Lock()
+
+
+def _driver_alive(driver) -> bool:
+    """Sürücü hâlâ canlı ve yanıt veriyor mu? (ucuz liveness probe)."""
+    if driver is None:
+        return False
+    try:
+        _ = driver.current_url  # ölü/çökmüş sürücüde exception fırlatır
+        return True
+    except Exception:
+        return False
+
 
 def _register_driver(driver) -> None:
     """Yeni açılan driver'ı reaper kaydına ekle; atexit reaper'ı bir kez kur."""
@@ -57,17 +77,27 @@ def _register_driver(driver) -> None:
             _REAPER_INSTALLED = True
 
 
-def quit_driver(driver) -> None:
+def quit_driver(driver, force: bool = False) -> None:
     """Bir driver'ı güvenle kapat (idempotent) ve reaper kaydından düş.
 
     Çağrı noktaları (main._run_scan_phases, discover_dynamic_endpoints) bunu
-    `finally` içinde çağırmalı — happy-path `driver.quit()` yetmez."""
+    `finally` içinde çağırmalı — happy-path `driver.quit()` yetmez.
+
+    PAYLAŞILAN sürücü (singleton) faz sonunda KAPATILMAZ (force=False) — aksi halde
+    her faz kendi penceresini açıp kapatır, kullanıcı izleyemez ve pencereler çoğalır.
+    Paylaşılan sürücü yalnız scan sonunda reap_drivers() veya force=True ile kapanır."""
+    global _SHARED_DRIVER
     if driver is None:
+        return
+    if driver is _SHARED_DRIVER and not force:
+        # Paylaşılan tarayıcı: canlı tut, yeniden kullanılsın.
         return
     try:
         driver.quit()
     except Exception:
         pass
+    if driver is _SHARED_DRIVER:
+        _SHARED_DRIVER = None
     # Kayıttan düş (ölü/eşleşen ref'leri temizle)
     with _DRIVER_LOCK:
         _LIVE_DRIVERS[:] = [r for r in _LIVE_DRIVERS
@@ -77,7 +107,9 @@ def quit_driver(driver) -> None:
 def reap_drivers() -> int:
     """Hâlâ hayatta olan tüm izlenen driver'ları kapat. atexit'te otomatik
     çalışır; manuel de çağrılabilir. Kapatılan driver sayısını döner."""
+    global _SHARED_DRIVER
     n = 0
+    _SHARED_DRIVER = None  # paylaşılan sürücü de bu turda kapatılıyor
     with _DRIVER_LOCK:
         refs = list(_LIVE_DRIVERS)
         _LIVE_DRIVERS.clear()
@@ -177,7 +209,15 @@ def _chrome_opts(headless: bool, proxy: str, profile_dir: str,
     return opts
 
 
-def setup_webdriver(headless: bool = True, proxy: str = None):
+def setup_webdriver(headless: bool = True, proxy: str = None, shared: bool = True):
+    global _SHARED_DRIVER
+    # Singleton: tarama boyunca AYNI pencereyi yeniden kullan. Canlı bir paylaşılan
+    # sürücü varsa onu döndür — yeni Chrome açma (10-pencere patlamasının çaresi).
+    if shared:
+        with _SHARED_DRIVER_LOCK:
+            if _driver_alive(_SHARED_DRIVER):
+                return _SHARED_DRIVER
+            _SHARED_DRIVER = None  # ölü/çökmüş cache'i at, yeniden kur
     try:
         import time
         import tempfile
@@ -188,14 +228,22 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
             logging.warning("[WebDriver] Uyumlu ChromeDriver bulunamadı.")
             return None
 
-        attempts = [
-            # (headless, new_headless, swiftshader, use_profile, label)
-            (headless, True,  False, True,  "headless=new"),
-            (headless, False, False, True,  "headless eski mod"),
-            (False,    False, False, True,  "GUI mod"),
-            (headless, True,  True,  True,  "headless=new + SwiftShader"),
-            (False,    False, True,  False, "GUI + SwiftShader (profil yok)"),
-        ]
+        # Deneme matrisi. KRİTİK: headless istendiyse ASLA görünür (GUI) moda düşme
+        # — aksi halde her başarısız deneme öksüz bir GÖRÜNÜR Chrome penceresi bırakır
+        # (yönetici modunda DevToolsActivePort hatası → 10+ pencere patlaması). Görünür
+        # mod yalnız kullanıcı bilerek istediğinde (headless=False) kullanılır.
+        if headless:
+            attempts = [
+                # (headless, new_headless, swiftshader, use_profile, label)
+                (True, True,  False, True, "headless=new"),
+                (True, False, False, True, "headless eski mod"),
+                (True, True,  True,  True, "headless=new + SwiftShader"),
+            ]
+        else:
+            attempts = [
+                (False, False, False, True,  "GUI mod"),
+                (False, False, True,  False, "GUI + SwiftShader (profil yok)"),
+            ]
 
         # "Chrome instance exited" çoğu zaman GEÇİCİDİR (Chrome otomatik-güncelleme
         # yarışı, AV taraması, anlık kaynak baskısı). Aynı config'i kısa backoff'la
@@ -222,6 +270,9 @@ def setup_webdriver(headless: bool = True, proxy: str = None):
                     )
                     logging.info(f"[WebDriver] Chrome başlatıldı ({label}).")
                     _register_driver(driver)  # atexit reaper: öksüz Chrome bırakma
+                    if shared:
+                        with _SHARED_DRIVER_LOCK:
+                            _SHARED_DRIVER = driver  # sonraki çağrılar yeniden kullanır
                     return driver
                 except Exception as exc:
                     last_exc = exc
