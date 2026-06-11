@@ -1224,6 +1224,24 @@ _PHASE_TIMEOUTS: Dict[str, int] = {
 }
 _DEFAULT_PHASE_TIMEOUT = 120  # 2 min default (was 5 min — too long for light scanners)
 
+# Phases whose watchdog stays UNLIMITED under no_timeout. These are legitimately
+# long recon/offensive tools that may run a long time but make steady progress;
+# abandoning them mid-work would defeat the user's "full power" intent (nmap
+# özellikle: anonimlik/zaman için kısıtlanmaz). Their subprocesses are still
+# bounded by effective_timeout (generous-finite), so even these cannot hang the
+# scan forever — we only avoid prematurely abandoning a phase that IS progressing.
+# Every OTHER phase gets a generous-but-finite watchdog under no_timeout so a hung
+# in-process await auto-advances instead of freezing until the user hits Ctrl+C.
+_NO_TIMEOUT_UNBOUNDED_PHASES: set = {
+    "port_scan", "portscan",          # nmap — full-power priority
+    "sqlmap",
+    "nuclei", "owasp_and_nuclei",
+    "amass", "subdomain", "passive_recon",
+}
+# Watchdog failsafe = configured × this (min 600s) for non-unbounded phases when
+# no_timeout is on. Large on purpose: only a genuine hang trips it.
+_NO_TIMEOUT_WATCHDOG_FACTOR = 6
+
 # ---------------------------------------------------------------------------
 # Parallel phase groups — phases in the same list run concurrently via
 # ThreadPoolExecutor; groups execute in order (each group blocks until all
@@ -1292,14 +1310,22 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     ):
         phase_timeout = int(phase_timeout * 3)
 
-    # Max-power / timeout-free mode: the watchdog never SKIPS a phase — it runs to
-    # completion. We keep the 1s poll loop below (so Ctrl+C / _SCAN_CANCEL still
-    # interrupts), but make the deadline effectively infinite so no scanner is
-    # cut off mid-work. This is the user-facing "nothing gets skipped" guarantee.
+    # Max-power / timeout-free mode. Previously this set phase_timeout to
+    # float("inf") for EVERY phase — but then any phase that blocks forever
+    # (browser_crawler'ın sayfa-içi fetch'i, Tor üzerinde asılı ffuf) tüm taramayı
+    # sonsuza kilitler ve TEK çıkış Ctrl+C olur (kullanıcının yaşadığı donma).
+    # Çözüm: ağır recon/ofansif fazlar SINIRSIZ kalır (ilerleyen bir fazı terk
+    # etmeyiz); diğer her faz cömert-ama-SONLU bir watchdog alır → asılı bir faz
+    # Ctrl+C beklemeden otomatik bir sonrakine ilerler. Araç subprocess'leri zaten
+    # effective_timeout ile sınırlı olduğundan (cömert-sonlu) bu watchdog yalnızca
+    # gerçek bir donmada (in-process await) devreye girer.
     try:
         from websecure.core.http import no_timeout_enabled as _nt_enabled
         if _nt_enabled():
-            phase_timeout = float("inf")
+            if phase_id in _NO_TIMEOUT_UNBOUNDED_PHASES:
+                phase_timeout = float("inf")
+            else:
+                phase_timeout = max(phase_timeout * _NO_TIMEOUT_WATCHDOG_FACTOR, 600)
     except Exception:
         pass
 

@@ -42,14 +42,44 @@ def no_timeout_mode() -> bool:
     return os.environ.get("WEBSECURE_NO_TIMEOUT") == "1"
 
 
+# Max-power FAILSAFE multiplier. Previously no_timeout mode returned ``None`` here
+# (wait forever) — but a tool that genuinely HANGS (e.g. ffuf stalling on a dead
+# Tor circuit, sqlmap on an unresponsive endpoint) then blocks its whole phase
+# forever, freezing the entire scan until the user hits Ctrl+C. Instead we grant a
+# generous-but-FINITE budget: normal × this factor. Normal operation finishes far
+# earlier, so this only trips on a real hang. The result is ALWAYS >= the default
+# budget, so no_timeout never cuts a tool shorter than default mode would.
+# Override with WEBSECURE_NOTIMEOUT_FACTOR for power users on slow links/wordlists.
+_NO_TIMEOUT_SUBPROC_FACTOR_DEFAULT = 4
+
+
+def _no_timeout_factor() -> int:
+    try:
+        f = int(os.environ.get("WEBSECURE_NOTIMEOUT_FACTOR", "") or
+                _NO_TIMEOUT_SUBPROC_FACTOR_DEFAULT)
+        return f if f >= 1 else _NO_TIMEOUT_SUBPROC_FACTOR_DEFAULT
+    except Exception:
+        return _NO_TIMEOUT_SUBPROC_FACTOR_DEFAULT
+
+
 def effective_timeout(default):
     """
-    Resolve a subprocess/communicate timeout. Returns ``None`` (wait until the
-    tool finishes on its own) in max-power mode, otherwise the supplied default.
+    Resolve a subprocess/communicate timeout. In max-power (no_timeout) mode the
+    tool gets a generous-but-FINITE budget (default × WEBSECURE_NOTIMEOUT_FACTOR,
+    default 4) instead of waiting forever — so a hung tool can never freeze the
+    whole scan, while a tool making real progress is never cut short (the budget
+    is always >= the default-mode value). Otherwise returns the supplied default.
     Drop-in for every ``proc.communicate(timeout=...)`` / subprocess timeout in
     the integration wrappers.
     """
-    return None if no_timeout_mode() else default
+    if not no_timeout_mode():
+        return default
+    if default is None:
+        return None  # caller explicitly wants no subprocess timeout
+    try:
+        return max(default, default * _no_timeout_factor())
+    except Exception:
+        return default
 
 
 # ---------------------------------------------------------------------------
