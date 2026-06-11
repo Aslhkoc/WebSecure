@@ -335,7 +335,7 @@ Benchmark FP=0/Recall=100%, 325 test. **T8 TAMAM.**
 - **Doğrulama:** pyflakes temiz (sqli+response_analyzer) · import smoke OK (MariaDB=3 pattern) · **benchmark
   TP=5 FP=0 FN=0 Recall=100% Precision=100%, SQLi=3 (baseline'la BİREBİR aynı)** · integration 13/13 + sqli
   unit (25 passed).
-- **Commit:** (bu commit)
+- **Commit:** b24fc46b7
 
 ### T5 HARİTA + KAPANIŞ
 - **3 BASELINE — TEKRAR DEĞİL (farklı ölçüm), KORUNDU:** `response_analyzer.BaselineCapture` (içerik
@@ -391,4 +391,32 @@ anomaly/RBA + chain-pair = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 
 - **Doğrulama:** pyflakes temiz (browser_crawler+js_analyzer) · import/cycle smoke OK (canonical=32, görünür) ·
   fonksiyonel (AWS Key + Bearer canonical yoldan tespit) · benchmark TP=5 FP=0 Recall=100% · integration 13/13 ·
   passive_recon 17 + js_analyzer 6 unit yeşil (canonical'in diğer tüketicileri Bearer eklemesinden bozulmadı).
-- **Commit:** (bu commit)
+- **Commit:** 984db648c
+
+### T4 HARİTA + KAPANIŞ
+- **3 CRAWLER — TEKRAR DEĞİL (farklı rol, hepsi WIRED), KORUNDU:** root `crawler.py:WebCrawler`+
+  `discover_dynamic_endpoints` (üretim HTTP+browser keşfi, main.py) ↔ `core/crawler.py:CrawlerOrchestrator`
+  (API/şema keşif fazı: OpenAPI/GraphQL/gRPC/APIVersion/ParameterMiner/Sitemap, phases:1674) ↔
+  `browser_crawler.BrowserCrawler` (Playwright SPA fazı). PROJECT_MAP "farklı roller" doğrulandı.
+- **EXTRACTION primitifleri (link/form/JS) — TEKRAR DEĞİL (bağlam-özel), KORUNDU:** `form_parser.extract_all_forms`
+  (kırık-HTML fuzz için regex, virtual-form/script-input çıkarımı) ↔ `core/crawler._extract_forms` (BFS-crawl,
+  `infer_form_method`'a delege) ↔ `analysis.detect_get_parameters_and_forms` (driver/fetcher + BS4) ↔
+  browser_crawler SPA DOM. Farklı girdi/çıktı şekli, farklı pipeline. `infer_form_method` ZATEN tek kaynak
+  (analysis.py, 948b9406d) — 4 keşif noktası ona delege ediyor (dedup zaten yapılmış).
+- **tech_fingerprint — KENDİ KENDİNE YETER (canonical), KORUNDU:** Wappalyzer-tarzı (header/body/cookie/db sig
+  + `_detect_waf`), pre-scan TechProfile. WAF tespiti katmanlı (analysis.detect_waf_from_response fallback +
+  tech_fingerprint._detect_waf tag + T3 waf_fingerprint/waf_bypass) — farklı seviye, T3'te korundu.
+- **endpoint_prioritizer — TEK IMPL (wired), KORUNDU:** `EndpointPrioritizer.rank` (main.py:1896). payload_engine
+  `.rank` FARKLI (payload skorlama). Tekrar yok.
+- **ParameterMiner ↔ ffuf ParamDiscoveryPipeline — FARKLI TEKNİK, KORUNDU:** arjun-tarzı differential param
+  madenciliği (core/crawler) ↔ wordlist-fuzz (ffuf, T10). İkisi de ayrı fazda wired. Cross-layer.
+- **🚩 B3-FLAG (ölü-kod, dedup değil):** `analysis.cloud_hints(headers)` ORPHAN (0 çağıran; sadece tanım).
+  Wired `passive_recon.CloudDetector` (11 sağlayıcı header-sig + CNAME takeover) çok daha güçlü → cloud_hints
+  benzersiz değer taşımıyor, tamamen subsumed. **Körü körüne SİLİNMEDİ** (orphan = 6boyut B3'ün işi); B3 pasında
+  kaldırılmalı. [[plan_6boyut_tam_denetim]]
+
+**T4 SONUÇ:** 1 gerçek konsolidasyon (#8 sır pattern havuzu, browser_crawler→js_analyzer tek kaynak,
+5→32 pattern, "Bearer Token" aktarıldı); 3 crawler (farklı rol) + extraction primitifleri (bağlam-özel) +
+tech_fingerprint (canonical) + endpoint_prioritizer + ParameterMiner = tekrar DEĞİL, KORUNDU. cloud_hints
+orphan → B3-flag. Benchmark FP=0/Recall=100%, integration 13/13 + passive_recon 17 + js_analyzer 6.
+**T4 TAMAM.** ➜ Sıradaki: T2 (exploit core kalan) / T7 (auth) / T9-T15 ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).
