@@ -105,4 +105,26 @@
 - **Doğrulama:** pyflakes temiz (paket 69→69) · offline execute smoke (reflected graceful-fail,
   DOM güçlü PoC'u evidence'a koyuyor) · `test_chaining.py`+`test_xss_scanner.py`+`test_dom_xss.py`
   40/40 · benchmark TP=5 FP=0 FN=0 Recall=100% Precision=100%.
-- **Commit:** (aşağıdaki)
+- **Commit:** 30a94717b
+
+---
+
+### [T1/T2][Madde 1] Denetim — exploit_orchestrator tüm *Strategy delegasyon analizi (TAMAMLANDI)
+- **Yöntem:** 13 ExploitStrategy sınıfının her birinin execute()'u, karşılık gelen scanner'da
+  yeniden-kullanılır **exploiter** sınıfına delege mi ediyor yoksa kendi kopyasını mı çalıştırıyor.
+- **Zaten delege eden (güçlü, dokunulmadı):** SQLiExploitStrategy→`scanners.sqli.SQLiExploiter`,
+  SSTIExploitStrategy→`scanners.ssti.SSTIAutoExploiter`, CMDiExploitStrategy→`scanners.cmdi.CMDIRCEChain`,
+  FileUploadExploitStrategy→`scanners.file_upload.PolyglotFileUploader`.
+- **Düzeltildi:** XSSToATOStrategy→`scanners.xss.XSSToATOChain` (yukarıdaki #2).
+- **Ayrı ROL — tekrar DEĞİL, KORUNDU (8):** LFI, SSRF, JWT, GraphQL, XXE, CORS, IDOR, Deserialization
+  stratejileri. Gerekçe: ilgili scanner sınıfları **BaseScanner tespit** prober'ları (`run→List[Dict]`
+  bulgu üretir), strateji ise **post-tespit sömürü** (LFI log-poison/PHP-filter RCE+loot+shell;
+  JWT alg:none/RS256→HS256/kid forge→hedefe gönder→ExploitResult). Delege edilebilir hazır exploiter
+  YOK. Teknik/payload ÖRTÜŞMESİ var ama birleştirme = tespit+sömürü ortak-primitif çıkarma refactor'ü.
+- **AÇIK FLAG (ileride, dikkatli, ayrı iş):** (a) JWT forge primitifleri (alg:none/key-confusion/
+  weak-secret) hem `scanners.jwt` prober'larında hem JWTExploitStrategy'de — scanner 12 alg:none
+  case-variant'ı daha zengin; ortak `jwt_forge` util'e çıkarılabilir. (b) LFI log-poison/filter-chain
+  payload mantığı LFIExploitStrategy ↔ scanners.lfi.LFILogPoisoningChain/LFIPHPFilterChain. **LFI
+  benchmark'ta → bu refactor benchmark-LFI recall'ı riske atar, ÖZEL dikkat gerekir.** Şimdi YAPILMADI.
+- **Sonuç:** Strateji-delegasyon dedup partisi #2 ile KAPANDI (1 gerçek düzeltme; 4 zaten doğru;
+  8 ayrı-rol korundu). Körü körüne hiçbir sömürü kodu silinmedi.
