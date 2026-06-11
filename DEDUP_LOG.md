@@ -290,4 +290,19 @@ CVSS/scoring tekrarı) ya da batch-FLAG dedicated risky pas (T3-encoding/TLS/JWT
 - **Doğrulama:** pyflakes 69→69 · smoke (3 yol+alias tam aralıkta kanonikle BİREBİR aynı; high-CVSS
   değişmedi) · benchmark TP=5 FP=0 Recall=100% · 325 test (chaining dahil). (Benchmark high-CVSS →
   low-bound farkı tetiklenmez = güvenli; üstelik standarda hizalandı.)
-- **Commit:** (aşağıdaki)
+- **Commit:** 19936bdc7
+
+### T8 HARİTA + KAPANIŞ
+- **CVSS scoring SINIFLARI — TEKRAR DEĞİL (farklı amaç), KORUNDU:** `cvss.CVSSScorer` (per-finding CVSS
+  v3 base score) ↔ `chain_reactor.CVSSChainCalculator` (exploit-zinciri aggregate CVSS) ↔
+  `score_tracker.ScoreCalculator` (tüm-tarama risk grade'i 0-100, "1 Critical→62/100"). Farklı hesap,
+  farklı girdi/çıktı. (Ortak primitif = score→severity band → #6'da tekilleşti.)
+- **Bildirim 3 MODALİTE — TEKRAR DEĞİL, KORUNDU:** `notification.py` (HARİCİ servisler: Slack/Jira/
+  Teams/PagerDuty/GitHub webhook) ↔ `alerts.py:AlertManager` (AUDIO: winsound beep, severity'e göre
+  siren/machine-gun) ↔ `live_monitor.py` (TERMİNAL canlı gösterim). Üç ayrı çıktı kanalı, örtüşme yok.
+- **`finalize_reports`** reporting↔report_generator = facade (T1'de incelendi, korundu). **`redaction.py`**
+  = PII maskeleme, benzersiz.
+
+**T8 SONUÇ:** 1 gerçek konsolidasyon (#6 CVSS band, 3→1, low-bound standarda hizalandı); CVSS scoring
+sınıfları (farklı amaç), bildirim 3-modalite, finalize facade, redaction = tekrar DEĞİL, KORUNDU.
+Benchmark FP=0/Recall=100%, 325 test. **T8 TAMAM.**
