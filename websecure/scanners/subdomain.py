@@ -165,60 +165,96 @@ class DNSBruteForce:
 # 2. Subfinder entegrasyonu
 # ---------------------------------------------------------------------------
 
-class SubfinderWrapper:
-    """Subfinder binary wrapper (passive OSINT)."""
+# Subfinder: güçlü integration (effective_timeout/TAM GUC, kısmi-sonuç, ToolResult)
+# tek kaynaktır. Bu sınıf yalnızca arayüz uyarlar (ToolResult → List[Dict]) ve her
+# subdomain için IP çözer — tıpkı aşağıdaki AmassWrapper adapter'ı gibi. Eski yerel
+# subprocess kopyası (sabit timeout=120, no_timeout'a uymuyordu) integration yoksa
+# devreye giren ImportError fallback'ına indirildi.
+try:
+    from websecure.integrations.amass import SubfinderIntegration as _SubfinderIntegration
 
-    def __init__(self, binary: str = "subfinder"):
-        self.binary = binary
-        self._find_binary()
+    class SubfinderWrapper:
+        """
+        Adapter: integrations/amass.SubfinderIntegration'ı subdomain tarayıcısının
+        beklediği List[Dict] arayüzüne dönüştürür (ToolResult → List[Dict], IP çözümü dahil).
+        """
 
-    def _find_binary(self):
-        if shutil.which(self.binary):
-            return
-        from websecure.core.platform_compat import binary_candidates as _bc
-        from websecure.core.paths import writable_root as _ws_root
-        root = _ws_root()
-        for _cand in _bc(root, "subfinder"):
-            if _cand.exists():
-                self.binary = str(_cand)
+        def __init__(self, binary: str = "subfinder"):
+            self._impl = _SubfinderIntegration(
+                binary_path=binary if binary != "subfinder" else None
+            )
+
+        def is_available(self) -> bool:
+            return self._impl.is_available()
+
+        def run(self, domain: str, timeout: int = 120) -> List[Dict[str, Any]]:
+            result = self._impl.run(domain, timeout_s=timeout)
+            # ToolResult.extra["subdomains"] -> List[str] (lowercase, dedup)
+            extra = getattr(result, "extra", None) or {}
+            subdomains: List[str] = extra.get("subdomains") or []
+            out: List[Dict[str, Any]] = []
+            for sub in subdomains:
+                if sub:
+                    ip = _resolve(str(sub))
+                    out.append({"subdomain": str(sub), "ip": ip or "", "method": "subfinder"})
+            logger.info(f"[Subfinder] {len(out)} subdomain bulundu (integration adapter)")
+            return out
+
+except ImportError:
+    class SubfinderWrapper:  # type: ignore[no-redef]
+        """Subfinder binary wrapper (passive OSINT) — integration yoksa fallback."""
+
+        def __init__(self, binary: str = "subfinder"):
+            self.binary = binary
+            self._find_binary()
+
+        def _find_binary(self):
+            if shutil.which(self.binary):
                 return
+            from websecure.core.platform_compat import binary_candidates as _bc
+            from websecure.core.paths import writable_root as _ws_root
+            root = _ws_root()
+            for _cand in _bc(root, "subfinder"):
+                if _cand.exists():
+                    self.binary = str(_cand)
+                    return
 
-    def is_available(self) -> bool:
-        return bool(shutil.which(self.binary) or os.path.isfile(self.binary))
+        def is_available(self) -> bool:
+            return bool(shutil.which(self.binary) or os.path.isfile(self.binary))
 
-    def run(self, domain: str, timeout: int = 120) -> List[Dict[str, Any]]:
-        if not self.is_available():
-            logger.debug("[Subfinder] Binary bulunamadı, atlanıyor.")
-            return []
+        def run(self, domain: str, timeout: int = 120) -> List[Dict[str, Any]]:
+            if not self.is_available():
+                logger.debug("[Subfinder] Binary bulunamadı, atlanıyor.")
+                return []
 
-        fd, tmp = tempfile.mkstemp(suffix=".txt")
-        os.close(fd)
-        try:
-            cmd = [self.binary, "-d", domain, "-o", tmp, "-silent", "-all"]
-            logger.info(f"[Subfinder] Pasif OSINT başlıyor: {domain}")
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=timeout)
-            results = []
-            if os.path.isfile(tmp):
-                with open(tmp, encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        sub = line.strip()
-                        if sub:
-                            ip = _resolve(sub)
-                            results.append({"subdomain": sub, "ip": ip or "", "method": "subfinder"})
-            logger.info(f"[Subfinder] {len(results)} subdomain bulundu")
-            return results
-        except subprocess.TimeoutExpired:
-            logger.warning("[Subfinder] Zaman aşımı")
-            return []
-        except Exception as e:
-            logger.error(f"[Subfinder] Hata: {e}")
-            return []
-        finally:
+            fd, tmp = tempfile.mkstemp(suffix=".txt")
+            os.close(fd)
             try:
-                os.remove(tmp)
-            except OSError:
-                pass
+                cmd = [self.binary, "-d", domain, "-o", tmp, "-silent", "-all"]
+                logger.info(f"[Subfinder] Pasif OSINT başlıyor: {domain}")
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               check=False, timeout=timeout)
+                results = []
+                if os.path.isfile(tmp):
+                    with open(tmp, encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            sub = line.strip()
+                            if sub:
+                                ip = _resolve(sub)
+                                results.append({"subdomain": sub, "ip": ip or "", "method": "subfinder"})
+                logger.info(f"[Subfinder] {len(results)} subdomain bulundu")
+                return results
+            except subprocess.TimeoutExpired:
+                logger.warning("[Subfinder] Zaman aşımı")
+                return []
+            except Exception as e:
+                logger.error(f"[Subfinder] Hata: {e}")
+                return []
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 # ---------------------------------------------------------------------------
