@@ -202,6 +202,12 @@ class FFUFWrapper(ToolIntegration):
             _threads = _p.get("threads", threads)
             _prof_extra = list(_p.get("extra_args", []))
 
+            # Tor/proxy üzerinden çok thread + rate'siz çalışmak Tor devresini boğar
+            # (bağlantılar zaman aşımına uğrar → ffuf yavaşlar, güvenilmez/eksik sonuç).
+            # Az thread + global rate limit ile Tor üzerinde sağlıklı çalışır.
+            if proxy:
+                _threads = min(int(_threads), 10)
+
             cmd.extend([
                 "-u", url,
                 "-w", wordlist,
@@ -225,17 +231,21 @@ class FFUFWrapper(ToolIntegration):
 
             if proxy:
                 cmd.extend(["-x", proxy.replace("socks5h://", "socks5://")])
+                # Tor: global istek hızını sınırla (devreyi boğmamak için)
+                if not any(str(a) == "-rate" for a in (custom_args or [])):
+                    cmd.extend(["-rate", "20"])
 
             logger.info(f"Starting FFUF scan on {url}")
             process, _unreg = _run_proc_tracked(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
+            _eff_to = effective_timeout(600)
             try:
-                _, stderr_b = process.communicate(timeout=effective_timeout(600))
+                _, stderr_b = process.communicate(timeout=_eff_to)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate()
-                logger.warning("[FFUF] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
+                logger.warning(f"[FFUF] Zaman aşımı ({_eff_to}s) — kısmi sonuçlar ayrıştırılıyor")
             else:
                 if process.returncode != 0 and stderr_b:
                     logger.debug(f"FFUF stderr: {stderr_b.decode('utf-8', 'ignore')[:300]}")
