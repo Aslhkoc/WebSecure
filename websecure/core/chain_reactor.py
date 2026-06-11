@@ -1492,15 +1492,10 @@ def _keywords_in_raw(raw: Dict[str, Any], keywords: List[str]) -> bool:
 
 
 def _cvss_to_severity(score: float) -> str:
-    if score >= 9.0:
-        return "Critical"
-    if score >= 7.0:
-        return "High"
-    if score >= 4.0:
-        return "Medium"
-    if score > 0.0:
-        return "Low"
-    return "Info"
+    """Tek kaynak: cvss.cvss_to_severity (standart CVSS v3.1 bandı). Eski yerel kopya
+    (>0.0→Low) buraya delege edildi; low-bound artık standart (>=0.1)."""
+    from websecure.core.cvss import cvss_to_severity
+    return cvss_to_severity(score)
 
 
 def _chain_finding_to_dict(cf: ChainFinding) -> Dict[str, Any]:

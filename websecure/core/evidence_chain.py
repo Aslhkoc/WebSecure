@@ -47,17 +47,10 @@ def _sev_score(sev: str) -> float:
 
 
 def _score_to_sev(score: float) -> str:
-    if score >= 9.0:
-        return "Critical"
-    if score >= 7.0:
-        return "High"
-    if score >= 4.0:
-        return "Medium"
-    if score >= 1.0:
-        return "Low"
-    # P10 fix: was "Informational" — system-wide convention is "Info"
-    # (html_dashboard, diff.py, markdown.py all key on "Info").
-    return "Info"
+    """Tek kaynak: cvss.cvss_to_severity (standart CVSS v3.1 bandı). Eski yerel kopya
+    (>=1.0→Low) buraya delege edildi; low-bound artık standart (>=0.1)."""
+    from websecure.core.cvss import cvss_to_severity
+    return cvss_to_severity(score)
 
 
 # ---------------------------------------------------------------------------

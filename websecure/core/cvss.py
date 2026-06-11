@@ -354,7 +354,10 @@ class CVSSScorer:
         return vector
 
 
-def _severity_label(score: float) -> str:
+def cvss_to_severity(score: float) -> str:
+    """Standart CVSS v3.1 skoru → severity etiketi. TEK KAYNAK (Madde 4): chain_reactor.
+    _cvss_to_severity ve evidence_chain._score_to_sev artık buna delege eder (önceden 3
+    kopyaydı, low-bound'da tutarsız: >0.0 / >=1.0 → standart >=0.1'e hizalandı)."""
     if score >= 9.0:
         return "Critical"
     elif score >= 7.0:
@@ -363,10 +366,13 @@ def _severity_label(score: float) -> str:
         return "Medium"
     elif score >= 0.1:
         return "Low"
-    # P10 fix: was returning "Informational" but the entire codebase uses "Info"
-    # (html_dashboard, diff.py, markdown.py, cli/diff.py all key on "Info").
-    # "Informational" caused silent fallback-to-zero in severity rank lookups.
+    # Tüm kod tabanı "Info" kullanır ("Informational" değil) — severity rank lookup'larında
+    # sessiz sıfıra-düşmeyi önler (P10): html_dashboard, diff.py, markdown.py "Info" anahtarlar.
     return "Info"
+
+
+# Geriye dönük iç alias — cvss.py içi çağrılar _severity_label kullanıyor.
+_severity_label = cvss_to_severity
 
 
 def score_findings(findings: list, auth_required: bool = False,

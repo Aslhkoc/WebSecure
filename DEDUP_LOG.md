@@ -272,3 +272,22 @@ test kırmadı (295 deterministik geçiyor + 1 önceden-flaky XSS). Benchmark FP
 (layered), RateGate (farklı mekanizma), concurrency havuzları (farklı bağlam), circuit-breaker (tek kaynak)
 = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 296 test. **T6 TAMAM.** ➜ Sıradaki: T8 (rapor/skor —
 CVSS/scoring tekrarı) ya da batch-FLAG dedicated risky pas (T3-encoding/TLS/JWT/LFI).
+
+---
+
+## ═══ T8 (core rapor/skor — 8 dosya) ═══
+
+### [T8][Madde 4] #6 — CVSS score→severity band: 3 kopya → tek kaynak (cvss)
+- **KAZANAN (tek kaynak):** `core/cvss.py:cvss_to_severity()` (yeni public; standart CVSS v3.1 bandı
+  >=9 Critical / >=7 High / >=4 Medium / >=0.1 Low / else Info). `_severity_label` artık buna alias.
+- **KAYBEDEN (kaldırılan kopyalar):** `chain_reactor.py:_cvss_to_severity` (>0.0→Low) +
+  `evidence_chain.py:_score_to_sev` (>=1.0→Low) — ikisi de aynı band'ı kopyalıyordu, low-bound TUTARSIZdı.
+- **AKTARILAN:** yok (high-CVSS bandlar zaten aynıydı). **DÜZELTME:** low-bound (0.1–1.0 aralığı) artık
+  3 yerde de standart CVSS v3.1 (>=0.1→Low) — önceki off-by-boundary tutarsızlık giderildi.
+- **SİLİNEN/YÖNLENDİRİLEN:** `_cvss_to_severity`/`_score_to_sev` fonksiyon ADLARI + tüm çağıranları
+  (chain_reactor 203/1360/1370 vb.) AYNI kaldı, gövdeleri cvss.cvss_to_severity'e delege (lazy import,
+  cvss saf leaf → cycle yok). `_SEV_SCORES` (evidence_chain, severity→float) FARKLI ölçek, DOKUNULMADI.
+- **Doğrulama:** pyflakes 69→69 · smoke (3 yol+alias tam aralıkta kanonikle BİREBİR aynı; high-CVSS
+  değişmedi) · benchmark TP=5 FP=0 Recall=100% · 325 test (chaining dahil). (Benchmark high-CVSS →
+  low-bound farkı tetiklenmez = güvenli; üstelik standarda hizalandı.)
+- **Commit:** (aşağıdaki)
