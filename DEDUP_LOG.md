@@ -655,7 +655,7 @@ T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da bat
   ederek aynı rütbeyi döndürür (T11'de 13/13 eşdeğerlik kanıtlandı). cycle yok (reporters/__init__ leaf).
 - **Doğrulama:** pyflakes temiz · ScanDiff.compare crash'siz (8 severity_rank yeri yürüdü) · benchmark
   TP=5 FP=0 Recall=100% · integration 13/13.
-- **Commit:** (bu commit)
+- **Commit:** b9fdf3101
 
 ### T12 HARİTA + KAPANIŞ
 - **severity RENK/EMOJİ — FORMAT-ÖZEL, KORUNDU:** `tui._SEVERITY_COLORS`/`_SEVERITY_EMOJI` (Rich renk + emoji) ↔
