@@ -613,7 +613,7 @@ _check_binary redundancy NOT edildi (düşük öncelik). Benchmark FP=0/Recall=1
   kasıtlı ayrı tasarım, tekrar değil, KORUNDU.
 - **Doğrulama:** pyflakes temiz · severity eşdeğerlik 13/13 · markdown+html render crash'siz (911/58199 char) ·
   test_reporting + integration 31 passed · benchmark TP=5 FP=0 Recall=100%. PROJECT_MAP reporters/__init__ güncellendi.
-- **Commit:** (bu commit)
+- **Commit:** 422491a3f
 
 ### T11 HARİTA + KAPANIŞ
 - **finding extraction/dedup — FARKLI YAKLAŞIM, KORUNDU:** `markdown._coerce_final` (results["final"] veya generic
