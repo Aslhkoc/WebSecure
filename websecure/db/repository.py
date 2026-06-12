@@ -324,48 +324,41 @@ class ScanRepository:
 # ---------------------------------------------------------------------------
 
 class FindingRepository:
+    # Tek kaynak INSERT — create() ve bulk_create() aynı 20-kolon kaydını paylaşır.
+    _INSERT_SQL = """INSERT OR IGNORE INTO findings(
+        id, scan_id, tenant_id, project_id, fingerprint, title,
+        severity, url, tool, category, description, evidence, cwe,
+        cvss, verified, false_positive, remediation, tags,
+        created_at, extra_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+
     def __init__(self, db: Optional[Database] = None) -> None:
         self._db = db or get_db()
 
+    @staticmethod
+    def _insert_params(f: Finding) -> tuple:
+        """Finding -> _INSERT_SQL için 20'li parametre demeti."""
+        return (
+            f.id, f.scan_id, f.tenant_id, f.project_id,
+            f.fingerprint, f.title, f.severity, f.url,
+            f.tool, f.category, f.description, f.evidence,
+            f.cwe, f.cvss, int(f.verified),
+            int(f.false_positive), f.remediation,
+            json.dumps(f.tags), f.created_at, json.dumps(f.extra),
+        )
+
     def create(self, finding: Finding) -> Finding:
         with self._db.connection() as conn:
-            conn.execute(
-                """INSERT OR IGNORE INTO findings(
-                    id, scan_id, tenant_id, project_id, fingerprint, title,
-                    severity, url, tool, category, description, evidence, cwe,
-                    cvss, verified, false_positive, remediation, tags,
-                    created_at, extra_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (finding.id, finding.scan_id, finding.tenant_id, finding.project_id,
-                 finding.fingerprint, finding.title, finding.severity, finding.url,
-                 finding.tool, finding.category, finding.description, finding.evidence,
-                 finding.cwe, finding.cvss, int(finding.verified),
-                 int(finding.false_positive), finding.remediation,
-                 json.dumps(finding.tags), finding.created_at,
-                 json.dumps(finding.extra)),
-            )
+            conn.execute(self._INSERT_SQL, self._insert_params(finding))
         return finding
 
     def bulk_create(self, findings: List[Finding]) -> int:
-        """Toplu kayıt — daha hızlı."""
+        """Toplu kayıt — tek bağlantı/transaction içinde N satır (create'ten hızlı)."""
         count = 0
         with self._db.connection() as conn:
             for f in findings:
                 try:
-                    conn.execute(
-                        """INSERT OR IGNORE INTO findings(
-                            id, scan_id, tenant_id, project_id, fingerprint, title,
-                            severity, url, tool, category, description, evidence, cwe,
-                            cvss, verified, false_positive, remediation, tags,
-                            created_at, extra_json)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (f.id, f.scan_id, f.tenant_id, f.project_id,
-                         f.fingerprint, f.title, f.severity, f.url,
-                         f.tool, f.category, f.description, f.evidence,
-                         f.cwe, f.cvss, int(f.verified),
-                         int(f.false_positive), f.remediation,
-                         json.dumps(f.tags), f.created_at, json.dumps(f.extra)),
-                    )
+                    conn.execute(self._INSERT_SQL, self._insert_params(f))
                     count += 1
                 except Exception as exc:
                     logger.warning(f"[FindingRepo] bulk_create hata: {exc}")
