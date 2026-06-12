@@ -806,3 +806,66 @@ kontrat) + _build_auth_ctx (farklı konu) + crawler extraction (T4 bağlam-özel
 KORUNDU. Benchmark FP=0/Recall=100%, integration 13/13, pyflakes 69. **T14 TAMAM.** ➜ Sıradaki: **T15** (kod-dışı +
 MUTABAKAT: wordlists/config/playbooks/templates + PROJECT_MAP tam doğrulama + ölü-referans son tarama + tam test+benchmark)
 ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
+
+---
+
+## ═══ T15 (kod-dışı + MUTABAKAT — 3 .py + ~33 varlık) — SON FAZ ═══
+
+> Kapsam: scripts/(__init__, preflight_check, validate_config) + wordlists/*.txt(22) + config/profiles(5)/
+> playbooks(4)*.yml + reporters/templates/report.html.j2 + config.json/schema (final = mutabakat/doğrulama).
+> **SONUÇ: 0 konsolidasyon — doğrulama-only faz** (T2/T9 gibi). Kod-dışı varlık SİLİNMEZ (kırmızı çizgi);
+> tekrar eden *yükleyici* kodu zaten T3'te tekilleşti. scripts/*.py = bağımsız CLI, kanonik API tüketir.
+
+### scripts/*.py — TEKRAR DEĞİL (bağımsız CLI, kanonik tüketici), KORUNDU
+- **`preflight_check.py`** (standalone tanı CLI `python -m …preflight_check`): 10 entegrasyon wrapper'ının
+  `is_available()`'ını çağırır → **kanonik (T10 `base.ToolIntegration.is_available`) tüketir**, reimplement YOK.
+  `_check_port` (Tor socket), `_check_playwright` (chromium launch), `_check_wordlists` (varlık kontrolü) =
+  tanı-özel. startup.py (T9 install-spec) / tool_manager (T9 farklı konvansiyon) ile FARKLI amaç (tanı vs kurulum).
+- **`validate_config.py`** (standalone CI/dev CLI): jsonschema ile config.json↔schema doğrular + opsiyonel --prune.
+  Runtime config yükleme (core/utils/config) = farklı amaç (hafif yükleme vs şema-doğrulama). Tekrar değil.
+- **`__init__.py`** = boş paket işaretçisi.
+
+### MUTABAKAT (reconciliation) — programatik doğrulama sonuçları
+- **PROJECT_MAP ↔ gerçek dosyalar:** `websecure/` altındaki **150 .py'nin TAMAMI** PROJECT_MAP FILES'da mevcut
+  (eksik=0). Disk'te olmayan 4 path = `websecure/output/*` (report.md/junit.xml/sarif = runtime-üretilen
+  artefakt, temiz ağaçta yok — kasıtlı örnek girdileri, kaynak değil). tests/*, tools/*, root scriptleri repo
+  kökünde mevcut. **PROJECT_MAP GÜNCEL — stale kaynak entry'si YOK.**
+- **Ölü-referans son tarama (pyflakes):** paket geneli **69 uyarı** (taban ile AYNI) — hepsi kasıtlı re-export
+  "imported but unused" (payloads facade, phases/__init__ vb.). **Yeni undefined name = 0** (T1→T15 boyunca artış yok).
+- **Kod-dışı varlık bütünlüğü:** 22 wordlist + payload yükleyici (T3 kanonik `core/payloads`) çalışıyor
+  (xss=438, sqli=373, lfi=432, cmdi=360 yüklendi); report.html.j2 mevcut; config.json+schema repo kökünde.
+  Wordlist orphan denetimi 2026-06-11'de yapıldı (lfi/params/values bağlandı) — yeniden gerekmedi.
+- **B3-FLAG orphan'lar (dedup DEĞİL, 6boyut B3'e ait — körü körüne silinmedi, T15'te yalnız mutabakat):**
+  `analysis.cloud_hints` (T4), `chain_reactor.analyze_chains` (T2), `utils/system.ensure_dir`+`reporting._ensure_dir`
+  (T9) hâlâ flag'li → 6boyut B3 pasının işi. Dedup kapsamında DEĞİL. [[plan_6boyut_tam_denetim]]
+
+### TAM DOĞRULAMA (final gate)
+- **Birim+entegrasyon:** `tests/unit` + `tests/integration` → **352 passed**.
+- **Benchmark:** TP=5 FP=0 FN=0 TN=5 · **Precision=100% Recall=100% F1=1.00**.
+- **pyflakes:** 69 (taban ile aynı, regresyon yok).
+
+**T15 SONUÇ:** 0 konsolidasyon (scripts bağımsız-CLI/kanonik-tüketici; varlık silinmez/yükleyici T3'te tekil).
+PROJECT_MAP güncel, ölü-referans yok, varlıklar bütün, 352 test + benchmark FP=0/Recall=100%. **T15 TAMAM.**
+
+---
+
+## ═══════════════ DEDUP PLANI TAMAMLANDI (T1–T15) ═══════════════
+
+**Toplam 17 konsolidasyon** (faz başına ~1-3 gerçek tekrar — kalan "tekrar"lar kanıtla KORUNDU):
+- **T1** #1 subfinder→SubfinderIntegration · #2 XSS→ATO→xss.XSSToATOChain · #3 JS-sır→js_analyzer
+- **T3** #4 fullwidth→mutator.to_fullwidth
+- **T4** #8 browser-sır→js_analyzer · **T5** #7 SQL-hata→SQLErrorDetector
+- **T6** #5 token-bucket→rate_controller · **T7** #9 CSRF→auth_flow.extract_csrf · **T8** #6 CVSS-band→cvss
+- **T10** #10 is_available→base · **T11** #11 severity-rank→reporters (+latent bug fix)
+- **T12** #12 _make_websecure_runner→commands · #13 diff-rank→reporters
+- **T13** #14 api/server._to_dict · #15 FindingRepository INSERT · #16 _BaseRepository
+- **T14** #17 crawler-sır→js_analyzer (6→34)
+
+**0-konsolidasyon (zaten-tekil, kanıtla korundu):** T2 (exploit-core, DIP), T9 (altyapı, farklı-konvansiyon),
+T15 (kod-dışı/scripts). **DESEN:** kod tabanı iyi-katmanlanmış — çoğu "tekrar" facade/adapter/farklı-seviye/
+farklı-amaç çıktı; her biri kanıtla korundu, körü körüne hiçbir şey silinmedi (ADIM2 merge manifest her adayda).
+
+**SIRADA-DIŞI kalan (BATCH-FLAG — ayrı, dikkatli, benchmark-validated pas):** T3-encoding-motor yığını
+(mutator↔EncodingVariantGenerator↔AdaptiveMutationEngine, 2 paralel canlı, SQLi/XSS recall-kritik), TLS-cert
+(scan_tls iki-dosyada), JWT-forge primitifleri, LFI-RCE (benchmark-recall riski). Bunlar bilinçli ERTELENDİ.
+**B3-orphan'lar** 6boyut B3'e devredildi. Final durum: 352 test, benchmark FP=0/Recall=100%, pyflakes 69, PROJECT_MAP güncel.
