@@ -92,6 +92,7 @@ BROWSER_ALLOWED_CT_PREFIXES = [
     "application/x-javascript",
 ]
 
+# Yerel fallback — kanonik js_analyzer._SECRET_PATTERNS yüklenemezse kullanılır.
 _JS_KEY_PATTERNS = [
     ("AWS", r"AKIA[0-9A-Z]{16}"),
     ("GoogleAPI", r"AIza[0-9A-Za-z\-_]{35}"),
@@ -100,6 +101,14 @@ _JS_KEY_PATTERNS = [
     ("SentryDSN", r"https://[0-9a-zA-Z]+@o\d+\.ingest\.sentry\.io/\d+"),
     ("Algolia", r"[A-Z0-9]{32}"),
 ]
+
+# Sır/secret tarama TEK KAYNAĞI = scanners.js_analyzer._SECRET_PATTERNS (34 pattern,
+# capture-grup'lu; passive_recon + browser_crawler de buna bağlı — T1#3/T4#8).
+# js_analyzer leaf (yalnız core.reporting import eder) → cycle yok; yine de guard'lı.
+try:
+    from websecure.scanners.js_analyzer import _SECRET_PATTERNS as _CANON_SECRET_PATTERNS
+except Exception:
+    _CANON_SECRET_PATTERNS = None
 
 _JS_URL_RE = re.compile(
     r"""(?ix)
@@ -744,11 +753,19 @@ def harvest_js_keys(session, cfg: Optional[dict], urls: list[str], source_tag: s
         seen.add(u)
         sc, txt, _ = _fetch_text(session, u)
         if not sc or sc >= 400 or len(txt) > 1_000_000: continue
-        
-        for name, pattern in _JS_KEY_PATTERNS:
-            for m in re.finditer(pattern, txt):
-                val = m.group(0)
-                out.append({"provider": name, "value": _mask_secret(val), "source": u})
+
+        if _CANON_SECRET_PATTERNS:
+            # Kanonik havuz: (name, compiled). capture-grup varsa gerçek sırrı al
+            # (browser_crawler/passive_recon ile aynı çıkarım), sonra maskele.
+            for name, pat in _CANON_SECRET_PATTERNS:
+                for m in pat.finditer(txt):
+                    val = m.group(m.lastindex) if m.lastindex else m.group(0)
+                    out.append({"provider": name, "value": _mask_secret(val), "source": u})
+        else:
+            for name, pattern in _JS_KEY_PATTERNS:
+                for m in re.finditer(pattern, txt):
+                    val = m.group(0)
+                    out.append({"provider": name, "value": _mask_secret(val), "source": u})
     return out
 
 

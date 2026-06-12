@@ -68,6 +68,8 @@ _SECRET_PATTERNS: List[tuple] = [
     ("Mailgun",             re.compile(r"""key-[0-9a-zA-Z]{32}""")),
     ("Zendesk Token",       re.compile(r"""(?i)zendesk[_\-\s]?(?:api[_\-\s]?)?(?:token|key)\s*[:=]\s*["'`]([A-Za-z0-9_\-]{20,})["'`]""")),
     ("Shopify Token",       re.compile(r"""shpss_[0-9a-fA-F]{32}|shpat_[0-9a-fA-F]{32}""")),
+    ("Mapbox Token",        re.compile(r"""sk\.[0-9a-zA-Z]{60,}""")),
+    ("Sentry DSN",          re.compile(r"""https://[0-9a-zA-Z]+@o\d+\.ingest\.sentry\.io/\d+""")),
     # Generic credential patterns
     ("API Key",             re.compile(r"""(?:apiKey|api_key|apikey|API_KEY)\s*[:=]\s*["'`]([A-Za-z0-9_\-]{16,})["'`]""", re.I)),
     ("Access Token",        re.compile(r"""(?:access_token|accessToken|ACCESS_TOKEN)\s*[:=]\s*["'`]([A-Za-z0-9_\-\.]{16,})["'`]""", re.I)),
