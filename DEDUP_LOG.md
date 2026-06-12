@@ -420,3 +420,43 @@ anomaly/RBA + chain-pair = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 
 tech_fingerprint (canonical) + endpoint_prioritizer + ParameterMiner = tekrar DEĞİL, KORUNDU. cloud_hints
 orphan → B3-flag. Benchmark FP=0/Recall=100%, integration 13/13 + passive_recon 17 + js_analyzer 6.
 **T4 TAMAM.** ➜ Sıradaki: T2 (exploit core kalan) / T7 (auth) / T9-T15 ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).
+
+---
+
+## ═══ T2 (core exploit — 6 dosya) ═══
+
+> Kapsam: chain_reactor, exploit_orchestrator, post_exploit, evidence_chain, oast, xss_callback (Madde 1 saldırı + 2 tarama).
+> **SONUÇ: 0 YENİ konsolidasyon — katman ZATEN tekilleşmiş** (T1 strateji-denetimi + T8 severity + iyi DIP mimarisi).
+> Doğrulama-only faz: kod değişmedi, benchmark FP=0/Recall=100% (T4'ten beri sabit), tüm T2 modülleri import OK.
+
+### T2 HARİTA + ZATEN-KONSOLİDE / KORUNDU (her biri kanıtla)
+- **Exploit STRATEJİLERİ (exploit_orchestrator 13 *Strategy) — ZATEN T1-DENETLENDİ (8ee390ec4):** 4 zaten
+  delege (SQLi/SSTI/CMDi/FileUpload→scanner zincirleri), 1 düzeltildi (#2 XSSToATO→xss.XSSToATOChain, 30a94717b),
+  8 ayrı-rol sömürü KORUNDU (LFI/SSRF/JWT/GraphQL/XXE/CORS/IDOR/Deser = tespit-vs-sömürü). Re-litigate YOK.
+- **POST-EXPLOIT komut çalıştırıcılar — ZATEN TEK KAYNAK (DIP), KORUNDU:** `post_exploit.CommandRunner` (+ SSTI/
+  CMDi/WebShell alt sınıfları, yalnız `_build_payload` farklı) + `PostExploitChain` TEK kaynak. chain_reactor
+  (ChainExploitRunner 1921/2502) VE exploit_orchestrator stratejileri (215/307/402/584/762/877) hepsi buna
+  DELEGE eder — reimplement YOK. Bölüm-C "post-exploit runner tekrarı" zaten çözülmüş.
+- **OAST/OOB — ZATEN MERKEZİ (oast.py), KORUNDU:** `oast.py` tam OOB altyapısı (token gen, Interactsh/Generic
+  client, poller, SMTP/FTP/LDAP/log4shell kanalları, korelasyon). Scanner OOB prober'ları (CMDiOOBDNSProber/
+  BlindXXEErrorProber/SSRFScanner) `oast.OASTScannerMixin`'i import eder + `config.oast.dns_domain`/global poller
+  kullanır — token/polling reimplement YOK (cmdi/sqli/ssrf_xxe oast'tan import). T1 "OAST ortak" doğrulaması geçerli.
+  (`uuid4().hex[:8]` canary'leri trivial stdlib idiom — dedup hedefi değil.)
+- **CVSS/severity yardımcıları — ZATEN T8-DELEGE:** `chain_reactor._cvss_to_severity` + `evidence_chain._score_to_sev`
+  → `cvss.cvss_to_severity` tek kaynak (19936bdc7). `CVSSChainCalculator` (zincir-aggregate) farklı amaç, KORUNDU.
+- **3 ZİNCİR-BİLGİSİ ENCODER'ı — FARKLI AMAÇ/YAPI/TÜKETİCİ, KORUNDU:** `correlation_engine._CHAIN_PAIRS` (15 tuple,
+  ÇAPRAZ-tarama keyword korelasyonu, API-only) ↔ `chain_reactor` ChainRule sınıfları (10, AKTİF exploit-graph +
+  ChainExploitRunner, phase_chain_reactor) ↔ `evidence_chain._CHAIN_RULES` (10 tuple, TEK-tarama rapor narrative +
+  CVSS escalation, annotate_results). Aynı domain bilgisini (XSS→ATO, SQLi→exfil…) 3 UYUMSUZ şemada 3 farklı
+  algoritma için kodlar; birleştirmek 3'ünün de DAVRANIŞINI değiştirir → "davranış değişmez" ihlali olurdu. KORUNDU.
+- **3 HTTP SERVER — FARKLI AMAÇ, KORUNDU:** `xss_callback.XSSCallbackServer` (blind-XSS cookie/storage yakalama,
+  xss.py kullanır) ↔ `api/server.py` (REST API) ↔ `cli/web_ui.py` (dashboard). BaseHTTPRequestHandler ortak ama
+  3 ayrı amaç. xss_callback (in-browser JS exfil) ↔ oast (protokol-seviyesi OOB) de farklı yakalama mekanizması.
+- **🚩 B3-FLAG (ölü-kod, dedup değil):** `chain_reactor.analyze_chains` (1535, public facade `ChainReactor().analyze`)
+  CANLI ÇAĞIRANI YOK — main.py phase_chain_reactor'ı kullanıyor (yorum 2399: "analyze_chains sadece detection,
+  exploit pipeline çalışmıyordu"). `__all__`'da public API olduğu için körü körüne SİLİNMEDİ; 6boyut B3 değerlendirsin.
+
+**T2 SONUÇ:** 0 yeni konsolidasyon. Exploit-core katmanı T1 (strateji denetimi + XSS→ATO) + T8 (severity) +
+iyi DIP (post-exploit tek kaynak, OAST merkezi) ile ZATEN tekilleşmiş. 3 zincir-encoder + 3 HTTP-server =
+farklı amaç, KORUNDU. analyze_chains orphan → B3-flag. Kod değişmedi, benchmark FP=0/Recall=100%.
+**T2 TAMAM.** ➜ Sıradaki: T7 (auth) / T9-T15 ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
