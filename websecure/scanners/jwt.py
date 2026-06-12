@@ -18,6 +18,40 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Canonical JWT forge primitifleri — TEK KAYNAK
+# JWTScanner._b64e/_b64d/_attack_* + module-level _jwt_encode/_jwt_decode_parts +
+# core.exploit_orchestrator.JWTExploitStrategy hepsi bunlara delege eder (önceden
+# her biri kendi b64url + HMAC-sign kopyasını taşıyordu — T1 "jwt_forge util" flag'i).
+# ---------------------------------------------------------------------------
+
+_HS_HASHES = {"HS256": hashlib.sha256, "HS384": hashlib.sha384, "HS512": hashlib.sha512}
+
+
+def b64url_encode(data) -> str:
+    """JWT base64url encode (padding'siz). str veya bytes kabul eder."""
+    if isinstance(data, str):
+        data = data.encode()
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def b64url_decode(data) -> bytes:
+    """JWT base64url decode (otomatik pad). Ham bytes döndürür (json.loads bytes kabul eder)."""
+    if isinstance(data, bytes):
+        data = data.decode()
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def jwt_sign(signing_input, key, alg: str = "HS256") -> str:
+    """signing_input'u key ile HMAC-imzalar → b64url imza (HS256/384/512; bilinmeyen→sha256)."""
+    if isinstance(signing_input, str):
+        signing_input = signing_input.encode()
+    if isinstance(key, str):
+        key = key.encode()
+    hash_fn = _HS_HASHES.get((alg or "HS256").upper(), hashlib.sha256)
+    return b64url_encode(hmac.new(key, signing_input, hash_fn).digest())
+
+
 # OOB host for SSRF/JKU probing — overridable via OOB infrastructure
 _OOB_HOST = "oob-wsp.invalid"
 
@@ -233,9 +267,7 @@ class JWTScanner(BaseScanner):
         original_sig = parts[2]
 
         for secret in candidates:
-            sig = base64.urlsafe_b64encode(
-                hmac.new(secret.encode(), msg, hashlib.sha256).digest()
-            ).decode().rstrip("=")
+            sig = jwt_sign(msg, secret, "HS256")
             if sig == original_sig:
                 self.add(bucket, {
                     "type": "JWT Weak Secret", "severity": "Critical", "url": url,
@@ -265,11 +297,7 @@ class JWTScanner(BaseScanner):
         signing_input = f"{h_enc}.{p_enc}".encode()
 
         for key in public_keys:
-            if isinstance(key, str):
-                key = key.encode()
-            sig = base64.urlsafe_b64encode(
-                hmac.new(key, signing_input, hashlib.sha256).digest()
-            ).decode().rstrip("=")
+            sig = jwt_sign(signing_input, key, "HS256")
             token = f"{h_enc}.{p_enc}.{sig}"
             for target_url in urls:
                 if self._verify_access(target_url, token):
@@ -335,9 +363,7 @@ class JWTScanner(BaseScanner):
             signing_input = f"{h_enc}.{p_enc}".encode()
             # /dev/null and "" -> empty file content -> HMAC(b"", ...) or HMAC(b"\x00", ...)
             for secret in (b"", b"\x00", b"null"):
-                sig = base64.urlsafe_b64encode(
-                    hmac.new(secret, signing_input, hashlib.sha256).digest()
-                ).decode().rstrip("=")
+                sig = jwt_sign(signing_input, secret, "HS256")
                 token = f"{h_enc}.{p_enc}.{sig}"
                 for target_url in urls:
                     if self._verify_access(target_url, token):
@@ -471,11 +497,10 @@ class JWTScanner(BaseScanner):
     # -------------------------------------------------------------------------
 
     def _b64e(self, s: str) -> str:
-        return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+        return b64url_encode(s)
 
     def _b64d(self, s: str) -> str:
-        padded = s + "=" * (4 - len(s) % 4)
-        return base64.urlsafe_b64decode(padded).decode()
+        return b64url_decode(s).decode()
 
 
 def run(url: str, session=None, debug: bool = False, **kwargs) -> int:
@@ -517,22 +542,19 @@ def _jwt_decode_parts(token: str):
     parts = token.split(".")
     if len(parts) != 3:
         raise ValueError("Not a JWT")
-    def _dec(s):
-        padded = s + "=" * (4 - len(s) % 4)
-        return json.loads(base64.urlsafe_b64decode(padded).decode())
-    return _dec(parts[0]), _dec(parts[1]), parts[2]
+    return (json.loads(b64url_decode(parts[0])),
+            json.loads(b64url_decode(parts[1])),
+            parts[2])
 
 
 def _jwt_encode(header: dict, payload: dict, secret: bytes, alg: str = "HS256") -> str:
-    def _enc(d):
-        return base64.urlsafe_b64encode(json.dumps(d, separators=(",", ":")).encode()).decode().rstrip("=")
-    h = _enc(header)
-    p = _enc(payload)
-    msg = f"{h}.{p}".encode()
+    h = b64url_encode(json.dumps(header, separators=(",", ":")))
+    p = b64url_encode(json.dumps(payload, separators=(",", ":")))
     if alg == "none":
         return f"{h}.{p}."
-    sig = hmac.new(secret, msg, hashlib.sha256).digest()
-    return f"{h}.{p}.{base64.urlsafe_b64encode(sig).decode().rstrip('=')}"
+    # NOT: özgün davranış imzayı DAİMA sha256 ile atardı (alg yalnız "none" için
+    # kontrol edilirdi); tüm çağıranlar HS256 → davranış birebir korunur.
+    return f"{h}.{p}.{jwt_sign(f'{h}.{p}', secret, 'HS256')}"
 
 
 
