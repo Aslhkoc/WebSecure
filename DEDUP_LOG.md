@@ -673,3 +673,80 @@ T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da bat
 reporters.severity_rank, T11 canonical'ine bağlandı). severity renk/emoji (format-özel) + run_*_cli (farklı arg) +
 webhook (farklı amaç) = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, integration 13/13.
 **T12 TAMAM.** ➜ Sıradaki: T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da batch-FLAG.
+
+---
+
+## ═══ T13 (db/ + api/ — 5 dosya) ═══
+
+> Kapsam: db/(__init__, database, repository) + api/(__init__, server) (Madde 4 = diğer/sistem).
+> ADIM 0/1: Katman İYİ DELEGE EDİLMİŞ — db/ tek kanonik kalıcılık katmanı; tüketiciler doğru bağlı:
+> `score_tracker._db_record`→ScoreRepository, `correlation_engine.correlate_from_db`→FindingRepository,
+> `api/server` 13 endpoint hepsi db.repository + core servislerine (score_tracker/fp_learner/
+> plugin_marketplace/correlation_engine) DELEGE eder (reimplement yok). 3 saf intra-katman tekrar bulundu.
+
+### [T13][Madde 4] #14 — api/server serileştirme: 2 birebir static method → tek kaynak (_to_dict)
+- **KAZANAN (tek kaynak):** `api/server.py:APIServer._to_dict(obj)` — `dataclasses.asdict` + `vars()` fallback.
+- **KAYBEDEN (kaldırılan):** `_scan_to_dict(scan)` + `_finding_to_dict(finding)` — BİREBİR aynıydı (yalnız param
+  adı farklı). 6 çağrı yeri (`_list_scans`/`_create_scan`/`_get_scan`/`_scan_findings`/`_scan_score`/
+  `_search_findings`) `_to_dict`'e güncellendi.
+- **AKTARILAN:** yok (birebir aynı). **SİLİNEN:** `_scan_to_dict`+`_finding_to_dict` gövdeleri (biri kaldı, adı genelleşti).
+- **KORUNDU (cross-layer, dokunulmadı):** `correlation_engine._finding_to_dict` (T5/core, aynı trivial stdlib
+  idiom AMA core→api ters bağımlılık yaratmamak için ayrı bırakıldı); `chain_reactor._chain_finding_to_dict`
+  (asdict değil, ChainFinding'den manuel dict kurar — farklı iş).
+- **Doğrulama:** pyflakes 69→69 · `_to_dict` smoke (dataclass Scan/Finding + non-dataclass vars fallback) ·
+  api/server'da eski ad kalıntısı yok · benchmark TP=5 FP=0 Recall=100% · integration 13/13.
+- **Commit:** 760b9cddb
+
+### [T13][Madde 4] #15 — FindingRepository INSERT: create+bulk_create birebir kopya → tek kaynak
+- **KAZANAN (tek kaynak):** `repository.py:FindingRepository._INSERT_SQL` (class-constant, 20-kolon INSERT OR IGNORE)
+  + `_insert_params(f)` static helper (Finding→20'li param demeti).
+- **KAYBEDEN (kaldırılan kopya):** `create()` ve `bulk_create()` AYNI INSERT SQL string'i + AYNI param tuple
+  builder'ı tekrar ediyordu (yalnız girinti farkı, SQL'de anlamsız). İkisi de artık `self._INSERT_SQL,
+  self._insert_params(...)` kullanır.
+- **AKTARILAN (ADIM 2 — bulk_create'in BENZERSİZ faydası):** `bulk_create` TEK `with connection()` içinde N satır
+  (tek transaction/bağlantı) + per-row try/except + warn → KORUNDU. create()'e DELEGE EDİLMEDİ (o N bağlantı
+  açıp bulk faydasını yok ederdi). Yalnız SQL+param inşası tekilleşti, döngü/transaction yapısı aynen kaldı.
+- **Doğrulama:** pyflakes 69→69 · round-trip smoke (temp db: create+bulk_create+list_by_scan+get; json tags/extra
+  roundtrip; severity sıralaması Critical→Info; count_by_severity) BİREBİR · benchmark FP=0/Recall=100% · integration 13/13.
+- **Commit:** ff704d0cd
+
+### [T13][Madde 4] #16 — repository __init__: 6 birebir kopya → tek kaynak (_BaseRepository)
+- **KAZANAN (yeni tek kaynak):** `repository.py:_BaseRepository` — concrete taban, `__init__(db)→self._db = db or
+  get_db()` (T10 `base.ToolIntegration.is_available` concrete-default deseni). SRP=yalnız bağlantı kökü, OCP=alt
+  sınıf tabloya-özgü CRUD ekler.
+- **KAYBEDEN (kaldırılan kopyalar):** 6 repository (Tenant/Project/Scan/Finding/FPRule/Score) hepsi BİREBİR aynı
+  2-satır `__init__`'i tekrar ediyordu → 6 override kaldırıldı, hepsi `_BaseRepository`'den miras alır.
+- **AKTARILAN:** yok (birebir aynı boilerplate). FindingRepository'nin `_INSERT_SQL`/`_insert_params`'ı (#15)
+  korundu — yalnız `__init__` tabana taşındı.
+- **SİLİNEN/YÖNLENDİRİLEN:** Tek kalan `def __init__` = `_BaseRepository`'nin kendisi (tek kaynak). Sınıf adları +
+  CRUD imzaları + `__all__` AYNI kaldı → tüm tüketiciler (api/server, score_tracker, fp_learner,
+  correlation_engine, cli/commands) DEĞİŞMEDİ.
+- **Doğrulama:** pyflakes 69→69 · `def __init__` artık YALNIZ 1 (base) · 6/6 repo `issubclass(_BaseRepository)` +
+  tam CRUD round-trip (explicit db + get_db() default branch) BİREBİR · benchmark FP=0/Recall=100% · integration 13/13.
+- **Commit:** 499340d29
+
+### T13 HARİTA + KAPANIŞ
+- **db/ KANONİK KALICILIK — TEK KAYNAK, KORUNDU:** `database.Database`/`get_db` (bağlantı/şema/migration singleton)
+  + `repository` 6 model+6 repo. Paralel persistence YOK: tüketiciler db'ye delege eder.
+- **score_tracker / correlation_engine — DOĞRU TÜKETİCİ (db'ye delege), KORUNDU:** `score_tracker._db_record`→
+  ScoreRepository, `correlation_engine`→FindingRepository (`correlate_from_db`). Kendi tablosunu kurmaz.
+- **fp_learner ÇİFT-YAZIM (JSON + db mirror) — T5'TE KORUNDU, dokunulmadı:** `fp_learner` kendi `FPRule`
+  (regex-matching model, from_dict/to_dict/eşleştirme) + `fp_rules.json` öğrenilmiş-kural store'u tutar, AYRICA
+  `_db_save` ile `db.FPRuleRepository`'ye opsiyonel mirror'lar. İki `FPRule` FARKLI rol (matching-engine modeli vs
+  DB-satırı dataclass'ı) → T5 "fp_learner ayrı kapsam, API-only" kararı geçerli; T13'te birleştirilmez (yüksek risk,
+  cross-layer, davranış değişir).
+- **api/server HTTP-server — 3'ten biri (T2'de FARKLI AMAÇ), KORUNDU:** `api/server` (REST) ↔ `cli/web_ui`
+  (dashboard) ↔ `xss_callback` (blind-XSS yakalama). BaseHTTPRequestHandler ortak ama 3 ayrı amaç.
+- **api/server endpoint DB-hata boilerplate — KORUNDU (bilinçli):** ~10 handler `except Exception as exc: return
+  _err(503, f"... {exc}")` deseni paylaşır AMA her biri FARKLI etiket ("DB hatası"/"Skor hatası"/"Trend hatası"/
+  "FP hatası"/"Plugin hatası"/"Korelasyon hatası"). Decorator'a çıkarmak etiketleri parametrize zorunluluğu + hata
+  semantiğini değiştirme riski → düşük değer, dokunulmadı (byte-identical değil).
+- **PROJECT_MAP:** api/server.py + db/repository.py entry'leri `classes:[]`/`funcs:[]` zaten boş (dosyaların 12+
+  sınıfı hiç listelenmemiş — özet alanlar enumere edilmiyor); `_BaseRepository`/`_to_dict` iç-helper, dosya
+  amacı/deps değişmedi → harita güncellemesi gerekmedi (mevcut boş-alan konvansiyonuyla tutarlı).
+
+**T13 SONUÇ:** 3 gerçek konsolidasyon (#14 api/server _to_dict 2→1; #15 FindingRepository INSERT create+bulk
+paylaşır; #16 6 repository __init__ → _BaseRepository tabanı). db/ kanonik kalıcılık + doğru-delege tüketiciler +
+fp_learner çift-yazım (T5 korundu) + 3 HTTP-server (T2 korundu) + endpoint hata-etiketleri = tekrar DEĞİL, KORUNDU.
+Benchmark FP=0/Recall=100%, integration 13/13, pyflakes 69. **T13 TAMAM.** ➜ Sıradaki: T14 (root websecure/*.py:
+main/crawler/__init__/__main__/setup) / T15 (kod-dışı+mutabakat) ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
