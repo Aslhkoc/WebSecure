@@ -869,3 +869,45 @@ farklı-amaç çıktı; her biri kanıtla korundu, körü körüne hiçbir şey 
 (mutator↔EncodingVariantGenerator↔AdaptiveMutationEngine, 2 paralel canlı, SQLi/XSS recall-kritik), TLS-cert
 (scan_tls iki-dosyada), JWT-forge primitifleri, LFI-RCE (benchmark-recall riski). Bunlar bilinçli ERTELENDİ.
 **B3-orphan'lar** 6boyut B3'e devredildi. Final durum: 352 test, benchmark FP=0/Recall=100%, pyflakes 69, PROJECT_MAP güncel.
+
+---
+
+## ═══════════════ BATCH-FLAG #1 — ENCODING/MUTATION MOTORU (derin denetim) ═══════════════
+
+> **TETİK:** "T3 encoding-motor konsolidasyonu başla" (2026-06-12). **SONUÇ: 0 konsolidasyon → KORUNDU
+> (çeşitli-evasion-tasarımı).** Kod DEĞİŞMEDİ (HEAD 1139f4f5c, ağaç temiz). 5×-ertelenen FLAG resmen KAPANDI.
+
+### Denetlenen 5 implementasyon (ADIM 0 — tam okuma)
+1. **`core/mutator.py:Mutator`** — vuln-aware satır-içi mutasyon (mutate_sql/xss/rce/nosql/polyglot + `_common_polymorph`
+   base85/zlib/XOR/reverse + `_to_fullwidth` [T3#4 zaten tek kaynak]). KANONİK base.
+2. **`core/payload_engine.py:EncodingVariantGenerator`** — saf encoding transform (`_enc_url`=`quote(safe="")`,
+   `_enc_double_url`, `_enc_html` dict, `_enc_base64`=eval(atob), `_enc_unicode`=`\uXXXX`, `_enc_hex`=`\xXX`, utf16le,
+   big5, null/tab). `get_payloads_v2(apply_encoding=True)` yolu.
+3. **`core/payload_engine.py:PayloadMutationEngine`** — OCP strateji deseni (URLEncodingMutation/HTMLEntityMutation/
+   UnicodeEscapeMutation/Base64Mutation/CaseMutation/…). `get_payloads_v2(apply_mutations=True)` yolu.
+4. **`core/waf_bypass.py:AdaptiveMutationEngine`** — generic trick'ler (`_url_encode_mutate`=char-replace+`quote(safe="=&?")`,
+   `_double_encode_mutate`=regex `%XX→%25XX`, `_unicode_mutate`=KİRİL confusable, `_hex_mutate`=`0x`hex) + **Mutator'ı SARAR**
+   (mutate(): satır 2393-2411 mutate_sql/xss/rce/nosql çağırır). `_apply_creative_waf_bypass` yolu.
+5. **`core/human_adapter.py:_mutate_payload`/`_get_encoded_payload`** — `random.choice`-of-bir MİNİMAL tweak
+   (human-benzeri stealth retry; tam arsenal DEĞİL — bilinçli sade).
+
+### ADIM 1/2 — neden KONSOLİDE EDİLEMEZ (kanıt)
+- **"Aynı" primitif FARKLI BYTE üretir (tasarım gereği çeşitli-evasion):** url-encode 3 motorda 3 farklı çıktı
+  (`quote(p)` default-safe / `quote(p,safe="")` / char-replace+`quote(safe="=&?")`); double-url 2'si tam-çift-encode
+  ama AdaptiveMutationEngine'inki regex ile YALNIZ mevcut `%XX`'i yeniden-encode eder (bambaşka semantik); unicode
+  fullwidth ↔ `\uXXXX` ↔ Kiril confusable = 3 ayrı evasion. **Farklı WAF farklı encoding'le aşılır → çeşitlilik = ÖZELLİK.**
+- **Zaten KOMPOZE:** AdaptiveMutationEngine Mutator'ı sarıyor (delegasyon, kopya değil). `get_smart_payloads`
+  iki yığını (get_payloads_v2[EVG+PME] + _apply_creative_waf_bypass[AME+Mutator]) çalıştırıp `seen` set'le UNION+DEDUP eder
+  → byte-çakışması zaten runtime'da elenir; kalan = kasıtlı çeşitlilik.
+- **BENCHMARK-KÖR:** `get_smart_payloads` encoding motorlarını YALNIZ `_waf_detected()` True iken çalıştırır; benchmark
+  (yerel vulnapp, WAF yok, 403-storm yok) → `waf_present=False` → motorlar HİÇ tetiklenmez. Konsolidasyon benchmark'ta
+  görünmez; bir evasion kaybı YALNIZ gerçek WAF taramasında sessizce recall düşürür (test sinyali YOK).
+- **KIRMIZI ÇİZGİ "davranış değişmez, sadece tekilleşir" SAĞLANAMAZ:** farklı byte = çıktı değişimi. Birleştirme =
+  evasion-set daralması = gerçek-dünya WAF-bypass kapasitesi düşüşü (tam da ertelemenin "çöp olur" gerekçesi).
+- **human_adapter._mutate_payload — FARKLI KONTRAT/AMAÇ:** tek-rastgele minimal tweak (stealth), Mutator'ın 30-varyant
+  agresif arsenaline delege etmek human-trafiğini "bariz saldırı aracı"na çevirir → stealth amacını bozar. KORUNDU.
+
+**BATCH-FLAG #1 SONUÇ:** Encoding/mutation motorları **çeşitli-evasion-tasarımı** — gerçek tekrar DEĞİL; mimari zaten
+kompoze+dedup ediyor. Konsolidasyon davranışı değiştirir + benchmark-kör + gerçek WAF-bypass'ı zayıflatır → **KORUNDU,
+0 değişiklik.** (T2/T9/T15 gibi kanıtlı-koruma.) ➜ Kalan batch-FLAG: **TLS-cert** (scan_tls tls.py↔infrastructure.py,
+genuine yapısal tekrar — sıradaki en olası gerçek konsolidasyon) / JWT-forge / LFI-RCE.
