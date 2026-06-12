@@ -750,3 +750,59 @@ paylaşır; #16 6 repository __init__ → _BaseRepository tabanı). db/ kanonik 
 fp_learner çift-yazım (T5 korundu) + 3 HTTP-server (T2 korundu) + endpoint hata-etiketleri = tekrar DEĞİL, KORUNDU.
 Benchmark FP=0/Recall=100%, integration 13/13, pyflakes 69. **T13 TAMAM.** ➜ Sıradaki: T14 (root websecure/*.py:
 main/crawler/__init__/__main__/setup) / T15 (kod-dışı+mutabakat) ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
+
+---
+
+## ═══ T14 (root websecure/*.py — 5 dosya) ═══
+
+> Kapsam: main, crawler, __init__, __main__, setup (Madde 1 saldırı + 2 tarama + 3 analiz + 4 diğer).
+> ADIM 0/1: main.py = ORKESTRATÖR — saldırı/tarama/analizi scanner/phase'lere delege eder (fonksiyonların
+> çoğu graceful-degradation fallback stub'ı). Tek gerçek tekrar: crawler'ın kendi sır-tarama pattern kopyası (Madde 3).
+
+### [T14][Madde 3] #17 — crawler sır-tarama: yerel 6-pattern kopya → tek kaynak (js_analyzer)
+- **KAZANAN (tek kaynak):** `scanners/js_analyzer.py:_SECRET_PATTERNS` (32→**34**, capture-grup'lu; passive_recon
+  [T1#3] + browser_crawler [T4#8] de buna bağlı). crawler artık **4. tüketici**.
+- **KAYBEDEN (fallback'e indirildi):** `crawler.py:_JS_KEY_PATTERNS` (6-pattern: AWS/GoogleAPI/Mapbox/StripePub/
+  SentryDSN/Algolia) — `harvest_js_keys` artık kanonik `_CANON_SECRET_PATTERNS` kullanır; yerel dict yalnız
+  ImportError fallback (passive_recon/browser_crawler precedent'i).
+- **AKTARILAN (ADIM 2 merge manifest — crawler'da olup canonical'da OLMAYAN):**
+  - **Mapbox Token** (`sk\.[0-9a-zA-Z]{60,}`) + **Sentry DSN** (`https://…@o\d+\.ingest\.sentry\.io/\d+`) → canonical'e
+    EKLENDİ (4 tüketici de kazandı). AWS/GoogleAPI canonical'da zaten vardı (birebir).
+  - **BİLİNÇLİ PROMOTE EDİLMEDİ (anti-feature, precision koruması):** Algolia `[A-Z0-9]{32}` (herhangi 32-char
+    hash/CSS-hash'i yakalar → FP seli) + Stripe `pk_` (publishable = public-by-design, sır DEĞİL). Canonical'a
+    taşımak 4 tüketicinin de precision'ını bozardı. Normal yolda (canonical) artık çalışmazlar = precision iyileşmesi.
+- **crawler-BENZERSİZ KORUNDU:** `_mask_secret` maskeleme (`val[:6]+…+val[-4:]`) + `{provider,value,source}` çıktı
+  şekli (`_finalize_results` `(value,provider)` dedup'u + `results["secrets"]` tüketicisi) + kendi fetch/400/size-guard
+  döngüsü. capture-grup çıkarımı eklendi (`m.group(m.lastindex)` → gerçek sır, eskiden `group(0)` tam-eşleşme).
+- **SİLİNEN/YÖNLENDİRİLEN:** hiçbir şey silinmedi (yerel 6-pattern bilinçli fallback). Eski kısa provider adları
+  ("AWS"/"Algolia") hiçbir yerde literal tüketilmiyordu (grep doğrulandı) → ad değişimi (kanonik "AWS Access Key")
+  güvenli. Cycle yok (js_analyzer leaf, yalnız core.reporting). PROJECT_MAP crawler deps += scanners/js_analyzer.
+- **Doğrulama:** pyflakes 69→69 · 34-pattern wired smoke (Mapbox/Sentry mevcut, capture-grup+mask+shape) · consumer
+  testleri js_analyzer+passive_recon 8/8 + dom_xss 5/5 · benchmark TP=5 FP=0 Recall=100% (sır benchmark-dışı) · integration 13/13.
+- **Commit:** 76541f480
+
+### T14 HARİTA + KAPANIŞ (kanıtla korunanlar)
+- **main.py ORKESTRATÖR — ZATEN DELEGE, KORUNDU:** `_sig_params`/`_kw_filter` (960-980) try-dalı `core.utils.
+  sig_params/kw_filter` kanoniğine delege + except fallback (T1#3 deseni, zaten tekil). `_get_resolve_canonical_base`
+  (424) kanonik resolve + fallback. egress helpers `core/egress`'e taşınmış (yorum 995). Saldırı/tarama fazları
+  phases/scanner'lara delege; main-içi `def run_mode/graphql_scan/ssrf_xxe_scan…` = import başarısızsa fallback STUB.
+- **İKİ `_to_bool` (main.py 869 + 1041) — FARKLI KONTRAT, KORUNDU:** #1 (`_off_enabled`) `enabled/disabled` token'ları
+  tanır, `default=False` (feature-flag bool); #2 (`_normalize_webdriver_cfg`) bu token'ları tanımaz, `default=None`
+  TRI-STATE (`headless is None` config-cascade'i buna bağlı). Birleştirmek webdriver config-parse davranışını değiştirir
+  (T13 endpoint-etiketleri / `_sig_params` fallback deseni: farklı-ama-ikisi-de-geçerli yerel helper).
+- **`_build_auth_ctx` (796) — FARKLI KONU, KORUNDU:** statik config→headers/cookies (Bearer/api-key/cookie injection
+  ctx-dict'i). T7 auth (auth_flow/auth_manager) = interaktif LOGIN akışı (form/CSRF). Farklı sorumluluk.
+- **crawler.py — T4-KORUNANLAR geçerli:** WebCrawler farklı-rol (üretim HTTP+browser, main.py); `_extract_links`/
+  `_analyze_content` form-parse = bağlam-özel extraction (analiz kısmını `core.analysis.analyze_form_inputs`
+  kanoniğine zaten delege eder); `_parse_sitemap_xml`/`_parse_robots` = crawl-URL keşfi (≠ `passive_recon._check_sitemap`
+  SUBDOMAIN çıkarımı, farklı amaç/çıktı). Browser strateji'leri (_Playwright/_UC) crawler-özel.
+- **__init__.py / __main__.py / setup.py — KORUNDU:** __init__ = graceful-degradation re-export (her try/except farklı
+  modül, desen değil tekrar); __main__ = 4-satır entry; setup.py `full` extras = bireysel extras'ların toplamı
+  (standart setuptools konvansiyonu, kasıtlı).
+
+**T14 SONUÇ:** 1 gerçek konsolidasyon (#17 crawler sır-tarama → kanonik js_analyzer, 6→34 pattern, Mapbox+Sentry
+aktarıldı, Algolia/pk_ FP-koruması için bilinçli dışlandı). main.py orkestratör (zaten delege) + 2 _to_bool (farklı
+kontrat) + _build_auth_ctx (farklı konu) + crawler extraction (T4 bağlam-özel) + root küçük dosyalar = tekrar DEĞİL,
+KORUNDU. Benchmark FP=0/Recall=100%, integration 13/13, pyflakes 69. **T14 TAMAM.** ➜ Sıradaki: **T15** (kod-dışı +
+MUTABAKAT: wordlists/config/playbooks/templates + PROJECT_MAP tam doğrulama + ölü-referans son tarama + tam test+benchmark)
+ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
