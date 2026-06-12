@@ -11,6 +11,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from websecure.reporters import severity_rank
+
 
 _logger = logging.getLogger(__name__)
 
@@ -320,7 +322,6 @@ def render_html_dashboard(results: dict) -> str:
 
     # Deduplicate findings by (base_type, url, param) — same logic as reporting._dedupe_findings
     # This keeps the highest-severity version when multiple buckets report the same finding.
-    _sev_ranks = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
     _dedup_map: dict = {}
     for _f in findings:
         _base = _f["type"].split(" (")[0].strip()
@@ -332,7 +333,7 @@ def render_html_dashboard(results: dict) -> str:
         _ex = _dedup_map.get(_key)
         if _ex is None:
             _dedup_map[_key] = _f
-        elif _sev_ranks.get(_f["severity"], 0) > _sev_ranks.get(_ex["severity"], 0):
+        elif severity_rank(_f["severity"]) > severity_rank(_ex["severity"]):
             _f2 = dict(_f)
             _f2["id"] = _ex["id"]
             _dedup_map[_key] = _f2
@@ -633,7 +634,6 @@ def render_html_dashboard(results: dict) -> str:
         "web crawler": ("Keşfedilen endpoint'leri gözden geçir; gereksiz/eski olanları yetkilendir veya kaldır", "Düşük"),
         "api endpoint": ("Keşfedilen API endpoint'lerinde authentication/authorization doğrula", "Düşük"),
     }
-    _SEV_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
     _EFFORT_COLOR = {"Düşük": "var(--sev-low)", "Orta": "var(--sev-medium)", "Yüksek": "var(--sev-high)"}
 
     # Build type -> {max_sev, count, advice, effort}
@@ -642,7 +642,7 @@ def render_html_dashboard(results: dict) -> str:
         raw_type = f["type"].split(" (")[0] if " (" in f["type"] else f["type"]
         entry = type_map.setdefault(raw_type, {"count": 0, "max_sev": 0, "sev_label": "Info", "examples": []})
         entry["count"] += 1
-        sev_rank = _SEV_ORDER.get(f["severity"], 0)
+        sev_rank = severity_rank(f["severity"])
         if sev_rank > entry["max_sev"]:
             entry["max_sev"] = sev_rank
             entry["sev_label"] = f["severity"]

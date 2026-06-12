@@ -587,3 +587,43 @@ batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
 SARIF/subdomain-adapter ZATEN canonical-delege; subprocess/parse CLI-başına özel = tekrar DEĞİL, KORUNDU.
 _check_binary redundancy NOT edildi (düşük öncelik). Benchmark FP=0/Recall=100%, integration 13/13.
 **T10 TAMAM.** ➜ Sıradaki: T11 (reporters) / T12 (cli) / T13 (db+api) / T14 (root) / T15 (kod-dışı) ya da batch-FLAG.
+
+---
+
+## ═══ T11 (reporters/ — 4 dosya) ═══
+
+> Kapsam: __init__, html_dashboard, markdown, pdf (Madde 4 diğer). Rapor format renderer'ları.
+
+### [T11][Madde 4] #11 — severity normalize/rank: format'lar arası 6 kopya → tek kaynak (reporters/__init__)
+- **KAZANAN (yeni tek kaynak):** `reporters/__init__.py` (eskiden boş) → `normalize_severity(s)` (TR/EN varyant →
+  kanonik etiket) + `severity_rank(s)` (Critical=4..Info=0, normalize-ederek-sıralar).
+- **KAYBEDEN (kaldırılan/delege edilen kopyalar):**
+  - `markdown._norm_sev_tr` + `_norm_sev_en` (~aynı TR/EN normalizasyonu) → normalize_severity'e delege.
+  - `markdown._sev_rank` → severity_rank'e delege. `markdown` render_risk_matrix yerel `_SEV_ORDER` haritası → kaldırıldı.
+  - `html_dashboard` İKİ ayrı yerel `{Critical:4..Info:0}` haritası (`_sev_ranks` satır 323 + `_SEV_ORDER` satır 636) →
+    severity_rank() çağrısına indirildi.
+- **AKTARILAN (ADIM 2):** TR varyant supersetı (`düsük`/`düşük`/`dusuk`→Low, `kritik`/`yüksek`/`orta`/`bilgi` …)
+  canonical normalize'a toplandı (markdown'ın iki normalize fonksiyonunun birleşimi).
+- **🐞 LATENT BUG DÜZELTİLDİ (dedup yan-ürünü):** `markdown._sev_rank` büyük-harf normalize çıktısını ("Critical")
+  küçük-harf anahtarlı haritada arıyordu → **her severity için DAİMA 0** döndürüyordu. Sonuç: markdown dedup
+  severity-escalation (aynı bulgu farklı bucket'ta Low+High → High'a yükseltme) ve severity-sıralaması fiilen
+  çalışmıyordu. severity_rank'e delege ile düzeldi (render smoke: Low+High duplike → "High" gösteriliyor).
+- **DAVRANIŞ:** normalize/html-rank BİREBİR korundu (13/13 severity vakası eşleşti); yalnız markdown'ın bozuk
+  _sev_rank'ı DÜZELDİ (kasıtlı, doğru davranış). pdf/html severity RENK paletleri FARKLI (#dc3545 vs #da3633) →
+  kasıtlı ayrı tasarım, tekrar değil, KORUNDU.
+- **Doğrulama:** pyflakes temiz · severity eşdeğerlik 13/13 · markdown+html render crash'siz (911/58199 char) ·
+  test_reporting + integration 31 passed · benchmark TP=5 FP=0 Recall=100%. PROJECT_MAP reporters/__init__ güncellendi.
+- **Commit:** (bu commit)
+
+### T11 HARİTA + KAPANIŞ
+- **finding extraction/dedup — FARKLI YAKLAŞIM, KORUNDU:** `markdown._coerce_final` (results["final"] veya generic
+  merge) ↔ `markdown._dedupe_findings` (gelişmiş merge: payload/evidence/poc birleştirme) ↔ `pdf._flatten_findings`
+  (hardcoded bucket listesi + basit seen-set) ↔ html_dashboard inline. Farklı sofistikelik/amaç, format-özel.
+- **severity RENK/İKON — FORMAT-ÖZEL, KORUNDU:** `markdown._SEV_ICON` (emoji) ↔ `pdf._severity_color` (#dc3545…) ↔
+  `html_dashboard` renk (#da3633…). Her format kendi sunumu; renkler bilinçli farklı palet.
+- **pdf — kendi _count_by_severity/_render:** PDF-özel (reportlab/weasyprint + j2 template), ayrı sorumluluk.
+
+**T11 SONUÇ:** 1 gerçek konsolidasyon (#11 severity normalize/rank 6 kopya→tek kaynak reporters/__init__,
++ latent markdown._sev_rank daima-0 bug'ı düzeltildi). finding-extraction (farklı yaklaşım) + severity renk/ikon
+(format-özel) = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 31 test. **T11 TAMAM.** ➜ Sıradaki: T12 (cli) /
+T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from websecure.reporters import normalize_severity, severity_rank
+
 # Logger
 logger = logging.getLogger(__name__)
 
@@ -26,40 +28,27 @@ _SEV_ICON: dict = {
 }
 
 
+# Severity normalize/rank tek kaynak: websecure.reporters (normalize_severity/severity_rank).
+# _norm_sev_tr/_norm_sev_en eskiden ayrı ama ~aynı TR/EN normalizasyonuydu → tek kanona indi.
 def _norm_sev_tr(s: str | None) -> str:
-    """Normalize severity to English canonical — handles Turkish and English variants."""
-    s = (s or "Info").strip().lower()
-    if s in ("critical", "crit", "severe", "kritik"): return "Critical"
-    if s in ("high", "yüksek", "yuksek", "yüksek"): return "High"
-    if s in ("medium", "med", "orta"): return "Medium"
-    if s in ("low", "düşük", "dusuk", "düsük"): return "Low"
-    if s in ("info", "informational", "bilgi"): return "Info"
-    return "Info"
+    return normalize_severity(s)
 
 
 def _norm_sev_en(s: str | None) -> str:
-    s = (s or "Info").strip().lower()
-    if s in ("critical", "crit", "severe", "kritik"): return "Critical"
-    if s in ("high", "yüksek", "yuksek"): return "High"
-    if s in ("medium", "med", "orta"): return "Medium"
-    if s in ("low", "düşük", "dusuk"): return "Low"
-    if s in ("info", "informational", "bilgi"): return "Info"
-    return "Info"
+    return normalize_severity(s)
 
 
 def _sev_with_icon(s: str | None) -> str:
     """Return 'Critical 🔴' style label."""
-    norm = _norm_sev_tr(s)
+    norm = normalize_severity(s)
     icon = _SEV_ICON.get(norm, "")
     return f"{norm} {icon}".strip()
 
 def _sev_rank(s: str | None) -> int:
-    """Rank via EN normalization: critical=4 > high=3 > medium=2 > low=1 > info=0."""
-    m = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
-    try:
-        return m.get(_norm_sev_en(s or ""), 0)
-    except Exception:
-        return 0
+    # Tek kaynak: severity_rank (normalize-ederek-sıralar). Eski yerel kopya büyük-harf
+    # etiketi küçük-harf haritada arayıp DAİMA 0 döndüren bir hata içeriyordu (dedup
+    # severity escalation + severity sıralaması fiilen çalışmıyordu) — düzeltildi.
+    return severity_rank(s)
 
 def _dedupe_findings(items: List[Dict]) -> List[Dict]:
     """Deduplicates findings based on type, url, location, param."""
@@ -236,16 +225,15 @@ def render_risk_matrix(findings: List[Dict]) -> str:
         "tls": ("Upgrade to TLS 1.2+; disable weak protocols; renew certificates", "Low"),
     }
 
-    _SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
     type_map: Dict[str, dict] = {}
     for f in findings:
         t = str(f.get("type") or "Unknown")
         entry = type_map.setdefault(t, {"count": 0, "max_sev": 0, "sev_label": "Info", "advice": "", "effort": "Medium"})
         entry["count"] += 1
-        sev_rank = _SEV_ORDER.get(_norm_sev_en(f.get("severity")).lower(), 0)
+        sev_rank = severity_rank(f.get("severity"))  # tek kaynak (normalize+rank)
         if sev_rank > entry["max_sev"]:
             entry["max_sev"] = sev_rank
-            entry["sev_label"] = _norm_sev_en(f.get("severity"))
+            entry["sev_label"] = normalize_severity(f.get("severity"))
         if not entry["advice"]:
             tl = t.lower()
             for kw, (adv, eff) in _REMEDIATION_DB.items():
