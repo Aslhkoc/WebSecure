@@ -189,7 +189,8 @@ def _sync_session_cookies_to_driver(session: requests.Session, driver, base_url:
 # CSRF çıkarımı (DOM-first; regex fallback)
 # -----------------------------------------------------------------------------
 
-_CSRF_NAMES = ("csrf", "_csrf", "csrf_token", "csrfmiddlewaretoken", "xsrf", "_xsrf", "authenticity_token")
+_CSRF_NAMES = ("csrf", "_csrf", "csrf_token", "csrfmiddlewaretoken", "xsrf", "xsrf_token",
+               "_xsrf", "authenticity_token", "__RequestVerificationToken")
 
 def _extract_csrf_dom(html_text: str) -> Optional[str]:
     # selectolax
@@ -223,11 +224,34 @@ def _extract_csrf_dom(html_text: str) -> Optional[str]:
     return None
 
 def _extract_csrf_regex(html_text: str) -> Optional[str]:
+    # Tek kaynak: _CSRF_NAMES (DOM ekstraktörüyle aynı havuz). Hem name→value hem
+    # value→name sırası, ayrıca <meta name="csrf*"> kapsanır (auth_manager parity:
+    # tek CSRF çıkarımı bu fonksiyonda birleşti). value pozisyonu esnek ([^>]*) →
+    # name/value arasında type="hidden" gibi attribute olsa da yakalar.
+    html = html_text or ""
+    _alt = "|".join(re.escape(n) for n in _CSRF_NAMES)
+    # name-before-value (en yaygın)
     m = re.search(
-        r'(?is)(?:name|id)\s*=\s*["\'](?:csrf|_csrf|csrf_token|csrfmiddlewaretoken|xsrf|_xsrf|authenticity_token)["\']\s+value\s*=\s*["\']([^"\']+)["\']',
-        html_text or "",
+        rf'(?is)(?:name|id)\s*=\s*["\'](?:{_alt})["\'][^>]*?\bvalue\s*=\s*["\']([^"\']+)["\']',
+        html,
     )
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    # value-before-name
+    m = re.search(
+        rf'(?is)\bvalue\s*=\s*["\']([^"\']+)["\'][^>]*?\bname\s*=\s*["\'](?:{_alt})["\']',
+        html,
+    )
+    if m:
+        return m.group(1)
+    # meta etiketi (Rails/Laravel: <meta name="csrf-token" content="...">)
+    m = re.search(
+        r'(?is)<meta[^>]+name\s*=\s*["\']csrf[^"\']*["\'][^>]*\bcontent\s*=\s*["\']([^"\']+)["\']',
+        html,
+    )
+    if m:
+        return m.group(1)
+    return None
 
 def extract_csrf(html_text: str) -> Optional[str]:
     # Empty/whitespace input has no token — return early so the lxml-based DOM

@@ -53,7 +53,17 @@ _VERIFY_PATHS = ("/dashboard", "/profile", "/account", "/me", "/home", "/panel")
 
 
 def _extract_csrf(html: str) -> Optional[str]:
-    """Extract CSRF token from HTML form fields."""
+    """CSRF token çıkarımı — TEK KAYNAK ``auth_flow.extract_csrf`` (DOM + regex + analysis;
+    meta-tag, iki-yönlü name/value sırası ve __RequestVerificationToken dahil — bu modülün
+    eski yetenekleri oraya taşındı). Aşağıdaki yerel regex yalnız auth_flow import
+    edilemezse devreye giren fallback'tir."""
+    try:
+        from websecure.core.auth_flow import extract_csrf as _ef_extract
+    except Exception:
+        _ef_extract = None
+    if _ef_extract:
+        return _ef_extract(html)
+    # Fallback (auth_flow yoksa): yerel regex
     for name in _CSRF_FIELD_NAMES:
         m = re.search(
             rf'<input[^>]+name=["\']({re.escape(name)})["\'][^>]*value=["\']([^"\']+)["\']',

@@ -460,3 +460,52 @@ orphan → B3-flag. Benchmark FP=0/Recall=100%, integration 13/13 + passive_reco
 iyi DIP (post-exploit tek kaynak, OAST merkezi) ile ZATEN tekilleşmiş. 3 zincir-encoder + 3 HTTP-server =
 farklı amaç, KORUNDU. analyze_chains orphan → B3-flag. Kod değişmedi, benchmark FP=0/Recall=100%.
 **T2 TAMAM.** ➜ Sıradaki: T7 (auth) / T9-T15 ya da batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
+
+---
+
+## ═══ T7 (core auth/profil/akış — 14 dosya) ═══
+
+> Kapsam: auth_flow, auth_manager, flows, auth/(__init__,flows,providers,totp), profiles, scan_profile,
+> scan_runner, checkpoint, phases/(_context,_hprofile) (Madde 2 tarama + 4 diğer).
+> ADIM 0/1: Bölüm-C "4 login akışı" kısmen yanlış-gruplama: `core/flows.py` = business-logic-flow DSL (login DEĞİL),
+> `core/auth/flows.py` = EmailOTP/DeviceCode 2FA sağlayıcıları (login DEĞİL). Gerçek login-primitifi tekrarı:
+> **auth_flow ↔ auth_manager** (iki paralel auth sistemi: main.py→auth_flow.run_auth_flow, phases.run→AuthManager).
+
+### [T7][Madde 4] #9 — CSRF token çıkarımı: auth_manager kopyası → tek kaynak (auth_flow.extract_csrf)
+- **KAZANAN (tek kaynak):** `auth_flow.extract_csrf` (en sağlam: boş-guard + `analysis.extract_csrf` delegasyonu
+  + DOM selectolax/lxml + regex fallback). main.py login yolu + test_auth_flow ile kaplı.
+- **KAYBEDEN (fallback'e indirildi):** `auth_manager._extract_csrf` (bağımsız 8-isim regex kopyası) →
+  artık `auth_flow.extract_csrf`'e delege (lazy import; yerel regex yalnız o modül yoksa fallback).
+- **AKTARILAN (ADIM 2 merge manifest — auth_manager'da olup auth_flow'da OLMAYAN):** (a) field adları
+  `xsrf_token` + `__RequestVerificationToken` (ASP.NET) → `_CSRF_NAMES`'e eklendi (DOM + regex ikisi de görür);
+  (b) value→name sırası (eskiden yalnız name→value); (c) `<meta name="csrf*" content>` etiketi; (d) esnek value
+  pozisyonu (`name="csrf" type="hidden" value="x"` — name/value arası attribute). Hepsi `_extract_csrf_regex`'te
+  birleşti → auth_flow'un TÜM çağıranları da kazandı.
+- **DAVRANIŞ:** sadece tekilleşme + additive kapsam artışı (auth_manager hiçbir şey kaybetmedi, DOM+analysis+meta
+  KAZANDI; auth_flow daha çok token yakalıyor). Cycle yok (auth_flow auth_manager'ı import etmez; dep zaten vardı).
+- **Doğrulama:** pyflakes temiz · fonksiyonel 5/5 (meta/value-first/aspnet/attr-between/classic — HEM canonical
+  HEM consumer) · test_auth_flow + test_csrf + integration 27 passed · benchmark TP=5 FP=0 Recall=100% (auth
+  benchmark-dışı ama çalıştırıldı).
+- **Commit:** (bu commit)
+
+### T7 HARİTA + KAPANIŞ
+- **İKİ AUTH SİSTEMİ — paralel ama WIRED, farklı runner, KORUNDU:** `auth_flow` (session+cfg, Requests/WebDriver/
+  Playwright stratejileri + signup/device-code/mailbox/LoginAuditor; main.py pipeline) ↔ `auth_manager.AuthManager`
+  (ctx-tabanlı çok-metot: form/basic/bearer/cookie/apikey/jwt; phases.run). Tüm sistemleri birleştirmek = 2 runner'ı
+  riske atar; bunun yerine PAYLAŞILAN primitifler tekilleşti (CSRF #9). `_looks_authenticated` (auth_flow resp+hints
+  + Set-Cookie ↔ auth_manager indicator-substring + farklı hint seti) + form-alan tespiti (auth_manager._detect_form_fields
+  extract-all ↔ auth_flow._infer_login_fields login-özel) = FARKLI imza/amaç → birleştirmek davranış değiştirir, KORUNDU.
+- **core/flows.py — TEKRAR DEĞİL (login değil):** business-logic-flow DSL (run_business_logic_flows/idempotency,
+  store/assert/extractor). Auth ile alakasız.
+- **core/auth/flows.py + providers + totp — TEKRAR DEĞİL (2FA):** EmailOtpProvider (IMAP) / DeviceCodeAuth (OAuth) /
+  Totp2FA/EmailOtp2FA/Null2FA / TOTP. 2FA sağlayıcıları, login-orkestrasyonu değil.
+- **profiles.py ↔ scan_profile.py — TAMAMLAYICI (delege), KORUNDU:** scan_profile (etkileşimli CLI sihirbazı +
+  süre tahmini, `_offer_scan_profile_and_confirm`) `profiles.get_registry/apply_profile`'a DELEGE eder (OOP
+  ScanProfile hiyerarşisi: Aggressive/Stealth/CICD/BugBounty/...). Tekrar değil, katmanlı.
+- **scan_runner / checkpoint / phases/_context,_hprofile — denetlendi, tekrar yok:** scan-state/checkpoint/host-profile
+  bağlam yardımcıları, ayrı sorumluluk.
+
+**T7 SONUÇ:** 1 gerçek konsolidasyon (#9 CSRF çıkarımı, auth_manager→auth_flow tek kaynak, meta/iki-sıra/ASP.NET-
+token/esnek-pozisyon aktarıldı). 2 auth sistemi (paralel/wired/farklı-runner) + _looks_authenticated/form-alan
+(farklı imza) + flows(business-logic) + auth/(2FA) + profiles↔scan_profile(delege) = tekrar DEĞİL, KORUNDU.
+Benchmark FP=0/Recall=100%, 27 test. **T7 TAMAM.** ➜ Sıradaki: T9 (altyapı/util) / T10-T15 ya da batch-FLAG.
