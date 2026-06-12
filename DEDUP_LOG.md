@@ -568,7 +568,7 @@ batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
 - **Doğrulama:** pyflakes temiz (4 unused import temizlendi) · is_available baseline 10/10 BİREBİR ·
   base instantiate-edilemez (abstract korundu) · benchmark TP=5 FP=0 Recall=100% · integration 13/13.
   PROJECT_MAP base.py entry güncellendi (ortak is_available + classes/funcs/deps).
-- **Commit:** (bu commit)
+- **Commit:** bb4d76a70
 
 ### T10 HARİTA + KAPANIŞ
 - **binary çözümleme — ZATEN canonical:** `platform_compat.binary_candidates` tek kaynak; `base._resolve_binary`
