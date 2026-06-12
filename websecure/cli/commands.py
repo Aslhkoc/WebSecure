@@ -37,10 +37,60 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 _VERSION = "20.0.0"
 logger = logging.getLogger(__name__)
+
+
+def make_websecure_runner(log_label: str = "CLI") -> Callable[[str, dict], dict]:
+    """CLI için gerçek WebSecure tarama runner'ı oluşturur (TEK KAYNAK).
+
+    Her hedefi ayrı bir subprocess (`python -m websecure <target>`) olarak çalıştırır;
+    bu sayede paralel daemon tick'leri / worker'lar sys.argv üzerinden çakışmaz.
+    ``scheduler`` ve ``queue_manager`` bunu kullanır (eskiden ikisinde birebir kopyaydı);
+    ``log_label`` yalnız hata log'undaki etiketi belirler ([Scheduler] / [Queue]).
+    """
+    import subprocess
+    import sys
+
+    def _runner(target: str, options: dict) -> dict:
+        import time as _time
+        t0 = _time.monotonic()
+        try:
+            cmd = [sys.executable, "-m", "websecure", target]
+            profile = options.get("profile")
+            if profile:
+                cmd += ["--profile", profile]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=int(options.get("timeout", 3600)),
+            )
+            return {
+                "success": proc.returncode == 0,
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+                "error": proc.stderr.strip() if proc.returncode != 0 else "",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "Tarama zaman aşımına uğradı",
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
+        except Exception as _exc:
+            logger.error(f"[{log_label}] Tarama runner hatası: {_exc!r}")
+            return {
+                "success": False,
+                "error": str(_exc),
+                "finding_count": 0,
+                "duration_s": round(_time.monotonic() - t0, 2),
+            }
+
+    return _runner
 
 
 # ---------------------------------------------------------------------------

@@ -355,52 +355,9 @@ class ScanQueue:
 _queue_instance: Optional[ScanQueue] = None
 
 
-def _make_websecure_runner() -> Callable:
-    """
-    CLI için gerçek WebSecure tarama runner'ı oluşturur.
-    Her hedefi ayrı bir subprocess olarak çalıştırır; bu sayede paralel
-    worker'lar sys.argv üzerinden çakışmaz.
-    """
-    import subprocess
-    import sys
-
-    def _runner(target: str, options: dict) -> dict:
-        import time as _time
-        t0 = _time.monotonic()
-        try:
-            cmd = [sys.executable, "-m", "websecure", target]
-            profile = options.get("profile")
-            if profile:
-                cmd += ["--profile", profile]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=int(options.get("timeout", 3600)),
-            )
-            return {
-                "success": proc.returncode == 0,
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-                "error": proc.stderr.strip() if proc.returncode != 0 else "",
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "success": False,
-                "error": "Tarama zaman aşımına uğradı",
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-            }
-        except Exception as _exc:
-            logger.error(f"[Queue] Tarama runner hatası: {_exc!r}")
-            return {
-                "success": False,
-                "error": str(_exc),
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-            }
-
-    return _runner
+# _make_websecure_runner kaldırıldı → tek kaynak commands.make_websecure_runner
+# (scheduler ve queue_manager'daki birebir kopya birleştirildi). run_queue_cli'de
+# lazy import ile çağrılır.
 
 
 def get_queue(runner: Optional[Callable] = None) -> ScanQueue:
@@ -460,7 +417,8 @@ def run_queue_cli(args: list) -> int:
     run_p.add_argument("--workers", "-w", type=int, default=1)
 
     ns = parser.parse_args(args)
-    q = get_queue(runner=_make_websecure_runner())
+    from websecure.cli.commands import make_websecure_runner
+    q = get_queue(runner=make_websecure_runner("Queue"))
 
     if ns.subcmd == "add":
         e = q.add(target=ns.target, priority=ns.priority, label=ns.label)

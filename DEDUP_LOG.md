@@ -627,3 +627,21 @@ _check_binary redundancy NOT edildi (düşük öncelik). Benchmark FP=0/Recall=1
 + latent markdown._sev_rank daima-0 bug'ı düzeltildi). finding-extraction (farklı yaklaşım) + severity renk/ikon
 (format-özel) = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, 31 test. **T11 TAMAM.** ➜ Sıradaki: T12 (cli) /
 T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da batch-FLAG (T3-encoding/TLS/JWT/LFI).
+
+---
+
+## ═══ T12 (cli/ — 10 dosya) ═══
+
+> Kapsam: __init__, autocomplete, commands, diff, queue_manager, scheduler, tui, web_ui, webhook, wizard (Madde 4).
+
+### [T12][Madde 4] #12 — _make_websecure_runner: 2 birebir kopya → tek kaynak (commands)
+- **KAZANAN (yeni tek kaynak):** `cli/commands.py:make_websecure_runner(log_label="CLI")` — `python -m websecure
+  <target>` subprocess runner factory. commands.py modül-yükünde yalnız stdlib import eder (cli alt-modülleri lazy) →
+  cycle-güvenli home. (`cli/__init__` re-export hub olduğu için home OLAMAZDI — scheduler/queue'yu import ediyor.)
+- **KAYBEDEN (kaldırılan kopyalar):** `scheduler._make_websecure_runner` + `queue_manager._make_websecure_runner` —
+  BİREBİR aynıydı (tek fark: log etiketi `[Scheduler]`/`[Queue]` + bir docstring kelimesi). İkisi de lazy import ile
+  `make_websecure_runner("Scheduler")` / `("Queue")` çağırır.
+- **AKTARILAN (ADIM 2):** log etiketi parametreye (`log_label`) çıkarıldı; gövde birebir korundu.
+- **Doğrulama:** pyflakes temiz · cli paketi import OK (cycle yok) · runner uçtan-uca çalıştı (sonuç şekli
+  {success,finding_count,duration_s,error}) · benchmark TP=5 FP=0 Recall=100% · integration 13/13.
+- **Commit:** (bu commit)

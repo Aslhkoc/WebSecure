@@ -411,52 +411,9 @@ class CronScheduler:
 _scheduler_instance: Optional[CronScheduler] = None
 
 
-def _make_websecure_runner() -> Callable:
-    """
-    CLI için gerçek WebSecure tarama runner'ı oluşturur.
-    Her hedefi ayrı bir subprocess olarak çalıştırır; bu sayede paralel
-    daemon tick'leri sys.argv üzerinden çakışmaz.
-    """
-    import subprocess
-    import sys
-
-    def _runner(target: str, options: dict) -> dict:
-        import time as _time
-        t0 = _time.monotonic()
-        try:
-            cmd = [sys.executable, "-m", "websecure", target]
-            profile = options.get("profile")
-            if profile:
-                cmd += ["--profile", profile]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=int(options.get("timeout", 3600)),
-            )
-            return {
-                "success": proc.returncode == 0,
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-                "error": proc.stderr.strip() if proc.returncode != 0 else "",
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "success": False,
-                "error": "Tarama zaman aşımına uğradı",
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-            }
-        except Exception as _exc:
-            logger.error(f"[Scheduler] Tarama runner hatası: {_exc!r}")
-            return {
-                "success": False,
-                "error": str(_exc),
-                "finding_count": 0,
-                "duration_s": round(_time.monotonic() - t0, 2),
-            }
-
-    return _runner
+# _make_websecure_runner kaldırıldı → tek kaynak commands.make_websecure_runner
+# (scheduler ve queue_manager'daki birebir kopya birleştirildi). run_scheduler_cli'de
+# lazy import ile çağrılır.
 
 
 def get_scheduler(
@@ -514,7 +471,8 @@ def run_scheduler_cli(args: list) -> int:
     sub.add_parser("run",  help="Daemon modunda çalıştır (Ctrl+C ile durdur)")
 
     ns = parser.parse_args(args)
-    sched = get_scheduler(runner=_make_websecure_runner())
+    from websecure.cli.commands import make_websecure_runner
+    sched = get_scheduler(runner=make_websecure_runner("Scheduler"))
 
     if ns.subcmd == "add":
         try:
