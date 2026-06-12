@@ -132,13 +132,26 @@ class ScoreRecord:
 
 
 # ---------------------------------------------------------------------------
-# TenantRepository
+# _BaseRepository — ortak bağlantı kökü
 # ---------------------------------------------------------------------------
 
-class TenantRepository:
+class _BaseRepository:
+    """
+    Tüm repository'ler için ortak taban (SRP: yalnız Database erişimi sağlar).
+
+    Her repository ``db or get_db()`` ile aynı bağlantı kökünü kurardı; tek
+    kaynak burada. Alt sınıflar tabloya-özgü CRUD'ı ekler (OCP).
+    """
+
     def __init__(self, db: Optional[Database] = None) -> None:
         self._db = db or get_db()
 
+
+# ---------------------------------------------------------------------------
+# TenantRepository
+# ---------------------------------------------------------------------------
+
+class TenantRepository(_BaseRepository):
     def create(self, tenant: Tenant) -> Tenant:
         with self._db.connection() as conn:
             conn.execute(
@@ -192,10 +205,7 @@ class TenantRepository:
 # ProjectRepository
 # ---------------------------------------------------------------------------
 
-class ProjectRepository:
-    def __init__(self, db: Optional[Database] = None) -> None:
-        self._db = db or get_db()
-
+class ProjectRepository(_BaseRepository):
     def create(self, project: Project) -> Project:
         with self._db.connection() as conn:
             conn.execute(
@@ -237,10 +247,7 @@ class ProjectRepository:
 # ScanRepository
 # ---------------------------------------------------------------------------
 
-class ScanRepository:
-    def __init__(self, db: Optional[Database] = None) -> None:
-        self._db = db or get_db()
-
+class ScanRepository(_BaseRepository):
     def create(self, scan: Scan) -> Scan:
         with self._db.connection() as conn:
             conn.execute(
@@ -323,7 +330,7 @@ class ScanRepository:
 # FindingRepository
 # ---------------------------------------------------------------------------
 
-class FindingRepository:
+class FindingRepository(_BaseRepository):
     # Tek kaynak INSERT — create() ve bulk_create() aynı 20-kolon kaydını paylaşır.
     _INSERT_SQL = """INSERT OR IGNORE INTO findings(
         id, scan_id, tenant_id, project_id, fingerprint, title,
@@ -331,9 +338,6 @@ class FindingRepository:
         cvss, verified, false_positive, remediation, tags,
         created_at, extra_json)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
-
-    def __init__(self, db: Optional[Database] = None) -> None:
-        self._db = db or get_db()
 
     @staticmethod
     def _insert_params(f: Finding) -> tuple:
@@ -481,10 +485,7 @@ class FindingRepository:
 # FPRuleRepository
 # ---------------------------------------------------------------------------
 
-class FPRuleRepository:
-    def __init__(self, db: Optional[Database] = None) -> None:
-        self._db = db or get_db()
-
+class FPRuleRepository(_BaseRepository):
     def create(self, rule: FPRule) -> FPRule:
         with self._db.connection() as conn:
             conn.execute(
@@ -557,10 +558,7 @@ class FPRuleRepository:
 # ScoreRepository
 # ---------------------------------------------------------------------------
 
-class ScoreRepository:
-    def __init__(self, db: Optional[Database] = None) -> None:
-        self._db = db or get_db()
-
+class ScoreRepository(_BaseRepository):
     def record(self, rec: ScoreRecord) -> ScoreRecord:
         with self._db.connection() as conn:
             conn.execute(
