@@ -18,12 +18,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from websecure.integrations.base import (
     ToolFinding,
@@ -98,11 +96,7 @@ class DalfoxWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "dalfox"
 
-    def is_available(self) -> bool:
-        return (
-            shutil.which(self.binary) is not None
-            or (self._binary_path is not None and Path(self._binary_path).exists())
-        )
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/'da veya PATH'te).
 
     def version(self) -> Optional[str]:
         if not self.is_available():

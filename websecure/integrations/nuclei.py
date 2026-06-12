@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import time
@@ -161,15 +160,7 @@ class NucleiWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "nuclei"
 
-    def is_available(self) -> bool:
-        """Binary keşfedildiyse True döner."""
-        # ToolIntegration._resolve_binary() self._binary_path'i set eder.
-        # self.binary → self._binary_path or self._binary_name
-        bp = self._binary_path
-        if bp and Path(bp).exists():
-            return True
-        # Fallback: PATH kontrolü
-        return shutil.which("nuclei") is not None
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/nuclei veya PATH).
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration arayüzü — tarama yap ve ToolResult döndür."""

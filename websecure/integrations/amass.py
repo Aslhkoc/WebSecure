@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import time
@@ -77,11 +76,7 @@ class AmassWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "amass"
 
-    def is_available(self) -> bool:
-        return (
-            shutil.which(self.binary) is not None
-            or (self._binary_path is not None and Path(self._binary_path).exists())
-        )
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/'da veya PATH'te).
 
     def version(self) -> Optional[str]:
         if not self.is_available():
@@ -440,11 +435,7 @@ class SubfinderIntegration(ToolIntegration):
     def tool_name(self) -> str:
         return "subfinder"
 
-    def is_available(self) -> bool:
-        return (
-            shutil.which(self.binary) is not None
-            or (self._binary_path is not None and Path(self._binary_path).exists())
-        )
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/'da veya PATH'te).
 
     def version(self) -> Optional[str]:
         if not self.is_available():
@@ -610,11 +601,8 @@ class InteractshIntegration(ToolIntegration):
     def tool_name(self) -> str:
         return "interactsh"
 
-    def is_available(self) -> bool:
-        bp = self._binary_path
-        if bp and Path(bp).exists():
-            return True
-        return shutil.which("interactsh-client") is not None
+    # is_available → ToolIntegration ortak varsayılanı (binary_path "interactsh-client"
+    # ile çözülür; tools/interactsh, drivers/ ve PATH __init__'te + base'de taranır).
 
     def version(self) -> Optional[str]:
         if not self.is_available():

@@ -255,11 +255,6 @@ class ToolIntegration(ABC):
         ...
 
     @abstractmethod
-    def is_available(self) -> bool:
-        """Araç binary'si sistemde mevcut mu?"""
-        ...
-
-    @abstractmethod
     def run(self, target: str, **kwargs) -> ToolResult:
         """Aracı çalıştır ve ToolResult döndür."""
         ...
@@ -267,6 +262,19 @@ class ToolIntegration(ABC):
     # ------------------------------------------------------------------ #
     # Ortak yardımcılar (alt sınıflar override edebilir)
     # ------------------------------------------------------------------ #
+
+    def is_available(self) -> bool:
+        """Araç binary'si tools/'da veya PATH'te çözümlendi mi?
+
+        Ortak VARSAYILAN: amass/subfinder/interactsh/dalfox/katana/nuclei/feroxbuster
+        hepsi bu birebir aynı kontrolü kendi içinde tekrar ediyordu → tek kaynağa
+        indirildi. Özel durumu olan alt sınıflar override eder: sqlmap (.py script),
+        ffuf (.py launcher), httpx (Go-vs-Python httpx ayrımı).
+        """
+        return (
+            shutil.which(self.binary) is not None
+            or (self._binary_path is not None and Path(self._binary_path).exists())
+        )
 
     def to_findings(self, result: ToolResult) -> List[Dict[str, Any]]:
         """ToolResult'u WebSecure native finding listesine dönüştür."""

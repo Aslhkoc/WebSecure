@@ -24,7 +24,6 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
@@ -127,12 +126,7 @@ class KatanaWrapper(ToolIntegration):
     def tool_name(self) -> str:
         return "katana"
 
-    def is_available(self) -> bool:
-        if shutil.which(self.binary) is not None:
-            return True
-        if self._binary_path and Path(self._binary_path).exists():
-            return True
-        return False
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/'da veya PATH'te).
 
     def version(self) -> Optional[str]:
         if not self.is_available():

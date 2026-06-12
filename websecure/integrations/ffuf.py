@@ -582,10 +582,7 @@ class FeroxbusterWrapper(ToolIntegration):
                 self._binary_path = str(_cand)
                 return
 
-    def is_available(self) -> bool:
-        return shutil.which(self.binary) is not None or (
-            self._binary_path is not None and Path(self._binary_path).exists()
-        )
+    # is_available → ToolIntegration ortak varsayılanı (binary tools/'da veya PATH'te).
 
     def run(self, target: str, **kwargs) -> ToolResult:
         """ToolIntegration interface — recursive directory brute-force."""

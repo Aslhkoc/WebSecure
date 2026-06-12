@@ -544,3 +544,46 @@ tool_manager/startup farklı konvansiyon+amaç, binary_candidates zaten canonica
 marketplace farklı amaç) + utils tekil-amaç = tekrar DEĞİL, KORUNDU. ensure_dir/reporting._ensure_dir orphan →
 B3-flag. Kod değişmedi, benchmark FP=0/Recall=100%. **T9 TAMAM.** ➜ Sıradaki: T10 (integrations) / T11-T15 ya da
 batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
+
+---
+
+## ═══ T10 (integrations/ — 11 dosya) ═══
+
+> Kapsam: __init__, base, amass, dalfox, ffuf, httpx_runner, katana, nmap, nuclei, sarif, sqlmap (Madde 2,4).
+> Hepsi `base.ToolIntegration` türevi araç wrapper'ları.
+
+### [T10][Madde 4] #10 — is_available() boilerplate: 7 birebir kopya → tek kaynak (base default)
+- **KAZANAN (tek kaynak):** `base.ToolIntegration.is_available()` artık CONCRETE varsayılan (eskiden abstract):
+  `shutil.which(self.binary) is not None or (self._binary_path and Path(self._binary_path).exists())`.
+- **KAYBEDEN (kaldırılan 7 birebir override):** amass.AmassWrapper, amass.SubfinderIntegration,
+  amass.InteractshIntegration, dalfox.DalfoxWrapper, katana.KatanaWrapper, nuclei.NucleiWrapper,
+  ffuf.FeroxbusterWrapper — hepsi bu birebir aynı kontrolü (veya denkini: nuclei/interactsh hardcoded ad)
+  tekrar ediyordu. Artık base'den miras alır.
+- **AKTARILAN (ADIM 2):** yok (7 override base default'a denk; nuclei/interactsh'in hardcoded adı
+  self._binary_name ile aynı → fark yok). 4 dosyada artık kullanılmayan import temizlendi (shutil/Path).
+- **KORUNAN (özel, override KALDI):** sqlmap (.py script + binary_candidates), ffuf.FFUFWrapper (.py launcher
+  sys.executable kontrolü), httpx (_is_go_httpx Go-vs-Python ayrımı). nmap (kendi _find_binary).
+- **DAVRANIŞ:** birebir aynı — 10 wrapper is_available() çıktısı baseline'la BİREBİR eşleşti (hepsi True,
+  binary mevcut). base hâlâ abstract (tool_name/run). abstractmethod yalnız is_available'dan kalktı.
+- **Doğrulama:** pyflakes temiz (4 unused import temizlendi) · is_available baseline 10/10 BİREBİR ·
+  base instantiate-edilemez (abstract korundu) · benchmark TP=5 FP=0 Recall=100% · integration 13/13.
+  PROJECT_MAP base.py entry güncellendi (ortak is_available + classes/funcs/deps).
+- **Commit:** (bu commit)
+
+### T10 HARİTA + KAPANIŞ
+- **binary çözümleme — ZATEN canonical:** `platform_compat.binary_candidates` tek kaynak; `base._resolve_binary`
+  + sqlmap/nmap/ffuf ona DELEGE eder (T9'da da doğrulandı). katana/ffuf'un __init__'teki ekstra _check_binary'si
+  süper sonrası REDUNDANT re-resolution (base zaten çözüyor) ama her birinde ufak fark var (katana hardcoded aday,
+  uyarı log'u) → davranış-değişmez riski, NOT edildi (düşük öncelik), KORUNDU.
+- **subdomain Amass/Subfinder — ZATEN DELEGE (adapter+fallback):** `scanners/subdomain.py` AmassWrapper/Subfinder
+  birer adapter, `integrations.amass.AmassWrapper`/`SubfinderIntegration`'a delege eder (T1 #1 + mevcut). Tekrar değil.
+- **SARIF — ZATEN DELEGE:** `report_generator.export_sarif` → `integrations/sarif.findings_to_sarif` (canonical;
+  fingerprint/CWE/dedup). integrations/sarif.py tek SARIF kaynağı. Tekrar değil.
+- **subprocess/parse — FARKLI CLI başına özel, KORUNDU:** her aracın run/_build_command/_parse_output'u kendi
+  CLI'sine özgü (nuclei templates, amass enum/intel, httpx probe, katana crawl…). effective_timeout/no_timeout
+  base'den (tek kaynak). Tekrar değil.
+
+**T10 SONUÇ:** 1 gerçek konsolidasyon (#10 is_available 7→1 base default, davranış birebir). binary_candidates/
+SARIF/subdomain-adapter ZATEN canonical-delege; subprocess/parse CLI-başına özel = tekrar DEĞİL, KORUNDU.
+_check_binary redundancy NOT edildi (düşük öncelik). Benchmark FP=0/Recall=100%, integration 13/13.
+**T10 TAMAM.** ➜ Sıradaki: T11 (reporters) / T12 (cli) / T13 (db+api) / T14 (root) / T15 (kod-dışı) ya da batch-FLAG.
