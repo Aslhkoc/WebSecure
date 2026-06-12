@@ -509,3 +509,38 @@ farklı amaç, KORUNDU. analyze_chains orphan → B3-flag. Kod değişmedi, benc
 token/esnek-pozisyon aktarıldı). 2 auth sistemi (paralel/wired/farklı-runner) + _looks_authenticated/form-alan
 (farklı imza) + flows(business-logic) + auth/(2FA) + profiles↔scan_profile(delege) = tekrar DEĞİL, KORUNDU.
 Benchmark FP=0/Recall=100%, 27 test. **T7 TAMAM.** ➜ Sıradaki: T9 (altyapı/util) / T10-T15 ya da batch-FLAG.
+
+---
+
+## ═══ T9 (core altyapı/util — 16 dosya) ═══
+
+> Kapsam: paths, platform_compat, startup, tool_manager, plugin_registry, plugin_marketplace, exceptions,
+> __init__, utils/(__init__,config,helpers,net,system,wordlists), cli/__init__ (Madde 4 diğer/sistem).
+> **SONUÇ: 0 YENİ canlı konsolidasyon — katman İYİ KATMANLI** (T2 gibi). Doğrulama-only faz, kod değişmedi,
+> benchmark FP=0/Recall=100% (T7'den sabit), tüm T9 modülleri import OK.
+
+### T9 HARİTA + ZATEN-KATMANLI / KORUNDU (her biri kanıtla)
+- **BINARY KEŞFİ — KATMANLI, FARKLI KONVANSİYON, KORUNDU:** `paths.py` (TÜM yolların tek kaynağı, frozen-aware:
+  tools_dir/drivers_dir/...) ↔ `platform_compat.py` (exe_suffix/binary_name/**binary_candidates** = canonical
+  tools/-aday üreteci, archive extraction) ↔ `tool_manager.py` (runtime ToolManager: _find_binary + sqlmap API +
+  Go/pdtm dir search) ↔ `startup.py` (_GO_TOOLS install-spec, ensure_* indirme). **binary_candidates ZATEN canonical:**
+  integrations/base._resolve_binary + sqlmap/nmap/ffuf ona DELEGE eder. tool_manager._find_binary FARKLI konvansiyon
+  (`tools/{tool_name}/{binary}` + _KNOWN_TOOLS alias'ları [sqlmap→sqlmapapi.py, interactsh→interactsh-client] +
+  capitalize variant + Go-dir search); binary_candidates `tools/{tool}/{tool}` + exe_suffix. Birleştirmek konvansiyon
+  çakışması + tool-tespiti riski (benchmark-dışı) → KORUNDU. tool.path zaten paths.tools_dir() kullanıyor (path tek kaynak).
+- **PLUGIN — FARKLI AMAÇ, ikisi de WIRED, KORUNDU:** `plugin_registry.PluginRegistry` (İÇ scanner kaydı:
+  built-in BaseScanner sınıfları → fazlar, entry-point/dizin keşfi; phases.get_registry) ↔ `plugin_marketplace`
+  (HARİCİ 3.parti plugin yaşam-döngüsü: BasePlugin ABC, git/local install, enable/disable/uninstall/run;
+  api/server get_marketplace). Farklı arayüz, farklı amaç. Tekrar değil.
+- **profiles ↔ scan_profile (T7'de de geçti):** scan_profile DELEGE eder. utils/* (config/helpers/net/wordlists/
+  system) tekil-amaç yardımcılar; net.is_junk_url/same_site vb. tek kaynak (T4'te de doğrulandı).
+- **🚩 B3-FLAG (ölü-kod, dedup değil):** dizin-oluşturma üçlüsü `paths.ensure` (canonical, CANLI) ↔
+  `utils/system.ensure_dir` (0 çağıran, yalnız `__all__` export — orphan) ↔ `reporting._ensure_dir` (0 çağıran,
+  private orphan). İkincil ikisi paths.ensure kopyası; CANLI çağıranı yok → körü körüne SİLİNMEDİ, 6boyut B3
+  değerlendirsin (ensure_dir public export olduğu için harici-kullanıcı riski var). [[plan_6boyut_tam_denetim]]
+
+**T9 SONUÇ:** 0 yeni canlı konsolidasyon. Altyapı/util katmanı iyi-katmanlı: binary-keşif (paths/platform_compat/
+tool_manager/startup farklı konvansiyon+amaç, binary_candidates zaten canonical) + plugin (iç-registry vs harici-
+marketplace farklı amaç) + utils tekil-amaç = tekrar DEĞİL, KORUNDU. ensure_dir/reporting._ensure_dir orphan →
+B3-flag. Kod değişmedi, benchmark FP=0/Recall=100%. **T9 TAMAM.** ➜ Sıradaki: T10 (integrations) / T11-T15 ya da
+batch-FLAG (T3-encoding/TLS-cert/JWT-forge/LFI-RCE).
