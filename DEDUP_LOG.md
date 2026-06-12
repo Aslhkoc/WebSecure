@@ -952,3 +952,40 @@ genuine yapısal tekrar — sıradaki en olası gerçek konsolidasyon) / JWT-for
 girişi (kozmetik isim çakışması); `_probe_cert` kasıtlı daha-hassas findings-üretici (kaba report-checker'a delege =
 hassasiyet kaybı + FP riski + benchmark-kör). Birleştirme davranış değiştirir → **KORUNDU, 0 değişiklik.** `tls.
 check_ssl_certificate` ölü-alias → B3'e not. ➜ Kalan batch-FLAG: **JWT-forge** / **LFI-RCE** (LFI benchmark-kritik, en riskli).
+
+---
+
+## ═══════════════ BATCH-FLAG #3 — JWT-FORGE (✅ GERÇEK KONSOLİDASYON) ═══════════════
+
+> **TETİK:** kullanıcı "jwt forge'u hallet" (2026-06-12). **SONUÇ: 1 KONSOLİDASYON (#18)** — batch-FLAG'ler içinde
+> ilk gerçek dedup (#1 encoding + #2 TLS korunmuştu). JWT benchmark-DIŞI → benchmark güvende; byte-equivalence + jwt testleri ile doğrulandı.
+
+### [BATCH-FLAG #3][Madde 1] #18 — JWT forge primitifleri → tek kaynak (scanners.jwt)
+- **KAZANAN (yeni tek kaynak):** `scanners/jwt.py` module-level `b64url_encode(str|bytes)→str` + `b64url_decode(str|bytes)
+  →bytes` + `jwt_sign(signing_input, key, alg)→b64url-imza` (HS256/384/512, `_HS_HASHES` map). En zengin JWT modülü =
+  doğal kanonik ev.
+- **KAYBEDEN (kopyalar kaldırıldı/delege edildi):**
+  - `scanners/jwt.py` İÇİ: `JWTScanner._b64e/_b64d` artık delege; 3 inline `urlsafe_b64encode(hmac.new(...).digest())
+    .decode().rstrip("=")` (`_attack_hs256_brute`/`_attack_rs256_hs256`/`_attack_kid_traversal`) → `jwt_sign`;
+    module-level `_jwt_decode_parts`/`_jwt_encode` nested `_dec`/`_enc` → kanonik primitifler.
+  - `core/exploit_orchestrator.py:JWTExploitStrategy`: nested `_b64url_encode`/`_b64url_decode` + 3 inline `hmac.new`
+    sign-site (Step2 RS256→HS256, Step3 weak-secret `alg_map`, Step4 KID) → kanonik `b64url_*`/`jwt_sign`. Lazy import
+    (`from websecure.scanners.jwt import …`), cycle yok (jwt.py leaf: stdlib+.base+lazy core.payloads).
+- **AKTARILAN (ADIM 2 — her iki tarafın BENZERSİZ değeri KORUNDU, yalnız primitifler tekilleşti):**
+  - JWTScanner-benzersiz: 4 alg:none case-varyantı, null-sig attack, JWKS `_fetch_public_keys`, external `jwt_secrets`
+    wordlist, kid traversal → orkestrasyon AYNEN kaldı.
+  - JWTExploitStrategy-benzersiz: token-extraction (cookie/header/evidence), HS384/512 brute, ExploitResult/cvss,
+    `_probe_token` → orkestrasyon AYNEN kaldı. (HS384/512 zaten `jwt_sign` ile destekli, kayıp yok.)
+- **🐞 LATENT FIX (dedup yan-ürünü, byte-safe):** jwt.py `_b64d` padding'i `4 - len%4` idi → len%4==0'da GEREKSİZ
+  `"===="` ekliyordu (geçersiz padding; gerçek JWT segmentlerinde tetiklenmez). Kanonik `-len%4` (doğru) ile değişti —
+  exploit tarafının zaten kullandığı `pad%4` formuyla hizalandı; len%4≠0'da BİREBİR aynı (kanıtlandı).
+- **Doğrulama:** **4 forge adımının HEPSİ byte-IDENTICAL** (eski inline impl vs yeni kanonik: none/RS256→HS256/
+  weak-secret-HS256+384+512/KID + decode parity, programatik kanıt) · `test_jwt.py`+`test_chaining.py` **34/34** ·
+  integration **13/13** · benchmark **TP=5 FP=0 Recall=100%** (JWT benchmark-dışı, kırılma yok) · pyflakes **69**
+  (kaldırılan base64/hmac/hashlib local import'ları temizlendi, yeni undefined yok) · import smoke (cycle yok).
+- **Commit:** e133ea9fc
+
+**BATCH-FLAG #3 SONUÇ:** JWT forge gerçek bir tekrardı (b64url + HMAC-sign primitifleri 2 dosyada ~8 kopya) → kanonik
+`scanners.jwt.b64url_encode/b64url_decode/jwt_sign` tek kaynağında birleşti; her iki tüketicinin orkestrasyonu + benzersiz
+yetenekleri korundu, byte-equivalence kanıtlandı, latent padding bug'ı düzeldi. **1 konsolidasyon (#18).** ➜ Kalan batch-FLAG:
+**LFI-RCE** (LFIExploitStrategy log-poison/PHP-filter ↔ scanners.lfi zincirleri — **LFI benchmark-KRİTİK, en riskli, en son**).
