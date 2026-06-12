@@ -911,3 +911,44 @@ farklı-amaç çıktı; her biri kanıtla korundu, körü körüne hiçbir şey 
 kompoze+dedup ediyor. Konsolidasyon davranışı değiştirir + benchmark-kör + gerçek WAF-bypass'ı zayıflatır → **KORUNDU,
 0 değişiklik.** (T2/T9/T15 gibi kanıtlı-koruma.) ➜ Kalan batch-FLAG: **TLS-cert** (scan_tls tls.py↔infrastructure.py,
 genuine yapısal tekrar — sıradaki en olası gerçek konsolidasyon) / JWT-forge / LFI-RCE.
+
+---
+
+## ═══════════════ BATCH-FLAG #2 — TLS-CERT (derin denetim) ═══════════════
+
+> **TETİK:** kullanıcı "TLS-cert" seçti (2026-06-12). **SONUÇ: 0 konsolidasyon → KORUNDU (cert-çıkarımı ZATEN
+> tekil + scan_tls farklı-FAZ + _probe_cert daha-hassas-bağlam).** Kod DEĞİŞMEDİ (HEAD f2805a320, ağaç temiz).
+
+### ADIM 0 — denetlenen yüzey
+- **İKİ `scan_tls`** (T1 flag'i): `tls.py:104 scan_tls` (TAM orkestratör: cert+protokol+cipher+TLSAdim9Scanner+
+  TLSDeepScanner) ↔ `infrastructure.py:1220 scan_tls` (HAFİF: get_security_headers + check_ssl_certificate).
+- **cert-çıkarımı** (T1 flag'i): `infrastructure._extract_cert_details_from_obj` (cert-obj→düz dict) +
+  `_extract_cert_details` (DER→#1 delege) + `PySSLCertChecker.check` ↔ `tls.CertificateValidationProber.
+  _der_to_peercert_dict` (DER→getpeercert-şekli) + `_probe_cert`.
+
+### ADIM 1/2 — neden KONSOLİDE EDİLEMEZ / ZATEN TEKİL (kanıt)
+- **cert-çıkarımı ZATEN tek kaynak:** `tls.py:14` `from .infrastructure import check_ssl_certificate as
+  _get_cert_details` → tls.scan_tls cert analizini infrastructure'a DELEGE eder (kendi parse'ı YOK). T1 flag'i
+  "_get_cert_details ↔ infrastructure" aslında **import alias'ıydı** — tekrar değil, zaten delege. `_extract_cert_details`
+  (DER) → `_extract_cert_details_from_obj` (obj) delege; bu ikisi de katmanlı, tekrar değil.
+- **İKİ scan_tls = FARKLI FAZ (yanlış-isimlendirme, kozmetik):** `phase_tls`→`tls.scan_tls` (derin TLS atakları);
+  `phase_sec_headers`→`infrastructure.run/scan_tls` (güvenlik başlıkları + temel cert). İkisi AYRI faz-runner'ı,
+  AYRI çıktı şekli ({certificate,new_findings} ↔ {headers,certificate}). İsim çakışması maintainability-kokusu ama
+  rakip-implementasyon DEĞİL → birleştirme iki fazı karıştırır. KORUNDU.
+- **`_der_to_peercert_dict` ↔ `_extract_cert_details_from_obj` = FARKLI ŞEKİL/HASSASİYET:** ilki getpeercert()-uyumlu
+  şekil (subject/issuer RDNS tuple, notAfter openssl-format `%b %d…`, subjectAltName ("DNS",n) tuple) üretir —
+  `_probe_cert`'in standart-ssl mantığı bunu tüketir; ikincisi düz dict (CN string, ISO tarih). Farklı downstream
+  kontratı; biri diğerinden yeniden-kurulamaz (RDNS yapısı düzde kayıp).
+- **`_probe_cert` DELEGE EDİLEMEZ (daha hassas + FP-geçmişi):** `_probe_cert` self-signed'ı **issuer==subject**
+  (kesin tanım) + hostname/SAN eşleşmesini AYRI saptar → FINDINGS (graded severity: expired=High, <7d=Medium,
+  <30d=Low) üretir. `PySSLCertChecker` self_signed'ı **`not valid`** (kaba: doğrulanmış GET başarısız → expired/
+  güvenilmez-CA/self-signed'ı KARIŞTIRIR) olarak verir → REPORT dict. `_probe_cert`'i checker'a delege etmek
+  self-signed semantiğini kaba'ya düşürür (CA-imzalı-ama-expired cert'i "self-signed" sanma = FP) — kodun yorumlardaki
+  **CERT_NONE getpeercert FP-fix geçmişi** tam da bu sınıf. Benchmark TLS'i kapsamaz → regresyon görünmez.
+- **`tls.check_ssl_certificate` (209)** = infrastructure'a saf pass-through alias, public export infrastructure'dan
+  gelir (kimse tls.check_ssl_certificate import etmiyor) → muhtemelen ÖLÜ ama zararsız compat; **B3 (ölü-kod), dedup değil.**
+
+**BATCH-FLAG #2 SONUÇ:** TLS-cert'in cert-ÇIKARIMI zaten tekil (tls→infrastructure delege); iki scan_tls farklı-FAZ
+girişi (kozmetik isim çakışması); `_probe_cert` kasıtlı daha-hassas findings-üretici (kaba report-checker'a delege =
+hassasiyet kaybı + FP riski + benchmark-kör). Birleştirme davranış değiştirir → **KORUNDU, 0 değişiklik.** `tls.
+check_ssl_certificate` ölü-alias → B3'e not. ➜ Kalan batch-FLAG: **JWT-forge** / **LFI-RCE** (LFI benchmark-kritik, en riskli).
