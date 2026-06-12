@@ -644,4 +644,32 @@ T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da bat
 - **AKTARILAN (ADIM 2):** log etiketi parametreye (`log_label`) çıkarıldı; gövde birebir korundu.
 - **Doğrulama:** pyflakes temiz · cli paketi import OK (cycle yok) · runner uçtan-uca çalıştı (sonuç şekli
   {success,finding_count,duration_s,error}) · benchmark TP=5 FP=0 Recall=100% · integration 13/13.
+- **Commit:** 1ff7c8ffd
+
+### [T12][Madde 4] #13 — diff severity rank: yerel kopya → tek kaynak (reporters.severity_rank)
+- **KAZANAN (tek kaynak):** `reporters.severity_rank` (T11'de kurulan canonical; normalize-ederek-sıralar).
+- **KAYBEDEN (kaldırılan kopya):** `cli/diff.py:_SEVERITY_ORDER` ({Critical:4..Info:0}) — T11'de markdown/html'den
+  kaldırılan haritanın aynısı. 8 çağrı yeri (`_SEVERITY_ORDER.get(sev, 0)` skorlama/sıralama/regression) →
+  `severity_rank(...)`. `_SEVERITY_EMOJI` (terminal etiketi `[Critical]`) format-özel → KORUNDU.
+- **DAVRANIŞ:** birebir aynı — diff'in severity değerleri zaten büyük-harf İngilizce, severity_rank normalize
+  ederek aynı rütbeyi döndürür (T11'de 13/13 eşdeğerlik kanıtlandı). cycle yok (reporters/__init__ leaf).
+- **Doğrulama:** pyflakes temiz · ScanDiff.compare crash'siz (8 severity_rank yeri yürüdü) · benchmark
+  TP=5 FP=0 Recall=100% · integration 13/13.
 - **Commit:** (bu commit)
+
+### T12 HARİTA + KAPANIŞ
+- **severity RENK/EMOJİ — FORMAT-ÖZEL, KORUNDU:** `tui._SEVERITY_COLORS`/`_SEVERITY_EMOJI` (Rich renk + emoji) ↔
+  `diff._SEVERITY_EMOJI` (`[Critical]` terminal etiketi) ↔ `web_ui` CSS `.sev-Critical`. Her UI kendi sunumu
+  (T11 deseni: renk/ikon format-özel). Tekrar değil.
+- **run_*_cli — FARKLI ARGÜMAN, KORUNDU:** run_serve_cli/run_scheduler_cli/run_queue_cli/run_diff_cli/
+  run_completion_cli/run_wizard_cli — her biri kendi argparse alt-komutunu parse eder, ortak boilerplate değil.
+- **webhook ↔ notification (T8) — FARKLI AMAÇ:** `cli/webhook` jenerik outbound HTTP webhook dispatcher (Webhook
+  Event/Endpoint, tarama-olayı tetikleme) ↔ `notification.py` belirli servis entegrasyonları (Slack/Jira/Teams/
+  PagerDuty). Farklı katman/amaç, KORUNDU.
+- **web_ui._DashboardHandler (BaseHTTPRequestHandler) — 3 HTTP-server'dan biri** (api/web_ui/xss_callback, T2'de
+  farklı amaç olarak korundu). KORUNDU.
+
+**T12 SONUÇ:** 2 gerçek konsolidasyon (#12 _make_websecure_runner 2→1 commands; #13 diff severity rank →
+reporters.severity_rank, T11 canonical'ine bağlandı). severity renk/emoji (format-özel) + run_*_cli (farklı arg) +
+webhook (farklı amaç) = tekrar DEĞİL, KORUNDU. Benchmark FP=0/Recall=100%, integration 13/13.
+**T12 TAMAM.** ➜ Sıradaki: T13 (db+api) / T14 (root websecure/*.py) / T15 (kod-dışı+mutabakat) ya da batch-FLAG.

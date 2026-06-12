@@ -38,19 +38,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from websecure.reporters import severity_rank
+
 
 # ---------------------------------------------------------------------------
 # Yardımcılar
 # ---------------------------------------------------------------------------
 
-_SEVERITY_ORDER: Dict[str, int] = {
-    "Critical": 4,
-    "High":     3,
-    "Medium":   2,
-    "Low":      1,
-    "Info":     0,
-}
-
+# Severity rank tek kaynak: reporters.severity_rank (T11). Eski yerel _SEVERITY_ORDER
+# {Critical:4..Info:0} kopyası kaldırıldı. _SEVERITY_EMOJI format-özel (terminal etiketi), kalır.
 _SEVERITY_EMOJI: Dict[str, str] = {
     "Critical": "[Critical]",
     "High":     "[High]",
@@ -121,8 +117,8 @@ class DiffResult:
     @property
     def risk_delta(self) -> int:
         """Risk delta: yeni - düzelen (pozitif = kötüleşme, negatif = iyileşme)."""
-        new_score  = sum(_SEVERITY_ORDER.get(f.get("severity","Info"), 0) for f in self.new_findings)
-        fix_score  = sum(_SEVERITY_ORDER.get(f.get("severity","Info"), 0) for f in self.fixed_findings)
+        new_score  = sum(severity_rank(f.get("severity")) for f in self.new_findings)
+        fix_score  = sum(severity_rank(f.get("severity")) for f in self.fixed_findings)
         return new_score - fix_score
 
     @property
@@ -239,8 +235,8 @@ class ScanDiff:
             old_sev = sev_map1.get(fp, "Info")
             new_sev = f2.get("severity", "Info")
 
-            old_val = _SEVERITY_ORDER.get(old_sev, 0)
-            new_val = _SEVERITY_ORDER.get(new_sev, 0)
+            old_val = severity_rank(old_sev)
+            new_val = severity_rank(new_sev)
 
             if new_val > old_val:
                 # Severity yükseldi — gerileme
@@ -288,7 +284,7 @@ class DiffRenderer:
         if diff.new_findings:
             print("\n[+] Yeni Bulgular:")
             for f in sorted(diff.new_findings,
-                            key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
+                            key=lambda x: severity_rank(x.get("severity")),
                             reverse=True):
                 sev = f.get("severity", "Info")
                 print(f"  {_SEVERITY_EMOJI.get(sev,'')} [{sev}] {f.get('title','?')}  "
@@ -340,7 +336,7 @@ class DiffRenderer:
             t.add_column("Başlık")
             t.add_column("URL")
             for f in sorted(findings,
-                            key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
+                            key=lambda x: severity_rank(x.get("severity")),
                             reverse=True):
                 sev = f.get("severity", "Info")
                 t.add_row(
@@ -400,7 +396,7 @@ class DiffRenderer:
             lines.append("| Önem | Başlık | URL |")
             lines.append("|---|---|---|")
             for f in sorted(findings,
-                            key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
+                            key=lambda x: severity_rank(x.get("severity")),
                             reverse=True):
                 sev = f.get("severity", "Info")
                 title_f = f.get("title", "?").replace("|", "\\|")
@@ -433,7 +429,7 @@ class DiffRenderer:
         def _rows(findings: list, badge_class: str) -> str:
             rows = []
             for f in sorted(findings,
-                            key=lambda x: _SEVERITY_ORDER.get(x.get("severity","Info"),0),
+                            key=lambda x: severity_rank(x.get("severity")),
                             reverse=True):
                 sev = f.get("severity", "Info")
                 sev_colors = {
@@ -576,7 +572,7 @@ def run_diff_cli(args: list) -> int:
     if ns.exit_code:
         critical_new = [
             f for f in diff.new_findings
-            if _SEVERITY_ORDER.get(f.get("severity","Info"), 0) >= 3
+            if severity_rank(f.get("severity")) >= 3
         ]
         if critical_new:
             return 2
