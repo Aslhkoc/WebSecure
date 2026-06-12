@@ -313,7 +313,7 @@ class APIServer:
                 project_id=params.get("project_id"),
                 limit=int(params.get("limit", 50)),
             )
-            return _ok([self._scan_to_dict(s) for s in scans])
+            return _ok([self._to_dict(s) for s in scans])
         except Exception as exc:
             return _err(503, f"DB hatası: {exc}")
 
@@ -332,7 +332,7 @@ class APIServer:
                 config_json=body.get("options", {}),
             )
             ScanRepository(self._db).create(scan)
-            return _created(self._scan_to_dict(scan))
+            return _created(self._to_dict(scan))
         except Exception as exc:
             return _err(503, f"DB hatası: {exc}")
 
@@ -343,7 +343,7 @@ class APIServer:
             scan = ScanRepository(self._db).get(scan_id)
             if not scan:
                 return _err(404, f"Tarama bulunamadı: {scan_id}")
-            return _ok(self._scan_to_dict(scan))
+            return _ok(self._to_dict(scan))
         except Exception as exc:
             return _err(503, f"DB hatası: {exc}")
 
@@ -353,7 +353,7 @@ class APIServer:
         try:
             from websecure.db.repository import FindingRepository
             findings = FindingRepository(self._db).list_by_scan(scan_id, include_fp)
-            return _ok([self._finding_to_dict(f) for f in findings])
+            return _ok([self._to_dict(f) for f in findings])
         except Exception as exc:
             return _err(503, f"DB hatası: {exc}")
 
@@ -371,7 +371,7 @@ class APIServer:
                 logger.debug(f"[api.server] {type(_fix_e).__name__}: {_fix_e!r}")
             target = scan.target if scan else "unknown"
             calc = ScoreCalculator()
-            snap = calc.calculate(scan_id, target, [self._finding_to_dict(f) for f in findings])
+            snap = calc.calculate(scan_id, target, [self._to_dict(f) for f in findings])
             return _ok(snap.to_dict())
         except Exception as exc:
             return _err(503, f"Skor hatası: {exc}")
@@ -390,7 +390,7 @@ class APIServer:
                 severity=severity,
                 limit=limit,
             )
-            return _ok([self._finding_to_dict(f) for f in findings])
+            return _ok([self._to_dict(f) for f in findings])
         except Exception as exc:
             return _err(503, f"DB hatası: {exc}")
 
@@ -485,20 +485,13 @@ class APIServer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _scan_to_dict(scan) -> Dict[str, Any]:
+    def _to_dict(obj) -> Dict[str, Any]:
+        """Dataclass (Scan/Finding/…) -> dict; dataclass değilse vars() fallback."""
         from dataclasses import asdict
         try:
-            return asdict(scan)
+            return asdict(obj)
         except Exception:
-            return vars(scan)
-
-    @staticmethod
-    def _finding_to_dict(finding) -> Dict[str, Any]:
-        from dataclasses import asdict
-        try:
-            return asdict(finding)
-        except Exception:
-            return vars(finding)
+            return vars(obj)
 
     # ------------------------------------------------------------------
     # Sunucu yaşam döngüsü
