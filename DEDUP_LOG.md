@@ -486,7 +486,7 @@ farklı amaç, KORUNDU. analyze_chains orphan → B3-flag. Kod değişmedi, benc
 - **Doğrulama:** pyflakes temiz · fonksiyonel 5/5 (meta/value-first/aspnet/attr-between/classic — HEM canonical
   HEM consumer) · test_auth_flow + test_csrf + integration 27 passed · benchmark TP=5 FP=0 Recall=100% (auth
   benchmark-dışı ama çalıştırıldı).
-- **Commit:** (bu commit)
+- **Commit:** f80e108dc
 
 ### T7 HARİTA + KAPANIŞ
 - **İKİ AUTH SİSTEMİ — paralel ama WIRED, farklı runner, KORUNDU:** `auth_flow` (session+cfg, Requests/WebDriver/
