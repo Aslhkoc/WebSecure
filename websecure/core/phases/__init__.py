@@ -1254,6 +1254,14 @@ _PARALLEL_GROUPS: List[List[str]] = [
     ["subdomain", "passive_recon"],
     # Crawlers: share the same target, independent outputs
     ["katana", "browser_crawler"],
+    # Genişletilmiş keşif (WebCrawler + form çıkarımı → forms_meta + endpoint havuzu).
+    # KRİTİK: offensive/content fazlarından ÖNCE koşmalı ki form-alanı enjeksiyonu
+    # (name/email/password/message/...) ve keşfedilen hedefler hazır olsun. Eskiden
+    # "discovery" HİÇBİR paralel grupta değildi → serial-leftover'a düşüp TÜM paralel
+    # gruplardan (offensive suite dahil) SONRA koşuyordu → offensive scanner'lar
+    # çalışırken forms_meta BOŞТУ → form-alanı enjeksiyonu hiç çalışmıyordu (gerçek-hat
+    # kapısı: form-findings=0). Tek-öğe grup: kendi başına, offensive'den önce.
+    ["discovery"],
     # HTTP probing: independent of each other
     ["httpx_probe", "js_analysis"],
     # Content discovery: different result buckets, no shared state
