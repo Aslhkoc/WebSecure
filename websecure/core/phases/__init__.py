@@ -1540,6 +1540,13 @@ def _runner_browser_crawler(ctx) -> None:
         http_result = {
             "endpoints": list(existing_results.get("endpoints", [])),
             "tech_stack": list(getattr(ctx, "technologies", []) or []),
+            # Statik parse hiç form bulamadıysa (SPA'da JS-render formlar) tarayıcıyla
+            # render edip keşfet → input alanları fuzz'lanabilsin.
+            "forms_found": sum(
+                len(p.get("forms", []) or [])
+                for p in (existing_results.get("forms_meta", []) or [])
+                if isinstance(p, dict)
+            ),
         }
         if not should_use_browser_crawler(http_result):
             add_result("meta", {"stage": "browser_crawler", "status": "skipped:not-needed"})
@@ -1623,6 +1630,42 @@ def _runner_browser_crawler(ctx) -> None:
         existing_eps.update(new_urls)
         ctx_results["endpoints"] = list(existing_eps)
 
+        # Keşfedilen FORM'ları (SPA login/register/ödeme alanları) scanner'lara
+        # ulaştır. BU MERGE EKSİKTİ: browser_crawler formları buluyor
+        # (result.forms_meta) ama xss/sqli/nosqli/csrf `results["forms_meta"]`'dan
+        # okuyor → forms_meta hiç dolmuyordu → input alanları (name/email/password/
+        # kart) HİÇ fuzz'lanmıyor, yalnızca URL query'si test ediliyordu. SPA'da
+        # formlar JS ile render edildiğinden statik HTML parse (form_parser) onları
+        # GÖREMEZ → tek kaynak browser_crawler'dır.
+        bc_forms = getattr(result, "forms_meta", None) or []
+        _bc_forms_added = 0
+        if bc_forms:
+            fm = ctx_results.get("forms_meta", [])
+            if not isinstance(fm, list):
+                fm = []
+            _by_url = {p.get("url"): p for p in fm
+                       if isinstance(p, dict) and p.get("url")}
+            for page in bc_forms:
+                if not isinstance(page, dict):
+                    continue
+                p_url = page.get("url") or url
+                p_forms = page.get("forms") or []
+                if not p_forms:
+                    continue
+                if p_url in _by_url:
+                    _by_url[p_url].setdefault("forms", []).extend(p_forms)
+                else:
+                    entry = {"url": p_url, "forms": list(p_forms)}
+                    fm.append(entry)
+                    _by_url[p_url] = entry
+                _bc_forms_added += len(p_forms)
+            ctx_results["forms_meta"] = fm
+            _logger.info(
+                "[phases] BrowserCrawler: %d form (SPA dahil) forms_meta'ya eklendi "
+                "→ input alanları (name/email/password/kart) artık POST/JSON ile "
+                "fuzz'lanacak", _bc_forms_added,
+            )
+
         # Tech stack güncelle
         if result.tech_stack:
             existing_tech = list(getattr(ctx, "technologies", []) or [])
@@ -1653,6 +1696,7 @@ def _runner_browser_crawler(ctx) -> None:
             "api_endpoints": len(result.api_endpoints),
             "spa_routes": len(result.spa_routes),
             "secrets_found": len(result.secrets_found),
+            "forms_found": _bc_forms_added,
             "tech_stack": result.tech_stack,
         })
         _logger.info(

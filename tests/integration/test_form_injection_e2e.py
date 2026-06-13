@@ -201,6 +201,67 @@ def test_nosqli_form_field_injection():
         httpd.server_close()
 
 
+def test_browser_crawler_forms_reach_forms_meta(monkeypatch):
+    """REGRESYON: BrowserCrawler'ın keşfettiği SPA formları ctx.results['forms_meta']'ya
+    ULAŞMALI. Aksi halde xss/sqli/nosqli/csrf scanner'ları boş forms_meta okur ve
+    scan_forms no-op olur → input alanları (name/email/password/kart) HİÇ fuzz'lanmaz,
+    yalnız URL query'si test edilir (kullanıcının tekrar tekrar bildirdiği eksik).
+    _runner_browser_crawler eskiden result.forms_meta'yı merge etmiyordu."""
+    import websecure.core.browser_crawler as bc
+    import websecure.core.phases as ph
+
+    class _FakeResult:
+        endpoints = ["http://t/login", "http://t/register"]
+        api_endpoints = []
+        spa_routes = ["http://t/#/signup"]
+        tech_stack = ["React"]
+        secrets_found = []
+        forms_meta = [
+            {"url": "http://t/login", "forms": [
+                {"action": "http://t/api/login", "method": "POST", "inputs": [
+                    {"name": "email", "type": "email", "value": ""},
+                    {"name": "password", "type": "password", "value": ""}]}]},
+            {"url": "http://t/register", "forms": [
+                {"action": "http://t/api/register", "method": "POST", "inputs": [
+                    {"name": "username", "type": "text", "value": ""}]}]},
+        ]
+
+    class _FakeCrawler:
+        def __init__(self, _cfg):
+            pass
+
+        def overall_budget_seconds(self):
+            return 10
+
+        async def crawl(self, _url):
+            return _FakeResult()
+
+    monkeypatch.setattr(bc, "BrowserCrawler", _FakeCrawler)
+    monkeypatch.setattr(bc, "should_use_browser_crawler", lambda *_a, **_k: True)
+
+    class _Ctx:
+        def __init__(self):
+            self.results = {"endpoints": ["http://t/"]}
+            self.url = "http://t/"
+            self.config = {}
+            self.technologies = []
+            self.session = None
+
+        def get(self, k, d=None):
+            return getattr(self, k, d)
+
+    ctx = _Ctx()
+    ph._runner_browser_crawler(ctx)
+
+    fm = ctx.results.get("forms_meta", [])
+    total = sum(len(p.get("forms", [])) for p in fm)
+    assert total == 2, f"BrowserCrawler formları forms_meta'ya merge edilmedi: {fm}"
+    all_names = {i["name"] for p in fm for f in p["forms"] for i in f["inputs"]}
+    assert {"email", "password", "username"} <= all_names, (
+        f"Beklenen input alanları forms_meta'da yok: {all_names}"
+    )
+
+
 if __name__ == "__main__":
     test_form_field_injection_end_to_end()
     test_cmdi_form_field_injection()

@@ -716,10 +716,17 @@ class BrowserCrawler:
 def should_use_browser_crawler(http_result: Dict) -> bool:
     """
     Heuristic: escalate to Playwright if:
+    - HTTP crawler bulamadı HİÇ form (forms_found == 0) — formlar JS ile render
+      ediliyor olabilir; input alanlarının (login/register/ödeme) fuzz'lanabilmesi
+      için tarayıcıyla render edip keşfetmek ŞART. Statik HTML parse SPA formlarını
+      göremez → bu olmadan scanner'lar yalnız URL query'sini test eder.
     - fewer than 5 unique endpoints found by HTTP crawler
     - page source contains React/Angular/Vue script tags
     - JavaScript-heavy indicators present
     """
+    # Form keşfi en kritik tetikleyici: statik parse form bulamadıysa tarayıcıya yüksel.
+    if not http_result.get("forms_found"):
+        return True
     endpoints = http_result.get("endpoints", [])
     if len(endpoints) < 5:
         return True
