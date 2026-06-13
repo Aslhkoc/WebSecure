@@ -1282,10 +1282,23 @@ def _render_markdown_report_inline(results: Dict) -> str:
             val = it.get(fld)
             if isinstance(val, str) and val.strip():
                 tool_set.add(val.strip())
-    # Dış entegrasyon ipuçları
-    for cand in ("sqlmapapi","nuclei","owasp zap","nikto"):
-        # kaba tahmin: injection/owasp modüllerinde geçtiyse listeye ekle
-        pass
+    # Dış entegrasyon ipuçları: bulgu kayıtlarının YAPISAL alanlarında dış araç adı
+    # geçiyorsa "Kullanılan Araçlar"a ekle (sqlmap/nuclei/zap/nikto bulguları
+    # tool/engine/module/scanner/source/type alanlarında adıyla işaretlenir).
+    _ext_tools = {
+        "sqlmap":    ("sqlmap", "sqlmapapi"),
+        "nuclei":    ("nuclei",),
+        "OWASP ZAP": ("owasp zap", "owasp-zap", "zaproxy"),
+        "nikto":     ("nikto",),
+    }
+    _hint_blob = " ".join(
+        str(it.get(fld, ""))
+        for it in items
+        for fld in ("tool", "engine", "module", "scanner", "source", "type", "category")
+    ).lower()
+    for _display, _tokens in _ext_tools.items():
+        if any(tok in _hint_blob for tok in _tokens):
+            tool_set.add(_display)
 
     lines.append("### Kullanılan Araçlar")
     if tool_set:
