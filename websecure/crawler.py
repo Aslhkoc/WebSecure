@@ -606,9 +606,25 @@ class WebCrawler:
                                         "type": tag.get("type", "text"),
                                         "value": tag.get("value", "")
                                     })
+                            # action'i MUTLAK URL'e cevir: ham HTML 'action' relatif
+                            # ("/contact") olabilir; scanner'lar submit_form_variants ile
+                            # dogrudan session.post(action) yapar → relatif URL istegi
+                            # BASARISIZ olur → form-alani enjeksiyonu HIC calismaz (sadece
+                            # URL query test edilirdi). urljoin ile page-url'e gore coz.
+                            _raw_action = f.get("action")
+                            _form_action = urljoin(url, _raw_action) if _raw_action else url
+                            # method ATTRIBUTE'u yoksa (SPA auth/register formlari) GET
+                            # sanilmasin: infer_form_method password/email/auth-action'da
+                            # POST'a cevirir (yoksa scanner GET gonderir, POST endpoint 404 doner).
+                            _raw_method = f.get("method")
+                            try:
+                                from websecure.core.analysis import infer_form_method as _ifm
+                                _form_method = _ifm(_form_action, inputs, _raw_method or "GET")
+                            except Exception:
+                                _form_method = _raw_method or "GET"
                             forms_data.append({
-                                "action": f.get("action"),
-                                "method": f.get("method"),
+                                "action": _form_action,
+                                "method": _form_method,
                                 "inputs": inputs
                             })
                         self.results["forms_meta"].append({
