@@ -917,10 +917,22 @@ class GraphQLScanner(BaseScanner):
         Note: The BaseScanner interface expects 'url' to be the target.
         """
         endpoints = self._discover_endpoints(url)
-        if not endpoints:
-            endpoints = [url] # Assume inputs are endpoints if discovery fails or if url looks like one
-
         bucket = self.name
+        if not endpoints:
+            # GraphQL endpoint KEŞFEDİLEMEDİ. Eskiden buradan `[url]` (base URL) fallback
+            # vardı → hedefte GraphQL OLMASA bile 16 prober base URL'ye salınıyor, her 200
+            # yanıt sahte "vuln" sayılıyordu (gerçek-hat kapısında tek başına ~180 FP).
+            # Artık YALNIZ URL açıkça bir GraphQL endpoint'iyse devam et; aksi halde HİÇ
+            # bulgu yok (GraphQL yoksa GraphQL bulgusu da olmaz).
+            low = (url or "").lower()
+            if "graphql" in low or "gql" in low:
+                endpoints = [url]
+            else:
+                self.results[bucket] = []
+                self.set_summary(bucket, 0)
+                logger.debug("[GraphQL] Endpoint bulunamadı, GraphQL taraması atlandı: %s", url)
+                return self.results
+
         self.results[bucket] = []
         
         client = GraphQLClient(self.session)
