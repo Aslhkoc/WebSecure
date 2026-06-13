@@ -989,3 +989,55 @@ check_ssl_certificate` ölü-alias → B3'e not. ➜ Kalan batch-FLAG: **JWT-for
 `scanners.jwt.b64url_encode/b64url_decode/jwt_sign` tek kaynağında birleşti; her iki tüketicinin orkestrasyonu + benzersiz
 yetenekleri korundu, byte-equivalence kanıtlandı, latent padding bug'ı düzeldi. **1 konsolidasyon (#18).** ➜ Kalan batch-FLAG:
 **LFI-RCE** (LFIExploitStrategy log-poison/PHP-filter ↔ scanners.lfi zincirleri — **LFI benchmark-KRİTİK, en riskli, en son**).
+
+---
+
+## ═══════════════ BATCH-FLAG #4 — LFI-RCE (cross-file KORUNDU + intra-file konsolidasyon) ═══════════════
+
+> **TETİK:** kullanıcı "geç" (2026-06-12). **SONUÇ: 1 KONSOLİDASYON (#19, intra-file/benchmark-güvenli) +
+> cross-file KORUNDU (ayrı-rol).** En riskli flag (LFI benchmark-KRİTİK) → scanners.lfi'ye HİÇ dokunulmadı.
+
+### ADIM 0/1 — cross-file CROSS-FILE neden KORUNDU (kanıt)
+`LFIExploitStrategy` (exploit_orchestrator) ↔ `scanners.lfi` chains (LFILogPoisoningChain/LFIProcEnvironRCE/
+LFIPHPFilterChain/LogPoisoningProber) = **ayrı-rol, farklı payload/yol/tespit/çıktı** (T1 "tespit-vs-sömürü" verdict'i):
+- **Rol/çıktı:** LFIExploitStrategy = FULL sömürü (sensitive-file loot → log-poison → **persistent webshell DROP** →
+  PostExploitChain → cred-extraction → `ExploitResult`); scanners.lfi = DETECTION (RCE doğrula → `report_finding` → `List[Dict]`).
+- **Payload farkı:** webshell `<?php @system($_GET['cmd']); ?>` (canary'siz) ↔ scanners.lfi `<?php …system($_GET['c'])… ?> wsp={uid}`
+  (CANARY'li); log-yolları **4** (apache2/nginx/apache/proc-fd-2) ↔ **7** (+ httpd/lighttpd/auth.log); RCE-tespiti
+  `echo lfi_rce_confirmed` exact-string ↔ regex `uid=\d+\(|root:|www-data`; filter-chain `iconv|base64.../etc/passwd READ`
+  ↔ scanners.lfi `_FILTER_CHAIN_RCE_BASE64` (php://temp RCE).
+- **Benchmark-KRİTİK:** scanners.lfi benchmark'ta (LFI=4: Directory-Traversal + Null-Byte + …). Birleştirme = recall riski,
+  test sinyaliyle yakalanamayan payload/yol kaybı. → **KORUNDU** (encoding #1 / TLS #2 gibi: farklı-amaç-by-design).
+
+### [BATCH-FLAG #4][Madde 4] #19 — LFIExploitStrategy intra-file tekrarları → tek kaynak
+- **KAZANAN (yeni tek kaynak, exploit_orchestrator modül-seviyesi):**
+  - `_LFI_LOG_PATHS` sabiti (4-yol sömürü log listesi).
+  - `_lfi_build_url(url, param, value, cmd=None)` — LFI enjeksiyon URL kurucu (parse_qsl/urlencode).
+- **KAYBEDEN (kaldırılan kopyalar — yalnız exploit_orchestrator İÇİ, scanners.lfi'ye DOKUNULMADI):**
+  - log-yol listesi 2 BİREBİR kopya (`_attempt_log_poison_rce` + Step2.5 inline `_log_poison_inject`) → `_LFI_LOG_PATHS`.
+  - LFI URL-kurma deseni ~6 inline kopya (Step1 file-read, `_log_poison_inject`, `_attempt_log_poison_rce` test+drop,
+    Step3 `_lfi_inject`, `_attempt_php_filter_chain`) → `_lfi_build_url`.
+- **AKTARILAN:** yok (birebir aynı desen). cmd-param sırası (param→cmd) korundu → urlencode byte-identical. `parsed`
+  değişkeni `_attempt_log_poison_rce`'de base_url için korundu.
+- **Doğrulama:** `_lfi_build_url` **BYTE-IDENTICAL** (4 url-şekli × 2 değer × single/cmd, programatik kanıt) · `_LFI_LOG_PATHS`
+  birebir · test_chaining+test_lfi **35/35** · integration **13/13** · **benchmark LFI=4 DEĞİŞMEDİ, TP=5 FP=0 Recall=100%** ·
+  pyflakes **69** · import OK.
+- **Commit:** cc021e7d3
+
+**BATCH-FLAG #4 SONUÇ:** cross-file LFI (asıl flag) = KORUNDU (ayrı-rol sömürü-vs-tespit, farklı payload/yol/tespit,
+benchmark-kritik); ek olarak LFIExploitStrategy İÇİ gerçek tekrarlar (log-yol listesi 2×, URL-kurma 6×) benchmark-güvenli
+şekilde tekilleşti (#19). **1 konsolidasyon (#19).**
+
+---
+
+## ═══════════════ BATCH-FLAG TOPLU SONUÇ (4/4 TAMAM) ═══════════════
+
+**#1 encoding-motor:** KORUNDU (çeşitli-evasion, byte-farklı-by-design, benchmark-kör).
+**#2 TLS-cert:** KORUNDU (cert-çıkarımı zaten tekil + scan_tls farklı-faz + _probe_cert daha-hassas).
+**#3 JWT-forge:** ✅ KONSOLİDE #18 (b64url/jwt_sign kanonik scanners.jwt, JWTExploitStrategy delege).
+**#4 LFI-RCE:** cross-file KORUNDU (ayrı-rol, benchmark-kritik) + intra-file KONSOLİDE #19 (log-yol/URL-build).
+
+**Net:** 4 flag → 2 gerçek konsolidasyon (#18 JWT cross-file, #19 LFI intra-file) + 2 tam-koruma (#1/#2) + 1 kısmi-koruma
+(#4 cross-file). **DESEN:** "yüksek-risk flag" ≠ "kesin tekrar"; derin ADIM 0/1/2 ile bazısı çeşitli-amaç-by-design (koru),
+bazısı gerçek primitif-tekrarı (birleştir). Kırmızı çizgi "davranış değişmez" her kararı yönetti; benchmark FP=0/Recall=100%
+4 flag boyunca KORUNDU. **TÜM dedup işi (T1–T15 plan: 17 + batch-FLAG: 2) = 19 konsolidasyon TAMAM.**
