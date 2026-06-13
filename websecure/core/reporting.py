@@ -736,12 +736,6 @@ def get_bucket_results() -> Dict[str, List[Dict[str, Any]]]:
 
 
 # -------------------- Grafik Üretimi (Matplotlib) --------------------
-def _ensure_dir(p: str) -> None:
-    if not p:
-        return
-    os.makedirs(p, exist_ok=True)
-
-
 def _safe_norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
 

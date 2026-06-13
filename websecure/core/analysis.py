@@ -281,16 +281,6 @@ def detect_graphql(url: str, body: str | bytes) -> bool:
     t = (body if isinstance(body, str) else body.decode("utf-8", "ignore")).lower()
     return "__schema" in t or "graphql" in t or url.lower().endswith("/graphql")
 
-def cloud_hints(headers: Dict[str, Any]) -> List[str]:
-    hints = []
-    for v in headers.values():
-        val = str(v).lower()
-        if any(x in val for x in ["amazon", "s3", "cloudfront"]): hints.append("aws")
-        if any(x in val for x in ["google", "gcp", "appengine"]): hints.append("gcp")
-        if "azure" in val or "microsoft" in val: hints.append("azure")
-    return sorted(set(hints))
-
-
 # ============================================================================
 # SECTION 4: WAF DETECTION & EVASION (formerly waf.py)
 # ============================================================================

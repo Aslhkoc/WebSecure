@@ -205,10 +205,6 @@ def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs
         "new_findings": findings,
     }
 
-# Compatibility alias
-def check_ssl_certificate(*args, **kwargs):
-    return _get_cert_details(*args, **kwargs)
-
 def scan_tls_quick(url):
     return scan_tls(url)
 
