@@ -330,7 +330,9 @@ class InteractshClient(_BaseOSAT, IOSATClient):
         self._encrypted: bool = True  # Sunucu şifreleme kullanıyor mu
 
     async def _ensure_registered(self) -> None:
-        if self._registered:
+        # _register_failed: kayıt bir kez başarısız olduysa tekrar deneme (her
+        # token/poll çağrısında yeniden denenip ~1000 tekrarlı WARNING basmasını önler).
+        if self._registered or getattr(self, "_register_failed", False):
             return
         url = self.cfg.interact_base.rstrip("/") + self.cfg.interact_register_path
         secret = uuid.uuid4().hex
@@ -363,9 +365,10 @@ class InteractshClient(_BaseOSAT, IOSATClient):
                 if not self._correlation_id:
                     _logger.warning(
                         "[OAST] interactsh yanıt geldi fakat correlation_id boş — "
-                        "polling token eşleşmesi çalışmayacak"
+                        "polling token eşleşmesi çalışmayacak (tekrar denenmeyecek)"
                     )
                     self._registered = False
+                    self._register_failed = True
                     return
                 self._secret = str(data.get("secret-key") or data.get("secret") or secret)
                 root = str(data.get("domain") or "").strip(".")
@@ -379,8 +382,21 @@ class InteractshClient(_BaseOSAT, IOSATClient):
                     f"domain={self.cfg.root_domain}, encrypted={self._encrypted}"
                 )
         except Exception as e:
-            _logger.warning(f"[OAST] interactsh kayıt hatası: {e}")
+            # asyncio.TaskGroup/ExceptionGroup gerçek alt-hatayı sarmalar
+            # ("unhandled errors in a TaskGroup (1 sub-exception)") → kök nedeni aç.
+            _root = e
+            _depth = 0
+            while getattr(_root, "exceptions", None) and _depth < 6:
+                _root = _root.exceptions[0]
+                _depth += 1
+            # YALNIZ BİR KEZ logla; _register_failed bundan sonra tekrar girmeyi engeller.
+            _logger.warning(
+                "[OAST] interactsh kaydı başarısız — OOB/blind (kör) tespit bu tarama "
+                "boyunca devre dışı, tekrar denenmeyecek. Sebep: %s: %s",
+                type(_root).__name__, _root,
+            )
             self._registered = False
+            self._register_failed = True
 
     async def new_token(self) -> str:
         await self._ensure_registered()
@@ -1515,7 +1531,9 @@ class EnhancedCollaboratorClient(_BaseOSAT, IOSATClient):
         self._registered = False
 
     async def _ensure_registered(self) -> None:
-        if self._registered:
+        # _register_failed: kayıt bir kez başarısız olduysa tekrar deneme (her
+        # token/poll çağrısında yeniden denenip ~1000 tekrarlı WARNING basmasını önler).
+        if self._registered or getattr(self, "_register_failed", False):
             return
         base = (self.cfg.api_url or "").rstrip("/")
         if not base:
