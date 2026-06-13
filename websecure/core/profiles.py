@@ -409,14 +409,20 @@ class CICDProfile(ScanProfile):
         cfg.setdefault("scan", {})["fail_fast"] = True        # ilk Critical'da dur
 
         # Araclar: hafif konfigurasyon
-        cfg.setdefault("_sqlmap", {}).update({
-            "enabled": False,  # cicd'de cok yavas
-        })
+        # SQLMap'i GERÇEKTEN kapat: runner sqlmap.enabled (phases:5039/1006) ve faz
+        # gate _flag('sqlmap') -> offensive.sqlmap.enabled okur. Yalniz _sqlmap.enabled
+        # yazmak YETMIYORDU (yanlis section) -> sqlmap yine calisiyordu.
+        cfg.setdefault("_sqlmap", {})["enabled"] = False        # arg-config tutarliligi
+        cfg.setdefault("sqlmap", {})["enabled"] = False         # run_sqlmap_scan gate
+        cfg.setdefault("offensive", {}).setdefault("sqlmap", {})["enabled"] = False  # _flag gate
         cfg.setdefault("_nuclei", {}).update({
             "rate_limit": 300, "concurrency": 100, "bulk_size": 100,
             "extra_args": ["-severity", "critical,high", "-timeout", "5"],
         })
+        # Nmap'i GERÇEKTEN kapat: port-scan faz gate top-level nmap.enabled (phases:720)
+        # okur; _nmap.enabled / offensive.nmap.enabled yanlis section idi.
         cfg.setdefault("_nmap", {})["enabled"] = False
+        cfg.setdefault("nmap", {})["enabled"] = False           # phase_port_scan gate
         cfg.setdefault("_ffuf", {}).update({
             "threads": 30,
             "extra_args": ["-rate", "300", "-timeout", "5"],

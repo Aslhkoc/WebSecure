@@ -962,7 +962,10 @@ def _sev_rank(s: str | None) -> int:
 def _coerce_final(results: Dict) -> List[Dict]:
 
     fin = results.get("final")
-    if isinstance(fin, list) and len(fin) > 0:
+    # _final_authoritative: severity filtresi 'final'i otoritatif kıldıysa (boş olsa
+    # bile) bucket'lardan YENİDEN inşa etme — yoksa "min_severity=critical + tümü
+    # düşük" durumunda filtre baypas edilir, elenen bulgular geri sızardı.
+    if isinstance(fin, list) and (len(fin) > 0 or results.get("_final_authoritative")):
         return fin
     merged: List[Dict] = []
     for key, val in list(results.items()):
@@ -1757,6 +1760,44 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     if isinstance(results, dict) and isinstance(results.get("final"), list):
         results = dict(results)
         results["final"] = _e_autofill(results["final"])
+
+    # --- Severity filtresi (profil 'filter.min_severity') ---
+    # cicd/bug_bounty=high, compliance=medium "yalnız eşik üstü raporlanır" vaadini
+    # GERÇEKTEN uygular. _coerce_final results['final']'i önce okuduğundan tüm
+    # renderer'lar (HTML/PDF/MD/SARIF/summary) aynı filtrelenmiş listeyi alır.
+    # GÜVENLİK: yalnız TANINAN severity'si eşiğin altında olan bulgular elenir;
+    # severity'si bilinmeyen/etiketsiz bulgular KORUNUR (yanlış-etiket yüzünden
+    # gerçek bir bulguyu asla gizleme). 'info' eşiği = filtre yok.
+    try:
+        _min_sev = ((cfg.get("filter") or {}).get("min_severity")
+                    if isinstance(cfg, dict) else None)
+        _known_sev = {"info", "informational", "low", "medium", "high", "critical"}
+        if (_min_sev and str(_min_sev).lower() in _known_sev
+                and isinstance(results, dict)
+                and isinstance(results.get("final"), list)):
+            _thr = _severity_rank(str(_min_sev))
+            if _thr > 0:
+                _kept, _dropped = [], 0
+                for _it in results["final"]:
+                    _sev = str((_it or {}).get("severity") or "").lower()
+                    if _sev in _known_sev and _severity_rank(_sev) < _thr:
+                        _dropped += 1
+                        continue
+                    _kept.append(_it)
+                if _dropped:
+                    results = dict(results)
+                    results["final"] = _kept
+                    results["_final_authoritative"] = True  # bucket fallback'i kapat
+                    results["_severity_filtered"] = {
+                        "min_severity": str(_min_sev),
+                        "dropped": _dropped, "kept": len(_kept),
+                    }
+                    log_info(
+                        "[reporting] Severity filtresi (min=%s): %d bulgu rapordan "
+                        "düşürüldü, %d kaldı.", str(_min_sev), _dropped, len(_kept),
+                    )
+    except Exception as _sf_exc:
+        log_warn(f"[reporting] Severity filtresi atlandı: {_sf_exc!r}")
 
     # Evidence bundle (optional side-car)
     _write_evidence_bundle(results, out_dir)
