@@ -18,27 +18,8 @@ permissions:
   contents: write
 
 jobs:
-  # Test kapısı — binary build'ten ÖNCE çalışır. Geçmezse hiçbir şey build/release
-  # edilmez (build ve build-macos-intel bu job'a 'needs' ile bağlıdır). Böylece
-  # regresyonlu kod asla release'e çıkamaz.
-  test:
-    name: test (pytest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml tldextract cryptography jinja2 cvss regex PyYAML jsonschema curl-cffi tls-client cloudscraper PySocks python-Levenshtein "httpx[http2]" rich reportlab pytest
-      - name: Run test suite
-        run: python -m pytest
-
   build:
     name: build (${{ matrix.os }})
-    needs: [test]
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +59,6 @@ jobs:
   # macOS Intel — opsiyonel, release'i bloklamaz (runner kuyruğu uzun olabilir).
   build-macos-intel:
     name: build (macos-13 / Intel)
-    needs: [test]
     runs-on: macos-13
     continue-on-error: true
     timeout-minutes: 30

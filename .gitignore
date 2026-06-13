@@ -34,6 +34,17 @@ websecure/session.json
 websecure/-*
 
 # Claude Code yerel dosyaları (API anahtarı, session vb. içerebilir)
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 session.json
+
+# Geliştirici/araç dosyaları — yerelde tutulur, herkese açık repoya dahil EDİLMEZ
+# (test paketi, dahili haritalar, audit/dev script'leri; programın çalışması için
+#  GEREKMEZ, son kullanıcıyı ilgilendirmez).
+tests/
+pytest.ini
+CLAUDE.md
+PROJECT_MAP.html
+DEDUP_LOG.md
+audit_full.py
+fix_silent_failures.py
+websecure/tests/
