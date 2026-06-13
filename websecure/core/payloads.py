@@ -815,5 +815,14 @@ try:
         mutate_payload,
     )
     _HAS_PAYLOAD_ENGINE = True
+    # Re-export'u resmî public yüzeye ekle (yalnız import başarılıysa → import-* güvenli,
+    # pyflakes "unused import" yanılgısını giderir; noqa flake8'e özgüdür, pyflakes tanımaz).
+    __all__ += [
+        "CMSFingerprinter", "CMSPayloadProfile", "CVEPayloadMap",
+        "EncodingVariantGenerator", "MutationStrategy", "PayloadEngine",
+        "PayloadMutationEngine", "PayloadScorer", "WordlistUpdater",
+        "cms_payloads", "cve_payloads", "detect_cms", "encode_payload",
+        "get_engine", "get_payloads_v2", "mutate_payload",
+    ]
 except ImportError:
     _HAS_PAYLOAD_ENGINE = False
