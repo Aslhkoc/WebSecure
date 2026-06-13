@@ -85,8 +85,23 @@ def make_curl_poc(method: str, url: str, headers: Mapping[str, Any] = None, body
     cmds.append(f"'{url}'")
     return " ".join(cmds)
 
-def allowed_http_methods() -> List[str]:
-    return ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "CONNECT"]
+def allowed_http_methods(cfg: Optional[dict] = None, unauthenticated: bool = False) -> List[str]:
+    """İzin verilen HTTP metotları.
+
+    Kimliksiz modda (``unauthenticated=True``) yalnızca GÜVENLİ/idempotent metotlar
+    döner (GET/HEAD/OPTIONS) — kimlik doğrulanmadan durum değiştiren POST/PUT/DELETE
+    çağrıları atlanır. ``cfg`` ile override edilebilir:
+    ``cfg['http']['idempotent_methods']`` / ``cfg['http']['allowed_methods']``.
+    """
+    idempotent = ["GET", "HEAD", "OPTIONS"]
+    full = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE", "CONNECT"]
+    if isinstance(cfg, dict):
+        http_cfg = cfg.get("http") or {}
+        if unauthenticated and isinstance(http_cfg.get("idempotent_methods"), list):
+            return [str(m).upper() for m in http_cfg["idempotent_methods"]]
+        if not unauthenticated and isinstance(http_cfg.get("allowed_methods"), list):
+            return [str(m).upper() for m in http_cfg["allowed_methods"]]
+    return idempotent if unauthenticated else full
 
 def build_raw_http_request(method: str, url: str, headers: Dict[str, str], body: Optional[str] = None) -> str:
     parsed = urlparse(url)
@@ -106,9 +121,9 @@ def build_raw_http_request(method: str, url: str, headers: Dict[str, str], body:
         
     return "\r\n".join(req)
 
-def build_response_head(status_code: int, reason: str, headers: Dict[str, str], protocol: str = "HTTP/1.1") -> str:
-    res = [f"{protocol} {status_code} {reason}"]
-    for k, v in headers.items():
+def build_response_head(status_code: int, headers: Dict[str, str], http_version: str = "HTTP/1.1", reason: str = "") -> str:
+    res = [f"{http_version} {status_code} {reason}".rstrip()]
+    for k, v in (headers or {}).items():
         res.append(f"{k}: {v}")
     return "\r\n".join(res) + "\r\n"
 
