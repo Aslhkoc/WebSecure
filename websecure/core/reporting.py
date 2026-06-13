@@ -1722,9 +1722,28 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         results["owasp_mapping"] = owasp_mapping
 
         # Compliance report (PCI-DSS, HIPAA, ISO 27001)
+        # Profil 'scan.compliance_standards' belirttiyse (compliance profili:
+        # ["PCI-DSS","HIPAA","ISO27001"]) yalnız o framework'ler raporlanır; aksi
+        # halde tümü. Kısa adlar kanonik _COMPLIANCE_CONTROLS anahtarlarına çözülür.
+        _scan_cfg = (cfg.get("scan") or {}) if isinstance(cfg, dict) else {}
+        _frameworks = _resolve_compliance_frameworks(_scan_cfg.get("compliance_standards"))
         compliance_builder = ComplianceReportBuilder()
-        compliance_report = compliance_builder.build(owasp_mapping)
+        compliance_report = compliance_builder.build(owasp_mapping, frameworks=_frameworks)
         results["compliance_report"] = compliance_report
+
+        # Compliance profili açıkça istediyse insan-okunur AYRI rapor dosyası üret.
+        # 'generate_compliance_report' bayrağı ComplianceProfile.apply'da set edilir;
+        # böylece menüdeki "uyumluluk raporu üretilecek" vaadi gerçekten karşılanır.
+        if _scan_cfg.get("generate_compliance_report"):
+            try:
+                _comp_md = _render_compliance_document(owasp_mapping, compliance_report, cfg)
+                _comp_path = _write_text(
+                    os.path.join(out_dir, "compliance_report.md"), _comp_md,
+                )
+                written["compliance"] = _comp_path
+                print(f"\n\033[92m[+] Uyumluluk Raporu: {_comp_path}\033[0m")
+            except Exception as _cw_exc:
+                log_warn(f"[reporting] Uyumluluk rapor dosyası yazılamadı: {_cw_exc!r}")
     except Exception as _oc_exc:
         log_warn(f"[reporting] OWASP/Compliance/Remediation enrichment failed: {_oc_exc!r}")
 
@@ -3646,6 +3665,95 @@ class ComplianceReportBuilder:
         return "\n".join(lines)
 
 
+def _resolve_compliance_frameworks(standards: Optional[List[str]]) -> Optional[List[str]]:
+    """Profil kısa adlarını ('PCI-DSS', 'HIPAA', 'ISO27001', 'PCI-DSS v4' ...)
+    kanonik _COMPLIANCE_CONTROLS anahtarlarına ('PCI-DSS v4.0', 'HIPAA Security
+    Rule', 'ISO 27001:2022') çözer.
+
+    Eşleşme yoksa veya liste boşsa None döner → ComplianceReportBuilder TÜM
+    framework'leri kullanır (önceki davranış korunur; compliance-dışı taramalar
+    etkilenmez)."""
+    if not standards:
+        return None
+
+    def _norm(s: object) -> str:
+        return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+    keys = list(_COMPLIANCE_CONTROLS.keys())
+    resolved: List[str] = []
+    for req in standards:
+        rq = _norm(req)
+        if not rq:
+            continue
+        for k in keys:
+            kk = _norm(k)
+            # "pcidss" ⊂ "pcidssv40", "iso27001" ⊂ "iso270012022" → prefix eşleşmesi
+            if kk.startswith(rq) or rq.startswith(kk[:8]):
+                if k not in resolved:
+                    resolved.append(k)
+                break
+    return resolved or None
+
+
+def _render_compliance_document(owasp_mapping: Dict[str, Any],
+                                compliance_report: Dict[str, Any],
+                                cfg: Dict[str, Any]) -> str:
+    """Compliance profili için insan-okunur Markdown uyumluluk raporu.
+
+    Mevcut OWASPTop10Mapper / ComplianceReportBuilder render'larını + yönetici
+    özetini + profilin `_owasp_coverage` test-kapsamı haritasını (hangi OWASP
+    kategorisi hangi modüllerle tarandı) birleştirir. Böylece compliance_standards,
+    generate_compliance_report ve _owasp_coverage profil anahtarlarının tamamı
+    fiilen tüketilir."""
+    lines: List[str] = []
+    lines.append("# WebSecure — Uyumluluk Denetim Raporu")
+    lines.append(f"_Oluşturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n")
+
+    # Yönetici özeti: framework başına uyumluluk skoru
+    if compliance_report:
+        lines.append("## Yönetici Özeti\n")
+        lines.append("| Standart | Uyumluluk | PASS | FAIL |")
+        lines.append("|---|---:|---:|---:|")
+        for fw, data in compliance_report.items():
+            lines.append(
+                f"| {fw} | {data.get('compliance_score', 0):.0f}% "
+                f"| {data.get('pass_count', 0)} | {data.get('fail_count', 0)} |"
+            )
+        lines.append("")
+
+    # OWASP Top 10 eşlemesi (mevcut render'ı yeniden kullan)
+    try:
+        lines.append(OWASPTop10Mapper().render_markdown(owasp_mapping))
+        lines.append("")
+    except Exception as _exc:
+        log_warn(f"[reporting] OWASP render atlandı: {_exc!r}")
+
+    # Framework kontrol durumları (mevcut render'ı yeniden kullan)
+    try:
+        lines.append(ComplianceReportBuilder().render_markdown(compliance_report))
+        lines.append("")
+    except Exception as _exc:
+        log_warn(f"[reporting] Compliance render atlandı: {_exc!r}")
+
+    # Test kapsamı — profilin _owasp_coverage haritası (ComplianceProfile.apply'da
+    # set edilir): her OWASP kategorisi hangi modüllerle test edildi + kaç bulgu.
+    coverage = cfg.get("_owasp_coverage") if isinstance(cfg, dict) else None
+    if isinstance(coverage, dict) and coverage:
+        cats = (owasp_mapping or {}).get("categories", {})
+        lines.append("## Test Kapsamı (OWASP Top 10)\n")
+        lines.append("| Kategori | Tarayan Modüller | Bulgu |")
+        lines.append("|---|---|---:|")
+        for cat_name, mods in coverage.items():
+            cat_key = str(cat_name).split(" ")[0].strip()  # "A03:2021 - Injection" → "A03:2021"
+            info = cats.get(cat_key, {})
+            found = info.get("count", 0) if isinstance(info, dict) else 0
+            mod_str = ", ".join(mods) if isinstance(mods, list) else str(mods)
+            lines.append(f"| {cat_name} | {mod_str} | {found} |")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Vulnerability Trend Analyzer
 # ---------------------------------------------------------------------------
@@ -3786,8 +3894,17 @@ class RemediationGuideGenerator:
                     break
         if cwe:
             finding["cwe"] = cwe
-            if not finding.get("remediation") and cwe in _CWE_REMEDIATION:
-                finding["remediation"] = _CWE_REMEDIATION[cwe]
+            # cwe, enrich_cvss_cwe'den LİSTE (['CWE-89']) ya da _TYPE_TO_CWE'den
+            # STRING ("CWE-89") olabilir. Liste bir dict anahtarı olarak
+            # kullanılamaz (TypeError) → string anahtar(lar)a normalize edip ilk
+            # eşleşen remediation'ı al. Bu normalize edilmeden enrichment bloğu
+            # CWE'li (yani neredeyse her) taramada sessizce çöküyordu.
+            cwe_keys = cwe if isinstance(cwe, (list, tuple)) else [cwe]
+            if not finding.get("remediation"):
+                for _ck in cwe_keys:
+                    if _ck in _CWE_REMEDIATION:
+                        finding["remediation"] = _CWE_REMEDIATION[_ck]
+                        break
         # OWASP category
         if not finding.get("owasp_category"):
             search = ftype
