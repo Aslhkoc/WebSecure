@@ -71,6 +71,8 @@ PACKAGES = [
     ("jinja2>=3.1.0",           "jinja2",          True,  "Şablon motoru"),
     ("cvss>=3.2",               "cvss",            True,  "CVSS skorlama"),
     ("regex>=2024.4.16",        "regex",           True,  "Gelişmiş regex"),
+    ("PyYAML>=6.0",             "yaml",            True,  "YAML tarama profilleri + exploit playbook'ları"),
+    ("jsonschema>=4.0",         "jsonschema",      False, "config.json şema doğrulama"),
 
     # --- WAF Bypass (en kritik) ---
     ("curl-cffi>=0.6.0",        "curl_cffi",       False, "TLS parmak izi taklidi (JA3/JA4) — Cloudflare bypass"),
@@ -85,11 +87,15 @@ PACKAGES = [
     ("playwright>=1.46.0",      "playwright",      False, "DOM XSS, JS crawl (Playwright)"),
 
     # --- Raporlama ---
-    ("weasyprint>=61.0",        "weasyprint",      False, "PDF raporu"),
+    ("weasyprint>=61.0",        "weasyprint",      False, "PDF raporu (CSS tabanlı; Windows'ta GTK gerekir)"),
+    ("reportlab>=4.0.0",        "reportlab",       False, "PDF raporu (saf Python fallback — sistem kütüphanesi gerekmez)"),
 
     # --- Performans ---
     ("python-Levenshtein>=0.25.0", "Levenshtein",  False, "Hızlı string benzerliği"),
     ("httpx[http2]>=0.27.0",    "httpx",           False, "HTTP/2 desteği"),
+
+    # --- Terminal UI ---
+    ("rich>=13.0",              "rich",            False, "Renkli terminal UI / ilerleme çubuğu (yoksa düz metne düşer)"),
 ]
 
 

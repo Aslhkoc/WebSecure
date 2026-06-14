@@ -53,9 +53,7 @@ for _rel in [
     "config.json",
     "config.schema.json",
     "websecure/wordlists",
-    "websecure/wordlists_custom",
-    "websecure/config",
-    "websecure/data",
+    "websecure/config",            # YAML profiller + exploit playbook'ları
     "websecure/reporters/templates",
 ]:
     datas += _collect(_rel)
@@ -67,11 +65,16 @@ hiddenimports = [
     if ".tests" not in m and not m.endswith(".tests")
 ]
 # Lazy / try-except ile içe aktarılan opsiyonel 3. taraf kütüphaneler.
+#  - h2       : httpx[http2] HTTP/2 desteğini lazy yükler (waf_bypass HTTP2Mux,
+#               race_condition, oast) → frozen'da statik analiz kaçırabilir.
+#  - reportlab: frozen'da TEK PDF backend'i (weasyprint native GTK nedeniyle
+#               hariç) — reporting._try_reportlab lazy import; bundle EDİLMEZSE
+#               exe hiç PDF üretemez, yalnız HTML'e düşer.
 hiddenimports += [
     "curl_cffi", "tls_client", "cloudscraper", "socks",
     "bs4", "lxml", "tldextract", "cryptography", "jinja2",
-    "cvss", "regex", "Levenshtein", "httpx", "yaml", "rich",
-    "jsonschema",
+    "cvss", "regex", "Levenshtein", "httpx", "h2", "yaml", "rich",
+    "jsonschema", "reportlab",
 ]
 
 # Native/ağır veya runtime'da indirilen — bilerek hariç (kod zarifçe degrade eder).

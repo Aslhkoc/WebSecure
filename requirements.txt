@@ -6,6 +6,7 @@
 
 # --- Zorunlu temel ---
 requests>=2.32.0
+urllib3>=1.26.0          # http.py doğrudan import eder (requests ile gelir; açıkça beyan)
 beautifulsoup4>=4.12.2
 lxml>=5.2.2
 tldextract>=5.1.2
