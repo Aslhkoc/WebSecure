@@ -124,6 +124,24 @@ _DEFAULT_SUCCESS_HINTS: Tuple[Pattern[str], ...] = (
     re.compile(r"(?i)\b(?:my\s*account|profile|dashboard|hesabım|profil)\b"),
 )
 
+# Açık login-BAŞARISIZLIK göstergeleri. Bir Set-Cookie session/auth cookie'si
+# tek başına kimlik doğrulaması KANITI DEĞİLDİR — sunucular login sayfasında ve
+# yanlış-kimlikli denemede de anonim session cookie verir. Yanıtta bu kalıplardan
+# biri varsa, cookie'ye bakıp "authenticated" demeyiz (yanlış-pozitif auth fix).
+_DEFAULT_FAILURE_HINTS: Tuple[Pattern[str], ...] = (
+    re.compile(r"(?i)\b(?:invalid|incorrect|wrong|bad)\b[^<>\n]{0,40}\b(?:password|user\s*name|username|credential|login|email|e-?mail)\b"),
+    re.compile(r"(?i)\b(?:login|authentication|sign[\s-]?in)\b[^<>\n]{0,24}\b(?:failed|unsuccessful|denied|error|invalid)\b"),
+    re.compile(r"(?i)(?:ge[çc]ersiz|hatal[ıi])\s+(?:kullan[ıi]c[ıi]|[şs]ifre|parola|giri[şs]|e-?posta)"),
+    re.compile(r"(?i)kullan[ıi]c[ıi]\s*ad[ıi]\s*(?:veya|ya\s*da|/)\s*(?:[şs]ifre|parola)"),
+    re.compile(r"(?i)\b(?:bad\s+credentials|access\s+denied|unauthor[iı]zed)\b"),
+)
+
+
+def _looks_login_failure(text: str) -> bool:
+    """Yanıt gövdesi açık bir login-başarısızlık mesajı içeriyor mu?"""
+    src = text or ""
+    return any(rx.search(src) for rx in _DEFAULT_FAILURE_HINTS)
+
 def _safe_compile_marker(s: str) -> Optional[Pattern[str]]:
     """İleri düzey regex içerenleri düz metin olarak işler; çökme yok, sessizlik yok."""
     if not isinstance(s, str) or not s.strip():
@@ -152,10 +170,15 @@ def _compile_success_hints(cfg: Optional[Dict[str, Any]]) -> Tuple[Pattern[str],
 def _looks_authenticated(text: str, resp: Optional[requests.Response] = None,
                          hints: Optional[Tuple[Pattern[str], ...]] = None) -> bool:
     src = text or ""
+    # Güçlü pozitif: gövdedeki açık kimlik-doğrulanmış-durum işaretleri.
     for rx in (hints or _DEFAULT_SUCCESS_HINTS):
         if rx.search(src):
             return True
-    if resp is not None:
+    # Zayıf sinyal: yeni atanmış session/auth cookie. TEK BAŞINA kanıt değil —
+    # sunucu anonim/başarısız denemede de cookie verir. Yalnızca gövdede açık bir
+    # login-başarısızlık mesajı YOKKEN kabul et (yanlış-kimlik + anonim-cookie →
+    # sahte "authenticated" hatasını önler; gerçek girişte FN yaratmaz).
+    if resp is not None and not _looks_login_failure(src):
         sc = resp.headers.get("Set-Cookie", "")
         if any(k for k in sc.split(",") if ("session" in k.lower() or "auth" in k.lower())):
             return True
