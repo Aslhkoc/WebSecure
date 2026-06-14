@@ -6469,11 +6469,13 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
         # Build a minimal ScanContext if not provided
         if context is None:
             try:
-                pass  # ScanContext is defined in this module (merged from scan_modes.py)
+                # ScanContext, modül tepesinde _context'ten import edilir; gerçek
+                # bağlamı kur (eski 'try: pass' içi-boştu → _SC tanımsız kalıp NameError atıyordu).
+                context = ScanContext(url=base_url, session=session, config=(config or {}), logger=logger)
             except _BOUNDARY_EXC as e:
                 _logger.error('phase error [scan_modes]', exc_info=True)
                 _report_phase_error('scan_modes', 'scan_modes.py', e)
-                # Fallback tiny context
+                # Fallback tiny context (ScanContext protokolüyle birebir değil)
                 class _SC:  # type: ignore[no-untyped-def]  # inline fallback, does not match ScanContext protocol
                     def __init__(self, url, session, config, logger):
                         self.url, self.session, self.config, self.logger = url, session, (config or {}), logger
@@ -6481,7 +6483,7 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
                         self.detailed = False
                         self.save_report = False
                         self.debug = False
-            context = _SC(url=base_url, session=session, config=(config or {}), logger=logger)
+                context = _SC(url=base_url, session=session, config=(config or {}), logger=logger)
 
         try:
             from websecure.core.phases import build_plan as _build_plan

@@ -642,8 +642,15 @@ def add_result(bucket: str, item: Any) -> None:
             
             # 2. Capture Screenshot path if present
             if "screenshot_path" in evidence:
-                # Validated path is already there, just ensure report knows it
-                pass
+                # Ekran görüntüsü dosyası zaten diskte; yolunu bulgunun birleşik
+                # delil-artifact listesine kaydet ki rapor onu izleyebilsin
+                # (raw_response ile tutarlı). Eski hâl 'pass'ti → kayıt yapılmıyordu.
+                _shot = evidence.get("screenshot_path")
+                if isinstance(_shot, str) and _shot:
+                    if "evidence_files" not in safe_it:
+                        safe_it["evidence_files"] = []
+                    if _shot not in safe_it["evidence_files"]:
+                        safe_it["evidence_files"].append(_shot)
 
         # --- Audio Alert Logic ---
         # Check severity (supports English and Turkish normalized severities)
