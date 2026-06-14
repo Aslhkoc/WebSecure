@@ -4170,11 +4170,6 @@ def run_finalize(ctx):
     return _mk_result("finalize", "ok")
 
 
-def run_port_scan_basic(ctx, *, event_cb=None):
-    # Native scanner removed
-    pass
-
-
 def run_security_headers_basic(ctx, *, event_cb=None):
     from websecure.scanners.infrastructure import get_security_headers as _scan_headers
     from websecure.core.reporting import add_result
@@ -6538,85 +6533,6 @@ def _safe_call_runner(_fn, session=None, base_url=None, config=None, logger=None
     if "logger" in params:
         kwargs["logger"] = logger
     return _fn(**kwargs) if kwargs else _fn()
-def _safe_construct_and_run(_cls, session, base_url, config, logger=None):
-    """
-    Constructs class with only supported kwargs, then calls run_all/run appropriately,
-    again filtering kwargs if the methods accept parameters.
-    """
-    # Construct
-    try:
-        cparams = _ins.signature(_cls).parameters
-    except _BOUNDARY_EXC as e:
-        _logger.error('phase error [scan_modes]', exc_info=True)
-        _report_phase_error('scan_modes', 'scan_modes.py', e)
-        cparams = {}
-    ckwargs = {}
-    # Check for context/results in constructor
-    # Note: Usually scanners take session/results in __init__
-    if "results" in cparams:
-         # Need to retrieve results from somewhere. 
-         # In _safe_construct_and_run signature we don't have 'context' explicitly passed often, 
-         # but let's check if we can get it. 
-         # Actually this function doesn't receive context, only session/base_url/config.
-         # We'll skip results here unless we change signature. 
-         # Wait, looking at usage, this is called by phases.py usually.
-         # For now, standard scanners take 'results' in __init__.
-         # We will pass empty dict if not available, OR if we had context we'd pass it.
-         pass 
-
-    if "session" in cparams:
-        ckwargs["session"] = session
-    if "base_url" in cparams:
-        ckwargs["base_url"] = base_url
-    elif "url" in cparams:
-        ckwargs["url"] = base_url
-    if "config" in cparams:
-        ckwargs["config"] = config
-    elif "cfg" in cparams:
-        ckwargs["cfg"] = config
-    if "logger" in cparams:
-        ckwargs["logger"] = logger
-    inst = _cls(**ckwargs) if ckwargs else _cls()
-
-    # Prefer run_all, fallback to run
-    runner = getattr(inst, "run_all", None) or getattr(inst, "run", None)
-    if not callable(runner):
-        # if the instance itself is callable, try that
-        if callable(inst):
-            return _safe_call_runner(inst, session, base_url, config, logger)
-        return None
-
-    try:
-        rparams = _ins.signature(runner).parameters
-    except _BOUNDARY_EXC as e:
-        _logger.error('phase error [scan_modes]', exc_info=True)
-        _report_phase_error('scan_modes', 'scan_modes.py', e)
-        rparams = {}
-    rkwargs = {}
-    if "context" in rparams:
-         # We don't have context here easily in _safe_construct_and_run unless passed.
-         # But wait, this function is usually called from run_plan which might not have full context object 
-         # if it was called with simple args. 
-         # However, if we look at _safe_call_runner, it builds context.
-         pass
-
-    if "results" in rparams:
-         # Similar issue.
-         pass
-
-    if "session" in rparams:
-        rkwargs["session"] = session
-    if "base_url" in rparams:
-        rkwargs["base_url"] = base_url
-    elif "url" in rparams:
-        rkwargs["url"] = base_url
-    if "config" in rparams:
-        rkwargs["config"] = config
-    elif "cfg" in rparams:
-        rkwargs["cfg"] = config
-    if "logger" in rparams:
-        rkwargs["logger"] = logger
-    return runner(**rkwargs) if rkwargs else runner()
 
 
 # --- Qualified import helpers (no try/except, no lazy hacks) ---
