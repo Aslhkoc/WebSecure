@@ -210,9 +210,17 @@ class ScoreCalculator:
             self._weights.get(sev) * cnt
             for sev, cnt in counts.items()
         )
-        # Logaritmik baskılama — çok sayıda düşük bulguda aşırı düşüş önlenir
-        if penalty > 0:
-            penalty = penalty * (1 - 0.3 * math.log10(1 + penalty / 10))
+        # Boundary fix: baskılama çarpanı (1-0.3*log10(1+p/10)) MONOTONİK DEĞİL —
+        # ~raw>21000'de dibe vurup negatife döner → min(penalty,MAX) negatif/küçük
+        # kalıp score'u 100'ün ÜSTÜNE veya ters yöne (çok-bulgu=yüksek skor) çıkarırdı.
+        # Ham penalty'yi log'dan ÖNCE doygunluk bölgesine sınırla: MAX*3=300'de
+        # compressed≈166>MAX → skor 0; bu sınır kalibre düşük aralığı (raw<300)
+        # etkilemez (4+ Critical zaten skor 0), dip'e asla girilmez, skor 0–100.
+        raw_penalty = min(penalty, _MAX_PENALTY * 3)
+        if raw_penalty > 0:
+            penalty = raw_penalty * (1 - 0.3 * math.log10(1 + raw_penalty / 10))
+        else:
+            penalty = 0.0
 
         score = max(0.0, _BASE_SCORE - min(penalty, _MAX_PENALTY))
 
