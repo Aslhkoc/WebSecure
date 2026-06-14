@@ -6762,6 +6762,13 @@ if _http_mod is not None and hasattr(_http_mod, "hardened_session"):
 
 # --------------------------- İptal/Kritik kontrol ---------------------------
 def _is_cancelled(ctx: 'ScanContext') -> bool:
+    # Global Ctrl+C bayrağını köprüle: threaded runner _SCAN_CANCEL'i doğrudan
+    # poll'lar, ama async run_plan yolu YALNIZ _is_cancelled'a bakar. Buraya
+    # eklenmezse o yolda Ctrl+C fazlar-arası iptali görmez (sadece 8s force-exit
+    # durdurur, in-process fazlar o ana dek sürer). Set yalnız Ctrl+C handler'ında
+    # yapılır → sahte iptal riski yok, yalnız iptali daha duyarlı kılar.
+    if _SCAN_CANCEL.is_set():
+        return True
     if ctx is None:
         return False
     if bool(getattr(ctx, "cancelled", False)):
