@@ -190,7 +190,7 @@ class FrameOptionsAnalyzer(BaseScanner):
                 continue
 
             # Skip 404 / 410 — path doesn't exist
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             xfo = _get_xfo(resp)
@@ -327,7 +327,7 @@ class CSPFrameAncestorsAnalyzer(BaseScanner):
                 logger.debug("[CSPFrameAncestors] %s fetch failed: %r", url, exc)
                 continue
 
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             csp = _get_csp(resp)
@@ -518,7 +518,7 @@ class ClickjackingExplorer(BaseScanner):
                 logger.debug("[ClickjackingExplorer] %s fetch failed: %r", url, exc)
                 continue
 
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             body = resp.text
@@ -731,7 +731,7 @@ class ClickjackingPoCGenerator(BaseScanner):
                 logger.debug("[PoCGenerator] %s fetch failed: %r", url, exc)
                 continue
 
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             xfo = _get_xfo(resp)
@@ -829,7 +829,7 @@ class FrameBustingBypassProber(BaseScanner):
                 logger.debug("[FrameBustBypass] %s fetch failed: %r", url, exc)
                 continue
 
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             body = resp.text
@@ -946,7 +946,7 @@ class DoubleClickJackingProber(BaseScanner):
                 logger.debug("[DblClickJacking] %s fetch failed: %r", url, exc)
                 continue
 
-            if resp.status_code in (404, 410):
+            if not self.path_exists(resp):  # soft-404 baseline: catch-all hedefte hayalet-sayfa FP'sini önler
                 continue
 
             body = resp.text

@@ -693,7 +693,7 @@ class RaceAuthBypassProber(BaseScanner):
         for url in session_urls:
             try:
                 r_check = self.session.get(url, timeout=4)
-                if r_check.status_code in (404, 410):
+                if not self.path_exists(r_check):  # soft-404 baseline: catch-all hedefte hayalet-endpoint race testini önler
                     continue
             except Exception:
                 continue
@@ -758,7 +758,7 @@ class RaceDoubleSpendProber(BaseScanner):
             url = urllib.parse.urljoin(target.rstrip("/") + "/", ep_path.lstrip("/"))
             try:
                 r_check = self.session.get(url, timeout=3)
-                if r_check.status_code in (404, 410):
+                if not self.path_exists(r_check):  # soft-404 baseline: catch-all hedefte hayalet-endpoint race testini önler
                     continue
             except Exception:
                 continue
@@ -896,7 +896,7 @@ class HTTP2ConcurrentStreamProber(BaseScanner):
             # Quick availability check (skip 404/410)
             try:
                 r_check = self.session.get(url, timeout=4)
-                if r_check.status_code in (404, 410):
+                if not self.path_exists(r_check):  # soft-404 baseline: catch-all hedefte hayalet-endpoint race testini önler
                     continue
             except Exception:
                 continue
@@ -1463,7 +1463,7 @@ class InventoryRaceProber(BaseScanner):
             # Check endpoint exists
             try:
                 r_check = self.session.get(url, timeout=3)
-                if r_check.status_code in (404, 410):
+                if not self.path_exists(r_check):  # soft-404 baseline: catch-all hedefte hayalet-endpoint race testini önler
                     continue
             except Exception:
                 continue

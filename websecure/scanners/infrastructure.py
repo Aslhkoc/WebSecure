@@ -636,7 +636,7 @@ class HeaderScanner(BaseScanner):
             try:
                 # First probe: GET to check if endpoint exists
                 r_check = self.session.get(url, timeout=5, verify=False, allow_redirects=True)
-                if r_check.status_code in (404, 410):
+                if not self.path_exists(r_check):  # soft-404 baseline (catch-all FP)
                     continue
 
                 # Poison probe: POST with injected Host + dummy email

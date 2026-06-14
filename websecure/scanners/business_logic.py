@@ -152,7 +152,10 @@ class NegativeValueProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 resp = self.session.get(url, timeout=5, verify=False)
-                if resp.status_code in (404, 410):
+                # Ham `status_code in (404,410)` YASAK (proje kuralı): SPA/parked/
+                # catch-all hedef her yola 200 döner → hayalet-endpoint FP seli. Aynı
+                # dosyadaki rate-limit prober'ı zaten path_exists kullanıyor; tutarlı yapıldı.
+                if not self.path_exists(resp):
                     continue
                 # Assume JSON API with standard numeric fields
                 found.append((url, "POST", ["quantity", "amount", "price", "discount"], True))
@@ -294,7 +297,9 @@ class WorkflowSkipProber(BaseScanner):
             fresh_session = _hardened_session({})
             fresh_session.verify = False
             resp = fresh_session.get(late_url, timeout=7, allow_redirects=True)
-            if _is_success(resp.status_code):
+            # Catch-all/SPA hedef her yola 200 döner → soft-404 baseline farkı şart;
+            # yoksa her workflow late-step'i sahte "doğrudan erişilebilir" olarak işaretlenirdi.
+            if _is_success(resp.status_code) and self.path_exists(resp):
                 finding = {
                     "vuln_type": f"Business Logic — Workflow Skip ({flow})",
                     "url": late_url,
@@ -332,7 +337,7 @@ class WorkflowSkipProber(BaseScanner):
         for base_url in candidate_urls:
             try:
                 resp_step1 = self.session.get(base_url, timeout=6, verify=False)
-                if resp_step1.status_code in (404, 410, 0):
+                if not self.path_exists(resp_step1):  # soft-404 baseline (catch-all FP)
                     continue
 
                 # Jump to step 3 directly
@@ -421,7 +426,7 @@ class PrivilegeEscalationProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 check = self.session.get(url, timeout=5, verify=False)
-                if check.status_code in (404, 410):
+                if not self.path_exists(check):  # ham 404-kontrolü yerine soft-404 baseline (catch-all FP)
                     continue
             except Exception as exc:
                 logger.debug("[priv_esc] path check %s: %s", url, exc)
@@ -596,7 +601,7 @@ class LimitBypassProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 check = self.session.get(url, timeout=5, verify=False)
-                if check.status_code in (404, 410):
+                if not self.path_exists(check):  # ham 404-kontrolü yerine soft-404 baseline (catch-all FP)
                     continue
             except Exception as exc:
                 logger.debug("[limit_bypass] coupon path check %s: %s", url, exc)
@@ -679,7 +684,7 @@ class LimitBypassProber(BaseScanner):
             url = _join_url(target, path.lstrip("/"))
             try:
                 check = self.session.get(url, timeout=5, verify=False)
-                if check.status_code in (404, 410):
+                if not self.path_exists(check):  # ham 404-kontrolü yerine soft-404 baseline (catch-all FP)
                     continue
             except Exception as exc:
                 logger.debug("[limit_bypass] cart path check %s: %s", url, exc)
