@@ -1399,11 +1399,17 @@ def main() -> None:
     _ = _ensure_wl(cfg)
     results: dict = {"phase_timings": {}, "sections": []}
 
+    # CLI argümanlarını AĞIR startup'tan ÖNCE ayrıştır: argparse `--help`/`-h` (ve
+    # geçersiz argüman) burada sys.exit eder → araç indirme, OAST/interactsh ağ
+    # çağrısı ve Tor rotasyonu TETİKLENMEZ. Yeni kullanıcı 'python -m websecure
+    # --help' yazınca ağa çıkılmaz/araç kurulmaz. Argümanlar yine _startup_phase'den
+    # SONRA uygulanır → normal koşuda davranış birebir korunur.
+    args = _build_arg_parser().parse_args()
+
     # Phase 1 — startup checks + tool manager + Tor rotation
     _startup_phase(cfg)
 
-    # Phase 2 — CLI argument parsing + config override
-    args = _build_arg_parser().parse_args()
+    # Phase 2 — CLI argument config override
     _apply_cli_args(cfg, args)
 
     # Phase 3 — target URL resolution
