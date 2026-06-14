@@ -8,8 +8,6 @@ from __future__ import annotations
 import subprocess
 import sys
 import importlib
-import os
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Renkli terminal çıktısı
