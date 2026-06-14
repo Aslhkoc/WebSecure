@@ -231,7 +231,12 @@ def check_idor(sessions: Dict[str, requests.Session], url: str) -> List[Dict[str
 
     orig_id = m.group(1)
     new_id = str(int(orig_id) + 1)
-    new_url = url.replace(orig_id, new_id)
+    # Sadece regex'in eşleştirdiği ID'yi YERİNDE değiştir. Ham url.replace(orig_id,..)
+    # anchor'suzdu → ID substring'inin tüm geçişlerini değiştiriyordu:
+    # "/api/v1/users/1" → replace("1","2") → "/api/v2/users/2" (sürüm de bozulur →
+    # yanlış endpoint, IDOR testi hedefi kaçırır). span ile yalnız eşleşen ID değişir.
+    _s, _e = m.span(1)
+    new_url = url[:_s] + new_id + url[_e:]
 
     user_role = next((r for r in sessions if r not in ("admin", "root", "anonymous")), None)
     if not user_role:
