@@ -37,7 +37,6 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
-    effective_timeout,
     no_timeout_mode,
 )
 
