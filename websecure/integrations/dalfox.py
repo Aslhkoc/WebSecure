@@ -195,7 +195,14 @@ class DalfoxWrapper(ToolIntegration):
                 if _unregister_cp:
                     _unregister_cp(proc)
 
-            if proc.returncode not in (0, 1):
+            # 3221225786 (0xC000013A STATUS_CONTROL_C_EXIT) / -1073741510 = süreç
+            # Ctrl+C ile öldürüldü → KULLANICI İPTALİ, hata değil. Eskiden bu kod
+            # WARNING olarak basılıyordu ("[dalfox] Çıkış kodu 3221225786") ve
+            # kullanıcıyı "dalfox çöktü / sqlmap değil miydi?" diye yanıltıyordu.
+            # Artık iptal olarak debug'a düşürülür; yalnız GERÇEK hata kodları uyarır.
+            if proc.returncode in (3221225786, -1073741510):
+                logger.debug("[dalfox] Ctrl+C ile durduruldu (çıkış kodu %s) — iptal", proc.returncode)
+            elif proc.returncode not in (0, 1):
                 stderr_out = (stderr_b or b"").decode("utf-8", "ignore")[:300]
                 logger.warning(f"[dalfox] Çıkış kodu {proc.returncode}: {stderr_out}")
 
