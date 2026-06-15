@@ -1235,7 +1235,10 @@ _DEFAULT_PHASE_TIMEOUT = 120  # 2 min default (was 5 min — too long for light 
 # in-process await auto-advances instead of freezing until the user hits Ctrl+C.
 _NO_TIMEOUT_UNBOUNDED_PHASES: set = {
     "port_scan", "portscan",          # nmap — full-power priority
-    "sqlmap",
+    # NOT: "sqlmap" KASITLI ÇIKARILDI (kullanıcı talebi 2026-06-15) — sqlmap artık
+    # FİRM zaman bütçesiyle sınırlı (_resolve_sqlmap_budget); no_timeout modunda bile
+    # sınırsız koşmaz. Gücü kısılmaz (level/risk/threads/tamper aynen), yalnız toplam
+    # süresi tavanlanır → tarama her zaman biter ve raporunu yazar.
     "nuclei", "owasp_and_nuclei",
     "amass", "subdomain", "passive_recon",
 }
@@ -1294,6 +1297,46 @@ _PHASE_TO_GROUP: Dict[str, int] = {
 }
 
 
+def _resolve_sqlmap_budget(ctx) -> int:
+    """sqlmap subprocess'inin TAMAMI için FİRM duvar-saati tavanı (saniye).
+
+    Kullanıcı talebi (2026-06-15): sqlmap max-power/no_timeout modunda bile
+    SINIRSIZ koşmasın. Bütçe FİRM'dir — gerçek tavandır ve no_timeout çarpanıyla
+    (WEBSECURE_NOTIMEOUT_FACTOR) ŞİŞİRİLMEZ. sqlmap bu bütçe İÇİNDE tam güçte
+    kalır (level/risk/threads/tamper/crawl değişmez); yalnız toplam süre
+    sınırlanır → tarama her zaman biter ve raporunu yazar.
+
+    Çözünürlük sırası: offensive.sqlmap.budget_seconds → sqlmap.budget_seconds →
+    _sqlmap.timeout (profil per-run süresi, ör. stealth=1800) → 1800 varsayılan.
+    Tor/proxy aktifken istek başına ~10-30x yavaş olduğundan tavana sonlu
+    headroom verilir (yine kesinlikle sonlu).
+    """
+    cfg = getattr(ctx, "config", {}) or {}
+    if not isinstance(cfg, dict):
+        return 1800
+    # Açıkça yapılandırılmış değer (herhangi bir kaynaktan) MUTLAK saygı görür —
+    # kullanıcının/profilin verdiği sayı aynen kullanılır. Tor headroom YALNIZ
+    # hiçbir değer verilmediğinde devreye giren hardcoded varsayılana uygulanır.
+    _explicit = ((cfg.get("offensive") or {}).get("sqlmap") or {}).get("budget_seconds")
+    if _explicit is None:
+        _explicit = (cfg.get("sqlmap") or {}).get("budget_seconds")
+    if _explicit is None:
+        _explicit = (cfg.get("_sqlmap") or {}).get("timeout")
+    if _explicit is not None:
+        try:
+            return max(300, int(_explicit))
+        except (TypeError, ValueError):
+            pass
+    # Hiç değer verilmemiş → varsayılan. Tor/proxy'de istek-başı gecikme çok büyük
+    # olduğundan sqlmap tavan içinde onaya ulaşabilsin diye headroom (yine sonlu).
+    _proxied = bool(
+        cfg.get("_tor_proxy")
+        or (cfg.get("proxy") or {}).get("url")
+        or ((cfg.get("proxy") or {}).get("tor_control") or {}).get("enabled")
+    )
+    return 2700 if _proxied else 1800
+
+
 def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
     """
     Her fazı ayrı bir thread'de çalıştırır. İstisnalar main thread'i bozmaz.
@@ -1337,6 +1380,18 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
                 phase_timeout = max(phase_timeout * _NO_TIMEOUT_WATCHDOG_FACTOR, 600)
     except Exception:
         pass
+
+    # sqlmap: süre artık FİRM bütçeyle sınırlı (kullanıcı talebi 2026-06-15, bkz
+    # _resolve_sqlmap_budget). ASIL tavan subprocess'tedir (wrapper.scan run_timeout);
+    # buradaki watchdog yalnız subprocess kill'i de asılırsa devreye giren failsafe →
+    # bütçenin hemen üstüne sabitle (no_timeout çarpanını sqlmap için bilinçli ez ki
+    # 'tam güç' başka fazları kilitlemesin). Temiz kısmi-sonuç ayrıştırması (wrapper'ın
+    # TimeoutExpired dalı) bu watchdog'dan ÖNCE çalışır.
+    if phase_id == "sqlmap":
+        try:
+            phase_timeout = _resolve_sqlmap_budget(ctx) + 300
+        except Exception:
+            pass
 
     def _phase_fn():
         # Each phase thread sets its own active-phase context so that http.py's
@@ -5092,6 +5147,13 @@ def run_sqlmap_scan(ctx) -> None:
         add_result("meta", {"stage": "sqlmap", "status": "skipped", "reason": "Binary not found in PATH"})
         return
 
+    # [budget] FİRM zaman tavanı — sqlmap no_timeout modunda bile sınırsız koşmaz
+    # (kullanıcı talebi). Gücü kısılmaz; yalnız toplam süre tavanlanır. Bütçe
+    # subprocess'e run_timeout olarak geçer (effective_timeout çarpanı uygulanmaz).
+    _sqlmap_budget = _resolve_sqlmap_budget(ctx)
+    _logger.info("[SQLMap] Firm zaman bütçesi: %ds (tam güç bu süre içinde)", _sqlmap_budget)
+    add_result("meta", {"stage": "sqlmap", "status": "budgeted", "budget_seconds": _sqlmap_budget})
+
     # [beast] Saldırı gücü: floor yüksek tutulur — sqlmap artık doğrulayıcı
     # değil, bağımsız bir keşif+sömürü motoru. level 5 = cookie/header/referer
     # injection da denenir; risk 3 = OR-based + zaman tabanlı ağır testler.
@@ -5192,6 +5254,7 @@ def run_sqlmap_scan(ctx) -> None:
         findings = wrapper.scan(
             url, batch=True, level=level, risk=risk,
             extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+            run_timeout=_sqlmap_budget,
         )
     else:
         cmd_args = list(extra_args)
@@ -5203,6 +5266,7 @@ def run_sqlmap_scan(ctx) -> None:
             findings = wrapper.scan(
                 _all_eps[0], batch=True, level=level, risk=risk,
                 extra_args=cmd_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+                run_timeout=_sqlmap_budget,
             )
         else:
             # -m: sqlmap URL listesi dosyasından okur, tek process içinde iter eder
@@ -5220,6 +5284,7 @@ def run_sqlmap_scan(ctx) -> None:
                 findings = wrapper.scan(
                     _all_eps[0], batch=True, level=level, risk=risk,
                     extra_args=_m_args, proxy=proxy, profile_cfg=_sqlmap_profile,
+                    run_timeout=_sqlmap_budget,
                 )
             finally:
                 try:

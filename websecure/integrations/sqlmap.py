@@ -175,7 +175,7 @@ class SQLMapWrapper(ToolIntegration):
             ))
         return findings
 
-    def scan(self, target: str, batch: bool = True, risk: int = 3, level: int = 5, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None) -> List[Dict[str, Any]]:
+    def scan(self, target: str, batch: bool = True, risk: int = 3, level: int = 5, extra_args: List[str] = None, proxy: str = None, profile_cfg: dict = None, run_timeout: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Runs sqlmap on the target.
         Note: Parsing sqlmap textual output is hard. 
@@ -227,12 +227,37 @@ class SQLMapWrapper(ToolIntegration):
             if extra_args:
                 cmd.extend(extra_args)
 
+            # [robustness] Profil 'threads' ayarını --threads'e bağla. Config-ghost
+            # fix: önceden _sqlmap.threads HİÇ komuta geçmiyordu (yalnız risk/level/
+            # extra_args/timeout okunuyordu) → deep/fast profillerinin threads:10
+            # paralelliği boşa gidiyordu. Yalnız ≥2 ve --delay YOKKEN ekle: sqlmap
+            # --delay ile çoklu-thread'i tek thread'e düşürür/uyarır, o yüzden stealth
+            # (delay=5, threads=1) etkilenmez. Bütçe içinde daha çok kapsam = sağlamlık.
+            _threads = _p.get("threads")
+            try:
+                _threads = int(_threads) if _threads is not None else 0
+            except (TypeError, ValueError):
+                _threads = 0
+            _has_threads = any(str(a).startswith("--threads") for a in cmd)
+            _has_delay = any(str(a).startswith("--delay") for a in cmd)
+            if _threads >= 2 and not _has_threads and not _has_delay:
+                cmd.extend(["--threads", str(min(_threads, 10))])
+
             if proxy:
                 cmd.extend(["--proxy", proxy.replace("socks5h://", "socks5://")])
 
-            # Timeout: profile'dan oku; yoksa 600s varsayılan.
-            # Stealth --delay=5 ile her istek 5s → 600s minimum gerekli.
-            _run_timeout = int(_p.get("timeout", 600))
+            # Süre tavanı: kullanıcı-yönetimli FİRM bütçe (run_timeout) verilmişse onu
+            # DOĞRUDAN kullan — no_timeout çarpanıyla (effective_timeout) ŞİŞİRME YOK
+            # (sqlmap max-power modda bile sınırsız koşmasın, kullanıcı talebi). Bütçe
+            # dolunca proc öldürülür ve --results-file/log'dan KISMİ sonuçlar
+            # ayrıştırılır → onaylanan injection'lar kaybolmaz. run_timeout yoksa
+            # (ör. ToolIntegration.run yolu) geriye dönük uyumluluk için eski davranış.
+            if run_timeout is not None:
+                _budget = int(run_timeout)
+                _subproc_timeout = _budget
+            else:
+                _budget = int(_p.get("timeout", 600))
+                _subproc_timeout = effective_timeout(_budget)
 
             logger.info(f"Starting SQLMap binary scan on {target}...")
             proc = subprocess.Popen(
@@ -248,7 +273,7 @@ class SQLMapWrapper(ToolIntegration):
             except Exception:
                 pass
             try:
-                stdout_b, stderr_b = proc.communicate(timeout=effective_timeout(_run_timeout))
+                stdout_b, stderr_b = proc.communicate(timeout=_subproc_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
@@ -256,7 +281,8 @@ class SQLMapWrapper(ToolIntegration):
                 except subprocess.TimeoutExpired:
                     pass
                 logger.warning(
-                    "[SQLMap] Zaman aşımı (%ds) — kısmi sonuçlar ayrıştırılıyor", _run_timeout
+                    "[SQLMap] Firm bütçe doldu (%ds) — sqlmap durduruldu, kısmi sonuçlar ayrıştırılıyor",
+                    int(_subproc_timeout),
                 )
                 stdout_b, stderr_b = b"", b""
             finally:
