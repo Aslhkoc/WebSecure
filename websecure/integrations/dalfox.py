@@ -259,6 +259,19 @@ class DalfoxWrapper(ToolIntegration):
         start = time.monotonic()
 
         for finding in xss_findings:
+            # Faz watchdog tarafından terk edildiyse (veya Ctrl+C) YENİ dalfox
+            # süreci açma — aksi halde bu döngü arka planda zincirleme dalfox.exe
+            # sızdırır (kullanıcının yaşadığı sorunun çekirdeği). _safe terk anında
+            # mark_phase_abandoned çağırır; burada görüp kalan doğrulamaları atlarız.
+            try:
+                from websecure.core.http import is_phase_abandoned
+                if is_phase_abandoned():
+                    logger.debug("[dalfox] Faz terk edildi — kalan %d doğrulama atlanıyor",
+                                 len(xss_findings))
+                    break
+            except Exception:
+                pass
+
             url = finding.get("url", "")
             if not url:
                 continue

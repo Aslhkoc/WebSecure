@@ -34,43 +34,82 @@ except ImportError:
 # Global cancel event — set by SIGINT handler or external callers to stop the scan
 _SCAN_CANCEL = threading.Event()
 
-# Kayıtlı alt süreçler — Ctrl+C gelince terminate edilir
-_CHILD_PROCS: list = []
+# Kayıtlı alt süreçler — (proc, phase_id) çiftleri olarak tutulur.
+#   • Ctrl+C → _kill_all_children: HEPSİ öldürülür.
+#   • Faz watchdog'la terk edildiğinde → kill_phase_children(phase): YALNIZ o
+#     fazın hâlâ canlı süreçleri öldürülür. Böylece dalfox/ffuf/katana gibi
+#     araçlar fazları bittikten sonra arka planda sızıp koşmaya devam etmez
+#     ("araç görevini bitirip ölmeli; fazı aşan artık temizlenir"). Tam güç
+#     KORUNUR: öldürme yalnız faz GERÇEKTEN bütçesini aştığında/iptalde olur.
+_CHILD_PROCS: list = []          # list[tuple[proc, str]]
 _CHILD_PROCS_LOCK = threading.Lock()
 
 
-def register_child_proc(proc) -> None:
-    """Subprocess'i global registry'e kaydet (Ctrl+C'de öldürülsün)."""
+def _current_phase_tag() -> str:
+    """Kayıt anındaki aktif faz id'si (alt süreci açan faz). Wrapper'lar faz
+    thread'i içinde çalıştığından ACTIVE_PHASE doğru fazı verir."""
+    try:
+        from websecure.core.http import ACTIVE_PHASE
+        return ACTIVE_PHASE.get() or ""
+    except Exception:
+        return ""
+
+
+def register_child_proc(proc, phase: str = None) -> None:
+    """Subprocess'i registry'e kaydet. phase verilmezse aktif fazdan alınır →
+    faz terk edilince yalnız o fazın çocukları hedeflenebilsin."""
+    tag = phase if phase is not None else _current_phase_tag()
     with _CHILD_PROCS_LOCK:
-        _CHILD_PROCS.append(proc)
+        _CHILD_PROCS.append((proc, tag))
 
 
 def unregister_child_proc(proc) -> None:
     with _CHILD_PROCS_LOCK:
-        try:
-            _CHILD_PROCS.remove(proc)
-        except ValueError as _fix_e:
-            _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
+        _CHILD_PROCS[:] = [(p, t) for (p, t) in _CHILD_PROCS if p is not proc]
 
 
-def _kill_all_children() -> None:
-    """Tüm kayıtlı alt süreçleri sonlandır."""
-    with _CHILD_PROCS_LOCK:
-        procs = list(_CHILD_PROCS)
-    for p in procs:
-        try:
-            p.terminate()
-        except Exception:
-            pass
-    # Terminate yetmezse kill
-    import time as _time
-    _time.sleep(0.5)
+def _terminate_procs(procs) -> int:
+    """Süreçleri nazikçe (terminate) sonra zorla (kill) sonlandır. Canlı olanı sayar."""
+    procs = [p for p in procs if p is not None]
+    killed = 0
     for p in procs:
         try:
             if p.poll() is None:
-                p.kill()
+                p.terminate()
+                killed += 1
         except Exception:
             pass
+    if procs:
+        import time as _time
+        _time.sleep(0.5)
+        for p in procs:
+            try:
+                if p.poll() is None:
+                    p.kill()
+            except Exception:
+                pass
+    return killed
+
+
+def kill_phase_children(phase: str) -> int:
+    """YALNIZ belirtilen fazın kayıtlı, hâlâ canlı alt süreçlerini öldür.
+    Faz watchdog tarafından terk edildiğinde (veya iptalde) çağrılır →
+    dalfox/ffuf/katana/httpx arka planda sızmaya devam etmez."""
+    with _CHILD_PROCS_LOCK:
+        procs = [p for (p, t) in _CHILD_PROCS if t == phase]
+        _CHILD_PROCS[:] = [(p, t) for (p, t) in _CHILD_PROCS if t != phase]
+    n = _terminate_procs(procs)
+    if n:
+        _logger.info("[phases] '%s' fazı terk edildi — %d artık alt süreç öldürüldü", phase, n)
+    return n
+
+
+def _kill_all_children() -> None:
+    """Tüm kayıtlı alt süreçleri sonlandır (Ctrl+C)."""
+    with _CHILD_PROCS_LOCK:
+        procs = [p for (p, _t) in _CHILD_PROCS]
+        _CHILD_PROCS.clear()
+    _terminate_procs(procs)
 
 
 def _install_sigint_handler():
@@ -1426,23 +1465,31 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
             break
 
     if t.is_alive():
+        # Faz hâlâ canlı (daemon thread zorla öldürülemez). İKİ ZORUNLU temizlik
+        # — aksi halde araç (dalfox/ffuf/katana/sqlmap...) arka planda sızıp
+        # koşmaya devam eder, sonraki fazlardan zaman/Tor bandı çalar:
+        #   (1) mark_phase_abandoned → http.py istekleri PhaseAbandoned ile kesilir
+        #       + loop tabanlı wrapper'lar (dalfox verify) is_phase_abandoned()
+        #       görüp yeni süreç açmayı bırakır;
+        #   (2) kill_phase_children → bu fazın AÇIK BIRAKTIĞI alt süreçler gerçekten
+        #       öldürülür. Yalnız bu faz hedeflenir; eşzamanlı diğer fazlar bozulmaz.
+        # Tam güç korunur: buraya yalnız faz GERÇEKTEN bütçesini aştığında veya
+        # Ctrl+C'de gelinir — sağlıklı biten faz çocuklarını finally'de unregister eder.
+        try:
+            from websecure.core.http import mark_phase_abandoned as _mark_abandoned
+            _mark_abandoned(phase_id)
+        except Exception:
+            pass
+        try:
+            kill_phase_children(phase_id)
+        except Exception:
+            pass
         if _SCAN_CANCEL.is_set():
             _logger.info("[phases] Phase '%s' cancelled by user (Ctrl+C)", phase_id)
         else:
             _logger.warning(
                 "[phases] Phase '%s' exceeded %ds — skipped to prevent hang", phase_id, phase_timeout
             )
-            # The phase thread cannot be force-killed; signal cooperative
-            # cancellation so its still-running daemon stops issuing HTTP
-            # requests in the background (otherwise it keeps crawling for the
-            # rest of the scan, stealing time from later phases and polluting
-            # their output — exactly what produced the duplicated 'discovery'
-            # block in the wild).
-            try:
-                from websecure.core.http import mark_phase_abandoned as _mark_abandoned
-                _mark_abandoned(phase_id)
-            except Exception:
-                pass
             add_result("errors", {
                 "type": "phase_timeout",
                 "phase": phase_id,
