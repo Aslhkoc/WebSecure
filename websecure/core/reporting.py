@@ -2262,11 +2262,49 @@ def to_markdown_summary(results: Dict) -> str:
 
 # ===================== SARIF / JUnit Export =====================
 
+# Bulgu OLMAYAN (keşif/özet/meta) kovalar — _iter_findings agregasyonu bunları
+# ATLAR. Aksi halde 'endpoints' (binlerce URL), '*_summary', 'charts', 'meta' vb.
+# bulgu sayısını şişirir ve SARIF/JSON çıktısını kirletir.
+_NON_FINDING_BUCKETS: frozenset = frozenset({
+    "endpoints", "charts", "meta", "sitemap", "tech_stack", "crawl_map",
+    "forms_meta", "open_ports", "ports", "payload_metrics", "metrics",
+    "owasp_mapping", "compliance_report", "egress_health", "_rate_controller",
+    "phase_timings", "endpoint_counts", "endpoint_fingerprints",
+    "discovered_params", "param_candidates", "assets", "ws_endpoints",
+    "js_endpoints", "api_endpoints", "sse_endpoints", "graphql_hints",
+    "json_keys", "coverage", "sections", "delta", "scan_meta",
+})
+
+
+def _is_finding_bucket(name: str) -> bool:
+    """Kova gerçek bulgu taşıyor mu (keşif/özet/meta değil)?"""
+    n = str(name or "")
+    if n in _NON_FINDING_BUCKETS:
+        return False
+    if n.endswith("_summary"):
+        return False
+    return True
+
+
+def _max_finding_bucket(results: Dict, exclude: str = "final") -> int:
+    """En kalabalık TEK bulgu-kovasının (exclude hariç) uzunluğu — 'final'in
+    OTORİTER (tam) mı yoksa KISMİ mi olduğunu anlamak için. Gerçek bir final,
+    herhangi bir tek ham kovadan küçük olamaz."""
+    _mx = 0
+    if isinstance(results, dict):
+        for _k, _v in results.items():
+            if _k == exclude or not _is_finding_bucket(_k):
+                continue
+            if isinstance(_v, list):
+                _mx = max(_mx, len(_v))
+    return _mx
+
+
 def _iter_findings(results: Dict) -> list[Dict]:
     """
     'results' içinde hangi kovada olursa olsun bulgu benzeri elemanları normalize ederek döndürür.
     - Her eleman _normalize_item ile sözlüğe çevrilir.
-    - 'final' kovası varsa öncelik verilir.
+    - 'final' kovası OTORİTER ise öncelik verilir; KISMİ/kirli ise tüm bulgu kovaları toplanır.
     - Liste olmayan ama sözlük olan kova değerleri tek kayıt gibi ele alınır.
     - Hatalı/uygunsuz öğeler (str, tek elemanlı tuple vs.) yutulmaz; normalize edilip 'items' alanıyla taşınır.
     """
@@ -2277,14 +2315,23 @@ def _iter_findings(results: Dict) -> list[Dict]:
         it2["_bucket"] = bucket
         items.append(it2)
 
-    if isinstance(results, dict) and isinstance(results.get("final"), list):
-        for it in results.get("final") or []:
-            _push("final", it)
-        return items
+    # 'final' kovasına ancak GÜVENİLİRSE (otoriter ya da en kalabalık ham kovadan
+    # küçük değilse) tek-kaynak olarak güven. Kesintiye uğramış/kirletilmiş bir
+    # tarama 'final'e kısmi (ör. 6 TLS) yazıp diğer kovalardaki onlarca bulguyu
+    # GİZLEYEBİLİR; bu durumda tüm bulgu kovalarını topla (dedup sonradan eler).
+    _fin = results.get("final") if isinstance(results, dict) else None
+    if isinstance(_fin, list) and _fin:
+        if results.get("_final_authoritative") or len(_fin) >= _max_finding_bucket(results, "final"):
+            for it in _fin:
+                _push("final", it)
+            return items
 
     if isinstance(results, dict):
         for bucket, arr in (results or {}).items():
-            # Bazı kovalarda özet/meta olabilir; yine de normalize ederek geçiriyoruz
+            # Keşif/özet/meta kovalarını (endpoints, *_summary, charts…) atla —
+            # bunlar bulgu değil, sayıyı şişirir.
+            if not _is_finding_bucket(bucket):
+                continue
             if isinstance(arr, list):
                 for it in arr or []:
                     _push(bucket, it)

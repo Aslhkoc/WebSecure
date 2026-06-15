@@ -1535,8 +1535,12 @@ def _run_scan_phases(
         meta["egress"] = ci if isinstance(ci, (dict, list, str)) else str(ci)
 
         meta["scan_profile"] = profile
+        # Hedefi meta'ya YAZ — kesintiye uğrayan (Ctrl+C) taramalarda emergency rapor
+        # yolu yalnız bu meta'yı görüyordu; target yoksa rapor "Unknown Target" basıyordu.
+        if url:
+            meta["target"] = url
         if callable(globals().get("add_result")):
-            add_result("meta", {"scan_profile": profile})
+            add_result("meta", {"scan_profile": profile, **({"target": url} if url else {})})
 
         auth_ok = False
         if callable(run_auth_flow):
@@ -2599,6 +2603,10 @@ def _run_scan_phases(
                 "detailed": detailed,
             },
             "final": final,
+            # 'final' burada verify_and_score'un ürettiği TAM konsolide listedir →
+            # otoriter işaretle ki rapor katmanı (html_dashboard/_iter_findings) onu
+            # tek-kaynak kabul edip ham kovalarla yeniden agregasyona gitmesin.
+            "_final_authoritative": True,
             "phase_timings": results.get("phase_timings", {}),
             "crawl_summary": results.get("crawl_summary"),
             "security_headers_summary": results.get("security_headers_summary"),

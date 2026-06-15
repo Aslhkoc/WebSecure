@@ -179,6 +179,86 @@ def _parse_nmap_ssl_cert(text: str) -> dict:
     return cert
 
 
+# Gerçek "bulgu" taşıyan kovalar. Rapor agregasyonu YALNIZ bunları toplar; böylece
+# 'endpoints' (binlerce URL), 'charts', 'meta', '*_summary' gibi keşif/meta kovaları
+# bulgu sayısını şişirmez. Bir tarayıcı kovasını buraya eklemek = rapora bağlamak.
+_FINDING_BUCKETS: tuple = (
+    "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
+    "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
+    "headers", "security_headers", "rate_limit", "request_smuggling",
+    "session_scanner", "mass_assignment", "ws_fuzz", "infrastructure",
+    "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
+    "discovery", "passive", "subdomains", "vulnerability",
+    "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
+    "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
+    "interactsh", "oast",
+    "clickjacking", "param_pollution", "bypass_403", "business_logic",
+    "oauth2", "cache_poisoning", "host_header",
+    # --- Eskiden HTML agregasyon listesinde EKSİK olan gerçek bulgu kovaları ---
+    # Bunlar olmadan CORS/DOM XSS dışı (owasp-kategorize) bulgular ve doğrudan-kova
+    # tarayıcıları raporda görünmüyordu.
+    "cors", "dom_xss", "crlf_injection", "lfi", "cmdi", "ssti", "idor",
+    "subdomain_takeover", "prototype_pollution", "deserialization", "secrets",
+    "open_redirect", "ssl", "tls_summary",
+    "a01_broken_access_control", "a02_crypto_failures", "a03_injection",
+    "a04_insecure_design", "a05_backup_scan", "a05_backup_scan_ext",
+    "a05_cache_poisoning", "a05_cache_poisoning_ext", "a06_vulnerable_components",
+    "a07_authentication", "a08_integrity_failures", "a09_logging_failures",
+    "a10_ssrf",
+)
+
+
+def _max_finding_bucket_len(results: dict, exclude: str = "final") -> int:
+    """En kalabalık TEK bulgu-kovasının (final hariç) eleman sayısı.
+
+    'final' kovasının OTORİTER (tam, konsolide) liste olup olmadığını anlamak için
+    kullanılır: gerçek bir final, herhangi bir tek ham kovadan küçük OLAMAZ. Küçükse
+    → final kısmi/kirli (ör. yalnız TLS yazmış, kesintiye uğramış tarama) demektir.
+    """
+    _mx = 0
+    for _b in _FINDING_BUCKETS:
+        if _b == exclude:
+            continue
+        _v = results.get(_b)
+        if isinstance(_v, list):
+            _mx = max(_mx, len(_v))
+    return _mx
+
+
+def _derive_target_from_results(results: dict) -> str:
+    """meta.target kaybolduğunda hedef adını bulgulardan/nmap/sertifikadan türet."""
+    if not isinstance(results, dict):
+        return ""
+    # 1) TLS sertifika subject CN (en güvenilir host adı)
+    for _k in ("tls", "ssl", "certificate"):
+        _c = results.get(_k)
+        if isinstance(_c, dict):
+            _cn = _c.get("subject_CN") or _c.get("subject_cn") or _c.get("host")
+            if _cn:
+                return f"https://{_cn}" if "://" not in str(_cn) else str(_cn)
+        elif isinstance(_c, list):
+            for _it in _c:
+                if isinstance(_it, dict) and (_it.get("subject_CN") or _it.get("host")):
+                    _cn = _it.get("subject_CN") or _it.get("host")
+                    return f"https://{_cn}" if "://" not in str(_cn) else str(_cn)
+    # 2) İlk gerçek bulgunun URL host'u
+    for _b in _FINDING_BUCKETS:
+        _v = results.get(_b)
+        if isinstance(_v, list):
+            for _it in _v:
+                if isinstance(_it, dict):
+                    _u = _it.get("url") or _it.get("target") or _it.get("host")
+                    if _u and "://" in str(_u):
+                        try:
+                            from urllib.parse import urlparse as _up
+                            _p = _up(str(_u))
+                            if _p.scheme and _p.hostname:
+                                return f"{_p.scheme}://{_p.hostname}"
+                        except Exception:
+                            pass
+    return ""
+
+
 def render_html_dashboard(results: dict) -> str:
     """
     Generates a modern, dark-mode, single-file HTML dashboard from the scan results.
@@ -188,32 +268,40 @@ def render_html_dashboard(results: dict) -> str:
     if isinstance(meta, list):
          meta = next((x for x in meta if isinstance(x, dict)), {})
 
-    target = meta.get("target") or "Unknown Target"
+    # Hedef adı çözümü — meta.target çoğu zaman set edilir, ama kesintiye uğramış
+    # (Ctrl+C) taramalarda meta yalnız {egress, scan_profile, scan_start} taşıyıp
+    # target'ı KAYBEDEBİLİR → eski kod "Unknown Target" yazıyordu. Bulgulardan /
+    # nmap host'undan / TLS sertifika CN'inden türeterek bunu telafi et.
+    target = (
+        (meta.get("target") if isinstance(meta, dict) else None)
+        or (meta.get("url") if isinstance(meta, dict) else None)
+        or results.get("target") or results.get("url")
+        or _derive_target_from_results(results)
+        or "Unknown Target"
+    )
     scan_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     # Flatten findings for the table
     findings = []
 
-    # Use 'final' bucket if non-empty (matches MD report source), otherwise aggregate all buckets.
-    # This keeps MD and HTML counts consistent.
+    # 'final' kovası tarama-sonu konsolidasyonunun (verify_and_score) OTORİTER tam
+    # listesidir; varsa onu kullanmak MD/HTML/SARIF sayımlarını hizalar. ANCAK 'final'
+    # GÜVENİLİR olmalı: kesintiye uğramış (Ctrl+C) tarama ya da bir tarayıcının
+    # doğrudan yazması yüzünden 'final' KISMİ olabilir (ör. yalnız 6 TLS bulgusu),
+    # bu sırada 76 gerçek bulgu 'offensive' kovasında bekliyor olabilir. Eski kod
+    # "final boş değilse SADECE final" diyerek bu 76 bulguyu RAPORDAN GİZLİYORDU.
+    # Guard: final'i ancak ya açıkça otoriter işaretliyse (_final_authoritative) ya da
+    # en kalabalık tek ham kovadan KÜÇÜK değilse otoriter say; aksi halde tüm bulgu
+    # kovalarını topla (dedup zaten çift kaydı eler).
     _final_items = results.get("final")
-    _use_final_only = isinstance(_final_items, list) and len(_final_items) > 0
-
-    all_buckets = (
-        ["final"] if _use_final_only else [
-            "final", "offensive", "xss", "csrf", "jwt", "sqli", "nosqli",
-            "ssrf", "xxe", "graphql", "file_upload", "auth", "auth_matrix",
-            "headers", "security_headers", "rate_limit", "request_smuggling",
-            "session_scanner", "mass_assignment", "ws_fuzz", "infrastructure",
-            "sqlmap", "feroxbuster", "ffuf", "nuclei", "owasp",
-            "discovery", "passive", "subdomains", "vulnerability",
-            "portscan", "nmap", "tls", "tls_findings", "js_analysis", "files_discovered",
-            "httpx", "http_probe", "katana", "crawl", "dalfox", "amass", "subfinder",
-            "interactsh", "oast",
-            "clickjacking", "param_pollution", "bypass_403", "business_logic",
-            "oauth2", "cache_poisoning", "host_header",
-        ]
+    _final_nonempty = isinstance(_final_items, list) and len(_final_items) > 0
+    _final_authoritative = bool(results.get("_final_authoritative"))
+    _use_final_only = _final_nonempty and (
+        _final_authoritative
+        or len(_final_items) >= _max_finding_bucket_len(results, exclude="final")
     )
+
+    all_buckets = (["final"] if _use_final_only else list(_FINDING_BUCKETS))
 
     _id_counter = 1
 
@@ -239,7 +327,14 @@ def render_html_dashboard(results: dict) -> str:
             elif bucket == "portscan" and not item.get("type"):
                 f_type = item.get("message") or "Port Scan Note"
             else:
-                f_type = item.get("type") or item.get("title") or item.get("message") or "Generic"
+                # Bazı tarayıcılar 'type' yerine alternatif alan adları kullanır:
+                #   TLS deep scanner → 'vuln_type'; OWASP a0X tarayıcıları → 'issue'.
+                # Bunları tanımazsak bu GERÇEK bulgular "Generic" olur ve _has_label
+                # filtresinde DÜŞER (HSTS Missing, Sensitive File, Broken Access… kaybı).
+                f_type = (
+                    item.get("type") or item.get("vuln_type") or item.get("title")
+                    or item.get("issue") or item.get("message") or "Generic"
+                )
             _raw_sev = (item.get("severity") or "Info").lower()
             f_sev = _HTML_SEV_NORM.get(_raw_sev, "Info")
 
@@ -251,14 +346,17 @@ def render_html_dashboard(results: dict) -> str:
             #     Bunlar zafiyet değil — keşfedilen endpoint'ler (crawl bölümünde).
             # (b) Tarama-süreci olayları (phase_error vb.) ayrı tanı bölümünde.
             # ---------------------------------------------------------------
-            _has_label = bool(item.get("type") or item.get("title") or item.get("message"))
+            _has_label = bool(
+                item.get("type") or item.get("vuln_type") or item.get("title")
+                or item.get("issue") or item.get("message")
+            )
             if not _has_label:
                 continue
             _proc_noise = {
                 "phase_error", "phase_timeout", "circuit_breaker_trip",
                 "phase_metrics", "anti_block_event",
             }
-            if str(item.get("type") or "").strip().lower() in _proc_noise:
+            if str(item.get("type") or item.get("vuln_type") or "").strip().lower() in _proc_noise:
                 continue
 
             # Drop contentless "ghost" findings: a category marker that leaked into
@@ -272,6 +370,9 @@ def render_html_dashboard(results: dict) -> str:
                 or item.get("evidence") or item.get("description")
                 or item.get("message") or item.get("payload") or item.get("count")
                 or item.get("port") or item.get("parameter") or item.get("param")
+                # OWASP a0X bulguları url yerine path/why/issue taşır — bunları
+                # içeriksiz "hayalet" sanıp düşürme.
+                or item.get("path") or item.get("why") or item.get("issue")
             )
             if not _has_substance:
                 continue
@@ -302,6 +403,12 @@ def render_html_dashboard(results: dict) -> str:
 
             # Resolve URL — prefer clean URL, fall back to target, avoid bare IPs
             _raw_url = item.get("url") or item.get("target") or item.get("host") or ""
+            # OWASP a0X bulguları yalnız 'path' taşıyabilir (ör. ".env.backup",
+            # "/admin") → hedefe göre tam URL'ye çevir, böylece "http://.env.backup"
+            # gibi bozuk URL üretmeyiz.
+            if not _raw_url and item.get("path") and isinstance(target, str) and "://" in target:
+                _p = str(item["path"]).lstrip("/")
+                _raw_url = target.rstrip("/") + "/" + _p
             # Normalize: if it looks like a bare IP or hostname (no scheme), add http://
             if _raw_url and "://" not in _raw_url and not _raw_url.startswith("-"):
                 _raw_url = "http://" + _raw_url
@@ -722,7 +829,7 @@ def render_html_dashboard(results: dict) -> str:
             _bc = _SEV_COLORS.get(_info["sev_label"], "#8b949e")
             _vt_short = _vt if len(_vt) <= 34 else _vt[:31] + "…"
             _bars += (
-                f'<div style="margin:7px 0;cursor:pointer;" onclick="filterByType({json.dumps(_vt)})" '
+                f'<div style="margin:7px 0;cursor:pointer;" onclick="filterByType({_escape(json.dumps(_vt))})" '
                 f'title="Bu türe göre filtrele: {_escape(_vt)}">'
                 f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:2px;">'
                 f'<span style="color:var(--text-main);">{_escape(_vt_short)}</span>'
@@ -757,8 +864,12 @@ def render_html_dashboard(results: dict) -> str:
         effort  = info["effort"]
         ec      = _EFFORT_COLOR.get(effort, "var(--text-muted)")
         # Safe JS string: use JSON encoding to avoid quote/special-char issues
-        vtype_js = json.dumps(vtype)  # produces "\"...\""  — safe inside onclick attr
-        sev_js   = json.dumps(sev_lbl)
+        # json.dumps çift-tırnak üretir ("...") — onclick="..." ÇİFT-tırnak attribute'u
+        # içinde ham bırakılırsa attribute'u kırar (onclick="filterByType(" + serbest
+        # "Weak Cipher Suite" + ")"). _escape ile " → &quot; yapılır; tarayıcı attribute'u
+        # çözerken &quot;'i " 'ye geri çevirir → JS doğru string'i alır. Tıkla-filtrele çalışır.
+        vtype_js = _escape(json.dumps(vtype))
+        sev_js   = _escape(json.dumps(sev_lbl))
 
         # Açılır detay satırı — etkilenen URL/parametre örnekleri ("oklara bilgi koy")
         _ex_rows = ""

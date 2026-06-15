@@ -61,16 +61,44 @@ def check_protocol_support(host: str, port: int) -> List[str]:
 
     return weak_protocols
 
+def _is_genuinely_weak_cipher(c_name: str) -> bool:
+    """NEGOTIATED cipher adı GERÇEKTEN zayıf mı?
+
+    KRİTİK: `ssl.SSLContext.set_ciphers()` YALNIZCA TLS 1.2 ve altını kısıtlar;
+    TLS 1.3 cipher suite'lerini (TLS_AES_*, TLS_CHACHA20_*) ETKİLEMEZ. Bu yüzden
+    "NULL"/"aNULL" gibi zayıf cipher istesek bile, TLS 1.3 konuşan modern bir
+    sunucu el sıkışmayı GÜÇLÜ bir AEAD cipher'ı (ör. TLS_AES_256_GCM_SHA384) ile
+    tamamlar. Eski kod bağlantının kurulmasını "zayıf cipher destekleniyor" sanıp
+    `NULL (TLS_AES_256_GCM_SHA384)` gibi SAHTE bir bulgu üretiyordu. Artık yalnız
+    görüşülen cipher'ın ADI gerçekten zayıfsa rapor edilir.
+    """
+    n = (c_name or "").upper()
+    if not n:
+        return False
+    # TLS 1.3 suite'lerinin tamamı güçlü AEAD — ne istersek isteyelim asla zayıf değil
+    if n.startswith("TLS_AES_") or n.startswith("TLS_CHACHA20") or n.startswith("TLS_SM4"):
+        return False
+    _WEAK_TOKENS = (
+        "RC4", "NULL", "EXPORT", "EXP-", "-DES-CBC", "DES-CBC3", "3DES",
+        "ADH-", "AECDH", "ANON", "-MD5", "IDEA", "SEED", "RC2",
+    )
+    # "DES" tek başına 3DES'i de yakalar ama 3DES'i ayrıca listeliyoruz; salt "DES-"
+    # (tekil DES, gerçekten zayıf) için ayrı kontrol — "DES-CBC" zayıf, "3DES" da zayıf.
+    if "DES-CBC-" in n or n.endswith("-DES-CBC-SHA") or "-DES-CBC3-" in n:
+        return True
+    return any(tok in n for tok in _WEAK_TOKENS)
+
+
 def check_weak_ciphers(host: str, port: int) -> List[str]:
     """
     Checks for support of weak cipher suites (RC4, NULL, DES).
     """
     weak_ciphers_found = []
-    
-    # Cipher strings to test. 
+
+    # Cipher strings to test.
     # OpenSSL cipher strings: NULL, RC4, DES, 3DES, EXPORT, ADH
     # We try to force these ciphers.
-    
+
     bad_suites = [
         ("RC4", "RC4"),
         ("NULL", "NULL"),
@@ -78,7 +106,7 @@ def check_weak_ciphers(host: str, port: int) -> List[str]:
         ("Export", "EXPORT"),
         ("Anon", "aNULL")
     ]
-    
+
     for name, cipher_str in bad_suites:
         try:
             ctx = ssl.create_default_context()
@@ -89,16 +117,20 @@ def check_weak_ciphers(host: str, port: int) -> List[str]:
             except ssl.SSLError:
                 # Local OpenSSL might not even support asking for it
                 continue
-                
+
             with _create_socket(host, port) as sock:
                 with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                     cipher = ssock.cipher()
                     if cipher:
                         c_name = cipher[0]
-                        weak_ciphers_found.append(f"{name} ({c_name})")
+                        # Sadece GÖRÜŞÜLEN cipher gerçekten zayıfsa rapor et.
+                        # TLS 1.3 sunucuları set_ciphers'a aldırmadan güçlü cipher
+                        # ile el sıkışır → sahte NULL/Anon bulgusunu engelle.
+                        if _is_genuinely_weak_cipher(c_name):
+                            weak_ciphers_found.append(f"{name} ({c_name})")
         except (ssl.SSLError, socket.error) as _fix_e:
             _logger.debug(f"[scanners.tls] {type(_fix_e).__name__}: {_fix_e!r}")
-            
+
     return weak_ciphers_found
 
 def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs) -> Dict[str, Any]:
@@ -176,14 +208,21 @@ def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs
             "recommendation": "Disable weak ciphers (RC4, DES, NULL). Use modern AEAD suites.",
         })
 
-    results.setdefault("final", []).extend(findings)
+    # NOT: TLS bulguları ASLA "final" kovasına yazılmaz. "final" yalnız tarama-sonu
+    # konsolidasyon adımının (verify_and_score) ürettiği OTORİTER tam listedir.
+    # Bir tarayıcının "final"e doğrudan yazması, rapor katmanının ("final varsa onu
+    # otoriter say") küçük bir kısmi listeyi tüm bulguların yerine geçirmesine ve
+    # diğer kovalardaki onlarca bulgunun (offensive/cors/dom_xss…) raporda
+    # GİZLENMESİNE yol açıyordu. TLS bulguları kendi "tls_findings" kovasına gider;
+    # rapor agregasyonu bu kovayı zaten okur, dedup eder.
+    results.setdefault("tls_findings", []).extend(findings)
 
     # 4. Advanced TLS attacks (BEAST/POODLE, CRIME/BREACH, ROBOT, HTTP2/HTTP3, CDN)
     try:
         adim9 = TLSAdim9Scanner(session=session, results=results)
         adim9_results = adim9.run(url, **kwargs)
         findings.extend(adim9_results)
-        results.setdefault("final", []).extend(adim9_results)
+        results.setdefault("tls_findings", []).extend(adim9_results)
         if debug:
             _logger.debug(f"[TLS] Adim9 scanner produced {len(adim9_results)} findings")
     except Exception as exc:
@@ -194,7 +233,7 @@ def scan_tls(url: str, session=None, results=None, debug: bool = False, **kwargs
         deep = TLSDeepScanner(session=session, results=results)
         deep_results = deep.run(url, **kwargs)
         findings.extend(deep_results)
-        results.setdefault("final", []).extend(deep_results)
+        results.setdefault("tls_findings", []).extend(deep_results)
         if debug:
             _logger.debug(f"[TLS] Deep scanner produced {len(deep_results)} findings")
     except Exception as exc:
