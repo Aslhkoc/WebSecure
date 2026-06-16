@@ -41,7 +41,7 @@ class LiveMonitor:
     _SYSTEM_BUCKETS: frozenset = frozenset({
         "errors", "meta", "nmap", "portscan", "tls", "sessions",
         "security_headers", "tech_stack", "egress_degraded",
-        "passive_recon", "passive", "dns", "subdomain",
+        "passive_recon", "passive", "dns", "subdomain", "subdomains",
         # circuit_breaker trip = operasyonel teşhis, zafiyet değil → VULN sayma
         "circuit_breaker",
     })

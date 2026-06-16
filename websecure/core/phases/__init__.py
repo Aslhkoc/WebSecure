@@ -1958,7 +1958,12 @@ def _runner_subdomain(ctx) -> None:
         cfg = getattr(ctx, "config", {}) or {}
         results = _sub_run(target, cfg=cfg)
         for r in results:
-            add_result("subdomain", r)
+            # KANONİK KOVA = 'subdomains' (ÇOĞUL). Rapor (html_dashboard
+            # FINDING_BUCKETS + dedike "Keşfedilen Subdomain'ler" bölümü),
+            # pdf reporter ve subdomain.py docstring'i HEPSİ çoğul okur.
+            # Eski 'subdomain' (tekil) hiçbir tüketicinin okumadığı öksüz
+            # kovaydı → tarama subdomain buluyor ama rapora HİÇ düşmüyordu.
+            add_result("subdomains", r)
         _logger.info(f"[phases] Subdomain tarama tamamlandı: {len(results)} bulgu")
     except Exception as e:
         _logger.warning(f"[phases] Subdomain tarama hatası: {e}")
