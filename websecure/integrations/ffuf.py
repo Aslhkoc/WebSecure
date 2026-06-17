@@ -165,7 +165,8 @@ class FFUFWrapper(ToolIntegration):
                  filter_size: Optional[str] = None,
                  custom_args: Optional[List[str]] = None,
                  proxy: str = None,
-                 profile_cfg: dict = None) -> List[Dict[str, Any]]:
+                 profile_cfg: dict = None,
+                 maxtime: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Runs FFUF against the target URL.
         :param url: Target URL with 'FUZZ' keyword (e.g., http://target/FUZZ)
@@ -217,6 +218,18 @@ class FFUFWrapper(ToolIntegration):
                 "-mc", match_codes,
             ])
 
+            # ffuf'u SÜRE TAVANIYLA çalıştır: -maxtime dolunca ffuf KENDİ durur ve o
+            # ana kadar bulduklarını '-o' JSON'una YAZAR. Eskiden yalnız Python tarafı
+            # proc.kill() ediyordu → ffuf JSON dizisini ASLA yazamadan ölüyordu →
+            # "FFUF output was not valid JSON", 0 sonuç (kullanıcının "ffuf farklı
+            # yerlerde timeout yiyor" şikâyetinin asıl kaynağı). -maxtime ile kısmi
+            # sonuç bile kurtulur. Tavan = subprocess kill-bütçesinin biraz altı
+            # (ffuf önce kendi durup yazsın; Python kill yalnızca son-kalkan).
+            _eff_to = effective_timeout(600)
+            if maxtime is None:
+                maxtime = max(60, int(_eff_to * 0.85))
+            cmd.extend(["-maxtime", str(int(maxtime))])
+
             if filter_size:
                 cmd.extend(["-fs", filter_size])
 
@@ -239,7 +252,8 @@ class FFUFWrapper(ToolIntegration):
             process, _unreg = _run_proc_tracked(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            _eff_to = effective_timeout(600)
+            # _eff_to yukarıda (-maxtime ile birlikte) hesaplandı. Python kill'i
+            # ffuf'un kendi -maxtime'ından SONRA devreye girer (son-kalkan).
             try:
                 _, stderr_b = process.communicate(timeout=_eff_to)
             except subprocess.TimeoutExpired:
@@ -644,6 +658,14 @@ class FeroxbusterWrapper(ToolIntegration):
             cmd = [self.binary, "--url", target, "--threads", str(threads),
                    "--depth", str(depth), "--json", "--output", temp_output,
                    "--wordlist", effective_wordlist, "--no-state"]
+
+            # Graceful süre tavanı: feroxbuster kill-bütçesinden ÖNCE kendi durur.
+            # (JSONL çıktısı kill'de kısmi sonuç verir ama --time-limit ile özyineleme
+            # sonsuza gitmez ve temiz kapanır.) Kullanıcı talebi: faz atlanmasın, ama
+            # araç bütçesi içinde bitsin.
+            if not any(str(a) == "--time-limit" for a in (extra_args or [])):
+                _ferox_to = int(effective_timeout(600) * 0.9)
+                cmd.extend(["--time-limit", f"{max(60, _ferox_to)}s"])
 
             if extra_args:
                 cmd.extend(extra_args)

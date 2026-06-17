@@ -5587,6 +5587,33 @@ def _ffuf_budgeted_wordlist(sources, tor_active: bool, max_words_override: int =
     return out_path
 
 
+def _ffuf_realistic_rate(session, url: str, threads: int, tor_active: bool) -> float:
+    """ffuf'un GERÇEK isabet hızını (req/s) hedefin gecikmesinden tahmin eder.
+
+    SEBEP: wordlist'i `bütçe × hız` ile boyutluyoruz; eski kod hızı SABİT 40 req/s
+    (direkt) / 2.5 (Tor) varsayıyordu. Yavaş hedefte gerçek hız çok daha düşük →
+    liste bütçeye sığmaz → ffuf timeout/kill → boş sonuç. Birkaç istek zamanlayıp
+    `eşzamanlı thread / ortalama gecikme` ile gerçekçi tavan üretiriz; başarısız
+    olursa eski sabit varsayıma düşer. Sonuç makul aralığa sıkıştırılır.
+    """
+    lat: list = []
+    try:
+        base = url.split("FUZZ")[0] if "FUZZ" in url else url
+        for _ in range(3):
+            _t0 = _t.monotonic()
+            session.get(base, timeout=15, allow_redirects=False)
+            lat.append(max(0.02, _t.monotonic() - _t0))
+    except Exception:
+        pass
+    if lat:
+        avg = sum(lat) / len(lat)
+    else:
+        avg = 4.0 if tor_active else 1.0
+    rate = max(1, threads) / avg
+    lo, hi = (0.5, 8.0) if tor_active else (3.0, 120.0)
+    return max(lo, min(rate, hi))
+
+
 def run_ffuf_scan(ctx) -> None:
     """
     Runs FFUF fuzzing.
@@ -5679,94 +5706,122 @@ def run_ffuf_scan(ctx) -> None:
 
     # This is safer than multiple -w flags for a single FUZZ keyword
     merged_wl_path = "merged_wordlist_temp.txt"  # placeholder (finally temizler)
+    _api_wl_built = None   # bütçeli API listesi (finally temizler)
+    _ext_wl_built = None   # bütçeli uzantı listesi (finally temizler)
     try:
-        # Wordlist'i BÜTÇELE — tüm SecLists'i ham birleştirmek yerine dedup + cap.
-        # (Eski cap'siz birleştirme milyonlarca satır üretip ffuf'u her taramada
-        #  zaman aşımına/boş JSON'a sokuyordu — asıl bug buydu.)
         _tor_active = bool(_resolve_proxy(ctx)) or os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
         _ffuf_max_words = int(_get_config(ctx, "offensive.ffuf.max_words", 0) or 0)
-        # Öncelik: curated discovery listeleri ÖNCE (targeted), sonra paketli/dış
-        # listelerin YALNIZ path-keşfine uygun olanları (payload/param/parola/subdomain
-        # listeleri elenir — yoksa ffuf'un çoğu çöp denemeye gider, özellikle SecLists
-        # kurulu değilken). Curated zaten vetted, doğrudan; all_wls süzülür.
-        _disc_from_all = [w for w in all_wls if _is_ffuf_discovery_wordlist(w)]
-        _wl_sources = list(curated.get("discovery", [])) + _disc_from_all
-        _built_wl = _ffuf_budgeted_wordlist(_wl_sources, _tor_active, _ffuf_max_words)
-        if not _built_wl:
-            add_result("ffuf", {"status": "skipped", "reason": "wordlist build failed"})
-            return
-        merged_wl_path = _built_wl
 
         wrapper = FFUFWrapper()
         if not wrapper.is_available():
             add_result("ffuf", {"status": "skipped", "reason": "Binary not found"})
             return
 
-        _logger.info("Launching FFUF scan with MERGED wordlist...")
-
         custom_args = []
         # [Check 5] Proxy
         proxy = _resolve_proxy(ctx)
         if proxy:
             _logger.info(f"[Evasion] FFUF using proxy: {proxy}")
-
-        # Bütçeli wordlist (merged_wl_path) zaten curated discovery listelerini
-        # ÖNCELİKLİ + dedup + cap'li içeriyor. Ham curated[0]'ı (cap'siz, 220k-1.2M
-        # satır olabilir) doğrudan KULLANMA — yoksa ffuf yine bitiremez.
-        discovery_wl = merged_wl_path
-
         _ffuf_profile = (getattr(ctx, "config", {}) or {}).get("_ffuf", {})
 
+        # --- ffuf'u BÜTÇE İÇİNDE BİTİRECEK şekilde boyutla ---------------------
+        # Her ffuf çağrısı kill-bütçesi (effective_timeout) İÇİNDE bitmeli; aksi
+        # halde -maxtime/kill devreye girer ve eski kod boş JSON üretirdi. Gerçek
+        # hızı hedefin gecikmesinden ölç, kelime tavanını ona göre seç. (Bu,
+        # "ffuf farklı yerlerde timeout yiyor" şikâyetinin sayısal köküdür.)
+        from websecure.integrations.base import effective_timeout as _eff_to_fn
+        _eff_threads = int(_ffuf_profile.get("threads", 40))
+        if proxy:
+            _eff_threads = min(_eff_threads, 10)
+        _ffuf_rate = _ffuf_realistic_rate(getattr(ctx, "session", None), url, _eff_threads, _tor_active)
+        _call_budget = int(_eff_to_fn(600) or 600)
+        # Uzantısız tek çağrıda sığacak kelime tavanı: bütçenin YARISINDA bitsin
+        # (kalan yarı = boyutlama hatası payı + ffuf'un kendi -maxtime marjı).
+        _base_word_cap = max(500, min(int(_call_budget * 0.5 * _ffuf_rate), 100000))
+        if _ffuf_max_words > 0:
+            _base_word_cap = _ffuf_max_words
+        _logger.info(
+            f"[FFUF] hız≈{_ffuf_rate:.1f} req/s | bütçe={_call_budget}s | "
+            f"kelime-tavanı={_base_word_cap} (threads={_eff_threads}, tor={_tor_active})"
+        )
+
+        # Öncelik: curated discovery listeleri ÖNCE (targeted), sonra paketli/dış
+        # listelerin YALNIZ path-keşfine uygun olanları (payload/param/parola/subdomain
+        # listeleri elenir — yoksa ffuf'un çoğu çöp denemeye gider, özellikle SecLists
+        # kurulu değilken). Curated zaten vetted, doğrudan; all_wls süzülür.
+        _disc_from_all = [w for w in all_wls if _is_ffuf_discovery_wordlist(w)]
+        _wl_sources = list(curated.get("discovery", [])) + _disc_from_all
+        _built_wl = _ffuf_budgeted_wordlist(_wl_sources, _tor_active, _base_word_cap)
+        if not _built_wl:
+            add_result("ffuf", {"status": "skipped", "reason": "wordlist build failed"})
+            return
+        merged_wl_path = _built_wl
+
         # --- Directory/path discovery ---
-        findings = wrapper.run_scan(url, wordlist=discovery_wl, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
+        _logger.info("Launching FFUF scan with MERGED wordlist...")
+        findings = wrapper.run_scan(url, wordlist=merged_wl_path, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
         for f in findings:
             add_result("discovery", {"tool": "ffuf", **f})
 
-        # --- API endpoint discovery (curated api list OR bundled api_paths.txt) ---
+        # --- API endpoint discovery ---
+        # Ham curated[0]'ı (220k-1.2M satır) doğrudan KULLANMA — onu da bütçele,
+        # yoksa SecLists kuruluyken API taraması da timeout yer (eski bug: bu dal
+        # cap'siz curated[0] veriyordu, kodun kendi yorumu "kullanma" diyordu ama
+        # API dalı yine de kullanıyordu).
         curated_api = curated.get("api", [])
-        _bundled_api_wl = None
-        if not curated_api:
-            # Fall back to bundled api_paths.txt
-            _api_wl_path = os.path.join(
-                os.path.dirname(__file__), "..", "..", "wordlists", "api_paths.txt"
-            )
-            _api_wl_path = os.path.normpath(_api_wl_path)
+        _api_sources = list(curated_api)
+        if not _api_sources:
+            _api_wl_path = os.path.normpath(os.path.join(
+                os.path.dirname(__file__), "..", "..", "wordlists", "api_paths.txt"))
             if os.path.isfile(_api_wl_path):
-                _bundled_api_wl = _api_wl_path
-        api_wl = (curated_api[0] if curated_api else _bundled_api_wl)
-        if api_wl:
-            _logger.info(f"[FFUF] API endpoint scan using: {api_wl}")
-            api_findings = wrapper.run_scan(url, wordlist=api_wl, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
-            for f in api_findings:
-                add_result("discovery", {"tool": "ffuf", "category": "api", **f})
+                _api_sources = [_api_wl_path]
+        if _api_sources:
+            _api_wl_built = _ffuf_budgeted_wordlist(_api_sources, _tor_active, _base_word_cap)
+            if _api_wl_built:
+                _logger.info("[FFUF] API endpoint scan (bütçeli liste)")
+                api_findings = wrapper.run_scan(url, wordlist=_api_wl_built, custom_args=custom_args, proxy=proxy, profile_cfg=_ffuf_profile)
+                for f in api_findings:
+                    add_result("discovery", {"tool": "ffuf", "category": "api", **f})
 
         # --- File extension discovery: tech-aware via get_tech_extensions() ---
         _ff_techs = list(getattr(ctx, "technologies", []) or [])
         sensitive_exts = get_tech_extensions(_ff_techs)
-        _logger.info(f"[FFUF] Extension scan (techs: {_ff_techs or 'generic'}): {sensitive_exts}")
-        ext_findings = wrapper.run_scan(
-            url,
-            wordlist=merged_wl_path,  # bütçeli/capped liste (curated[0] cap'siz değil)
-            extensions=sensitive_exts,
-            custom_args=custom_args,
-            proxy=proxy,
-            profile_cfg=_ffuf_profile,
-        )
-        try:
-            from websecure.scanners.js_analyzer import classify_discovered_file
-            for f in ext_findings:
-                f_url = f.get("url", "")
-                f_status = f.get("status", 200)
-                classified = classify_discovered_file(f_url, f_status)
-                if classified:
-                    add_result("files_discovered", classified)
-                    if classified.get("severity") in ("Critical", "High"):
-                        add_result("offensive", classified)
-                else:
+        # KRİTİK: -e ile her kelime (1 + uzantı_sayısı) kez denenir. Uzantı listesi
+        # DAİMA ≥8 (varsayılan yedek/config seti), çoğu 14-20+. Wordlist'i bölmezsek
+        # istek sayısı 9-21x patlar → garantili timeout/kill (uzantı taramasının
+        # her seferinde boş dönmesinin sebebi buydu). Tavanı (1+uzantı) ile böl ki
+        # toplam istek dizin taramasıyla aynı bütçede kalsın.
+        _ext_count = (sensitive_exts.count(",") + 1) if sensitive_exts else 0
+        _ext_cap = max(200, _base_word_cap // (1 + _ext_count)) if _ext_count else _base_word_cap
+        _ext_wl_built = _ffuf_budgeted_wordlist(_wl_sources, _tor_active, _ext_cap)
+        if _ext_wl_built:
+            _logger.info(
+                f"[FFUF] Extension scan (techs: {_ff_techs or 'generic'}): {sensitive_exts} "
+                f"| kelime≤{_ext_cap}×(1+{_ext_count})"
+            )
+            ext_findings = wrapper.run_scan(
+                url,
+                wordlist=_ext_wl_built,
+                extensions=sensitive_exts,
+                custom_args=custom_args,
+                proxy=proxy,
+                profile_cfg=_ffuf_profile,
+            )
+            try:
+                from websecure.scanners.js_analyzer import classify_discovered_file
+                for f in ext_findings:
+                    f_url = f.get("url", "")
+                    f_status = f.get("status", 200)
+                    classified = classify_discovered_file(f_url, f_status)
+                    if classified:
+                        add_result("files_discovered", classified)
+                        if classified.get("severity") in ("Critical", "High"):
+                            add_result("offensive", classified)
+                    else:
+                        add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+            except ImportError:
+                for f in ext_findings:
                     add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
-        except ImportError:
-            for f in ext_findings:
-                add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
 
         # --- Header fuzzing: IP spoofing / auth bypass / WAF bypass ---
         _hdr_fuzz_enabled = _get_config(ctx, "ffuf.header_fuzzing", True)
@@ -5801,13 +5856,14 @@ def run_ffuf_scan(ctx) -> None:
                 _logger.debug(f"[FFUF] Header fuzzing skipped: {_hdr_exc!r}")
 
     finally:
-        # Cleanup
-        if os.path.exists(merged_wl_path):
-             try:
-                 os.remove(merged_wl_path)
-                 _logger.debug("Merged wordlist deleted.")
-             except OSError:
-                 pass
+        # Cleanup — dizin + API + uzantı bütçeli temp listelerinin hepsi silinmeli.
+        for _tmp in (merged_wl_path, _api_wl_built, _ext_wl_built):
+            if _tmp and os.path.exists(_tmp):
+                try:
+                    os.remove(_tmp)
+                except OSError:
+                    pass
+        _logger.debug("FFUF temp wordlists deleted.")
 
 
 def run_feroxbuster_scan(ctx) -> None:
