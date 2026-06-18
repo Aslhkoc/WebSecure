@@ -181,13 +181,26 @@ _NO_TIMEOUT: bool = False
 _TOR_ACTIVE: bool = False
 # (connect, read) seconds enforced as a MINIMUM when Tor is active.
 _TOR_TIMEOUT_FLOOR: tuple[float, float] = (20.0, 45.0)
+# (connect, read) seconds imposed as a DEFAULT when a caller omits ``timeout``
+# entirely (timeout=None) on a DIRECT (non-Tor) connection. requests' ``read``
+# timeout is an *inactivity* timeout (max seconds between bytes from the server),
+# so a generous value like 60s NEVER cuts a slow-but-progressing response while
+# still guaranteeing a stalled/half-open socket can't hang the request — and thus
+# the phase — forever. This is the single most important "always hangs somewhere"
+# guard: any scanner that does session.get(url) WITHOUT timeout= used to block
+# indefinitely off Tor (the previous _floor_request_timeout no-op'd off Tor and
+# build_session's stashed .request_timeout was never read). no_timeout disables
+# orchestration deadlines (phase watchdog / global deadline / tool subprocess
+# waits) — NOT per-request finiteness; a single HTTP request always stays bounded.
+_DEFAULT_REQUEST_TIMEOUT: tuple[float, float] = (15.0, 60.0)
 
 
 def set_power_flags(no_timeout: Optional[bool] = None,
                     tor_active: Optional[bool] = None,
-                    tor_floor: Optional[tuple] = None) -> None:
+                    tor_floor: Optional[tuple] = None,
+                    request_timeout: Optional[tuple] = None) -> None:
     """Update the process-global power flags. Mirrors to env for cross-module use."""
-    global _NO_TIMEOUT, _TOR_ACTIVE, _TOR_TIMEOUT_FLOOR
+    global _NO_TIMEOUT, _TOR_ACTIVE, _TOR_TIMEOUT_FLOOR, _DEFAULT_REQUEST_TIMEOUT
     if no_timeout is not None:
         _NO_TIMEOUT = bool(no_timeout)
         os.environ["WEBSECURE_NO_TIMEOUT"] = "1" if _NO_TIMEOUT else "0"
@@ -197,6 +210,11 @@ def set_power_flags(no_timeout: Optional[bool] = None,
     if tor_floor is not None and isinstance(tor_floor, (tuple, list)) and len(tor_floor) == 2:
         try:
             _TOR_TIMEOUT_FLOOR = (float(tor_floor[0]), float(tor_floor[1]))
+        except (TypeError, ValueError):
+            pass
+    if request_timeout is not None and isinstance(request_timeout, (tuple, list)) and len(request_timeout) == 2:
+        try:
+            _DEFAULT_REQUEST_TIMEOUT = (float(request_timeout[0]), float(request_timeout[1]))
         except (TypeError, ValueError):
             pass
 
@@ -213,14 +231,25 @@ def tor_active() -> bool:
 
 def _floor_request_timeout(timeout):
     """
-    Raise a too-small per-request timeout to the Tor floor when Tor is active.
+    Resolve a per-request timeout, GUARANTEEING a finite value. Two jobs:
 
-    Accepts the same shapes ``requests``/``httpx`` accept: ``None`` (no timeout),
-    a scalar, or a ``(connect, read)`` pair — and returns the same shape so it is
-    a drop-in for the ``timeout`` kwarg. A no-op when Tor is not active, so
-    direct-connection scans keep their original (tight, fast) timeouts.
+      1. Tor active  — raise any too-small (connect, read) up to the Tor floor so
+         the high-latency onion circuit doesn't flood ReadTimeoutError → trip the
+         circuit breaker → abort whole phases. (No-op for already-generous values.)
+      2. Tor inactive — if the caller omitted ``timeout`` (None), impose a sane,
+         generous default so a stalled/half-open DIRECT connection can never hang
+         the request — and therefore the phase — forever. Explicit caller timeouts
+         are respected unchanged (tight, fast probes keep their value).
+
+    Accepts the same shapes ``requests``/``httpx`` accept: ``None``, a scalar, or
+    a ``(connect, read)`` pair — and returns the same shape, so it is a drop-in for
+    the ``timeout`` kwarg and SAFE to call unconditionally on every request.
     """
     if not _TOR_ACTIVE:
+        # Direct connection: the only unbounded danger is timeout=None (block
+        # forever). Any explicit value is the caller's intentional choice — keep it.
+        if timeout is None:
+            return _DEFAULT_REQUEST_TIMEOUT
         return timeout
     cmin, rmin = _TOR_TIMEOUT_FLOOR
     if timeout is None:
@@ -325,10 +354,30 @@ def install_http_phase_policies(cfg: dict) -> None:
     _tor_pinned = bool(cfg.get("_tor_proxy")) or bool(
         ((cfg.get("privacy") or {}).get("tor") or {}).get("enabled")
     )
+    # Default per-request (connect, read) for callers that omit timeout= on a
+    # direct connection. Derived from http config but floored generously so it is
+    # always finite AND never cuts a slow-but-progressing response (read is an
+    # inactivity timeout). connect ≤ 15s; read ≥ 45s (≥ 2× configured).
+    _ts = http_cfg.get("timeout_seconds")
+    _connect = http_cfg.get("connect_timeout")
+    _read = http_cfg.get("read_timeout")
+    try:
+        _ts_f = float(_ts) if _ts else 20.0
+    except (TypeError, ValueError):
+        _ts_f = 20.0
+    try:
+        _c = float(_connect) if _connect else min(_ts_f, 15.0)
+    except (TypeError, ValueError):
+        _c = min(_ts_f, 15.0)
+    try:
+        _r = float(_read) if _read else max(_ts_f * 2.0, 45.0)
+    except (TypeError, ValueError):
+        _r = max(_ts_f * 2.0, 45.0)
     set_power_flags(
         no_timeout=bool(_settings.get("no_timeout", True)),
         tor_active=True if _tor_pinned else None,
         tor_floor=tuple(_floor) if isinstance(_floor, (list, tuple)) and len(_floor) == 2 else None,
+        request_timeout=(_c, _r),
     )
 
 # Gerçekçi tarayıcı kimliği fallback'i — config http.identity_pools BOŞ olduğunda
@@ -451,12 +500,37 @@ def _observe_rate_headers(headers: Dict[str, str]) -> Optional[int]:
     except ValueError:
         return None
 
+# Hard cap on any block/Retry-After/panic cooldown sleep. A hostile or
+# misconfigured server can send Retry-After: 3600 (or larger); honoring it
+# literally froze a request — and the whole phase thread — for an hour. Beyond
+# this cap the circuit breaker + identity rotation handle persistent blocking, so
+# there is no value in sleeping longer.
+_MAX_BLOCK_SLEEP: float = 60.0
+
+
+def _bounded_sleep(seconds: float, *, cap: float = _MAX_BLOCK_SLEEP) -> None:
+    """Sleep up to ``cap`` seconds in ≤1s steps, bailing early if the active phase
+    was abandoned by the watchdog. Keeps a blocked worker responsive instead of
+    parking it on a flat multi-minute sleep that fights the phase watchdog/Ctrl+C."""
+    total = max(0.0, min(float(seconds or 0.0), float(cap)))
+    slept = 0.0
+    while slept < total:
+        try:
+            if is_phase_abandoned(ACTIVE_PHASE.get()):
+                return
+        except Exception:
+            pass
+        step = min(1.0, total - slept)
+        time.sleep(step)
+        slept += step
+
+
 def _respect_retry_after(headers: Dict[str, str]) -> None:
     """Honor Retry-After header on 429 responses. Circuit breaker handles threshold logic."""
     ra = _parse_retry_after(headers) if _HTTP_POLICY["rate_limit"]["respect_retry_after"] else None
     wait_time = ra if (ra is not None and ra > 0) else 5.0
-    _logger.debug(f"[HTTP] Retry-After -> sleeping {wait_time:.1f}s")
-    time.sleep(wait_time)
+    _logger.debug(f"[HTTP] Retry-After -> sleeping {min(wait_time, _MAX_BLOCK_SLEEP):.1f}s (cap {_MAX_BLOCK_SLEEP:.0f}s)")
+    _bounded_sleep(wait_time)
 
 def _try_rotate_identity(session_obj) -> bool:
     """
@@ -563,11 +637,12 @@ def _smart_request(self, method, url, **kwargs):
                 _logger.debug(f"[HTTP] Live monitor log_request failed: {exc!r}")
 
             _req_t0 = time.monotonic()
-            # Tor floor: a 4-5s read timeout over an onion circuit is a guaranteed
-            # ReadTimeoutError → circuit-breaker trip → whole phase aborts. Raise
-            # any too-tight per-request timeout to the floor (no-op off Tor).
-            if _TOR_ACTIVE:
-                kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
+            # Resolve the per-request timeout UNCONDITIONALLY → always finite:
+            #  • off Tor: a missing timeout (None) gets a generous default so a
+            #    stalled direct connection can't hang this request/phase forever;
+            #  • on Tor: too-tight values are raised to the floor (a 4-5s read over
+            #    an onion circuit is a guaranteed ReadTimeoutError → CB trip → abort).
+            kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
             resp   = super(type(self), self).request(method, url, **kwargs)
             status = resp.status_code
             # Capture this exchange so a finding reported right after can show the
@@ -1376,8 +1451,9 @@ class _RequestsDriver:
 
         kw.pop("verify", None)
         kw.setdefault("timeout", self.timeout_pair)
-        if _TOR_ACTIVE:
-            kw["timeout"] = _floor_request_timeout(kw.get("timeout"))
+        # Always resolve to a finite value: if timeout_pair itself was None this
+        # still imposes the off-Tor default; on Tor it raises to the floor.
+        kw["timeout"] = _floor_request_timeout(kw.get("timeout"))
         headers = dict(kw.pop("headers", {}) or {})
         for k, v in self._default_headers.items():
             headers.setdefault(k, v)
@@ -1684,9 +1760,12 @@ class HttpClient:
                         _lg.getLogger(__name__).debug(f"[HTTP] Tor rotation attempt failed: {_exc!r}")
                     
                 if self._consecutive_blocks >= 5:
-                    # [PANIK MODU] 5 kere üst üste bloklandık -> SİSTEM DURUYOR
-                    _logger.critical(f"[PANIC] 5 defa üst üste bloklandık ({block_type})! 120sn soğuma molası...")
-                    time.sleep(120)
+                    # [PANIK MODU] 5 kere üst üste bloklandık -> soğuma molası.
+                    # Bounded + cancel-aware: eski flat time.sleep(120) WAF'lı hedefte
+                    # her worker thread'ini 2 dk dondurup taramayı "takılmış" gösteriyordu
+                    # ve faz watchdog'una/Ctrl+C'ye yanıt vermiyordu.
+                    _logger.critical(f"[PANIC] 5 defa üst üste bloklandık ({block_type})! soğuma molası (≤{_MAX_BLOCK_SLEEP:.0f}sn)…")
+                    _bounded_sleep(_MAX_BLOCK_SLEEP)
                     self._consecutive_blocks = 0 # Sıfırla ve tekrar dene
                 
                 # Bloklandıysa hemen retry logic'e düşür (status_code manipülasyonu ile)
@@ -1703,9 +1782,9 @@ class HttpClient:
                 if self.retry_policy.respect_retry_after_header and status in (429, 503):
                     ra = _retry_after_seconds(resp)
                     if ra is not None:
-                        time.sleep(ra)
+                        _bounded_sleep(ra)  # cap a hostile Retry-After (e.g. 3600s)
                         continue
-                time.sleep(self.retry_policy.compute_sleep(attempts))
+                _bounded_sleep(self.retry_policy.compute_sleep(attempts))
                 continue
 
             return resp
@@ -1986,6 +2065,9 @@ class SoftTLSSession(requests.Session):
                             verify_kw = False
                             break
         kwargs["verify"] = verify_kw
+        # Guarantee a finite per-request timeout (default off-Tor when omitted,
+        # floor on Tor) so a stalled connection can't hang the phase forever.
+        kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
         return super().request(method, url, **kwargs)
 # ================= /SoftTLS Preflight =================
 
@@ -2424,8 +2506,8 @@ class AntiBlockingHTTP:
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
         self.rl.acquire()
         self._sleep_policy(method)
-        if _TOR_ACTIVE:
-            kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
+        # Always finite: default off-Tor when timeout omitted, raise to floor on Tor.
+        kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
         t0 = time.monotonic()
         resp = self.s.request(method=method, url=url, **kwargs)
         rt_ms = int((time.monotonic() - t0)*1000)

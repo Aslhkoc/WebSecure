@@ -146,16 +146,36 @@ class DNSBruteForce:
             return None
 
         logger.info(f"[Subdomain] DNS brute-force başlıyor: {domain} ({len(words)} kelime, {self.threads} thread)")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as exe:
+        # OVERALL DEADLINE — socket.gethostbyname has NO per-lookup timeout and is
+        # uninterruptible (it ignores socket.setdefaulttimeout), so a slow/black-holed
+        # resolver could keep a worker stuck indefinitely. The 'subdomain' phase runs
+        # under an UNBOUNDED watchdog (no_timeout), so without this bound a single
+        # stuck lookup + the old un-timed as_completed() froze the entire scan until
+        # Ctrl+C. Budget ~ words/threads × 2.5s of resolution, clamped [60s, 1800s].
+        _budget = max(60.0, min(1800.0, (len(words) / max(1, self.threads)) * 2.5 + 30.0))
+        exe = concurrent.futures.ThreadPoolExecutor(max_workers=self.threads)
+        try:
             futures = {exe.submit(check, w): w for w in words}
-            for fut in concurrent.futures.as_completed(futures):
-                try:
-                    res = fut.result()
-                    if res:
-                        found.append(res)
-                        logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} -> {res['ip']}")
-                except Exception as exc:
-                    logger.debug("[DNSBruteForce] Future error: %s", exc)
+            try:
+                for fut in concurrent.futures.as_completed(futures, timeout=_budget):
+                    try:
+                        res = fut.result()
+                        if res:
+                            found.append(res)
+                            logger.debug(f"[Subdomain] Bulundu: {res['subdomain']} -> {res['ip']}")
+                    except Exception as exc:
+                        logger.debug("[DNSBruteForce] Future error: %s", exc)
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "[Subdomain] DNS brute-force bütçesi (%ds) doldu — kısmi sonuç (%d/%d kelime işlendi)",
+                    int(_budget), len(found), len(words),
+                )
+        finally:
+            # Drop pending lookups and DON'T block on stuck gethostbyname threads
+            # (wait=False). Leaked running resolver threads are bounded (== threads)
+            # and harmless — the process reaps them at exit. Without wait=False the
+            # ThreadPoolExecutor context-exit would re-introduce the very hang above.
+            exe.shutdown(wait=False, cancel_futures=True)
 
         logger.info(f"[Subdomain] DNS brute-force tamamlandı: {len(found)} subdomain")
         return found

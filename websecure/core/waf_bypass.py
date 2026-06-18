@@ -423,6 +423,17 @@ class WAFBypassSession(requests.Session):
         # concurrency=20 into ~20 s/round and makes aggressive mode impractical.
         # Callers that genuinely need stealth pacing should call
         # WAFBypassSession.phase_sleep() once per scan phase, not here.
+        # Guarantee a finite per-request timeout: callers that omit timeout= used
+        # to send timeout=None → a stalled WAF/tarpit connection hangs the phase
+        # forever. _floor_request_timeout imposes the off-Tor default (or Tor floor)
+        # only when no explicit timeout was given. Lazy import avoids a cycle
+        # (http.py imports this module).
+        if "timeout" not in kwargs:
+            try:
+                from websecure.core.http import _floor_request_timeout as _frt
+                kwargs["timeout"] = _frt(None)
+            except Exception:
+                kwargs["timeout"] = (15.0, 60.0)
         resp = super().request(method, url, *args, **kwargs)
         # Feedback loop: track 403/429 and learn which bypass strategies are failing
         if resp is not None:
