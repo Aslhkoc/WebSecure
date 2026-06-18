@@ -1592,10 +1592,14 @@ def _runner_katana(ctx) -> None:
         # taramasında görüldü). Havuza girmeden ele — yoksa Tor üzerinde boşa
         # istek harcanır ve rapor şişer.
         try:
-            from websecure.core.utils import is_junk_url as _is_junk
+            from websecure.core.utils import is_junk_url as _is_junk, is_streaming_endpoint as _is_stream
         except Exception:
             _is_junk = lambda _u: False  # noqa: E731 — import güvenliği
-        # ctx.results["endpoints"] 'a katana URL'lerini ekle
+            _is_stream = lambda _u: False  # noqa: E731
+        # ctx.results["endpoints"] 'a katana URL'lerini ekle. socket.io/SSE/long-poll
+        # uçlarını enjeksiyon havuzuna SOKMA (XSS/SQLi onlara payload atıp Tor'da
+        # ~45s asılı kalıyor, yansıma imkânsız = verimsiz). ws_fuzz bunları kendi
+        # keşfedip test eder → kapsam kaybı yok.
         if unique_urls:
             ctx_results = getattr(ctx, "results", None)
             if ctx_results is None:
@@ -1605,7 +1609,7 @@ def _runner_katana(ctx) -> None:
                 except AttributeError:
                     pass
             existing = set(ctx_results.get("endpoints", []))
-            existing.update(u for u in unique_urls if not _is_junk(u))
+            existing.update(u for u in unique_urls if not _is_junk(u) and not _is_stream(u))
             ctx_results["endpoints"] = list(existing)
         # endpoints bucket'a yaz
         for ep_dict in endpoints_data:
@@ -1722,10 +1726,15 @@ def _runner_browser_crawler(ctx) -> None:
         # beacon URL'lerinin (analytics.google.com vb.) fuzz havuzuna sızıp
         # taramayı şişirmesini ikinci kez engeller.
         try:
-            from websecure.core.utils import same_site as _same_site, is_junk_url as _is_junk
+            from websecure.core.utils import (
+                same_site as _same_site, is_junk_url as _is_junk,
+                is_streaming_endpoint as _is_stream,
+            )
+            # socket.io/SSE/long-poll uçları enjeksiyon havuzuna girmesin (verimsiz
+            # asılı kalma); ws_fuzz onları kendi keşfedip test eder → kapsam kaybı yok.
             new_urls = {
                 u for u in (result.endpoints + result.api_endpoints + result.spa_routes)
-                if _same_site(u, url) and not _is_junk(u)
+                if _same_site(u, url) and not _is_junk(u) and not _is_stream(u)
             }
         except Exception:
             new_urls = set(result.endpoints + result.api_endpoints + result.spa_routes)

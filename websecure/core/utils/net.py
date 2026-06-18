@@ -181,6 +181,47 @@ def is_junk_url(url: str) -> bool:
             return True
     return False
 
+# Real-time / streaming transport handshake paths (socket.io, Engine.IO, SockJS,
+# webpack hot-module-reload). High-precision: these substrings do not occur in
+# normal REST paths.
+_STREAMING_PATH_RE = _re.compile(
+    r'(?:^|/)(?:socket\.io|engine\.io|sockjs(?:-node)?|__webpack_hmr|webpack-hmr)(?:/|$)',
+    _re.IGNORECASE,
+)
+
+
+def is_streaming_endpoint(url: str) -> bool:
+    """
+    True if *url* is a REAL-TIME / STREAMING transport endpoint (socket.io,
+    Engine.IO, SockJS, webpack-HMR, or an Engine.IO long-poll handshake) — to be
+    EXCLUDED from active injection/XSS fuzzing.
+
+    Why: these endpoints hold the connection OPEN (long-poll / event-stream), so an
+    injection probe just blocks for the full read timeout (~45s over Tor) and can
+    NEVER reflect a payload — pure wasted effort with zero yield. They are NOT junk
+    (they are real endpoints): the WebSocket fuzzer (scanners/ws_fuzz.py) discovers
+    and tests them on its own, so dropping them here loses no coverage — it only
+    keeps them out of the pointless injection path.
+
+    High-precision: only definitive socket.io/Engine.IO/SockJS/HMR signatures match,
+    so legitimate REST endpoints (e.g. /api/events, /stream) are never dropped.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    path = (p.path or "").lower()
+    query = (p.query or "").lower()
+    if _STREAMING_PATH_RE.search(path):
+        return True
+    # Engine.IO / socket.io transport handshake query params (definitive).
+    if "eio=" in query or "transport=polling" in query or "transport=websocket" in query:
+        return True
+    return False
+
+
 def resolve_canonical_base(url: str) -> str:
     return normalize_url(url)
 

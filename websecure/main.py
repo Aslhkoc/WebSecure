@@ -1879,17 +1879,20 @@ def _run_scan_phases(
         # ingestion'da elenmiş olmalı ama burada da süz ki Tor üzerinde boşa
         # istek/zaman harcanmasın. Hepsi çöpse url'e düş (boş bırakma).
         try:
-            from websecure.core.utils import is_junk_url as _is_junk
-            _clean_eps = [e for e in endpoints if not _is_junk(e)]
+            from websecure.core.utils import is_junk_url as _is_junk, is_streaming_endpoint as _is_stream
+            # Çöp (crawler-artefaktı) + socket.io/SSE/long-poll transport uçları
+            # enjeksiyon havuzundan çıkar: ikincisi payload yansıtmaz, Tor'da ~45s
+            # asılı kalır (verim sıfır). ws_fuzz socket.io'yu kendi keşfedip test eder.
+            _clean_eps = [e for e in endpoints if not _is_junk(e) and not _is_stream(e)]
             if _clean_eps:
                 if len(_clean_eps) != len(endpoints):
                     _logger.info(
-                        "[main] %d crawler-artefaktı çöp endpoint elendi (%d→%d)",
+                        "[main] %d çöp/stream endpoint enjeksiyon havuzundan elendi (%d→%d)",
                         len(endpoints) - len(_clean_eps), len(endpoints), len(_clean_eps)
                     )
                 endpoints = _clean_eps
         except Exception as _je:
-            _logger.debug(f"[main] is_junk_url filtresi atlandı: {_je!r}")
+            _logger.debug(f"[main] is_junk_url/stream filtresi atlandı: {_je!r}")
 
         # Plan B (B8): Smart endpoint prioritization — re-rank after crawl
         if _PLAN_B_AVAILABLE and _EndpointPrioritizer is not None and len(endpoints) > 1:
