@@ -34,6 +34,7 @@ from websecure.integrations.base import (
     ToolResult,
     ToolSeverity,
     ToolStatus,
+    content_discovery_timeout,
     effective_timeout,
 )
 
@@ -225,7 +226,11 @@ class FFUFWrapper(ToolIntegration):
             # yerlerde timeout yiyor" şikâyetinin asıl kaynağı). -maxtime ile kısmi
             # sonuç bile kurtulur. Tavan = subprocess kill-bütçesinin biraz altı
             # (ffuf önce kendi durup yazsın; Python kill yalnızca son-kalkan).
-            _eff_to = effective_timeout(600)
+            # Tor-farkında bütçe: Tor aktifken ×4 no_timeout şişirmesi UYGULANMAZ
+            # (effective_timeout 2400→-maxtime 34dk = Tor'da çoğu boşa bekleme +
+            # sıralı boruyu kilitler). content_discovery_timeout Tor'da ~7dk tavanına
+            # sabitler; direkt bağlantıda tam güç (effective_timeout) aynen kalır.
+            _eff_to = content_discovery_timeout(600)
             if maxtime is None:
                 maxtime = max(60, int(_eff_to * 0.85))
             cmd.extend(["-maxtime", str(int(maxtime))])
@@ -663,8 +668,11 @@ class FeroxbusterWrapper(ToolIntegration):
             # (JSONL çıktısı kill'de kısmi sonuç verir ama --time-limit ile özyineleme
             # sonsuza gitmez ve temiz kapanır.) Kullanıcı talebi: faz atlanmasın, ama
             # araç bütçesi içinde bitsin.
+            # Tor-farkında bütçe (ffuf ile aynı): Tor'da ×4 şişirme yok → ~7dk tavan,
+            # direkt bağlantıda tam güç. --time-limit ile feroxbuster kendi durur.
+            _ferox_budget = content_discovery_timeout(600)
             if not any(str(a) == "--time-limit" for a in (extra_args or [])):
-                _ferox_to = int(effective_timeout(600) * 0.9)
+                _ferox_to = int(_ferox_budget * 0.9)
                 cmd.extend(["--time-limit", f"{max(60, _ferox_to)}s"])
 
             if extra_args:
@@ -675,7 +683,7 @@ class FeroxbusterWrapper(ToolIntegration):
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
             )
             try:
-                _, stderr_b = proc.communicate(timeout=effective_timeout(600))
+                _, stderr_b = proc.communicate(timeout=_ferox_budget)
                 if proc.returncode not in (0, 1) and stderr_b:
                     logger.warning(f"[Feroxbuster] rc={proc.returncode} stderr={stderr_b.decode('utf-8','ignore')[:300]}")
             except subprocess.TimeoutExpired:
@@ -684,7 +692,7 @@ class FeroxbusterWrapper(ToolIntegration):
                     proc.communicate(timeout=10)
                 except subprocess.TimeoutExpired:
                     pass
-                logger.warning("[Feroxbuster] Zaman aşımı (600s) — kısmi sonuçlar ayrıştırılıyor")
+                logger.warning(f"[Feroxbuster] Zaman aşımı ({int(_ferox_budget)}s) — kısmi sonuçlar ayrıştırılıyor")
             finally:
                 if _unreg:
                     _unreg(proc)

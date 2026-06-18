@@ -5544,8 +5544,12 @@ def _ffuf_budgeted_wordlist(sources, tor_active: bool, max_words_override: int =
     Dönen: temp dosya yolu (çağıran finally'de silmeli) veya None.
     """
     try:
-        from websecure.integrations.base import effective_timeout as _eff
-        budget = int(_eff(600) or 600)
+        # Tor-farkında bütçeyle HİZALA: -maxtime Tor'da ~7dk'ya sabitlendiği için
+        # (content_discovery_timeout) wordlist de o süreye sığacak boyutta olmalı —
+        # aksi halde ffuf 2400s'lik liste alıp 420s'de -maxtime'a takılır (kısmi).
+        # Direkt bağlantıda content_discovery_timeout == effective_timeout (tam güç).
+        from websecure.integrations.base import content_discovery_timeout as _cdt
+        budget = int(_cdt(600) or 600)
     except Exception:
         budget = 600
     rate = 2.5 if tor_active else 40.0

@@ -82,6 +82,49 @@ def effective_timeout(default):
         return default
 
 
+def tor_active_mode() -> bool:
+    """True when SOCKS/Tor egress is active (env mirror set by core.http.set_power_flags)."""
+    return os.environ.get("WEBSECURE_TOR_ACTIVE") == "1"
+
+
+# Content-discovery fuzzers (ffuf/feroxbuster) over Tor: the no_timeout ×N
+# inflation is counterproductive. Tor carries only ~2-3 req/s, so a 34-min ffuf
+# (effective_timeout(600)=2400 → -maxtime ≈ 2040s) covers only a tiny wordlist
+# fraction AND stalls the sequential phase pipeline for half an hour with little
+# to show. Over Tor we cap these fuzzers to a realistic ceiling; off Tor they keep
+# full power (effective_timeout, ×factor in no_timeout). nmap/sqlmap/nuclei do NOT
+# route through this — only the directory/file/param fuzzers. User-tunable via
+# WEBSECURE_TOR_DISCOVERY_CAP (seconds).
+_CONTENT_DISCOVERY_TOR_CAP_DEFAULT = 420  # 7 min
+
+
+def _content_discovery_tor_cap() -> int:
+    try:
+        c = int(os.environ.get("WEBSECURE_TOR_DISCOVERY_CAP", "") or
+                _CONTENT_DISCOVERY_TOR_CAP_DEFAULT)
+        return c if c >= 60 else _CONTENT_DISCOVERY_TOR_CAP_DEFAULT
+    except Exception:
+        return _CONTENT_DISCOVERY_TOR_CAP_DEFAULT
+
+
+def content_discovery_timeout(default):
+    """Subprocess budget for content-discovery fuzzers (ffuf/feroxbuster).
+
+    Off Tor → identical to effective_timeout() (full power, ×factor in no_timeout).
+    On Tor → capped to a realistic ceiling so the fuzzer can't burn ~34 min covering
+    almost nothing and stalling the sequential pipeline. Returned value is always
+    >= 60s. Only ffuf/feroxbuster use this; nmap (full power) / sqlmap (firm budget)
+    / nuclei keep their own budgets untouched.
+    """
+    eff = effective_timeout(default)
+    if not tor_active_mode():
+        return eff
+    try:
+        return max(60, min(int(eff), _content_discovery_tor_cap()))
+    except Exception:
+        return eff
+
+
 # ---------------------------------------------------------------------------
 # Enumlar
 # ---------------------------------------------------------------------------
