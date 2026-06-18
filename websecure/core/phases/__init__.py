@@ -5628,6 +5628,71 @@ def _ffuf_realistic_rate(session, url: str, threads: int, tor_active: bool) -> f
     return max(lo, min(rate, hi))
 
 
+_ALLOWED_HTTP = (200, 201, 202, 203, 204, 206, 301, 302, 307, 308)
+_BLOCKED_HTTP = (401, 403, 407, 451)
+
+
+def _header_fuzz_baseline(session, url: str) -> tuple:
+    """Un-fuzzed (header'sız) baseline yanıtı: (status, body_len). Hata → (0, -1)."""
+    try:
+        r = session.get(url, timeout=15, allow_redirects=False)
+        return int(getattr(r, "status_code", 0) or 0), len(getattr(r, "text", "") or "")
+    except Exception:
+        return 0, -1
+
+
+def _is_real_header_bypass(base_status: int, base_len: int, hf: dict) -> bool:
+    """Bir header enjeksiyonu YALNIZ baseline'a göre erişim durumunu değiştirdiğinde
+    gerçek bir bypass'tır. Hedefe özel DEĞİL — her site için geçerli mantık:
+      • baseline bloklu (401/403/407) + fuzzed erişilebilir (2xx/3xx) → klasik bypass;
+      • ikisi de erişilebilir ama içerik BELİRGİN farklı (IP/host'a göre farklı sayfa)
+        → içerik-bazlı bypass. Eşik yüksek (catch-all jitter FP üretmesin).
+    Public/catch-all sayfa zaten 200 + aynı boyut → bypass edilecek bir şey yok → False."""
+    try:
+        hf_status = int(hf.get("status", 0) or 0)
+    except (TypeError, ValueError):
+        hf_status = 0
+    if hf_status == 0:
+        return False
+    if base_status in _BLOCKED_HTTP and hf_status in _ALLOWED_HTTP:
+        return True
+    try:
+        hf_len = int(hf.get("length", -1))
+    except (TypeError, ValueError):
+        hf_len = -1
+    if (base_status in _ALLOWED_HTTP and hf_status in _ALLOWED_HTTP
+            and base_len >= 0 and hf_len >= 0):
+        if abs(hf_len - base_len) > max(2048, int(base_len * 0.30)):
+            return True
+    return False
+
+
+def _sensitive_file_is_genuine(session, url: str, baseline) -> bool:
+    """Keşfedilen 'hassas dosya' adayını yeniden çekip GERÇEKTEN o dosya mı doğrular.
+    Catch-all SPA her .bak/.config yoluna 200 + HTML index döndürür → bu FP'dir.
+    Genel kural (hedefe özel değil): genuine-hit (soft-404/catch-all değil) VE yanıt
+    HTML uygulama kabuğu DEĞİL. Gerçek açık config/yedek (gerçek içerik) KORUNUR."""
+    try:
+        r = session.get(url, timeout=15, allow_redirects=False)
+    except Exception:
+        return False
+    try:
+        if baseline is not None and not baseline.is_genuine_hit(r):
+            return False
+    except Exception:
+        pass
+    try:
+        ct = (r.headers.get("Content-Type", "") or "").lower()
+    except Exception:
+        ct = ""
+    body = (getattr(r, "text", "") or "")[:2048].lower()
+    if "text/html" in ct or "application/xhtml" in ct:
+        return False
+    if any(m in body for m in ("<!doctype html", "<html", "<app-root", "ng-version", "<script")):
+        return False
+    return True
+
+
 def run_ffuf_scan(ctx) -> None:
     """
     Runs FFUF fuzzing.
@@ -5823,16 +5888,44 @@ def run_ffuf_scan(ctx) -> None:
             )
             try:
                 from websecure.scanners.js_analyzer import classify_discovered_file
+                # FP GUARD: classify_discovered_file YALNIZ URL uzantısına bakar (.bak/
+                # .config → "exposed"). Catch-all SPA her yola 200 + HTML index döndürür
+                # → her uzantı sahte "High" olur (juice-shop'ta 71 FP). Adayı yeniden
+                # çekip GERÇEK dosya mı doğrula (genuine-hit + HTML-shell değil). Gerçek
+                # açık .bak/config (gerçek içerik) High kalır; catch-all Info'ya düşer.
+                # Bütçeli: doğrulama isteği Tor'da pahalı → en çok _SF_VERIFY_CAP aday.
+                _sf_session = getattr(ctx, "session", None) or hardened_session({})
+                try:
+                    from websecure.core.fp_reducer import SoftNotFoundBaseline as _SNB
+                    _sf_baseline = _SNB.for_target(_sf_session, url)
+                except Exception:
+                    _sf_baseline = None
+                _SF_VERIFY_CAP = 80
+                _sf_checked = 0
                 for f in ext_findings:
                     f_url = f.get("url", "")
                     f_status = f.get("status", 200)
                     classified = classify_discovered_file(f_url, f_status)
-                    if classified:
+                    if not classified:
+                        add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+                        continue
+                    _genuine = False
+                    if _sf_checked < _SF_VERIFY_CAP:
+                        _sf_checked += 1
+                        _genuine = _sensitive_file_is_genuine(_sf_session, f_url, _sf_baseline)
+                    if _genuine:
                         add_result("files_discovered", classified)
                         if classified.get("severity") in ("Critical", "High"):
                             add_result("offensive", classified)
                     else:
-                        add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
+                        # Doğrulanamadı (catch-all/HTML shell ya da bütçe doldu) →
+                        # High/offensive'e YÜKSELTME, bilgi olarak tut.
+                        add_result("files_discovered", {
+                            "tool": "ffuf", "severity": "Info",
+                            "type": classified.get("type", "Discovered Path"),
+                            "url": f_url, "status": f_status,
+                            "note": "doğrulanmadı (catch-all/HTML shell olabilir)",
+                        })
             except ImportError:
                 for f in ext_findings:
                     add_result("files_discovered", {"tool": "ffuf", "severity": "Info", **f})
@@ -5846,7 +5939,16 @@ def run_ffuf_scan(ctx) -> None:
                     proxy=proxy,
                     threads=min(int(_ffuf_profile.get("threads", 20)), 20),
                 )
-                for hf in hdr_findings:
+                # FP GUARD: bir header "bypass"ı yalnız baseline'a (header'sız istek)
+                # GÖRE erişim durumu değiştiğinde gerçektir. Eskiden ffuf -mc ile dönen
+                # HER 200 işaretleniyordu → catch-all/public sayfada 326 sahte "Auth
+                # Bypass [Medium]" (aynı URL, payload=N/A). Gerçek bypass (403→200) ve
+                # içerik-bazlı bypass korunur; baseline ile aynı yanıtlar elenir.
+                _hf_session = getattr(ctx, "session", None) or hardened_session({})
+                _hf_base_status, _hf_base_len = _header_fuzz_baseline(_hf_session, url)
+                _hf_kept = [hf for hf in hdr_findings
+                            if _is_real_header_bypass(_hf_base_status, _hf_base_len, hf)]
+                for hf in _hf_kept:
                     hdr_name = hf.get("fuzzed_header", "unknown")
                     hdr_val = hf.get("input", "")
                     hdr_status = hf.get("status", 0)
@@ -5859,13 +5961,24 @@ def run_ffuf_scan(ctx) -> None:
                         "fuzzed_header": hdr_name,
                         "fuzzed_value": hdr_val,
                         "status": hdr_status,
+                        "baseline_status": _hf_base_status,
                         "message": (
-                            f"Header '{hdr_name}: {hdr_val}' produced HTTP {hdr_status} — "
-                            "may indicate auth bypass or IP spoofing vector"
+                            f"Header '{hdr_name}: {hdr_val}' → HTTP {hdr_status} "
+                            f"(baseline header'sız: HTTP {_hf_base_status}) — erişim durumu "
+                            "değişti, olası auth/IP bypass"
                         ),
                     })
-                if hdr_findings:
-                    _logger.info(f"[FFUF] Header fuzzing: {len(hdr_findings)} interesting responses")
+                if _hf_kept:
+                    _logger.info(
+                        f"[FFUF] Header fuzzing: {len(_hf_kept)} gerçek bypass "
+                        f"({len(hdr_findings)} aday, {len(hdr_findings) - len(_hf_kept)} "
+                        f"baseline-eşi elendi; baseline=HTTP {_hf_base_status})"
+                    )
+                elif hdr_findings:
+                    _logger.info(
+                        f"[FFUF] Header fuzzing: {len(hdr_findings)} aday baseline ile aynı "
+                        f"(HTTP {_hf_base_status}) → bypass değil, hepsi elendi"
+                    )
             except Exception as _hdr_exc:
                 _logger.debug(f"[FFUF] Header fuzzing skipped: {_hdr_exc!r}")
 
