@@ -1474,6 +1474,18 @@ class _RequestsDriver:
                 proxy_url = None
             if proxy_url:
                 kw["proxies"] = {"http": proxy_url, "https": proxy_url}
+            elif tor_active() and not (getattr(self.s, "proxies", None) or {}):
+                # FAIL-CLOSED (gizlilik): Tor zorunlu çıkıştı ama canlı Tor/pool
+                # proxy yok (Tor tarama ortasında koptu) VE session kendi proxy'sini
+                # de taşımıyor. Bu isteği DOĞRUDAN göndermek gerçek IP'yi sızdırır →
+                # reddet. get_next_egress'in sessiz None→direkt geri-düşüşü tek
+                # fail-open noktasıydı; burada kapatılır. Circuit breaker hatayı sayar,
+                # Tor geri gelince (get_next_egress yine proxy döndürünce) tarama
+                # kaldığı yerden toparlar — donma/çökme değil, güvenli bekleme.
+                _cb_record_error()
+                raise requests.exceptions.ProxyError(
+                    "Tor egress unavailable (dropped) — request blocked to prevent real-IP leak"
+                )
 
         pol = hpm_current_policy()
         self._rps = float(pol.get("rps", self._rps))
