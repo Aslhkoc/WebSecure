@@ -270,6 +270,65 @@ def _floor_request_timeout(timeout):
         return (cmin, rmin)
 
 
+# ---------------------------------------------------------------------------
+# Tor egress drop/recovery — user-visible warning (throttled, thread-safe)
+# ---------------------------------------------------------------------------
+# When Tor is the required egress and it drops mid-scan, requests fail closed
+# (no real-IP leak) and the scan keeps going via the circuit breaker. But the
+# user needs to KNOW it happened — otherwise the scan silently slows/loses
+# coverage. These helpers print ONE clear warning on the down-transition (and a
+# recovery notice when Tor returns), de-duplicated across the many request
+# threads via a lock + cooldown so a flood of blocked probes can't spam the UI.
+_TOR_DROP_STATE: Dict[str, Any] = {"down": False, "last_warn": 0.0}
+_TOR_DROP_LOCK = threading.Lock()
+
+
+def _note_tor_egress_down(reason: str = "") -> None:
+    """Announce (once / throttled) that the Tor egress is unreachable."""
+    now = time.monotonic()
+    with _TOR_DROP_LOCK:
+        first = not _TOR_DROP_STATE["down"]
+        _TOR_DROP_STATE["down"] = True
+        if not first and (now - _TOR_DROP_STATE["last_warn"]) < 30.0:
+            return  # already warned recently — don't spam
+        _TOR_DROP_STATE["last_warn"] = now
+    msg = ("[!] UYARI: Tor baglantisi koptu/erisilemiyor — istekler engellendi "
+           "(gercek IP sizmasi onlendi). Tor'un donmesi bekleniyor; tarama devam ediyor.")
+    if reason:
+        _logger.warning("[egress] Tor drop: %s", reason)
+    _logger.warning(msg)
+    try:
+        print("\033[33m" + msg + "\033[0m", flush=True)
+    except Exception:
+        pass
+
+
+def _note_tor_egress_up() -> None:
+    """Announce recovery once, only if a drop was previously reported."""
+    with _TOR_DROP_LOCK:
+        if not _TOR_DROP_STATE["down"]:
+            return
+        _TOR_DROP_STATE["down"] = False
+    msg = "[+] Tor baglantisi geri geldi — tarama normal suruyor."
+    _logger.info(msg)
+    try:
+        print("\033[32m" + msg + "\033[0m", flush=True)
+    except Exception:
+        pass
+
+
+def _looks_like_proxy_error(exc: BaseException) -> bool:
+    """True if an exception indicates a SOCKS/Tor proxy failure (not a target error)."""
+    try:
+        import requests as _rq
+        if isinstance(exc, _rq.exceptions.ProxyError):
+            return True
+    except Exception:
+        pass
+    txt = f"{type(exc).__name__} {exc}".lower()
+    return any(k in txt for k in ("proxy", "socks", "sock_connect", "tor"))
+
+
 _IDENTITY_POOLS = {
     "user_agents": [],
     "accept_language": [],
@@ -644,6 +703,9 @@ def _smart_request(self, method, url, **kwargs):
             #    an onion circuit is a guaranteed ReadTimeoutError → CB trip → abort).
             kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
             resp   = super(type(self), self).request(method, url, **kwargs)
+            # Any response means egress is working → clear a prior Tor-drop notice.
+            if _TOR_DROP_STATE["down"]:
+                _note_tor_egress_up()
             status = resp.status_code
             # Capture this exchange so a finding reported right after can show the
             # exact response that came back (per-finding exploit evidence).
@@ -711,6 +773,10 @@ def _smart_request(self, method, url, **kwargs):
             _cb_record_error()
             err_msg    = str(e).lower()
             is_timeout = "timeout" in err_msg or "timed out" in err_msg
+            # Tor egress (session.proxies = socks5h) çöktüğünde requests ProxyError/
+            # SOCKS hatası verir → kullanıcıya net "Tor koptu" uyarısı (throttled).
+            if tor_active() and _looks_like_proxy_error(e):
+                _note_tor_egress_down(f"{type(e).__name__}: {e}")
             _logger.debug(f"[Autopilot] Connection error ({e.__class__.__name__}). Retry {attempt}/{max_retries}…")
 
             if is_timeout and attempt < max_retries:
@@ -1483,6 +1549,7 @@ class _RequestsDriver:
                 # Tor geri gelince (get_next_egress yine proxy döndürünce) tarama
                 # kaldığı yerden toparlar — donma/çökme değil, güvenli bekleme.
                 _cb_record_error()
+                _note_tor_egress_down("egress manager returned no live proxy")
                 raise requests.exceptions.ProxyError(
                     "Tor egress unavailable (dropped) — request blocked to prevent real-IP leak"
                 )
@@ -1494,6 +1561,9 @@ class _RequestsDriver:
 
         __t0 = time.time()
         resp = self.s.request(method, url, verify=self.verify, **kw)
+        # Any response (even 403) means egress works again → clear a prior Tor-drop notice.
+        if _TOR_DROP_STATE["down"]:
+            _note_tor_egress_up()
         __rt_ms = int((time.time() - __t0) * 1000)
         _collect_rate_limit(resp, url)
         st = int(getattr(resp, "status_code", 0) or 0)
