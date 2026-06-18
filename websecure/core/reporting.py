@@ -2273,6 +2273,10 @@ _NON_FINDING_BUCKETS: frozenset = frozenset({
     "discovered_params", "param_candidates", "assets", "ws_endpoints",
     "js_endpoints", "api_endpoints", "sse_endpoints", "graphql_hints",
     "json_keys", "coverage", "sections", "delta", "scan_meta",
+    # httpx host-probe verisi RECON'dur (canlı host/status/tech), zafiyet değil —
+    # rapordaki dedike "HTTP Probe Sonuçları" tablosunda gösterilir; bulgu/severity
+    # sayısına KATILMAMALI (gerçek httpx bulguları zaten 'meta'ya yazılıyor).
+    "httpx", "http_probe",
 })
 
 

@@ -3127,6 +3127,16 @@ def _runner_httpx_probe(ctx) -> None:
                     all_techs.add(t)
         if all_techs:
             ctx.technologies = sorted(all_techs)
+        # Probe host verisini 'httpx' kovasına yaz → rapordaki "HTTP Probe Sonuçları
+        # — httpx" tablosu YALNIZ results['httpx']/'http_probe'i okur. Eskiden bu
+        # veri HİÇBİR kovaya yazılmıyordu (yalnız meta'ya status özeti) → tablo HİÇ
+        # render edilmiyordu (kullanıcı "httpx görmedim" şikâyeti). probe_results
+        # dict'leri url/status_code/title/tech/content_length taşır = renderer'ın
+        # beklediği şekil. 'httpx' recon kovasıdır (bkz reporting._NON_FINDING_BUCKETS)
+        # → bulgu/severity sayısını şişirmez; html zaten type'sız öğeyi bulgudan eler.
+        for _pr in result.extra.get("probe_results", []):
+            if isinstance(_pr, dict) and (_pr.get("url") or _pr.get("input")):
+                add_result("httpx", _pr)
         for f in result.findings:
             add_result("meta", f.to_dict())
         add_result("meta", {
