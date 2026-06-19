@@ -1101,15 +1101,6 @@
       "randomize_ua_family": true
     }
   },
-  "traffic": {
-    "rate_limit": {
-      "host_rps": 20,
-      "jitter_ms_min": 50,
-      "jitter_ms_max": 200,
-      "burst": 30,
-      "keepalive_pool": 20
-    }
-  },
   "remote_workers": {
     "port_scan": {
       "enabled": false,

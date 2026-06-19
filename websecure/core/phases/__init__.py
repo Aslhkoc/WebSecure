@@ -1337,6 +1337,32 @@ _NON_OFFENSIVE_PHASES: set = (
 _STAGE_MAX_WORKERS = 8
 _BACKGROUND_MAX_WORKERS = 6
 
+# Faz ÖNCELİĞİ (Madde 4 — Adım D). Bir aşama içindeki fazlar bu ağırlığa göre
+# (YÜKSEK önce) gönderilir → yüksek-değerli/yüksek-severity scanner'lar havuz
+# slotlarını ilk kapar. Tarama erken kesilirse (global deadline / Ctrl+C) en
+# değerli bulgular ÖNCE elde edilmiş olur. Sıralama yalnız gönderim sırasını
+# etkiler (eşzamanlı koşum + AIMD throttle aynı); doğruluk etkisi yoktur.
+_PHASE_PRIORITY: Dict[str, int] = {
+    # RCE / kritik etki sınıfı
+    "cmdi": 95, "ssti": 95, "lfi": 92, "ssrf": 92, "xxe": 90,
+    "scanners.ssrf_xxe": 92, "scanners.file_upload": 90,
+    "scanners.request_smuggling": 88,
+    # Yüksek-etki enjeksiyon / erişim kontrolü
+    "xss": 85, "nosqli": 85, "jwt": 84, "idor": 84, "auth_matrix": 84,
+    "authorization_matrix": 84, "mass_assignment": 82, "open_redirect": 80,
+    "crlf_injection": 80, "prototype_pollution": 80, "cors": 78,
+    "scanners.graphql": 78, "scanners.graphql_attacks": 78,
+    "races": 76, "race_condition": 76, "dom_xss": 75,
+    # Orta
+    "scanners.tls": 55, "scanners.ws_fuzz": 55, "param_pollution": 55,
+    "business_logic": 55, "clickjacking": 50, "waf_bypass_validate": 50,
+    "human_adapter": 50, "subdomain_takeover": 50,
+    # Düşük / en son (pasif veya türev)
+    "headers_scanner": 35, "session_scanner": 35, "waf_fingerprint": 35,
+    "polyglot_probe": 30, "dalfox_verify": 25,
+}
+_DEFAULT_PHASE_PRIORITY = 50
+
 
 def _resolve_sqlmap_budget(ctx) -> int:
     """sqlmap subprocess'inin TAMAMI için FİRM duvar-saati tavanı (saniye).
@@ -4477,6 +4503,9 @@ def run_plan_if_needed(ctx: dict):
             _executed.add(it.get("id"))
         if not items:
             return
+        # Madde 4 — Adım D: yüksek-öncelikli (yüksek-değer/severity) fazlar havuz
+        # slotlarını ÖNCE kapsın. Stable sort → eşit öncelikte plan sırası korunur.
+        items.sort(key=lambda it: -_PHASE_PRIORITY.get(it.get("id"), _DEFAULT_PHASE_PRIORITY))
         if len(items) == 1:
             _run_phase_item(items[0])
             return
