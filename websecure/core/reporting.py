@@ -71,7 +71,8 @@ _GLOBAL_RESULTS: Dict[str, List[Any]] = defaultdict(list)
 # add_result (full implementation) is defined below at line ~534 with normalization + redaction + alerts.
 # _GLOBAL_RESULTS is kept in sync by that implementation.
 
-def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict]:
+def verify_and_score(findings: List[Dict], oast_events: List[Dict],
+                     auth_required: bool = False, waf_detected: bool = False) -> List[Dict]:
     """
     Verifies findings against OAST callbacks and applies CVSS scoring.
     Steps:
@@ -80,6 +81,10 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
       3. Correlate with OAST events — mark verified=True on token match
       4. Apply CVSS v3.1 scoring via cvss_scorer if available
       5. Sort by CVSS score descending (Critical -> Info)
+
+    CVSS scoring runs EXACTLY ONCE here (Madde 3 — eski çift-skorlama kaldırıldı).
+    Callers pass the real ``auth_required``/``waf_detected`` context so the single
+    pass scores with correct privileges/attack-complexity instead of re-scoring.
     """
     # 0. FP filtreleme (Adım 20)
     try:
@@ -140,7 +145,7 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
 
     # 4. CVSS scoring (score_findings defined in this module via merged cvss_scorer)
     try:
-        unique = score_findings(unique, auth_required=False, waf_detected=False)
+        unique = score_findings(unique, auth_required=auth_required, waf_detected=waf_detected)
     except Exception as exc:
         log_warn(f"[reporting] CVSS scoring skipped: {exc!r}")
 
@@ -149,7 +154,8 @@ def verify_and_score(findings: List[Dict], oast_events: List[Dict]) -> List[Dict
                        "Info": 4, "Informational": 4}
 
     def _sort_key(f: Dict):
-        sev = f.get("cvss_severity") or f.get("severity") or "Info"
+        # severity is now CVSS-authoritative (Madde 2); cvss_severity is gone.
+        sev = f.get("severity") or "Info"
         score = f.get("cvss_score", 0.0)
         return (_SEVERITY_ORDER.get(sev, 4), -float(score))
 
@@ -609,6 +615,20 @@ def add_result(bucket: str, item: Any) -> None:
         raw_sev = it.get("severity")
         if raw_sev is not None:
             it["severity"] = _norm_sev_tr(raw_sev)  # returns "Critical"/"High"/…
+
+        # CVSS-AUTHORITATIVE SEVERITY (Madde 2): the finding's severity is derived
+        # from its CVSS v3.1 base vector — the single source of truth — NOT the
+        # scanner's hint. Applied at this single ingestion chokepoint so every
+        # bucket, report, CI gate and the DB see one consistent value. Recognized
+        # vuln types only; unmapped types keep the scanner severity so Info/Low are
+        # never inflated by the generic default. Best-effort; never breaks ingest.
+        try:
+            from websecure.core.cvss import cvss_severity_for_type as _cvss_sev
+            _auth_sev = _cvss_sev(str(it.get("type") or it.get("vuln_type") or ""))
+            if _auth_sev:
+                it["severity"] = _auth_sev
+        except Exception as _cv_exc:
+            log_warn(f"[reporting] CVSS severity resolution skipped: {_cv_exc!r}")
 
         # İÇERİKSİZ junk bulguları (severity var ama url/payload/evidence yok) Info'ya
         # indir — "VULNERABILITY N/A" şişirmesini engeller, gerçek bulgular etkilenmez.

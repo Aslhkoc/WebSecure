@@ -833,12 +833,17 @@ def run_owasp_and_nuclei(
     open_ports=None,
     config: Dict[str, Any] | None = None,
     debug: bool = False,
-    auth_ctx: Dict[str, Any] | None = None
+    auth_ctx: Dict[str, Any] | None = None,
+    run_nuclei: bool = True,
 ) -> Dict[str, Any]:
     """
     Kolaylaştırıcı: önce mevcut OWASP kontrollerini çalıştırır, ardından Nuclei’yi çağırır.
     main.py bu fonksiyonu çağırırsa istenen “OWASP sonrası Nuclei” entegrasyonu gerçekleşir.
     (Susturma yok—hata olursa yükselir ve üst seviyede görünür.)
+
+    ``run_nuclei=False`` verildiğinde nuclei ATLANır — bu, dedike ``nuclei`` fazı
+    zaten nuclei'yi koşturuyorsa çağrılır (Madde 3: nuclei'nin aynı taramada
+    birden çok kez koşmasını engeller). Varsayılan True (geriye dönük uyum).
     """
     check_broken_access_control(url, results, session, debug=debug)
     check_sensitive_data_exposure(url, results, session, debug=debug)
@@ -849,8 +854,9 @@ def run_owasp_and_nuclei(
     host_header_cache_poison(url, session, results, debug=debug)
     backup_hunt(url, session, results, debug=debug)
 
-    # OWASP sonrası nuclei
-    run_nuclei_signatures(url, results, session, config=config, debug=debug, auth_ctx=auth_ctx)
+    # OWASP sonrası nuclei — yalnız dedike nuclei fazı koşmuyorsa.
+    if run_nuclei:
+        run_nuclei_signatures(url, results, session, config=config, debug=debug, auth_ctx=auth_ctx)
     return results
 
 

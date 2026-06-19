@@ -2437,9 +2437,17 @@ def _runner_owasp_nuclei(ctx) -> None:
     cfg = getattr(ctx, "config", {}) or {}
     debug = bool(getattr(ctx, "debug", False))
     auth_ctx = getattr(ctx, "auth_ctx", None)
-    
+
+    # Madde 3: nuclei'yi BURADA yalnız dedike `nuclei` fazı koşmuyorsa çalıştır.
+    # `nuclei` fazı _flag("nuclei", default=True) ile varsayılan açık → kullanıcı
+    # offensive.nuclei.enabled=False yapmadıkça bu OWASP fazı nuclei'yi ATLAR
+    # (aksi halde nuclei aynı taramada iki kez koşardı, aynı paralel grupta).
+    _off_cfg = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
+    _nuclei_phase_enabled = ((_off_cfg.get("nuclei") or {}).get("enabled")) is not False
+
     # Run — populates results dict with a01_, a02_, etc. OWASP buckets
-    run_func(url, results, session, config=cfg, debug=debug, auth_ctx=auth_ctx)
+    run_func(url, results, session, config=cfg, debug=debug, auth_ctx=auth_ctx,
+             run_nuclei=not _nuclei_phase_enabled)
 
     # Flush OWASP bucket findings into the global reporting system.
     # owasp.py writes to results["a01_broken_access_control"] etc. but never calls
@@ -2934,18 +2942,20 @@ _VERIFY_BUCKETS = {
 def _runner_verify_and_score(ctx) -> None:
     """Run verification + CVSS scoring + correlation on all accumulated findings."""
     try:
-        from websecure.core.reporting import get_global_results, verify_and_score, score_findings
+        from websecure.core.reporting import get_global_results, verify_and_score
         g_res = get_global_results()
         all_findings = []
         for bucket, items in g_res.items():
             if bucket in _VERIFY_BUCKETS:
                 all_findings.extend([i for i in items if isinstance(i, dict)])
         oast_events = g_res.get("oast_callbacks", [])
-        verified = verify_and_score(all_findings, oast_events)
+        # CVSS scoring runs ONCE inside verify_and_score with the real auth/WAF
+        # context (Madde 3 — önceki çift score_findings çağrısı kaldırıldı).
         waf_profile = getattr(ctx, "waf_profile", None)
         waf_detected = bool(getattr(waf_profile, "detected", False)) if waf_profile else False
         auth_required = bool(getattr(ctx, "authenticated", False))
-        scored = score_findings(verified, auth_required=auth_required, waf_detected=waf_detected)
+        scored = verify_and_score(all_findings, oast_events,
+                                  auth_required=auth_required, waf_detected=waf_detected)
         add_result("final", {"findings": scored, "total": len(scored)})
         _logger.info(f"[phases] Verified & scored {len(scored)} findings")
 
@@ -5498,20 +5508,13 @@ def run_xss_scan(ctx) -> None:
         )
     else:
         _logger.warning("[XSS] Internal scanner missing (xss.py).")
+        add_result("xss", {"status": "skipped", "reason": "XSS module (xss.py) missing"})
 
-    # 2. Nuclei / OWASP (Secondary)
-    if run_owasp_and_nuclei:
-        # Nuclei handles XSS templates
-        run_owasp_and_nuclei(
-            getattr(ctx, "base_url", ""), 
-            getattr(ctx, "results", {}), 
-            getattr(ctx, "session", None),
-            config=getattr(ctx, "config", {}),
-            debug=bool(getattr(ctx, "debug", False))
-        )
-    else:
-        if not run_local_xss:
-             add_result("xss", {"status": "skipped", "reason": "ALL XSS modules missing"})
+    # 2. (Madde 3) İkincil OWASP/Nuclei çağrısı KALDIRILDI — saf redundans:
+    #    nuclei'nin XSS şablonları zaten dedike `nuclei` fazında, OWASP kontrolleri
+    #    de `owasp_and_nuclei` fazında koşuyor. Buradaki çağrı yüzünden nuclei tarama
+    #    başına 3×, tüm OWASP suite 2× koşuyordu. Kapsam kaybı yok (aynı şablonlar
+    #    dedike fazda çalışır), yalnız tekrar eden iş elendi.
 
 
 # ffuf DİZİN/DOSYA keşfine UYGUN OLMAYAN wordlist ad-ipuçları. Bunlar başka

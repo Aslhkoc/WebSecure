@@ -7,7 +7,8 @@ Maps finding types to base vectors, adjusts for context (auth, WAF).
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from functools import lru_cache
+from typing import Dict, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
@@ -265,6 +266,50 @@ def _lookup_remediation(finding_type: str) -> str:
     return _REMEDIATION["default"]
 
 
+def _is_known_type(finding_type: str) -> bool:
+    """True if *finding_type* maps to a SPECIFIC CVSS base vector (not the generic
+    fallback).
+
+    CVSS-authoritative severity (Madde 2) is applied only to recognized vuln types;
+    unmapped types keep the scanner-provided severity so Info/Low findings are never
+    inflated to Medium by the generic 6.5 default.
+    """
+    t = _normalize_type(finding_type)
+    if not t:
+        return False
+    if t in _BASE_VECTORS:
+        return True
+    for key in _BASE_VECTORS:
+        if key == "generic":
+            continue
+        if key in t or t in key:
+            return True
+    return False
+
+
+@lru_cache(maxsize=512)
+def cvss_severity_for_type(finding_type: str) -> Optional[str]:
+    """SINGLE SOURCE OF TRUTH for finding severity (Madde 2).
+
+    Returns the CVSS v3.1 severity label derived from the finding TYPE's base
+    vector (no per-finding context adjustment, so it is stable and cacheable).
+    Returns ``None`` when the type is not a recognized CVSS type — callers then
+    preserve the scanner-provided severity instead of inflating it via the generic
+    default.
+    """
+    if not _is_known_type(finding_type):
+        return None
+    vector_str, fallback = _lookup_vector(finding_type)
+    score = fallback
+    if _CVSS_AVAILABLE:
+        try:
+            score = float(CVSS3(vector_str).base_score)
+        except Exception as exc:  # malformed vector → fall back to table score
+            _logger.debug(f"[CVSS] base score failed for {vector_str!r}: {exc!r}")
+            score = fallback
+    return cvss_to_severity(score)
+
+
 class CVSSScorer:
     """
     Calculates CVSS v3.1 scores for findings.
@@ -303,8 +348,17 @@ class CVSSScorer:
 
         result["cvss_score"] = round(base_score, 1)
         result["cvss_vector"] = vector_str
-        result["cvss_severity"] = severity_label
         result["remediation"] = _lookup_remediation(finding_type)
+
+        # CVSS AUTHORITATIVE (Madde 2): the finding's `severity` IS the CVSS-derived
+        # label — the scanner-provided value is only a fallback for types CVSS has
+        # no vector for. There is no separate `cvss_severity` field anymore (it was
+        # redundant and could diverge from `severity`); `severity` is the single
+        # source of truth and `cvss_score`/`cvss_vector` are its numeric evidence.
+        if _is_known_type(finding_type):
+            result["severity"] = severity_label
+        elif not result.get("severity"):
+            result["severity"] = severity_label
 
         return result
 
