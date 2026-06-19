@@ -378,6 +378,130 @@ _LAST_IDENTITY = contextvars.ContextVar("LAST_IDENTITY", default=None)
 _LAST_CANARY_TS = 0.0
 _LAST_CANARY_TS_LOCK = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# GLOBAL ADAPTIVE CONCURRENCY (Madde 4 — Adım A)
+# ---------------------------------------------------------------------------
+# A single AIMD controller + dynamic admission gate caps the TOTAL number of
+# in-flight network sends across ALL phases/threads. It GROWS the cap when the
+# target answers fast & healthy and HALVES it on 429/503/high-latency/errors →
+# "sağlıklı + güçlü" without a fixed thread storm. Defaults are CAUTIOUS/STEALTH
+# (low ceiling, fast back-off) per the chosen policy.
+#
+# Safety: the gate is fully cancel-aware and BOUNDED — acquire() re-checks every
+# 0.5s and never waits past an absolute cap (it over-admits rather than hang),
+# consistent with the no_timeout "self-bound every wait" rule. The slot is held
+# ONLY around the actual network send (retry back-off sleeps stay outside it), so
+# a backing-off request never occupies a concurrency slot.
+_ADAPTIVE_CFG: Dict[str, Any] = {
+    "enabled":    True,
+    "initial":    4,
+    "min":        1,
+    "max":        12,
+    "low_ms":     300,
+    "high_ms":    1500,
+    "error_rate": 0.20,
+    "max_wait_s": 120.0,
+}
+_ADAPTIVE_GATE = None
+_ADAPTIVE_GATE_LOCK = threading.Lock()
+
+
+class _AdaptiveAdmissionGate:
+    """Dynamic admission gate sized by ``AdaptiveConcurrencyCtrl.current``.
+
+    ``acquire()`` blocks while in-flight ≥ current, re-checking every 0.5s so it
+    tracks AIMD growth, honours phase abandonment, and obeys an absolute safety
+    cap. It can NEVER block forever: on cap expiry it admits anyway (degrade, not
+    deadlock). ``record()`` feeds each outcome to the controller and wakes waiters
+    when the cap grows.
+    """
+
+    def __init__(self, ctrl, max_wait_s: float = 120.0):
+        self.ctrl = ctrl
+        self._cond = threading.Condition()
+        self._in_flight = 0
+        self._max_wait_s = max(5.0, float(max_wait_s))
+
+    def acquire(self, phase=None) -> None:
+        deadline = time.monotonic() + self._max_wait_s
+        with self._cond:
+            while self._in_flight >= max(1, int(self.ctrl.current)):
+                if phase is not None and is_phase_abandoned(phase):
+                    raise PhaseAbandoned(f"admission aborted (phase abandoned): {phase}")
+                if time.monotonic() >= deadline:
+                    break  # safety: never hang — over-admit rather than deadlock
+                self._cond.wait(timeout=0.5)
+            self._in_flight += 1
+
+    def release(self) -> None:
+        with self._cond:
+            self._in_flight = max(0, self._in_flight - 1)
+            self._cond.notify()
+
+    def record(self, response_ms: float, is_error: bool, status: int) -> None:
+        try:
+            self.ctrl.record(float(response_ms), bool(is_error), int(status or 0))
+        except Exception:
+            pass
+        # AIMD may have grown current → wake any waiters so they re-check.
+        with self._cond:
+            self._cond.notify_all()
+
+    def snapshot(self) -> Dict[str, Any]:
+        try:
+            snap = dict(self.ctrl.snapshot())
+        except Exception:
+            snap = {}
+        snap["in_flight"] = self._in_flight
+        return snap
+
+
+def _configure_adaptive(cfg: dict) -> None:
+    """Read ``concurrency.adaptive.*`` from config and reset the global gate."""
+    global _ADAPTIVE_GATE
+    try:
+        ac = ((cfg or {}).get("concurrency") or {}).get("adaptive") or {}
+    except Exception:
+        ac = {}
+    if isinstance(ac, dict):
+        for key in ("enabled", "initial", "min", "max", "low_ms", "high_ms",
+                    "error_rate", "max_wait_s"):
+            if key in ac:
+                _ADAPTIVE_CFG[key] = ac[key]
+    with _ADAPTIVE_GATE_LOCK:
+        _ADAPTIVE_GATE = None  # rebuilt lazily with the new knobs
+
+
+def _get_adaptive_gate():
+    """Lazily build the singleton admission gate; None when disabled/unavailable."""
+    global _ADAPTIVE_GATE
+    if not _ADAPTIVE_CFG.get("enabled", True):
+        return None
+    if _ADAPTIVE_GATE is not None:
+        return _ADAPTIVE_GATE
+    with _ADAPTIVE_GATE_LOCK:
+        if _ADAPTIVE_GATE is None:
+            try:
+                from websecure.core.concurrency import AdaptiveConcurrencyCtrl
+                ctrl = AdaptiveConcurrencyCtrl(
+                    initial=int(_ADAPTIVE_CFG["initial"]),
+                    min_c=int(_ADAPTIVE_CFG["min"]),
+                    max_c=int(_ADAPTIVE_CFG["max"]),
+                    low_ms=int(_ADAPTIVE_CFG["low_ms"]),
+                    high_ms=int(_ADAPTIVE_CFG["high_ms"]),
+                )
+                try:
+                    ctrl.ERROR_RATE = float(_ADAPTIVE_CFG["error_rate"])
+                except Exception:
+                    pass
+                _ADAPTIVE_GATE = _AdaptiveAdmissionGate(
+                    ctrl, _ADAPTIVE_CFG.get("max_wait_s", 120.0)
+                )
+            except Exception as _exc:
+                _logger.debug(f"[HTTP] adaptive gate unavailable: {_exc!r}")
+                _ADAPTIVE_GATE = None
+    return _ADAPTIVE_GATE
+
 def set_active_phase(name: str) -> None:
     # A fresh start for this phase id clears any stale "abandoned" flag from a
     # previous run so it is not pre-emptively cancelled.
@@ -438,6 +562,10 @@ def install_http_phase_policies(cfg: dict) -> None:
         tor_floor=tuple(_floor) if isinstance(_floor, (list, tuple)) and len(_floor) == 2 else None,
         request_timeout=(_c, _r),
     )
+
+    # Global adaptive concurrency knobs (Madde 4 — Adım A). Cautious/stealth
+    # defaults; overridable via config.concurrency.adaptive.*.
+    _configure_adaptive(cfg)
 
 # Gerçekçi tarayıcı kimliği fallback'i — config http.identity_pools BOŞ olduğunda
 # kullanılır. Eskiden çıplak "Mozilla/5.0" + Accept "*/*" gönderiliyordu; bu
@@ -656,6 +784,10 @@ def _smart_request(self, method, url, **kwargs):
     # Raises CircuitBreakerTripped immediately if circuit is OPEN
     _cb_check()
 
+    # Global adaptive concurrency gate (Madde 4 — Adım A). Resolved once per
+    # logical request; the slot is acquired/released around each network send.
+    _gate = _get_adaptive_gate()
+
     # --- IMMORTAL LOOP: Auto-Heal & Retry ---
     max_retries = 3
     attempt     = 0
@@ -702,7 +834,16 @@ def _smart_request(self, method, url, **kwargs):
             #  • on Tor: too-tight values are raised to the floor (a 4-5s read over
             #    an onion circuit is a guaranteed ReadTimeoutError → CB trip → abort).
             kwargs["timeout"] = _floor_request_timeout(kwargs.get("timeout"))
-            resp   = super(type(self), self).request(method, url, **kwargs)
+            # Hold a concurrency slot ONLY around the actual send (true in-flight
+            # window). acquire() is cancel-aware + bounded; finally guarantees the
+            # slot is freed even on error so the gate can never leak/deadlock.
+            if _gate is not None:
+                _gate.acquire(phase)
+            try:
+                resp = super(type(self), self).request(method, url, **kwargs)
+            finally:
+                if _gate is not None:
+                    _gate.release()
             # Any response means egress is working → clear a prior Tor-drop notice.
             if _TOR_DROP_STATE["down"]:
                 _note_tor_egress_up()
@@ -725,6 +866,9 @@ def _smart_request(self, method, url, **kwargs):
                 note_http_response(_st, _rt_ms)
                 note_status_location(url, _st)
                 record_timing_ms(_rt_ms, _st)
+                # Feed the outcome to the AIMD controller (drives the global cap).
+                if _gate is not None:
+                    _gate.record(_rt_ms, (_st >= 500 or _st in (429, 503)), _st)
             except Exception as _mx:
                 _logger.debug(f"[HTTP] metrics record failed: {_mx!r}")
 
@@ -771,6 +915,9 @@ def _smart_request(self, method, url, **kwargs):
                 requests.exceptions.Timeout,
                 requests.exceptions.RequestException) as e:
             _cb_record_error()
+            # Network error → strong back-off signal for the AIMD controller.
+            if _gate is not None:
+                _gate.record(5000.0, True, 0)
             err_msg    = str(e).lower()
             is_timeout = "timeout" in err_msg or "timed out" in err_msg
             # Tor egress (session.proxies = socks5h) çöktüğünde requests ProxyError/

@@ -1,6 +1,19 @@
 {
   "$schema": "./config.schema.json",
   "version": "1.0",
+  "concurrency": {
+    "_comment": "Madde 4 / Adım A — global ADAPTİF eşzamanlılık (AIMD). Tüm fazların TOPLAM uçuşan-istek tavanını hedefin sağlığına göre otomatik ayarlar: hızlı/sağlıklıyken büyür, 429/503/yüksek-latency/hata'da yarıya iner. Varsayılanlar TEMKİNLİ/STEALTH (düşük tavan, hızlı geri çekilme). enabled=false → eski sabit davranış.",
+    "adaptive": {
+      "enabled": true,
+      "initial": 4,
+      "min": 1,
+      "max": 12,
+      "low_ms": 300,
+      "high_ms": 1500,
+      "error_rate": 0.20,
+      "max_wait_s": 120.0
+    }
+  },
   "exploitation": {
     "enabled": true,
     "lhost": "192.168.1.103",
