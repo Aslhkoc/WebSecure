@@ -1286,54 +1286,56 @@ _NO_TIMEOUT_UNBOUNDED_PHASES: set = {
 _NO_TIMEOUT_WATCHDOG_FACTOR = 6
 
 # ---------------------------------------------------------------------------
-# Parallel phase groups — phases in the same list run concurrently via
-# ThreadPoolExecutor; groups execute in order (each group blocks until all
-# members finish or time-out).  Phases not listed in any group run
-# sequentially (see run_plan_if_needed).
+# STAGED + BACKGROUND execution model (Madde 4 — Adım B)
 # ---------------------------------------------------------------------------
-_PARALLEL_GROUPS: List[List[str]] = [
-    # Recon: independent passive sources — run together, shave ~10 min off recon
-    ["subdomain", "passive_recon"],
-    # Crawlers: share the same target, independent outputs
-    ["katana", "browser_crawler"],
-    # Genişletilmiş keşif (WebCrawler + form çıkarımı → forms_meta + endpoint havuzu).
-    # KRİTİK: offensive/content fazlarından ÖNCE koşmalı ki form-alanı enjeksiyonu
-    # (name/email/password/message/...) ve keşfedilen hedefler hazır olsun. Eskiden
-    # "discovery" HİÇBİR paralel grupta değildi → serial-leftover'a düşüp TÜM paralel
-    # gruplardan (offensive suite dahil) SONRA koşuyordu → offensive scanner'lar
-    # çalışırken forms_meta BOŞТУ → form-alanı enjeksiyonu hiç çalışmıyordu (gerçek-hat
-    # kapısı: form-findings=0). Tek-öğe grup: kendi başına, offensive'den önce.
-    ["discovery"],
-    # HTTP probing: independent of each other
-    ["httpx_probe", "js_analysis"],
-    # Content discovery: different result buckets, no shared state
-    ["ffuf", "feroxbuster"],
-    # Signature scanners: read-only against the target
-    ["nuclei", "owasp_and_nuclei"],
-    # Offensive injection suite — all test different vuln classes,
-    # all depend on discovery results (written before this group starts)
-    [
-        "nosqli", "ssti", "idor", "csrf", "cors",
-        "xxe", "ssrf", "lfi", "cmdi", "jwt",
-        "prototype_pollution", "dom_xss", "mass_assignment",
-        "races", "race_condition", "crlf_injection", "open_redirect",
-        "headers_scanner", "session_scanner", "waf_fingerprint",
-        "auth_matrix", "subdomain_takeover",
-        "scanners.ssrf_xxe", "scanners.request_smuggling",
-        "scanners.graphql", "scanners.graphql_attacks",
-        "scanners.ws_fuzz", "scanners.file_upload", "scanners.tls",
-        "xss", "dalfox_verify",
-    ],
-    # Slow but independent: SQL injection + port scan run concurrently
-    ["sqlmap", "port_scan"],
+# Eski katı `_PARALLEL_GROUPS` (gruplar SIRALI; bağımsız-yavaş iş tüm taramayı
+# serileştiriyordu — amass en başta crawl'ı, sqlmap/port en sonda offensive'i
+# bekletiyordu) yerine bağımlılık-farkında model:
+#
+#   • DEPENDENT ZİNCİR aşamalı koşar (sıra korunur):
+#       Aşama 0: waf_detect (profil)  →  Aşama 1: keşif/crawl (forms_meta+endpoint)
+#       →  Aşama 2: saldırı (offensive — keşif sonuçlarını TÜKETİR)
+#       →  Aşama 3: finalizer'lar (exploit/oast/skorlama/rapor — TÜM bulguları okur)
+#   • BACKGROUND (bağımsız) fazlar EN BAŞTA başlar ve TÜM aşamalarla ÖRTÜŞÜR;
+#     finalizer'lardan ÖNCE join edilir. Ana duvar-saati kazancı buradan gelir.
+#
+# Birleşik istek hacmi global AIMD admission gate (Adım A, core/http.py) ile
+# sağlıklı tutulur → bağımsız fazları erkenden başlatmak hedefi dövmez.
+#
+# Sınıflandırılmamış HER etkin faz güvenli varsayılan olarak Aşama 2'ye düşer
+# (catch-all) → hiçbir faz sessizce atlanmaz.
+
+# Aşama 0 — WAF tespiti (hızlı, profili kurar; offensive payload seçimini etkiler)
+_STAGE_WAF: List[str] = ["waf_detect"]
+
+# Aşama 1 — keşif/crawl: offensive'in tükettiği endpoint + forms_meta yüzeyini üretir
+_STAGE_DISCOVERY: List[str] = [
+    "katana", "browser_crawler", "discovery", "http_crawler_orchestrator",
+    "session_analysis", "js_analysis", "httpx_probe", "fuzz_param_discovery",
 ]
 
-# Build phase-id → group-index lookup (used in run_plan_if_needed)
-_PHASE_TO_GROUP: Dict[str, int] = {
-    pid: gi
-    for gi, group in enumerate(_PARALLEL_GROUPS)
-    for pid in group
-}
+# BACKGROUND — dependent zincirden BAĞIMSIZ; baştan başlar, her aşamayla örtüşür,
+# finalizer'lardan önce join edilir. (amass subdomain.py içinden çağrılır.)
+_BACKGROUND_PHASES: List[str] = [
+    "subdomain", "passive_recon", "port_scan", "sqlmap",
+    "nuclei", "ffuf", "feroxbuster",
+]
+
+# Aşama 3 — finalizer'lar: TÜM bulgular (background dahil) tamamlandıktan SONRA,
+# SIRAYLA koşar (exploit found-vuln'leri sömürür → oast OOB doğrular → skorla → rapor).
+_FINALIZER_PHASES: List[str] = [
+    "exploit_orchestrator", "oast_verification", "verify_and_score", "reporting",
+]
+
+# Aşama 2 (saldırı) = bu sınıflara girmeyen TÜM etkin fazlar (catch-all).
+_NON_OFFENSIVE_PHASES: set = (
+    set(_STAGE_WAF) | set(_STAGE_DISCOVERY) | set(_BACKGROUND_PHASES) | set(_FINALIZER_PHASES)
+)
+
+# Aşama-içi ve background havuz genişlikleri (gerçek istek throttle'ı AIMD gate'tir;
+# bunlar yalnız thread/bellek baskısını sınırlar).
+_STAGE_MAX_WORKERS = 8
+_BACKGROUND_MAX_WORKERS = 6
 
 
 def _resolve_sqlmap_budget(ctx) -> int:
@@ -4439,12 +4441,15 @@ def run_plan_if_needed(ctx: dict):
     _executed: set = set()  # tracks ids already dispatched
 
     # ------------------------------------------------------------------
-    # Execute in parallel groups first, then leftover phases sequentially
+    # STAGED + BACKGROUND execution (Madde 4 — Adım B). Dependent chain runs in
+    # ordered stages (waf → discovery → offensive → finalizers); independent
+    # work runs in a background lane that overlaps every stage and is joined
+    # before the finalizers. Request volume is throttled by the global AIMD gate.
     # ------------------------------------------------------------------
-    for group_ids in _PARALLEL_GROUPS:
+    def _deadline_or_cancel() -> bool:
         if _SCAN_CANCEL.is_set():
             _logger.info("[phases] Scan cancelled — stopping plan execution")
-            break
+            return True
         if _t.monotonic() > _global_deadline:
             _logger.warning(
                 "[phases] Global scan timeout (%d min) — stopping early", _global_timeout_s // 60
@@ -4454,55 +4459,89 @@ def run_plan_if_needed(ctx: dict):
                 "timeout_secs": _global_timeout_s,
                 "message": f"Scan exceeded {_global_timeout_s // 60}min global deadline",
             })
-            break
+            return True
+        return False
 
-        # Collect enabled items that belong to this group and are in the plan
-        group_items = [_phase_map[pid] for pid in group_ids if pid in _phase_map]
-        for it in group_items:
-            _executed.add(it.get("id"))
-
-        enabled_items = [
-            it for it in group_items
-            if it.get("enabled", False) and callable(it.get("runner"))
+    def _enabled(ids):
+        """Plan-ordered, enabled, not-yet-dispatched items for the given ids."""
+        idset = set(ids)
+        return [
+            it for it in plan
+            if it.get("id") in idset and it.get("id") not in _executed
+            and it.get("enabled", False) and callable(it.get("runner"))
         ]
-        if not enabled_items:
-            continue
 
-        if len(enabled_items) == 1:
-            # Single phase — no overhead of thread pool
-            _run_phase_item(enabled_items[0])
-        else:
-            _logger.info(
-                "[phases] Parallel group (%d phases): %s",
-                len(enabled_items), [it.get("id") for it in enabled_items]
-            )
-            with _cf.ThreadPoolExecutor(max_workers=min(len(enabled_items), 8)) as pool:
-                futs = {pool.submit(_run_phase_item, it): it.get("id") for it in enabled_items}
-                for fut in _cf.as_completed(futs):
-                    try:
-                        fut.result()
-                    except Exception as exc:
-                        _logger.error(
-                            "[phases] Parallel phase error (id=%s): %s", futs[fut], exc
-                        )
+    def _run_stage(items, label: str) -> None:
+        items = [it for it in items if it.get("id") not in _executed]
+        for it in items:
+            _executed.add(it.get("id"))
+        if not items:
+            return
+        if len(items) == 1:
+            _run_phase_item(items[0])
+            return
+        _logger.info("[phases] %s (%d faz): %s", label, len(items),
+                     [it.get("id") for it in items])
+        with _cf.ThreadPoolExecutor(max_workers=min(len(items), _STAGE_MAX_WORKERS)) as pool:
+            futs = {pool.submit(_run_phase_item, it): it.get("id") for it in items}
+            for fut in _cf.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as exc:
+                    _logger.error("[phases] Stage phase error (id=%s): %s", futs[fut], exc)
 
-    # Sequential tail: phases not in any parallel group (waf_detect, discovery, etc.)
-    for item in plan:
+    # --- Background lane: independent slow work, started up front (overlaps all stages) ---
+    _bg_items = _enabled(_BACKGROUND_PHASES)
+    for it in _bg_items:
+        _executed.add(it.get("id"))
+    _bg_pool = None
+    _bg_futs: Dict[Any, str] = {}
+    if _bg_items:
+        _bg_pool = _cf.ThreadPoolExecutor(
+            max_workers=min(len(_bg_items), _BACKGROUND_MAX_WORKERS),
+            thread_name_prefix="bg",
+        )
+        _bg_futs = {_bg_pool.submit(_run_phase_item, it): it.get("id") for it in _bg_items}
+        _logger.info("[phases] Arka plan (bağımsız) fazlar başlatıldı: %s",
+                     [it.get("id") for it in _bg_items])
+
+    try:
+        # Aşama 0 — WAF tespit (profil)
+        if not _deadline_or_cancel():
+            _run_stage(_enabled(_STAGE_WAF), "Aşama 0 — WAF tespit")
+        # Aşama 1 — keşif/crawl (endpoint + forms_meta)
+        if not _deadline_or_cancel():
+            _run_stage(_enabled(_STAGE_DISCOVERY), "Aşama 1 — Keşif/Crawl")
+        # Aşama 2 — saldırı (catch-all: sınıflandırılmamış HER etkin faz)
+        if not _deadline_or_cancel():
+            _mid_items = [
+                it for it in plan
+                if it.get("id") not in _NON_OFFENSIVE_PHASES
+                and it.get("id") not in _executed
+                and it.get("enabled", False) and callable(it.get("runner"))
+            ]
+            _run_stage(_mid_items, "Aşama 2 — Saldırı")
+    finally:
+        # Background'ı finalizer'lardan ÖNCE join et (bulgular tam olmalı).
+        if _bg_pool is not None:
+            for fut in _cf.as_completed(list(_bg_futs.keys())):
+                try:
+                    fut.result()
+                except Exception as exc:
+                    _logger.error("[phases] Background phase error (id=%s): %s",
+                                  _bg_futs.get(fut), exc)
+            _bg_pool.shutdown(wait=True)
+
+    # Aşama 3 — finalizer'lar: SIRAYLA (exploit → oast → skorla → rapor).
+    for pid in _FINALIZER_PHASES:
         if _SCAN_CANCEL.is_set():
-            _logger.info("[phases] Scan cancelled — stopping plan execution")
+            _logger.info("[phases] Scan cancelled — finalizer'lar atlanıyor")
             break
-        if _t.monotonic() > _global_deadline:
-            _logger.warning("[phases] Global deadline reached during tail phases — stopping")
-            break
-        pid = item.get("id")
-        if pid in _executed:
-            continue
-        # ÖNEMLİ: çalıştırılan fazı _executed'a ekle. Aksi halde plan listesinde
-        # aynı id iki kez bulunuyorsa (parallel gruba dahil değilse) faz İKİ KEZ
-        # çalışıyordu — stealth profilinde fazı ~1800s'e kadar boşa tekrarlayıp
-        # "Phase '...' exceeded ...s" uyarısını çiftliyordu. Tek-çalıştırma garantisi.
-        _executed.add(pid)
-        _run_phase_item(item)
+        it = _phase_map.get(pid)
+        if (it and it.get("id") not in _executed
+                and it.get("enabled", False) and callable(it.get("runner"))):
+            _executed.add(pid)
+            _run_phase_item(it)
 
     results["meta"]["scan_end"] = _t.time()
     try:
