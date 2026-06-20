@@ -370,8 +370,14 @@ class FileUploadScanner(BaseScanner):
         upload_forms = self._discover_forms(endpoints, base_url)
         if not upload_forms:
             logger.info("[FileUpload] No upload forms found")
-            self.add("offensive", {
-                "type": "File Upload", "severity": "Info",
+            # [Fix-4] "Yükleme ucu bulunamadı" bir DURUM, bulgu DEĞİL. Eskiden
+            # offensive kovasına type="File Upload" Info yazılıyordu; CVSS-otoritesi
+            # bunu CWE-434 → High'a şişirip rapora HAYALET bir "File Upload [High]"
+            # (url/payload/evidence YOK, reason="No endpoints") koyuyordu. Artık
+            # meta/coverage durumu olarak yazılır — bulgu sayılmaz.
+            self.add("meta", {
+                "stage": "file_upload",
+                "status": "no_endpoints",
                 "reason": "No file upload endpoints discovered",
             })
             return self.results

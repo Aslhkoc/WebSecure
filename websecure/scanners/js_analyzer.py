@@ -19,6 +19,53 @@ from websecure.core.reporting import add_result
 
 logger = logging.getLogger(__name__)
 
+
+def _decode_jwt_claims(token: str) -> Optional[Dict[str, Any]]:
+    """JWT header+payload'ı doğrula ve (imza doğrulamadan) çöz.
+
+    Yapısal olarak GEÇERLİ bir JWT mi (header.payload.signature, header'da `alg`)?
+    Değilse None döner → arayan bunu Next.js Flight/base64-config gibi sahte-JWT
+    eşleşmelerini elemek için kullanır. Geçerliyse triyaj için anlamlı claim'leri
+    (alg, exp/expired, iss, role, scope, sub) döndürür — bu GERÇEK kanıttır ve
+    `evidence:null` Critical'ları ortadan kaldırır.
+    """
+    import base64 as _b64
+    import json as _json
+    import time as _time
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+
+    def _b64url(seg: str) -> Optional[dict]:
+        try:
+            pad = "=" * (-len(seg) % 4)
+            raw = _b64.urlsafe_b64decode(seg + pad)
+            obj = _json.loads(raw.decode("utf-8", "replace"))
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+    header = _b64url(parts[0])
+    payload = _b64url(parts[1])
+    if not header or "alg" not in header:
+        return None  # gerçek JWT header'ı değil → sahte eşleşme (FP)
+
+    claims: Dict[str, Any] = {"alg": header.get("alg"), "typ": header.get("typ")}
+    if isinstance(payload, dict):
+        exp = payload.get("exp")
+        try:
+            if exp is not None:
+                claims["exp"] = int(exp)
+                claims["expired"] = bool(int(exp) < int(_time.time()))
+        except (TypeError, ValueError):
+            pass
+        for k in ("iss", "sub", "aud", "role", "roles", "scope", "scp", "email", "name"):
+            if k in payload:
+                v = payload[k]
+                claims[k] = (v[:64] if isinstance(v, str) else v)
+    return claims
+
 # ---------------------------------------------------------------------------
 # Regex patterns
 # ---------------------------------------------------------------------------
@@ -408,16 +455,48 @@ class JSAnalyzer:
                     if unique < 4:  # "AAAAAAAAAAAAAAAA" gibi placeholder -> atla
                         continue
                 redacted = value[:6] + "****" + value[-2:] if len(value) > 10 else "****"
+                _sev = "Critical" if secret_type in (
+                    "AWS Access Key", "AWS Secret Key", "Private Key",
+                    "Database URL", "Stripe Key",
+                ) else "High"
+                _evidence: Dict[str, Any] = {
+                    "redacted_value": redacted,
+                    "location": js_url,
+                    "match": f"Pattern '{secret_type}' matched in JS bundle",
+                }
+                _locked = False
+                # [Fix-4] JWT'ye özel: Next.js/SPA client bundle'larında JWT yapısına
+                # benzeyen base64 (Flight data, config) çok yaygın FP. Token'ı GERÇEKTEN
+                # çöz: header'da `alg` yoksa SAHTE eşleşme → bulguyu at. Çözülürse
+                # claim'leri evidence'a koy (evidence:null Critical sorunu çözülür) ve
+                # client-bundle'daki doğrulanmamış JWT'yi Critical'a şişirtme (locked).
+                if secret_type == "JWT Token":
+                    _claims = _decode_jwt_claims(value)
+                    if _claims is None:
+                        continue  # yapısal olarak JWT değil → FP, raporlama
+                    _evidence["jwt_claims"] = _claims
+                    # Süresi dolmuş token canlı bir sır değil → Low
+                    if _claims.get("expired"):
+                        _sev = "Low"
+                        _evidence["note"] = "JWT süresi dolmuş (exp geçmiş) — canlı sır değil"
+                    else:
+                        # Client bundle'da doğrulanmamış JWT: çoğu public/anon token.
+                        # Scanner High'da kalsın, CVSS Critical'a şişirmesin.
+                        _sev = "High"
+                        _evidence["note"] = (
+                            "Client-side JS bundle'ında JWT — public/anon token olabilir; "
+                            "claim'lere göre doğrulayın (alg/role/exp)."
+                        )
+                    _locked = True
                 findings.append({
                     "type": f"Hardcoded Secret: {secret_type}",
-                    "severity": "Critical" if secret_type in (
-                        "AWS Access Key", "AWS Secret Key", "Private Key",
-                        "Database URL", "Stripe Key",
-                    ) else "High",
+                    "severity": _sev,
                     "url": js_url,
                     "parameter": secret_type,
                     "detail": f"Potential {secret_type} in JS. Value (redacted): {redacted}",
                     "proof": f"Pattern matched in {js_url}",
+                    "evidence": _evidence,
+                    "severity_locked": _locked,
                     "source": "js_analyzer",
                 })
                 secret_count += 1

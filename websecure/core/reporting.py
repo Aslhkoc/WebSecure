@@ -706,7 +706,30 @@ def add_result(bucket: str, item: Any) -> None:
         try:
             from websecure.core.cvss import cvss_severity_for_type as _cvss_sev
             _auth_sev = _cvss_sev(str(it.get("type") or it.get("vuln_type") or ""))
-            if _auth_sev:
+            # [Fix-4] CVSS-otoritesi, tarayıcının BİLEREK indirdiği "ön koşul /
+            # doğrulanmamış" bulguları yeniden ŞİŞİRMEMELİ. Örn. request_smuggling
+            # "TE.TE (precondition)" → severity=Info (501=sunucu reddetti, tek başına
+            # zafiyet değil) yazıyor; ama type="Request Smuggling" CVSS map'inde
+            # Critical (CWE-444) → Info kaybolup Critical oluyordu (rapor manşeti FP).
+            # Açık precondition/unconfirmed/severity_locked işaretli bulgular muaf.
+            _sev_exempt = (
+                "precondition" in str(it.get("technique", "")).lower()
+                or "precondition" in str(it.get("type", "")).lower()
+                or "unconfirmed" in str(it.get("type", "")).lower()
+                or bool(it.get("unconfirmed"))
+                or bool(it.get("severity_locked"))
+            )
+            # Locus'suz bulguyu (url/endpoint/matched_at YOK) CVSS ile YÜKSELTME.
+            # Gerçek bir zafiyet bir yere bağlıdır; locus'suz olanlar genelde
+            # "bulunamadı/çalışmadı" durum mesajıdır (örn. file_upload no_endpoints,
+            # owasp "İstek hatası (soft)") ve High/Critical'a şişmemeli.
+            _has_locus = any(it.get(k) for k in (
+                "url", "target", "endpoint", "matched_at", "matched-at"))
+            _would_inflate = bool(
+                _auth_sev and _severity_rank(_auth_sev)
+                > _severity_rank(str(it.get("severity") or "Info"))
+            )
+            if _auth_sev and not _sev_exempt and not (_would_inflate and not _has_locus):
                 it["severity"] = _auth_sev
         except Exception as _cv_exc:
             log_warn(f"[reporting] CVSS severity resolution skipped: {_cv_exc!r}")
