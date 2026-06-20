@@ -171,6 +171,79 @@ def get_global_results() -> Dict[str, List[Any]]:
 # perform_reporting (full implementation with logger support) defined below at ~line 1502.
 # Simple compat wrapper removed to avoid override confusion.
 
+
+def reconcile_behavioral_waf(results: Dict[str, Any]) -> None:
+    """Davranışsal WAF mutabakatı — imza-tabanlı dedektörün KAÇIRDIĞI WAF'ı yakala.
+
+    İmza/aktif-prob tabanlı WAF tespiti tarama BAŞINDA tek atışla çalışır; o anda
+    ana sayfa 200 dönerse "WAF yok" der. Oysa WAF çoğu zaman tarama agresifleşince
+    devreye girer ve istek seli 403'lenir. Bu fonksiyon, biriken HTTP sayaçlarından
+    403-ban oranını hesaplar; yüksekse `results["waf"]` kovasına detected=True
+    davranışsal bir kayıt EKLER (mevcut imza kaydını silmez). Böylece TÜM rapor
+    formatları (HTML/MD/SARIF) "1558 istek 403'lendi ama WAF yok" çelişkisinden kurtulur.
+
+    Eşik: en az 25 istek örneklemi + ban oranı >= %20. Yalnızca 403 (ve 429) WAF-blok
+    sayılır; sıradan 404'ler hariç (ban_403 zaten yalnız 403'ü sayar).
+    """
+    if not isinstance(results, dict):
+        return
+    try:
+        from websecure.core.http import HTTP_METRICS as _HM
+        total = int(_HM.get("total", 0) or 0)
+        ban403 = int(_HM.get("ban_403", 0) or 0)
+        thr429 = int(_HM.get("throttle_429", 0) or 0)
+    except Exception:
+        # Sayaçlara erişilemiyorsa results içindeki metrics'ten dene
+        _m = (results.get("metrics") or {})
+        _c = (_m.get("counters") if isinstance(_m, dict) else {}) or {}
+        total = int(_c.get("total") or _c.get("requests") or 0)
+        ban403 = int(_c.get("ban_403") or _c.get("403") or 0)
+        thr429 = int(_c.get("throttle_429") or _c.get("429") or 0)
+
+    if total < 25:
+        return
+    blocks = ban403 + thr429
+    ratio = blocks / total if total else 0.0
+    if ratio < 0.20:
+        return
+
+    waf_bucket = results.get("waf")
+    if not isinstance(waf_bucket, list):
+        waf_bucket = [waf_bucket] if isinstance(waf_bucket, dict) else []
+
+    # İmza dedektörü zaten WAF bulduysa davranışsal kaydı eklemeye gerek yok.
+    if any(isinstance(x, dict) and x.get("detected") for x in waf_bucket):
+        return
+
+    # confidence: %20 ban -> 0.6, %50 -> 0.85, %80+ -> ~0.97 (doygun)
+    confidence = round(min(0.97, 0.5 + ratio * 0.6), 2)
+    target = (results.get("meta") or {}).get("target") or ""
+    waf_bucket.append({
+        "url": target,
+        "target": target,
+        "vendor": "Behavioral (rate-based)",
+        "confidence": confidence,
+        "detected": True,
+        "behavioral": True,
+        "bypass_strategies": [],
+        "reasons": [f"{blocks}/{total} istek ({ratio:.0%}) 403/429 ile bloklandı"],
+        "message": (
+            f"WAF davranışsal tespit: istek selinin %{ratio*100:.0f}'i bloklandı "
+            f"({ban403}×403, {thr429}×429). İmza tespiti başta WAF'ı kaçırdı; "
+            f"yüksek ban oranı aktif bir WAF/bot-koruması olduğunu gösterir."
+        ),
+        "ts": _now_iso() if "_now_iso" in globals() else None,
+    })
+    results["waf"] = waf_bucket
+    # tech_profile.waf'ı da doldur (bazı raporlar oradan okur)
+    tp = results.get("tech_profile")
+    if isinstance(tp, dict) and not tp.get("waf"):
+        tp["waf"] = "Behavioral (rate-based)"
+    log_warn(
+        f"[reporting] Davranışsal WAF tespiti: ban oranı {ratio:.0%} "
+        f"({blocks}/{total}) — imza dedektörü WAF'ı kaçırmıştı, rapor düzeltildi."
+    )
+
 def finalize_reports(ctx: dict, cfg: dict) -> dict:
     """
     2.4/2.5 uyumlu finalize:
@@ -265,6 +338,14 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
     # [Fix] Ensure 'tls' key is populated from 'ssl' or certificate data
     if "tls" not in results:
          results["tls"] = results.get("ssl") or {}
+
+    # [Fix-1] Davranışsal WAF mutabakatı — imza dedektörü tarama başında WAF'ı
+    # kaçırmış olabilir; biriken 403-ban oranı yüksekse waf kovasını düzelt.
+    # TÜM rapor formatlarından önce çalışmalı (HTML/MD/SARIF aynı results'tan okur).
+    try:
+        reconcile_behavioral_waf(results)
+    except Exception as _waf_rec_exc:
+        log_warn(f"[reporting] behavioral WAF reconcile skipped: {_waf_rec_exc!r}")
 
     # Ensure output dir exists
     if out_dir:
@@ -1748,6 +1829,15 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
         results["payload_metrics"] = export_payload_metrics()
     # CVSS/CWE Enrichment
     results = enrich_cvss_cwe(results, cfg)
+
+    # [Fix-1] Davranışsal WAF mutabakatı — imza dedektörü tarama başında WAF'ı
+    # kaçırdıysa (örn. ana sayfa o an 200 dönüp sonra istek seli 403'lendi) biriken
+    # ban oranından WAF'ı yakala. MD/HTML/SARIF render'ından ÖNCE çalışmalı ki tüm
+    # formatlar aynı (düzeltilmiş) waf kovasını görsün.
+    try:
+        reconcile_behavioral_waf(results)
+    except Exception as _waf_rec_exc:
+        log_warn(f"[reporting] behavioral WAF reconcile skipped: {_waf_rec_exc!r}")
 
     # ---- OWASP Top 10 Mapping + Compliance + Remediation ----
     try:

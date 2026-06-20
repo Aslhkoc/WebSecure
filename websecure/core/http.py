@@ -1246,12 +1246,14 @@ def record_timing_ms(ms: int, status: int, *, content_bytes: int = 0) -> None:
 
 def get_http_metrics() -> dict:
     total = int(HTTP_METRICS.get("total", 0))
-    forb = int(HTTP_METRICS.get("403", 0))
+    # [Fix] Gerçek 403 sayacı "ban_403"tur; eski kod boş "403" anahtarını okuyordu
+    # (her zaman 0) → 403_ratio hep 0.0 çıkıyordu. Her iki anahtarı da yokla.
+    forb = int(HTTP_METRICS.get("ban_403", 0) or HTTP_METRICS.get("403", 0) or 0)
     metrics = {
         k: (len(v) if isinstance(v, list) else int(v) if v is not None else 0)
         for k, v in HTTP_METRICS.items()
     }
-    metrics["403_ratio"] = (forb / total) if total else 0.0
+    metrics["403_ratio"] = round(forb / total, 4) if total else 0.0
     with _loc_lock:
         status_locations = {k: dict(v) for k, v in HTTP_STATUS_LOCATIONS.items()}
     return {
