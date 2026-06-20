@@ -242,6 +242,56 @@ def setup_auth(cfg: dict, args: Namespace) -> None:
     print("=" * 60 + "\n")
 
 
+def setup_show_browser(cfg: dict, args: Namespace) -> None:
+    """
+    Görünür-tarayıcı form enjeksiyonu seçimi (Tor sorusu gibi E/H).
+
+    'E' → gerçek Chrome penceresi açılır ve form alanlarına (kullanıcı adı / e-posta /
+    şifre / kart numarası / CVV / yorum kutusu) SQLi/XSS payload'ları TEK TEK,
+    karakter karakter YAZILIR; formlar gönderilir ve sonuç (alert / SQL hatası) gözlenir.
+    Bunu ekranda izlersiniz. 'H' → enjeksiyon her zamanki hızlı HTTP katmanında
+    (arka planda) yapılır; görünür pencere açılmaz.
+
+    Mutasyon: cfg['browser_injection']['enabled'] + (E ise) cfg['browser']
+    altında headless=False / show_browser=True / slow_mo_ms. dry-run/batch'te kapalı.
+    """
+    bi = cfg.setdefault("browser_injection", {})
+
+    if args.dry_run or args.batch:
+        bi["enabled"] = False
+        return
+
+    print("\n" + "=" * 60)
+    print("  [?] Gorunur Tarayici Form Enjeksiyonu")
+    print("  Acik Chrome penceresinde, hedefin GIRIS / KAYIT / YORUM / ODEME")
+    print("  formlarindaki alanlara (kullanici adi, e-posta, sifre, kart numarasi,")
+    print("  CVV, yorum kutusu) SQLi ve XSS payload'lari TEK TEK YAZILIR, form")
+    print("  gonderilir ve sonuc (alert / SQL hatasi) gozlenir. Her adimi izlersiniz.")
+    print("")
+    print("  [i] 'Hayir' derseniz enjeksiyon yine yapilir ama arka planda (HTTP),")
+    print("      gorunur pencere acilmaz (daha hizli).")
+    print("")
+
+    _ans = _read("  Gorunur Chrome'da form enjeksiyonunu izlemek ister misiniz? (e/H): ", "h").lower()
+
+    if _ans.startswith("e"):
+        bi["enabled"] = True
+        br = cfg.setdefault("browser", {})
+        br["headless"] = False
+        br["show_browser"] = True
+        # adimlar arasi gecikme — yazmayi gozle takip etmeyi kolaylastirir
+        br.setdefault("slow_mo_ms", 120)
+        print("  [+] Gorunur form enjeksiyonu AKTIF — tarama sirasinda Chrome acilacak.")
+        if cfg.get("_tor_proxy"):
+            print("  [!] Tor acik: tarayici da Tor uzerinden gider (yavas olabilir, IP gizli).")
+        print("  [!] UYARI: Yalnizca yetkili oldugunuz hedeflerde kullanin.")
+    else:
+        bi["enabled"] = False
+        print("  [i] Gorunur enjeksiyon kapali — form testleri arka planda yapilacak.")
+
+    print("=" * 60 + "\n")
+
+
 def setup_proxy(cfg: dict, args: Namespace) -> None:
     """
     Interactive proxy / IP-rotation setup and OpSec summary.

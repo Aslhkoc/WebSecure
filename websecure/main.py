@@ -1417,10 +1417,13 @@ def main() -> None:
     cfg["target"] = url
     cfg["base_url"] = url
 
-    # Phase 4 — interactive wizard (Tor / auth / proxy)
-    from websecure.core.cli.interactive import setup_tor, setup_auth, setup_proxy  # noqa: PLC0415
+    # Phase 4 — interactive wizard (Tor / auth / görünür-tarayıcı enjeksiyon / proxy)
+    from websecure.core.cli.interactive import (  # noqa: PLC0415
+        setup_tor, setup_auth, setup_show_browser, setup_proxy,
+    )
     setup_tor(cfg, args)
     setup_auth(cfg, args)
+    setup_show_browser(cfg, args)
     setup_proxy(cfg, args)
 
     # Phase 5 — profile selection
