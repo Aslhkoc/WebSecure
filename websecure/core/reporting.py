@@ -1117,7 +1117,13 @@ def _dedupe_findings(items: List[Dict]) -> List[Dict]:
     for it in (items or []):
         if not isinstance(it, dict):
             continue
-        key = (it.get("type"), it.get("url"), it.get("location"), it.get("param"))
+        # [Fix-5] URL normalize (sondaki '/' at) → "host/" ile "host" aynı bulgu
+        # iki kez sayılmasın. HTML panosu da aynı normalizasyonu yapar → summary.json
+        # ile report.html sayıları tutarlı olsun (eskiden summary dedup'suz=218,
+        # HTML dedup'lu=150 çelişiyordu).
+        _u = it.get("url")
+        _u_norm = _u.rstrip("/") if isinstance(_u, str) else _u
+        key = (it.get("type"), _u_norm, it.get("location"), it.get("param"))
         cur = bykey.get(key)
         if cur is None:
             bykey[key] = dict(it)
@@ -1693,6 +1699,47 @@ def _count_status(results: Dict[str, Any], code: int) -> int:
     return n
 
 
+def _is_countable_finding(item: Dict[str, Any]) -> bool:
+    """HTML panosunun bulgu tablosuna ALDIĞI kayıt mı? (Fix-5 sayım birliği)
+
+    summary.json eskiden HAM `final`'i (218) sayıyordu; HTML ise aynı listeyi
+    `_has_label`/`_proc_noise`/`_has_substance`/port-status filtreleriyle 150'ye
+    indirip gösteriyordu → iki rapor çelişiyordu. Bu fonksiyon HTML'in filtresinin
+    bucket-bağımsız özüdür; build_summary onu kullanır → summary == HTML.
+    Etiketsiz crawl/port/durum artefaktları (zafiyet değil) sayılmaz.
+    """
+    if not isinstance(item, dict):
+        return False
+    has_label = bool(
+        item.get("type") or item.get("vuln_type") or item.get("title")
+        or item.get("issue") or item.get("message")
+    )
+    if not has_label:
+        return False
+    t = str(item.get("type") or item.get("vuln_type") or "").strip().lower()
+    if t in {"phase_error", "phase_timeout", "circuit_breaker_trip",
+             "phase_metrics", "anti_block_event"}:
+        return False
+    has_substance = bool(
+        item.get("url") or item.get("target") or item.get("host")
+        or item.get("evidence") or item.get("description") or item.get("message")
+        or item.get("payload") or item.get("count") or item.get("port")
+        or item.get("parameter") or item.get("param") or item.get("path")
+        or item.get("why") or item.get("issue")
+    )
+    if not has_substance:
+        return False
+    # Nmap/port kayıtları kendi bölümünde — type'sız port kaydını bulgu sayma.
+    if item.get("port") and not item.get("type"):
+        return False
+    # Araç durum-mesajları (sqlmap/ferox/nuclei "finished/skipped") bulgu değil.
+    if item.get("status") in ("skipped", "finished", "completed") and (
+        "findings" in item or not t or t in ("sqlmap", "feroxbuster", "nuclei")
+    ):
+        return False
+    return True
+
+
 def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict[str, Any]:
     counters = get_counters()
     rl = results.get("rate_limit_obs") or []
@@ -1703,7 +1750,16 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
     confidence_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
     severity_counts: Dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
     verified_count = 0
-    all_findings = _coerce_final(results)
+    # [Fix-5] DEDUP: HTML panosu bulguları tekilleştirip gösterir; summary.json ise
+    # ham sayıyordu → 218 vs 150 çelişki. Aynı dedup'ı burada da uygula → tüm
+    # artefaktlar (summary/SARIF/JUnit) tutarlı tek sayı.
+    all_findings = _dedupe_findings(_coerce_final(results))
+    # [Fix-5] HTML panosuyla AYNI bulgu kümesini say (etiketsiz crawl/port/durum
+    # artefaktlarını ele) → summary.json total/severity == report.html.
+    all_findings = [f for f in all_findings if _is_countable_finding(f)]
+    # Honest FP/zayıflık ölçümü için non-Info bulguları izle.
+    scored_total = 0      # severity >= Low olan gerçek "bulgu"lar (Info recon hariç)
+    weak_count = 0        # doğrulanmamış VE kanıtsız (evidence/proof/payload yok)
     for f in all_findings:
         conf = str(f.get("confidence") or "unknown").lower()
         if conf not in confidence_counts:
@@ -1716,16 +1772,40 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
         severity_counts[sev] += 1
         if f.get("verified"):
             verified_count += 1
+        if sev != "Info":
+            scored_total += 1
+            _has_ev = bool(f.get("evidence") or f.get("proof") or f.get("payload")
+                           or f.get("payloads") or f.get("request"))
+            if not f.get("verified") and not _has_ev:
+                weak_count += 1
 
     total = len(all_findings)
-    fp_rate_est = round(confidence_counts["low"] / total, 3) if total else 0.0
+    # [Fix-5] estimated_fp_rate ARTIK anlamlı: eski "low-confidence/total" hep 0.0
+    # çıkıyordu (tarayıcılar FP'leri confidence=high işaretliyor). Yeni ölçü:
+    # non-Info bulgular içinde DOĞRULANMAMIŞ + KANITSIZ olanların oranı = "ne kadarı
+    # teyitsiz". 0.0 artık "FP yok" yanılgısı vermez.
+    fp_rate_est = round(weak_count / scored_total, 3) if scored_total else 0.0
+
+    # [Fix-5] Gerçek HTTP trafiği canlı sayaçlardan (HTTP_METRICS) — eski
+    # counters.http_requests=1, 403_count=0 gösteriyordu; gerçek 2324 istek / 1558
+    # ban. _count_status yalnız http_timing kovasına bakıyordu (neredeyse boş).
+    _http_total = int(counters.get("http_requests", 0))
+    _http_403 = _count_status(results, 403)
+    _http_429 = _count_status(results, 429)
+    try:
+        from websecure.core.http import HTTP_METRICS as _HM
+        _http_total = int(_HM.get("total", 0) or _http_total)
+        _http_403 = int(_HM.get("ban_403", 0) or _http_403)
+        _http_429 = int(_HM.get("throttle_429", 0) or _http_429)
+    except Exception:
+        pass
 
     return {
         "http": {
-            "requests": int(counters.get("http_requests", 0)),
+            "requests": _http_total,
             "bytes": int(counters.get("http_bytes", 0)),
-            "429_count": _count_status(results, 429),
-            "403_count": _count_status(results, 403),
+            "429_count": _http_429,
+            "403_count": _http_403,
             "rate_limit_obs": len(rl),
             "anti_block_events": len(abe),
         },
@@ -1734,6 +1814,8 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
         "scan_meta": {
             "total_findings": total,
             "verified_findings": verified_count,
+            "unverified_unevidenced_findings": weak_count,
+            "scored_findings": scored_total,
             "confidence_summary": confidence_counts,
             "severity_summary": severity_counts,
             "estimated_fp_rate": fp_rate_est,
