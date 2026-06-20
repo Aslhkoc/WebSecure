@@ -568,7 +568,21 @@ def classify_discovered_file(url: str, status_code: int = 200) -> Optional[Dict[
     """
     Given a URL discovered by FFUF/Feroxbuster, classify it by extension
     and return a finding dict if it's sensitive, else None.
+
+    [Fix-7] DURUM-FARKINDA: bir dosya yalnızca 2xx ile DÖNDÜĞÜNDE "exposed"dır.
+    403/401/404/5xx → erişilemez, "Sensitive File Exposed" DEĞİL. circlecoffee'de
+    265 ffuf yolu 403 (catch-all WAF) iken her biri ".bak/.config/.json…
+    Sensitive File Exposed" diye etiketlenip raporu ~90 sahte "açık hassas dosya"
+    ile dolduruyordu. Artık 2xx-dışı durumlar None döner → arayan onları düz
+    "keşfedilen yol" (Info) olarak kaydeder, "açık" iddiası YOK.
     """
+    try:
+        _sc = int(status_code)
+    except (TypeError, ValueError):
+        _sc = 0
+    # Yalnız gerçekten erişilebilir (2xx/206) yanıtlar "exposed" sayılır.
+    if not (200 <= _sc < 300):
+        return None
     path = urlparse(url).path
     for ext, sev in SENSITIVE_EXTENSIONS.items():
         if path.endswith(ext):
