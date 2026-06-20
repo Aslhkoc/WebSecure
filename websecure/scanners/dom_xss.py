@@ -281,7 +281,17 @@ class DOMXSSScanner(BaseScanner):
             _logger.debug(f"[DOMXSSScanner] localStorage test error on {url}: {exc!r}")
 
     async def _test_postmessage(self, page, url: str):
-        """Test postMessage-based DOM XSS (event.data sink)."""
+        """Test postMessage-based DOM XSS (event.data sink).
+
+        FALSE-POSITIVE FIX (2026-06-20): eski kod KENDİ 'message' listener'ını
+        ekleyip canary'yi aynı pencereye post ediyor, listener tetiklenince
+        "DOM XSS" raporluyordu. Bir pencere kendine post ettiği mesajı HER ZAMAN
+        alır → her HTML sayfası sahte "DOM XSS (postMessage)" oluyordu (raporun 20
+        High DOM XSS'inin kaynağı; hepsi 403-ban'lı /admin, /auth/* sayfalarında).
+        Mesajın ALINMASI zafiyet DEĞİLDİR. Artık yalnız canary'yi post ederiz ve
+        SAYFANIN KENDİ handler'ı onu gerçek bir sink'e (JS yürütme / DOM yazımı)
+        akıtırsa rapor ederiz. Kendi listener'ımızı EKLEMEYİZ.
+        """
         _key = (url, "postMessage")
         if _key in self._seen_dom_findings:
             return
@@ -291,37 +301,56 @@ class DOMXSSScanner(BaseScanner):
             f"javascript:console.error('DOMXSS_{canary}')",
             f"DOMXSS_{canary}",
         ]
+        console_hits: List[str] = []
+
+        def on_console(msg):
+            try:
+                if canary in msg.text:
+                    console_hits.append(f"console.{msg.type}: {msg.text[:120]}")
+            except Exception:
+                pass
+
+        page.on("console", on_console)
         try:
             await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
             await page.wait_for_timeout(500)
             for payload in payloads:
-                result = await page.evaluate(f"""
-                    async () => {{
-                        return new Promise(resolve => {{
-                            const canary = {repr(canary)};
-                            const msgs = [];
-                            const handler = e => {{
-                                const d = String(e.data);
-                                if (d.includes(canary)) msgs.push('postMessage reflected: ' + d.substring(0, 80));
-                            }};
-                            window.addEventListener('message', handler);
-                            // Try sending to various origins
-                            window.postMessage({repr(payload)}, '*');
-                            try {{ window.postMessage({{type: 'data', data: {repr(payload)}}}, '*'); }} catch(e) {{}}
-                            try {{ window.postMessage({{message: {repr(payload)}}}, '*'); }} catch(e) {{}}
-                            setTimeout(() => {{
-                                window.removeEventListener('message', handler);
-                                resolve(msgs.length > 0 ? msgs[0] : null);
-                            }}, 600);
-                        }});
+                # Canary'yi yalnız POST et — kendi listener'ımızı kurmuyoruz.
+                # Sayfanın handler'ı varsa ve e.data'yı bir sink'e akıtırsa,
+                # ya console (yürütme) ya da DOM'a yazım gerçekleşir.
+                await page.evaluate(f"""
+                    () => {{
+                        try {{ window.postMessage({repr(payload)}, '*'); }} catch(e) {{}}
+                        try {{ window.postMessage({{type: 'data', data: {repr(payload)}}}, '*'); }} catch(e) {{}}
+                        try {{ window.postMessage({{message: {repr(payload)}}}, '*'); }} catch(e) {{}}
                     }}
                 """)
-                if result:
+                await page.wait_for_timeout(500)
+                if console_hits:
                     self._seen_dom_findings.add(_key)
-                    self._report(url, "postMessage", payload, str(result))
+                    self._report(url, "postMessage", payload,
+                                 f"postMessage → JS execution: {console_hits[0]}")
+                    return
+                # Sayfanın handler'ı canary'yi DOM'a (innerHTML) yazdı mı?
+                wrote = await page.evaluate(f"""
+                    () => {{
+                        const canary = {repr('DOMXSS_' + canary)};
+                        const body = document.body ? document.body.innerHTML : '';
+                        return body.indexOf(canary) !== -1 ? 'canary_written_to_dom' : null;
+                    }}
+                """)
+                if wrote:
+                    self._seen_dom_findings.add(_key)
+                    self._report(url, "postMessage", payload,
+                                 f"postMessage → DOM sink: {wrote}")
                     return
         except Exception as exc:
             _logger.debug(f"[DOMXSSScanner] postMessage test error on {url}: {exc!r}")
+        finally:
+            try:
+                page.remove_listener("console", on_console)
+            except Exception:
+                pass
 
     async def _navigate_and_check(self, page, url: str, canary: str, param: str) -> Optional[str]:
         """Navigate to URL and check for XSS execution. Returns evidence or None."""
@@ -334,7 +363,13 @@ class DOMXSSScanner(BaseScanner):
         page.on("console", on_console)
 
         try:
-            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            _resp = await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            # Blok/hata sayfasında (403/401/5xx) tarama yapma — uygulamanın gerçek
+            # DOM'u değil, WAF/hata sayfası. Aksi halde ban'lı URL'lerde sahte bulgu.
+            _status = getattr(_resp, "status", None)
+            if _status is not None and (_status in (401, 403) or _status >= 500):
+                _logger.debug("[DOMXSSScanner] blok/hata sayfası (HTTP %s) atlandı: %s", _status, url)
+                return None
             await page.wait_for_timeout(1000)
 
             # Check console for canary execution
@@ -483,8 +518,33 @@ _MONKEY_PATCH_JS = r"""
 (function () {
     window.__domxss_hits__ = [];
 
+    // FALSE-POSITIVE GUARD: Playwright'in page.evaluate() mekanizması, canary'yi
+    // gönderen probe fonksiyonumuzun KAYNAĞINI (içinde '__WEBSECURE_DOMXSS_789__'
+    // string literali geçen ok-fonksiyonu) eval/Function üzerinden çalıştırır.
+    // Bu, sayfanın canary'yi bir sink'e akıtması DEĞİL — kendi enjeksiyon
+    // harness'ımızın eval'e çarpmasıdır. Gerçek bir sink'te `val` çıplak canary
+    // (veya sayfanın sardığı küçük bir parça) olur; bizim probe'umuzun imzası
+    // (window.postMessage / addEventListener('message' / __pm_ / __domxss) ASLA
+    // gerçek bir saldırı yükünün parçası olmaz. Bu imzayı taşıyan code-exec
+    // sink kayıtlarını ele.
+    function _isSelfHarness(val) {
+        var s = String(val);
+        return s.indexOf('window.postMessage') !== -1
+            || s.indexOf("addEventListener('message'") !== -1
+            || s.indexOf('__pm_intercept') !== -1
+            || s.indexOf('__pm_listeners') !== -1
+            || s.indexOf('__domxss_hits__') !== -1;
+    }
+
     function _record(sink, val) {
         window.__domxss_hits__.push({sink: sink, val: String(val).slice(0, 200)});
+    }
+
+    // Yalnızca code-exec sink'leri (eval/Function/setTimeout/setInterval) için:
+    // self-harness değilse kaydet. DOM sink'leri (innerHTML vb.) doğrudan _record.
+    function _recordExec(sink, val) {
+        if (_isSelfHarness(val)) return;
+        _record(sink, val);
     }
 
     // --- Element.prototype.innerHTML ---
@@ -527,7 +587,7 @@ _MONKEY_PATCH_JS = r"""
     var _origEval = window.eval;
     window.eval = function(v) {
         if (String(v).indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
-            _record('eval', v);
+            _recordExec('eval', v);
         return _origEval(v);
     };
 
@@ -537,7 +597,7 @@ _MONKEY_PATCH_JS = r"""
         var args = Array.prototype.slice.call(arguments);
         for (var i = 0; i < args.length; i++) {
             if (String(args[i]).indexOf('__WEBSECURE_DOMXSS_789__') !== -1) {
-                _record('Function', args[i]);
+                _recordExec('Function', args[i]);
                 break;
             }
         }
@@ -549,7 +609,7 @@ _MONKEY_PATCH_JS = r"""
     var _origSetTimeout = window.setTimeout;
     window.setTimeout = function(fn) {
         if (typeof fn === 'string' && fn.indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
-            _record('setTimeout', fn);
+            _recordExec('setTimeout', fn);
         return _origSetTimeout.apply(this, arguments);
     };
 
@@ -557,7 +617,7 @@ _MONKEY_PATCH_JS = r"""
     var _origSetInterval = window.setInterval;
     window.setInterval = function(fn) {
         if (typeof fn === 'string' && fn.indexOf('__WEBSECURE_DOMXSS_789__') !== -1)
-            _record('setInterval', fn);
+            _recordExec('setInterval', fn);
         return _origSetInterval.apply(this, arguments);
     };
 
@@ -875,7 +935,20 @@ class PostMessageInterceptionProber(BaseScanner):
     async def _probe_url(self, page, url: str) -> None:
         """Navigate and send canary postMessages; inspect listener hits."""
         try:
-            await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+            _resp = await page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
+
+            # FALSE-POSITIVE GUARD: WAF/blok veya hata sayfasında (403/401/5xx) DOM
+            # taraması yapma. Banlanmış sayfa uygulamanın gerçek handler'larını
+            # içermez; orada "bulunan" her şey blok-sayfası artefaktıdır. (Raporda
+            # DOM XSS bulgularının /admin, /auth/* gibi 403-ban'lı URL'lerde
+            # çıkmasının nedeni buydu.)
+            _status = getattr(_resp, "status", None)
+            if _status is not None and (_status in (401, 403) or _status >= 500):
+                _logger.debug(
+                    "[PostMessageInterceptionProber] blok/hata sayfası (HTTP %s) atlandı: %s",
+                    _status, url,
+                )
+                return
 
             # İkinci güvenlik katmanı: sayfanın Content-Type'ına bak.
             # JSON/XML dönen endpoint'lerde DOM veya postMessage handler olmaz.
@@ -918,9 +991,30 @@ class PostMessageInterceptionProber(BaseScanner):
                 "window.__domxss_hits__ = []"
             )
 
-            if sink_hits:
-                # Canary flowed through postMessage into a DOM sink → Critical
-                for hit in sink_hits:
+            # Defense-in-depth: JS guard'a ek olarak Python tarafında da kendi
+            # enjeksiyon harness'ımızın sızdırdığı sahte sink kayıtlarını ele.
+            # Playwright page.evaluate() bizim probe fonksiyonumuzu eval/Function
+            # üzerinden çalıştırırken canary'yi içeren KENDİ kaynağımız sink olarak
+            # kaydolabiliyordu (14 sahte Critical'ın kaynağı). Gerçek sink hit'inde
+            # `val` çıplak canary olur; bizim harness imzamızı (postMessage/listener)
+            # taşıyan kayıt asla gerçek bir saldırı yükü değildir.
+            _HARNESS_MARKERS = (
+                "window.postMessage", "addEventListener('message'",
+                "addEventListener(\"message\"", "__pm_intercept",
+                "__pm_listeners", "__domxss_hits__", "=> {", "function(",
+            )
+            real_sink_hits = []
+            for hit in (sink_hits or []):
+                val = str(hit.get("val", ""))
+                if any(m in val for m in _HARNESS_MARKERS):
+                    continue  # kendi harness'ımız — sahte
+                if canary not in val:
+                    continue  # canary gerçekten sink'e ulaşmamış
+                real_sink_hits.append(hit)
+
+            if real_sink_hits:
+                # Canary GERÇEKTEN postMessage üzerinden bir DOM sink'e aktı → Critical
+                for hit in real_sink_hits:
                     self.report_finding(
                         vuln_type="DOM XSS via postMessage (Sink Reached)",
                         url=url,
