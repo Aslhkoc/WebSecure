@@ -655,7 +655,34 @@ def render_html_dashboard(results: dict) -> str:
             """
 
     if _dir_hits:
-        _dir_hits_sorted = sorted(_dir_hits, key=lambda x: str(x["url"]))
+        # [Fix-6] DÜRÜSTLÜK: (a) başlık yalnız GERÇEKTEN katkı veren aracı yazsın
+        # (eskiden sabit "ffuf / feroxbuster" — feroxbuster 0 sonuç verse bile kredi
+        # alıyordu). (b) HEPSİ 403/429 dönen "keşif"ler catch-all WAF gürültüsüdür,
+        # onaylı dizin/dosya keşfi DEĞİL — ayrılır. circlecoffee'de 265 ffuf "hit"in
+        # tamamı 403 (tek-tip ~33820B WAF bloğu) idi → 265 sahte keşif gösteriliyordu.
+        def _hit_blocked(h) -> bool:
+            try:
+                return int(h.get("status") or 0) in (401, 403, 429)
+            except (TypeError, ValueError):
+                return False
+        _confirmed = [h for h in _dir_hits if not _hit_blocked(h)]
+        _blocked = [h for h in _dir_hits if _hit_blocked(h)]
+        _tools_used = sorted({str(h.get("tool") or "").strip()
+                              for h in _dir_hits if h.get("tool")})
+        _tool_label = " / ".join(t for t in _tools_used if t) or "içerik keşfi"
+
+        _blocked_note = ""
+        if _blocked:
+            _blk_codes = sorted({str(h.get("status") or "?") for h in _blocked})
+            _blocked_note = (
+                f"<div style='background:rgba(210,153,34,0.1); border:1px solid var(--sev-high); "
+                f"border-radius:4px; padding:0.75rem; margin-bottom:1rem; color:var(--text-muted); font-size:0.85rem;'>"
+                f"[i] {len(_blocked)} yol denendi ve {'/'.join(_blk_codes)} ile bloklandı — "
+                f"bunlar ONAYLI keşif DEĞİL (catch-all WAF her yola aynı yanıtı veriyor olabilir). "
+                f"Sayıma yalnız bloklanmamış yanıtlar dahil edildi.</div>"
+            )
+
+        _dir_hits_sorted = sorted(_confirmed, key=lambda x: str(x["url"]))
         _dir_rows = "".join(
             f"<tr>"
             f"<td class='url' style='font-size:0.85rem'>"
@@ -667,15 +694,24 @@ def render_html_dashboard(results: dict) -> str:
             f"</tr>"
             for h in _dir_hits_sorted[:300]
         )
-        katana_html += f"""
-            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
-                <h3 style="margin-top:0;">[dir] Keşfedilen Dizinler & Yollar — ffuf / feroxbuster ({len(_dir_hits)} bulundu{', ilk 300 gösteriliyor' if len(_dir_hits) > 300 else ''})</h3>
+        if _confirmed:
+            _dir_body = f"""
+                <h3 style="margin-top:0;">[dir] Keşfedilen Dizinler & Yollar — {_escape(_tool_label)} ({len(_confirmed)} onaylı{', ilk 300 gösteriliyor' if len(_confirmed) > 300 else ''})</h3>
+                {_blocked_note}
                 <div class="table-container">
                     <table>
                         <thead><tr><th>URL</th><th>HTTP Kodu</th><th>Boyut</th><th>Araç</th></tr></thead>
                         <tbody>{_dir_rows}</tbody>
                     </table>
-                </div>
+                </div>"""
+        else:
+            # Hiç onaylı keşif yok — yalnız WAF/403 gürültüsü. Tabloyu basma, dürüst not.
+            _dir_body = f"""
+                <h3 style="margin-top:0;">[dir] İçerik Keşfi — {_escape(_tool_label)} (0 onaylı)</h3>
+                {_blocked_note}"""
+        katana_html += f"""
+            <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+                {_dir_body}
             </div>
             """
 
