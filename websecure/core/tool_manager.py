@@ -7,12 +7,9 @@ FAZ 17: Amass, httpx, katana, dalfox, Metasploit, Burp Suite desteği eklendi.
 Tüm araçlar ToolRegistry üzerinden erişilebilir.
 """
 import os
-import sys
-import time
 import subprocess
 import logging
 import shutil
-import socket
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -171,64 +168,36 @@ class ToolManager:
         print("="*60)
         return results
 
-    def start_sqlmap_api(self):
-        """
-        Starts the SQLMap API server as a background subprocess.
-        """
-        # Finds the sqlmapapi.py path
-        api_path = None
-        possible_paths = [
-            self.tools_dir / "sqlmap" / "sqlmapapi.py",
-            self.tools_dir / "sqlmapproject-sqlmap-4a40101" / "sqlmapapi.py"
-        ]
-        
-        for p in possible_paths:
-            if p.exists():
-                api_path = p
-                break
-        
-        if not api_path:
-            logger.error("[ToolManager] SQLMap API dosyası bulunamadı!")
-            return False
+    def prepare_sqlmap(self):
+        """sqlmap ENJEKSIYON MOTORUNU hazırla ve DÜRÜSTÇE rapor et.
 
-        print(f"[launch] SQLMap API Başlatılıyor... ({api_path})")
+        [Fix 2026-06-20] Eskiden burada arka planda bir sqlmap **API sunucusu**
+        (sqlmapapi.py, port 8775) başlatılıp "Program bu servisi otomatik
+        kullanacaktır" deniyordu. AMA gerçek tarama (run_sqlmap_scan →
+        SQLMapWrapper.scan) DOĞRUDAN sqlmap binary'sini subprocess olarak çalıştırır;
+        API istemcisinin scan metotları (start_scan/get_data) HİÇBİR YERDE çağrılmaz.
+        Yani sunucu boşuna açılıp tüm tarama boyunca atıl bekliyordu ve mesaj
+        YANILTICIYDI. Artık gerçek motorun (subprocess) hazır olduğunu doğrularız ve
+        ne yapacağını dürüstçe söyleriz — atıl sunucu yok.
+        """
         try:
-            # Check if port 8775 is already in use
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)  # firewall SYN-drop'ta süresiz bloklanmayı önle
-                if s.connect_ex(('127.0.0.1', 8775)) == 0:
-                    print("[!]  Port 8775 zaten dolu. SQLMap API zaten çalışıyor olabilir.")
-                    return True
-
-            # Start process
-            self.sqlmap_process = subprocess.Popen(
-                [sys.executable, str(api_path), "-s", "-H", "127.0.0.1", "-p", "8775"],
-                cwd=api_path.parent,
-                stdout=subprocess.DEVNULL, # Suppress stdout to keep console clean
-                stderr=subprocess.DEVNULL
-            )
-            
-            # Wait for startup
-            for _ in range(10):
-                time.sleep(1)
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    if s.connect_ex(('127.0.0.1', 8775)) == 0:
-                        # Extra Check: Use Client
-                        cli = self.get_sqlmap_client()
-                        if cli and cli.is_alive():
-                            print("[OK] SQLMap API Başarıyla Çalıştı (Arka Plan Servisi)")
-                        else:
-                            print("[OK] SQLMap API Portu Açık (Servis Yanıt Veriyor)")
-                        print("   (Program bu servisi otomatik kullanacaktır.)")
-                        return True
-            
-            print("[X] SQLMap API başlatılamadı (Timeout).")
+            from websecure.integrations.sqlmap import SQLMapWrapper
+        except Exception as exc:
+            logger.debug(f"[ToolManager] SQLMapWrapper yüklenemedi: {exc!r}")
+            print("[X] sqlmap entegrasyon modülü yüklenemedi — SQLi motoru devre dışı.")
             return False
 
-        except Exception as e:
-            logger.error(f"SQLMap başlatma hatası: {e}")
+        wrapper = SQLMapWrapper()
+        if not wrapper.is_available():
+            print("[X] sqlmap bulunamadı (PATH veya tools/sqlmap/sqlmap.py) — SQLi motoru atlanacak.")
             return False
+
+        print(f"[OK] sqlmap motoru hazır → {wrapper.binary}")
+        print("     SQLi fazında DOĞRUDAN çalışır; ilerlemesi terminale CANLI yansır ([sqlmap] ...).")
+        return True
+
+    # Geriye dönük uyumluluk: eski ad hâlâ çağrılabilir.
+    start_sqlmap_api = prepare_sqlmap
 
     def stop_all(self):
         """

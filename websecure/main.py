@@ -1209,7 +1209,7 @@ def _startup_phase(cfg: dict) -> None:
         tm = ToolManager(cfg)
         tool_choices = tm.ask_user_interactive()
         if tool_choices.get("sqlmap"):
-            tm.start_sqlmap_api()
+            tm.prepare_sqlmap()
         if "ffuf" in tool_choices:
             if cfg.get("content_discovery"):
                 cfg["content_discovery"]["enabled"] = tool_choices["ffuf"]
