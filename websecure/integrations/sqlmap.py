@@ -26,6 +26,52 @@ from websecure.integrations.base import (
 
 logger = logging.getLogger(__name__)
 
+# sqlmap canlı çıktısında kullanıcıya GÖSTERILECEK anlamlı satırlar. Aksi halde
+# tarama tamamen sessiz koşuyordu (stdout PIPE'a yutuluyordu) → kullanıcı "sqlmap
+# çalıştığını HİÇ görmedim" diyordu. Bu işaretler sqlmap'in gerçek ilerlemesidir:
+# parametre testi, dinamiklik, injectable tespiti, DBMS/banner, WAF, enjeksiyon
+# noktaları. Gürültülü "loading"/"fetched" satırları echolanmaz.
+_SQLMAP_ECHO_MARKERS = (
+    "testing connection", "target url content is stable", "is dynamic",
+    "might be injectable", "appears to be", "testing for sql injection",
+    "is vulnerable", "injectable", "identified the following injection",
+    "the back-end dbms", "banner:", "current user", "current database",
+    "hostname:", "is dba", "available databases", "WAF/IPS", "web application",
+    "heuristic", "parameter '", "retrieved:", "resumed:",
+)
+# Her seviye [CRITICAL]/[WARNING]/[ERROR] satırı daima gösterilir.
+_SQLMAP_ECHO_LEVELS = ("[CRITICAL]", "[WARNING]", "[ERROR]")
+# DBMS/observation çıkarımı için (run summary'de gösterilir). Yalnız ONAYLANMIŞ
+# DBMS adını yakala (kısa token); "it looks like ... Do you want" tahmin/prompt
+# satırlarını DEĞİL.
+_SQLMAP_DBMS_RE = re.compile(
+    r"back-end DBMS(?:\s+is|:)\s*'?([A-Za-z][A-Za-z0-9 .>=_-]{1,30}?)'?(?:\.|,|\s*$|\s+Do you|\s+\()",
+    re.IGNORECASE,
+)
+
+
+# Tekrarlayan/gürültülü satırlar — echolama (terminali boğar, anlam katmaz).
+# "parsed DBMS error message" sqlmap her payload denemesinde basar (onlarca kez).
+_SQLMAP_ECHO_SKIP = (
+    "parsed DBMS error message",
+    "reflective value(s) found",
+    "skip test payloads specific",
+    "using '",  # "using '...tmp' as the output directory"
+)
+
+
+def _sqlmap_echo_line(line: str) -> bool:
+    """Bu sqlmap log satırı kullanıcıya canlı gösterilsin mi?"""
+    s = line.strip()
+    if not s:
+        return False
+    if any(sk.lower() in s.lower() for sk in _SQLMAP_ECHO_SKIP):
+        return False
+    if any(lv in s for lv in _SQLMAP_ECHO_LEVELS):
+        return True
+    low = s.lower()
+    return any(m.lower() in low for m in _SQLMAP_ECHO_MARKERS)
+
 class SQLMapClient:
     """
     Client for interacting with the SQLMap REST-JSON API.
@@ -119,6 +165,8 @@ class SQLMapWrapper(ToolIntegration):
 
     def __init__(self, binary_path: str = "sqlmap"):
         super().__init__(binary_path)
+        # Son scan() çalışmasının meta verisi (run_sqlmap_scan özetinde gösterilir).
+        self.last_run_meta: Dict[str, Any] = {}
 
     def is_available(self) -> bool:
         if shutil.which(self.binary) is not None:
@@ -219,9 +267,14 @@ class SQLMapWrapper(ToolIntegration):
                 "--output-dir", out_dir,
                 "--results-file", csv_path,
                 "--disable-coloring",
-                "--forms",
                 "--parse-errors",
             ])
+            # [Fix] '--forms' ARTIK KOŞULSUZ EKLENMİYOR. Parametreli bir URL'de
+            # (-u url?id=1) '--forms' sqlmap'i FORM aramaya zorluyor; form yoksa
+            # "[CRITICAL] there were no forms found" deyip URL'nin KENDİ parametresini
+            # (id) HİÇ test etmeden çıkıyordu → sqlmap'in "veri vermemesinin" sessiz
+            # nedenlerinden biri. Form testi gerektiğinde çağıran (self-crawl yolu)
+            # '--forms'u extra_args ile zaten ekliyor; POST/form hedefinde de öyle.
             if _prof_extra:
                 cmd.extend(_prof_extra)
             if extra_args:
@@ -259,11 +312,22 @@ class SQLMapWrapper(ToolIntegration):
                 _budget = int(_p.get("timeout", 600))
                 _subproc_timeout = effective_timeout(_budget)
 
+            print(f"\n  [sqlmap] Tarama başlıyor → {target}  (bütçe {int(_subproc_timeout)}s, level={_level} risk={_risk})")
             logger.info(f"Starting SQLMap binary scan on {target}...")
+            # [Fix] CANLI ÇIKTI: eskiden stdout/stderr PIPE'a yutulup hiç gösterilmiyordu
+            # → sqlmap'in çalıştığı GÖRÜLMÜYORDU. Artık satır satır okunur; anlamlı
+            # satırlar terminale yansır (kullanıcı ilerlemeyi görür) ve TÜMÜ ayrıştırma
+            # için biriktirilir. Timeout'ta bile o ana kadarki çıktı KAYBOLMAZ (eski
+            # kod b"","" yapıp her şeyi atıyordu). stderr → stdout'a birleştirilir.
+            import threading as _threading
+            import queue as _queue
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                errors="replace",
             )
             _unreg = None
             try:
@@ -272,24 +336,79 @@ class SQLMapWrapper(ToolIntegration):
                 _unreg = unregister_child_proc
             except Exception:
                 pass
-            try:
-                stdout_b, stderr_b = proc.communicate(timeout=_subproc_timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+
+            _lines: List[str] = []
+            _dbms_seen = ""
+            _echoed = 0
+            _ECHO_CAP = 400  # terminali boğmamak için echo tavanı (parsing yine tam)
+            _q: "_queue.Queue" = _queue.Queue()
+
+            def _reader():
                 try:
-                    proc.communicate(timeout=10)
-                except subprocess.TimeoutExpired:
+                    assert proc.stdout is not None
+                    for _ln in proc.stdout:
+                        _q.put(_ln)
+                except Exception:
                     pass
-                logger.warning(
-                    "[SQLMap] Firm bütçe doldu (%ds) — sqlmap durduruldu, kısmi sonuçlar ayrıştırılıyor",
-                    int(_subproc_timeout),
-                )
-                stdout_b, stderr_b = b"", b""
-            finally:
-                if _unreg:
+                finally:
+                    _q.put(None)  # sentinel: stdout kapandı
+
+            _rt = _threading.Thread(target=_reader, daemon=True)
+            _rt.start()
+
+            _deadline = time.monotonic() + _subproc_timeout
+            _timed_out = False
+            while True:
+                _remaining = _deadline - time.monotonic()
+                if _remaining <= 0:
+                    _timed_out = True
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "[SQLMap] Firm bütçe doldu (%ds) — durduruldu; o ana kadarki çıktı korundu",
+                        int(_subproc_timeout),
+                    )
+                    print(f"  [sqlmap] Bütçe doldu ({int(_subproc_timeout)}s) — durduruldu, kısmi sonuçlar ayrıştırılıyor.")
+                    break
+                try:
+                    _ln = _q.get(timeout=min(1.0, _remaining))
+                except _queue.Empty:
+                    if proc.poll() is not None and _q.empty():
+                        break
+                    continue
+                if _ln is None:  # reader bitti (stdout kapandı)
+                    break
+                _lines.append(_ln)
+                if not _dbms_seen:
+                    _m = _SQLMAP_DBMS_RE.search(_ln)
+                    if _m:
+                        _dbms_seen = _m.group(1).strip()
+                if _echoed < _ECHO_CAP and _sqlmap_echo_line(_ln):
+                    print(f"  [sqlmap] {_ln.rstrip()}")
+                    _echoed += 1
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+            if _unreg:
+                try:
                     _unreg(proc)
-            stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
-            stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+                except Exception:
+                    pass
+
+            stdout = "".join(_lines)
+            stderr = ""
+            # Son çalışma meta verisi (run_sqlmap_scan özet için okur).
+            self.last_run_meta = {
+                "target": target,
+                "elapsed_s": round(_subproc_timeout - max(0.0, _deadline - time.monotonic()), 1),
+                "dbms": _dbms_seen,
+                "timed_out": _timed_out,
+                "output_lines": len(_lines),
+                "cmd": " ".join(cmd[-12:]),
+            }
 
             # Primary: parse structured CSV written by --results-file
             results = _parse_sqlmap_csv(csv_path, target)

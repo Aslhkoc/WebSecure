@@ -5447,7 +5447,7 @@ def run_sqlmap_scan(ctx) -> None:
             # [Check 2] Validating exploits
             # [WS3] Merge finding data to expose 'evidence' key to reporting
             entry = {
-                "severity": "high", 
+                "severity": "high",
                 "type": "SQL Injection",
                 "tool": "sqlmap"
             }
@@ -5455,13 +5455,65 @@ def run_sqlmap_scan(ctx) -> None:
                 entry.update(f) # Merges raw_finding and EVIDENCE
             else:
                 entry["detail"] = f
-                
+
             add_result("sqlmap", entry)
             # SQLi is always offensive — route Critical/High to offensive bucket too
             if str(entry.get("severity", "")).lower() in ("critical", "high"):
                 add_result("offensive", entry)
+
+    # [Fix] sqlmap'in NE YAPTIĞINI HER ZAMAN raporla — yalnız findings>0 değil.
+    # Eskiden 0 bulguda yalnız {"status":"finished","findings":0} yazılıyordu;
+    # kullanıcı sqlmap'in çalışıp çalışmadığını/neyi test ettiğini göremiyordu.
+    # Artık: kaç hedef/parametre denendi, DBMS, süre, ve 0 ise NEDEN (WAF/403 mu,
+    # injectable parametre mi yok). Hem terminale hem rapora.
+    _meta = getattr(wrapper, "last_run_meta", {}) or {}
+    _tested_targets = len(_all_eps)
+    _tested_params = len(params) if params else 0
+    _dbms = _meta.get("dbms") or "—"
+    _elapsed = _meta.get("elapsed_s")
+    if not findings:
+        # 0 bulgu nedenini biriken çıktıdan/durumdan çıkar (dürüst teşhis)
+        _reason = "injectable parametre bulunamadı"
+        try:
+            _res_obj = getattr(ctx, "results", {}) or {}
+            _cb = _res_obj.get("circuit_breaker") or []
+            _waf = _res_obj.get("waf") or []
+            if _meta.get("timed_out"):
+                _reason = "zaman bütçesi doldu (kısmi)"
+            elif any(isinstance(w, dict) and w.get("detected") for w in (_waf if isinstance(_waf, list) else [])):
+                _reason = "hedef WAF/403 ile blokluyor — enjeksiyon yüzeyi erişilemedi"
+            elif _self_discover and _tested_params == 0:
+                _reason = "test edilebilir parametre/form yok (statik/parametresiz yüzey)"
+        except Exception:
+            pass
+        _summary_msg = (
+            f"sqlmap bitti: {_tested_targets} hedef, {_tested_params} parametre denendi, "
+            f"DBMS={_dbms}, süre={_elapsed}s — 0 onaylı SQLi ({_reason})"
+        )
+        add_result("sqlmap", {
+            "status": "finished",
+            "findings": 0,
+            "tested_targets": _tested_targets,
+            "tested_params": _tested_params,
+            "dbms": _meta.get("dbms") or "",
+            "elapsed_s": _elapsed,
+            "timed_out": bool(_meta.get("timed_out")),
+            "reason": _reason,
+            "message": _summary_msg,
+        })
     else:
-        add_result("sqlmap", {"status": "finished", "findings": 0})
+        _summary_msg = (
+            f"sqlmap bitti: {len(findings)} SQLi bulgusu, {_tested_targets} hedef denendi, "
+            f"DBMS={_dbms}, süre={_elapsed}s"
+        )
+        add_result("meta", {
+            "stage": "sqlmap", "status": "findings",
+            "count": len(findings), "tested_targets": _tested_targets,
+            "dbms": _meta.get("dbms") or "", "elapsed_s": _elapsed,
+            "message": _summary_msg,
+        })
+    print(f"  [sqlmap] {_summary_msg}")
+    _logger.info("[SQLMap] %s", _summary_msg)
 
     # [beast] Onaylanan her injection için tam sömürü hattı — şema dökümü,
     # kimlik bilgisi çıkarımı, dosya okuma/yazma, RCE. sqlmap artık yalnızca
