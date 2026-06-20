@@ -1,4 +1,4 @@
-# bismillahirrahmanirrahim
+# Bismillahirrahmanirrahim
 from __future__ import annotations
 import sys
 import pathlib
@@ -2483,10 +2483,39 @@ def _run_scan_phases(
             except Exception:
                 _oast_unlimited = False
             if _oast_unlimited:
-                _oast_budget = float("inf")
+                # B4 FIX (2026-06-20): no_timeout'ta bile FİRM tavan. Eskiden
+                # _oast_budget=inf idi → kayıt-ölü/Tor'da OAST fazı 91 DAKİKA boşa
+                # koştu (0 bulgu). Tam güç korunur ama mutlak tavanla (Tor 1800s /
+                # doğrudan 1200s). per-call Tor'da uzun olabilir.
+                _tor_active = False
+                try:
+                    import os as _os
+                    _tor_active = (_os.environ.get("TOR_ACTIVE", "").lower() in ("1", "true", "yes"))
+                except Exception:
+                    _tor_active = False
+                _oast_budget = float(oast_cfg.get("phase_budget_secs_max", 1800 if _tor_active else 1200))
                 _oast_per_call = max(_oast_per_call, 180.0)
             ok_client, client = _safe_call(OASTClient, session, oast_cfg, call_timeout=30.0)
-            if ok_client:
+            # FIX-3 (2026-06-20): OOB kanalı GERÇEKTEN canlı mı? interactsh kaydı
+            # TypeError/ağ ile başarısızsa (bu taramada olduğu gibi) her hedefe
+            # asla doğrulanamayacak OOB payload atıp timeout'a düşmek anlamsız —
+            # 91 dk israf. Kayıt-ölüyse TÜM fazı atla, durumu dürüstçe yaz.
+            _oob_live = True
+            _oast_skipped = False
+            if ok_client and hasattr(client, "is_oob_live"):
+                try:
+                    _oob_live = bool(client.is_oob_live(timeout=30.0))
+                except Exception as _live_exc:
+                    _oob_live = False
+                    _logger.debug(f"[OAST] is_oob_live check failed: {_live_exc!r}")
+            if ok_client and not _oob_live:
+                print("[i] OAST atlandı: OOB/interactsh kaydı başarısız "
+                      "(OOB doğrulama bu tarama için kullanılamıyor).")
+                if callable(globals().get("add_result")):
+                    add_result("meta", {"stage": "oast",
+                                        "status": "skipped:oob_registration_failed"})
+                _oast_skipped = True  # döngüyü atla (ama init-fail DEĞİL)
+            if ok_client and not _oast_skipped:
                 _oast_done = 0
                 for u in (_inj_endpoints if _oast_unlimited else _inj_endpoints[:20]):
                     _elapsed = time.time() - t
@@ -2522,7 +2551,7 @@ def _run_scan_phases(
                                 add_result("oast", redact_sensitive(f))
                     elif not ok_oast and callable(globals().get("add_result")):
                         add_result("errors", {"stage": "oast", "url": u, "error": str(findings)})
-            else:
+            elif not ok_client:
                 if callable(globals().get("add_result")):
                     add_result("errors", {"stage": "oast", "error": f"client_init_failed:{client}"})
             mark("oast", t)

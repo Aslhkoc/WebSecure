@@ -246,9 +246,18 @@ class _BaseOSAT:
         self._client_kwargs: Dict[str, Any] = client_kwargs
         self._client_obj = None
         self._client_loop = None
+        # HTTP/2 (h2/hpack) gönderim katmanı bazı ortamlarda kayıt isteğinde
+        # "TypeError: argument 1 must be str, not bytes" fırlatabiliyor. Kayıt
+        # başarısız olursa bu bayrak set edilir ve istemci http2 olmadan yeniden
+        # kurulur (graceful fallback) — OOB tamamen ölmesin.
+        self._http2_enabled = bool(client_kwargs.get("http2", False))
+        self._force_no_http2 = False
 
     def _make_async_client(self):
-        return httpx.AsyncClient(**self._client_kwargs)
+        kwargs = dict(self._client_kwargs)
+        if self._force_no_http2:
+            kwargs.pop("http2", None)
+        return httpx.AsyncClient(**kwargs)
 
     @property
     def _client(self):
@@ -352,7 +361,20 @@ class InteractshClient(_BaseOSAT, IOSATClient):
             payload["public-key"] = self._public_key_b64
 
         try:
-            r = await self._client.post(url, json=payload)
+            try:
+                r = await self._client.post(url, json=payload)
+            except TypeError as _te:
+                # "argument 1 must be str, not bytes" — büyük olasılıkla HTTP/2
+                # (h2/hpack) gönderim katmanı. http2 olmadan bir kez daha dene.
+                if self._http2_enabled and not self._force_no_http2:
+                    _logger.debug(
+                        "[OAST] kayıt TypeError (%s) — http2 kapatılıp yeniden deneniyor", _te
+                    )
+                    self._force_no_http2 = True
+                    self._client_obj = None  # _client property yeniden kursun
+                    r = await self._client.post(url, json=payload)
+                else:
+                    raise
             if r.status_code not in (200, 201):
                 # Bazı self-hosted örnekler GET ile kayıt destekler
                 r = await self._client.get(url, params={"secret": secret})
@@ -503,6 +525,48 @@ class OASTClient:
         self._client: IOSATClient = create_osat_client(self.cfg)
 
     def register(self): return {"ok": True}
+
+    def is_oob_live(self, timeout: float = 30.0) -> bool:
+        """OOB kanalının GERÇEKTEN kullanılabilir olup olmadığını döndür.
+
+        İç istemcinin kaydını (interactsh register) bir kez senkron tetikler.
+        Kayıt başarısızsa (örn. `TypeError: argument 1 must be str, not bytes`,
+        ağ hatası, SOCKS) ``False`` döner. Çağıran (main OAST fazı) bunu görüp
+        TÜM fazı atlayabilir — aksi halde kayıt-ölü bir kanala her hedef için
+        OOB payload atıp timeout'a düşmek 90+ DAKİKA boşa harcıyordu (0 bulgu).
+
+        Kayıt kavramı olmayan basit/stub istemcilerde (``_ensure_registered``
+        yoksa) güvenli tarafta kalıp ``True`` döner.
+        """
+        client = self._client
+        ensure = getattr(client, "_ensure_registered", None)
+        if ensure is None or not callable(ensure):
+            return True  # registrasyon kavramı yok → engelleme
+
+        def _run() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(asyncio.wait_for(ensure(), timeout))
+            except Exception as exc:
+                _logger.debug("[OAST] is_oob_live registrasyon denemesi hata: %r", exc)
+            finally:
+                try:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                except Exception:
+                    pass
+                loop.close()
+
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                ex.submit(_run).result(timeout=timeout + 10)
+        except Exception as exc:
+            _logger.debug("[OAST] is_oob_live yürütme hatası: %r", exc)
+            return False
+
+        if getattr(client, "_register_failed", False):
+            return False
+        return bool(getattr(client, "_registered", False))
 
     def get_host(self) -> str:
         """Return the OOB domain root for payload injection.
