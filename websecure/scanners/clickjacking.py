@@ -441,7 +441,11 @@ class CSPFrameAncestorsAnalyzer(BaseScanner):
                 return {
                     "vuln_type": "No CSP frame-ancestors + No X-Frame-Options (Dual Missing)",
                     "url": url,
-                    "severity": "Critical",
+                    # Clickjacking RCE/tam-ele-geçirme DEĞİL; hassas sayfada çerçeveleme
+                    # koruması yokluğu en fazla HIGH'dır (CVSS ~6.5 Medium-High). Eski
+                    # "Critical" hem CVSS skoruyla (6.5) çelişiyordu hem rapor manşetini
+                    # şişiriyordu (kick.com'da 54x dual-missing → 54 sahte Critical).
+                    "severity": "High",
                     "description": (
                         f"Sensitive page '{label}' has neither a Content-Security-Policy "
                         "frame-ancestors directive nor an X-Frame-Options header. "

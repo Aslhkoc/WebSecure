@@ -425,9 +425,14 @@ class PPToPollutionChainProber(BaseScanner):
                             )
                             break
 
-                    # NODE_OPTIONS / debug port — any response with inspect indicator
+                    # NODE_OPTIONS / debug port — yalnız GERÇEK Node inspector kanıtı.
+                    # Eski regex bare "inspect"/"debugger" kelimesine takılıyordu (her
+                    # "inspector"/"inspection" geçen metin FP). Gerçek sinyal: açık debug
+                    # portu (9229), --inspect bayrağı veya Node'un "Debugger listening"
+                    # banner'ı — ve baseline'da YOKKEN belirmeli.
                     if chain_type == "option_injection":
-                        if re.search(r"(?i)(debugger|inspect|9229|1337)", text):
+                        _opt_re = r"(?i)(Debugger listening on|--inspect(-brk)?\b|\b9229\b|ws://[^ ]*:9229)"
+                        if re.search(_opt_re, text) and not re.search(_opt_re, baseline_text):
                             self.report_finding(
                                 vuln_type="Prototype Pollution → NODE_OPTIONS Injection",
                                 url=target,
@@ -441,11 +446,20 @@ class PPToPollutionChainProber(BaseScanner):
                             )
                             break
 
-                    # Env pollution: development mode signals
+                    # Env pollution: development mode signals — SPESİFİK dev-mode kanıtı.
+                    # Eski regex `(development|stack trace|error|debug)` "error" kelimesine
+                    # takılıyordu → sayısız normal yanıt (örn. "Database Error") sahte
+                    # "Debug Env Enabled" üretiyordu. Gerçek sinyal: NODE_ENV=development
+                    # yansıması veya gerçek Node stack-trace frame'i ('at fn (x.js:12:3)')
+                    # — ve baseline'da YOKKEN belirmeli.
                     if chain_type == "env_pollution":
-                        if re.search(r"(?i)(development|stack trace|error|debug)", text) and not re.search(
-                            r"(?i)(development|stack trace|error|debug)", baseline_text
-                        ):
+                        _env_re = (
+                            r"(?i)(NODE_ENV['\"]?\s*[:=]\s*['\"]?development"
+                            r"|['\"]?env(ironment)?['\"]?\s*[:=]\s*['\"]?development"
+                            r"|\bat\s+[\w.$<>]+\s*\([^)]*\.js:\d+:\d+\)"
+                            r"|\bError:\s*\n\s*at\s)"
+                        )
+                        if re.search(_env_re, text) and not re.search(_env_re, baseline_text):
                             self.report_finding(
                                 vuln_type="Prototype Pollution → Debug Env Enabled",
                                 url=target,

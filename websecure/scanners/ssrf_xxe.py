@@ -5,7 +5,7 @@ import re
 import requests
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin
+from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin, quote
 
 from .base import BaseScanner
 from websecure.core.payloads import load_external_payloads
@@ -517,6 +517,9 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
         ]
 
         for param in params:
+            # Kapalı-hedef kontrolü: app param'ı yok sayıyorsa tüm loopback payload'ları
+            # bununla aynı 200'ü döndürür → diferansiyel yok → sahte flag yok.
+            ctrl_status, ctrl_len, ctrl_text = self._ssrf_control(url, param)
             for payload in rebind_payloads:
                 injected = self.inject_param(url, param, payload)
                 try:
@@ -538,16 +541,20 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                             })
                             break
                     else:
-                        # Heuristic: unexpected 200 on internal-like payload
-                        if resp.status_code == 200 and len(text) > 100:
+                        # Heuristik: loopback payload'ında BEKLENMEDİK + kontrolden FARKLI
+                        # 200. Düz 200 (param yok sayılmış) tek başına KANIT DEĞİL.
+                        if (resp.status_code == 200 and len(text) > 100
+                                and self._differs_from_control(
+                                    resp.status_code, text, ctrl_status, ctrl_len, ctrl_text)):
                             self.add(bucket, {
                                 "type": "DNS Rebinding / SSRF Loopback Bypass",
                                 "severity": "Medium",
                                 "url": url,
                                 "parameter": param,
                                 "payload": payload,
-                                "evidence": f"HTTP 200 with loopback payload, {len(text)} bytes",
-                                "detection_method": "status_heuristic",
+                                "evidence": f"HTTP 200 differs from closed-target control "
+                                            f"({len(text)} bytes vs ctrl {ctrl_len})",
+                                "detection_method": "control_differential",
                             })
                             break
 
@@ -590,9 +597,20 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
         for meta_url, extra_headers, cloud in metadata_targets:
             t_url = _inject_url_param(url, param, meta_url)
             try:
+                # allow_redirects=False ZORUNLU: aksi halde hedef bir açık-yönlendirme
+                # ise (örn. /redirect?url=...) scanner 302'yi takip edip GERÇEK
+                # 169.254.169.254'e SCANNER makinesinden istek atar → ağ koşuluna
+                # göre flaky FP + yanlış metodoloji (scanner'ın ağ konumu hedefinki
+                # değil). SSRF, HEDEFİN yanıtına yansıyan marker ile tespit edilir.
                 resp = self.session.get(t_url, headers=extra_headers, timeout=4,
-                                        allow_redirects=True)
-                if resp.status_code == 200 and _has_metadata_marker(resp.text):
+                                        allow_redirects=False)
+                # Marker, HEDEFİN getirdiği metadata YANITINDA olmalı — bizim ENJEKTE
+                # ettiğimiz payload URL'inin echo'sunda DEĞİL. Aksi halde payload yolu
+                # ('.../instance-identity/...') "instance-id" marker'ına substring
+                # olarak takılıp REFLECTION'ı metadata sanıyordu (sahte Critical).
+                # Payload'ı (ham + urlencode'lu) yanıttan çıkarıp öyle kontrol et.
+                _clean = (resp.text or "").replace(meta_url, "").replace(quote(meta_url, safe=""), "")
+                if resp.status_code == 200 and _has_metadata_marker(_clean):
                     # AWS credential chain: if IAM credentials endpoint found, extract role name
                     credential_data = None
                     if cloud == "AWS" and "security-credentials" in meta_url:
@@ -626,7 +644,9 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                     self.add(bucket, finding)
                     logger.warning(f"[SSRF] Cloud metadata ({cloud}) via {url} param={param}")
                     return
-            except requests.exceptions.RequestException as exc:
+            except (requests.exceptions.RequestException, ValueError) as exc:
+                # ValueError: bkz. _test_scheme_abuse — bozuk redirect Location'ı
+                # requests urlparse ederken çökebilir; tarama akışını korumak için yakala.
                 logger.debug(f"[SSRF] Cloud metadata probe failed for {meta_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
@@ -669,23 +689,68 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                     })
                     return
 
-                # Generic gopher/dict positive detection
-                if payload.startswith(("dict://", "gopher://")) and resp.status_code == 200 and len(text) > 10:
-                    self.add(bucket, {
-                        "type": f"SSRF — URL Scheme Abuse ({payload.split(':')[0]}://)",
-                        "severity": "High",
-                        "url": url,
-                        "parameter": param,
-                        "payload": payload,
-                        "evidence": text[:200],
-                    })
-                    return
-            except requests.exceptions.RequestException as exc:
+                # Generic gopher/dict positive detection — yalnız İÇ-SERVİS BANNER'I
+                # yanıta yansımışsa. dict://, gopher:// bilinen servislere (redis,
+                # memcached…) konuşur; düz 200 (param yok sayılmış) KANIT DEĞİL.
+                # Eski bare-200 şartı her güvenli app'te sahte 'Scheme Abuse' üretiyordu.
+                if payload.startswith(("dict://", "gopher://")) and resp.status_code == 200:
+                    svc = _identify_service(text)
+                    if svc:
+                        self.add(bucket, {
+                            "type": f"SSRF — URL Scheme Abuse ({payload.split(':')[0]}://)",
+                            "severity": "High",
+                            "url": url,
+                            "parameter": param,
+                            "payload": payload,
+                            "service": svc,
+                            "evidence": f"Internal service '{svc}' reflected: {text[:200]}",
+                        })
+                        return
+            except (requests.exceptions.RequestException, ValueError) as exc:
+                # ValueError: requests, allow_redirects=False'ta bile resp._next için
+                # Location'ı urlparse eder; hedef bozuk bir Location (örn. bracketed
+                # IPv4 'http://[127.0.0.1]/') dönerse ValueError fırlar. Yakalamazsak
+                # tüm endpoint taraması çöker (önceki bug).
                 logger.debug(f"[SSRF] Scheme abuse probe failed for {payload!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
     # Internal port scanning via timing
     # -------------------------------------------------------------------------
+
+    def _ssrf_control(self, url: str, param: str,
+                      control_value: str = "http://127.0.0.1:1/"):
+        """SSRF param'ına KAPALI/erişilemez bir iç hedef enjekte ederek uygulamanın
+        'param yok sayıldı / fetch başarısız' yanıtını öğrenir.
+
+        Döner: (status, body_len, body) ya da hata olursa (None, 0, "").
+
+        NEDEN: Hedef SSRF param'ını tamamen yok sayıyorsa (SPA/parked/güvenli app —
+        baskın durum) HER port/şema denemesi bu kontrol yanıtının AYNISINI döndürür.
+        Hedeften gelen düz 200, bir iç portun açık olduğunun KANITI DEĞİLDİR; yalnız
+        bu kontrolden FARKLI bir yanıt (veya iç-servis banner'ı) gerçek sinyaldir.
+        Eski hâl bare-200'ü kanıt sayıp her taramada ~28 sahte 'Internal Port Open'
+        üretiyordu."""
+        try:
+            ctrl_url = _inject_url_param(url, param, control_value)
+            r = self.session.get(ctrl_url, timeout=6, allow_redirects=False)
+            t = r.text or ""
+            return r.status_code, len(t), t
+        except requests.exceptions.RequestException:
+            return None, 0, ""
+
+    @staticmethod
+    def _differs_from_control(status: int, text: str,
+                              ctrl_status, ctrl_len: int, ctrl_text: str) -> bool:
+        """Yanıt, kapalı-hedef kontrolünden anlamlı şekilde farklı mı?
+        Kontrol kurulamadıysa (None) muhafazakâr davran → fark yok say (flag'leme)."""
+        if ctrl_status is None:
+            return False
+        if status != ctrl_status:
+            return True
+        # uzunluk gürültü payını aşan farkla değişti mi
+        if abs(len(text) - ctrl_len) > max(64, int(ctrl_len * 0.2)):
+            return True
+        return False
 
     def _test_internal_ports(self, url: str, param: str, bucket: str):
         threshold = self.config.oast.timing_threshold
@@ -696,6 +761,10 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
         except requests.exceptions.RequestException:
             baseline = 1.0
 
+        # Kapalı-port kontrolü: param yok sayılıyorsa tüm denemeler buna eşit çıkar
+        # → diferansiyel yok → hiçbir şey flag'lenmez (sahte 'port açık' seli biter).
+        ctrl_status, ctrl_len, ctrl_text = self._ssrf_control(url, param)
+
         for ip in ["127.0.0.1", "localhost"]:
             for port in _SCAN_PORTS:
                 probe_url = f"http://{ip}:{port}/"
@@ -705,27 +774,47 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                     resp = self.session.get(t_url, timeout=threshold + 2, allow_redirects=False)
                     elapsed = time.time() - t0
                     text = resp.text or ""
-                    if resp.status_code == 200 and len(text) > 10:
-                        service = _identify_service(text)
+                    service = _identify_service(text)
+                    differs = self._differs_from_control(
+                        resp.status_code, text, ctrl_status, ctrl_len, ctrl_text)
+                    if resp.status_code == 200 and service:
+                        # GÜÇLÜ kanıt: iç-servis banner'ı yanıta yansımış.
                         self.add(bucket, {
                             "type": f"SSRF — Internal Port Open: {ip}:{port}",
                             "severity": "High",
                             "url": url,
                             "parameter": param,
                             "payload": probe_url,
-                            "service": service or "Unknown",
-                            "evidence": f"HTTP 200 with {len(text)} bytes in {elapsed:.2f}s",
+                            "service": service,
+                            "evidence": f"Service '{service}' fingerprinted; HTTP 200, "
+                                        f"{len(text)} bytes in {elapsed:.2f}s",
                         })
-                    elif elapsed > baseline + threshold:
+                    elif resp.status_code == 200 and len(text) > 10 and differs:
+                        # ZAYIF kanıt: yanıt kapalı-port kontrolünden farklı → olası açık port.
+                        self.add(bucket, {
+                            "type": f"SSRF — Possible Internal Port Open: {ip}:{port}",
+                            "severity": "Medium",
+                            "url": url,
+                            "parameter": param,
+                            "payload": probe_url,
+                            "service": service or "Unknown",
+                            "evidence": f"Response differs from closed-port control "
+                                        f"(status={resp.status_code}, {len(text)} bytes vs "
+                                        f"ctrl {ctrl_len} bytes) in {elapsed:.2f}s",
+                            "detection_method": "control_differential",
+                        })
+                    elif differs and elapsed > baseline + threshold:
                         self.add(bucket, {
                             "type": f"SSRF — Blind Internal Port Probe: {ip}:{port}",
                             "severity": "Medium",
                             "url": url,
                             "parameter": param,
                             "payload": probe_url,
-                            "evidence": f"Request took {elapsed:.2f}s (baseline {baseline:.2f}s)",
+                            "evidence": f"Request took {elapsed:.2f}s (baseline {baseline:.2f}s) "
+                                        f"and response differs from control",
+                            "detection_method": "timing_differential",
                         })
-                except requests.exceptions.RequestException as exc:
+                except (requests.exceptions.RequestException, ValueError) as exc:
                     logger.debug(f"[SSRF] Internal port probe failed for {probe_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
@@ -744,7 +833,9 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
         for service_url in _INTERNAL_SERVICE_TARGETS:
             t_url = _inject_url_param(url, param, service_url)
             try:
-                resp = self.session.get(t_url, timeout=5, allow_redirects=True)
+                # allow_redirects=False: hedef açık-yönlendirme ise scanner'ın iç
+                # servise GERÇEKTEN bağlanmasını engelle (flaky FP + yanlış metodoloji).
+                resp = self.session.get(t_url, timeout=5, allow_redirects=False)
                 body = (resp.text or "")[:2000]
                 if resp.status_code in (200, 401, 403):
                     service = _identify_service(body)
@@ -761,7 +852,7 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                         logger.warning(
                             f"[SSRF] Internal {service} at {service_url} via {url} param={param}"
                         )
-            except requests.exceptions.RequestException as exc:
+            except (requests.exceptions.RequestException, ValueError) as exc:
                 logger.debug(f"[SSRF] Service fingerprint failed for {service_url!r}: {exc!r}")
 
     # -------------------------------------------------------------------------
@@ -775,7 +866,9 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
                     payload = meta_base + path
                     try:
                         resp = self.session.post(url, json={key: payload}, timeout=5)
-                        if resp.status_code == 200 and _has_metadata_marker(resp.text):
+                        # Reflection muafiyeti: payload echo'su marker'a takılmasın.
+                        _clean = (resp.text or "").replace(payload, "")
+                        if resp.status_code == 200 and _has_metadata_marker(_clean):
                             self.add(bucket, {
                                 "type": "SSRF — Body-Based Cloud Metadata Exposure",
                                 "severity": "Critical",
@@ -803,9 +896,14 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
             t_url = _inject_url_param(url, param, callback_url)
             try:
                 self.session.get(t_url, timeout=self.config.oast.timeout, allow_redirects=True)
+                # Callback GÖNDERMEK doğrulama DEĞİLDİR; yalnız ALINAN OOB çözümleme
+                # zafiyettir. Bu yüzden Info + unconfirmed → rapor manşetini sahte
+                # High ile şişirmez. Gerçek OOB hit ayrı korelasyon adımında (OAST
+                # log poll) High'a yükseltilir.
                 self.add(bucket, {
-                    "type": "SSRF — OAST DNS Callback Sent",
-                    "severity": "High",
+                    "type": "SSRF — OAST DNS Callback Sent (unconfirmed)",
+                    "severity": "Info",
+                    "unconfirmed": True,
                     "url": url,
                     "parameter": param,
                     "payload": callback_url,
@@ -1081,6 +1179,8 @@ class XXEScanner(BaseScanner):
 
     def _test_blind_xxe_oast(self, url: str, bucket: str):
         domain = self.config.oast.dns_domain
+        if not domain:
+            return  # OAST yok → blind OOB doğrulanamaz, anlamsız callback üretme
         token = random_string(8)
         oast_url = f"http://{token}.{domain}/"
         payload = XXE_POC.replace("{U}", oast_url)
@@ -1090,9 +1190,13 @@ class XXEScanner(BaseScanner):
                 headers={"Content-Type": "application/xml"},
                 timeout=self.config.oast.timeout,
             )
+            # Callback GÖNDERMEK ≠ doğrulama. Yalnız ALINAN OOB çözümleme zafiyettir.
+            # Info + unconfirmed → her endpoint'te sahte High üretmez (~60x). Gerçek
+            # OOB hit OAST poll korelasyonunda High'a yükselir.
             self.add(bucket, {
-                "type": "XXE — Blind OOB DNS Callback Sent",
-                "severity": "High",
+                "type": "XXE — Blind OOB DNS Callback Sent (unconfirmed)",
+                "severity": "Info",
+                "unconfirmed": True,
                 "url": url,
                 "payload_target": oast_url,
                 "evidence": f"Check OAST DNS logs for {token}.{domain}",
@@ -1290,8 +1394,12 @@ class DTDInjectionProber(BaseScanner):
         '<root>test</root>'
     )
 
+    # XXE dosya-okuma KANITI yalnız gerçek dosya içeriği olabilir. "127.0.0.1",
+    # "ami-id", "instance-id" KALDIRILDI: bunlar son derece yaygın string'ler
+    # (örn. ana sayfadaki '/ping?host=127.0.0.1' linki) ve XML POST'un yanıtında
+    # geçince her endpoint'te sahte "In-Band Confirmed Critical" üretiyordu (~42x).
     _CONFIRM_MARKERS = [
-        "root:x:0:0", "nobody:x:", "ami-id", "instance-id", "127.0.0.1",
+        "root:x:0:0", "nobody:x:", "daemon:x:", "/bin/bash",
     ]
 
     def __init__(self, session=None, results: Dict = None, debug=False,
@@ -1345,16 +1453,23 @@ class DTDInjectionProber(BaseScanner):
                     logger.warning(f"[XXE-DTD] DTD injection confirmed at {url} via {dtd_url}")
                     return
 
-            # Accepted but unconfirmed (no rejection error)
-            if resp.status_code in (200, 400, 500):
+            # Accepted but unconfirmed (no rejection error). OAST yapılandırılmamışsa
+            # bu bulgu ASLA doğrulanamaz (OOB log yok) → emit etme; aksi halde her
+            # endpoint için anlamsız Info gürültüsü üretir.
+            if resp.status_code in (200, 400, 500) and self.config.oast.dns_domain:
                 no_reject = not re.search(
                     r"DOCTYPE.*not.*allowed|entity.*not.*permitted|external.*entity.*disabled",
                     body, re.I
                 )
                 if no_reject and resp.status_code == 200:
+                    # Düz 200 + "reddetmedi" XXE KANITI DEĞİL: XML işlemeyen sunucu da
+                    # XML POST'a 200 döner (ana sayfa/echo). "OOB Unconfirmed" zaten
+                    # doğrulanmamış → Info + unconfirmed (eskiden High → her endpoint'te
+                    # sahte bulgu ~19x). Gerçek OOB hit korelasyonda yükseltilir.
                     self.add(bucket, {
                         "type": "XXE — External DTD Reference Accepted (OOB Unconfirmed)",
-                        "severity": "High",
+                        "severity": "Info",
+                        "unconfirmed": True,
                         "url": url,
                         "dtd_url": dtd_url,
                         "evidence": (
@@ -1409,7 +1524,7 @@ class SVGXXEProber(BaseScanner):
 
     _CONFIRM_MARKERS = [
         "root:x:0:0", "nobody:x:", "daemon:x:", "/bin/bash",
-        "[fonts]", "for 16-bit", "127.0.0.1",
+        "[fonts]", "for 16-bit",  # "127.0.0.1" KALDIRILDI (çok yaygın → sahte XXE)
     ]
 
     def __init__(self, session=None, results: Dict = None, debug=False,
@@ -1512,7 +1627,7 @@ class XXECDATABypassProber(BaseScanner):
 
     _CONFIRM_MARKERS = [
         "root:x:0:0", "nobody:x:", "daemon:x:", "/bin/bash",
-        "[fonts]", "for 16-bit", "127.0.0.1",
+        "[fonts]", "for 16-bit",  # "127.0.0.1" KALDIRILDI (çok yaygın → sahte XXE)
     ]
 
     def __init__(self, session=None, results: Dict = None, debug=False,

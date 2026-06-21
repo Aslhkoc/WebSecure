@@ -287,9 +287,14 @@ class SSTIScanner(BaseScanner):
             "<esi:remove><!--esi test--></esi:remove>",
         ]
 
-        ssi_markers = [
-            r"root:x:0:", r"uid=\d+", r"DATE_LOCAL",
-            r"Apache", r"nginx", r"Server:",  # printenv leak
+        # SSI markerları GÖVDEDE aranır (header'da DEĞİL). Eski `Server:`/`Apache`/
+        # `nginx` markerları `text + hdrs` ile eşleşince HER yanıttaki gerçek `Server:`
+        # header'ına takılıp her sunucuda sahte SSI üretiyordu. printenv kanıtı için
+        # gerçek SSI çıktısına özgü env-var imzaları kullanılır (CGI/SSI değişkenleri).
+        ssi_body_markers = [
+            r"root:x:0:", r"uid=\d+\(", r"\bDATE_LOCAL\b",
+            r"DOCUMENT_ROOT=", r"SERVER_SOFTWARE=", r"GATEWAY_INTERFACE=",
+            r"SERVER_PROTOCOL=", r"HTTP_USER_AGENT=",  # printenv SSI çıktısı
         ]
         esi_markers = [
             r"esi:include", r"X-Edge-Server", r"Surrogate-Control",
@@ -306,9 +311,12 @@ class SSTIScanner(BaseScanner):
                 hdrs = str(resp.headers)
 
                 is_esi = payload.startswith("<esi")
-                markers = esi_markers if is_esi else ssi_markers
+                # ESI markerları header'da da olabilir (Surrogate-Control vs.); SSI
+                # gövde çıktısıdır → yalnız gövdede ara, ham payload yansımasını sayma.
+                haystack = (text + hdrs) if is_esi else text
+                markers = esi_markers if is_esi else ssi_body_markers
                 for sig in markers:
-                    if re.search(sig, text + hdrs, re.IGNORECASE):
+                    if re.search(sig, haystack, re.IGNORECASE):
                         vuln_type = "ESI Injection" if is_esi else "SSI Injection (Server-Side Include)"
                         severity = "High" if "exec" in payload or "meta-data" in payload else "Medium"
                         self.report_finding(
@@ -350,6 +358,21 @@ class SSTIScanner(BaseScanner):
             "X-Chat-Message", "X-Query",
         ]
 
+        # LLM injection KANITI: canary yanıtta GÖRÜNMELİ ama enjekte edilen ham
+        # payload GÖRÜNMEMELİ. Aksi halde bu sadece girdi-yansımasıdır (reflection/
+        # XSS sınıfı) — bir LLM'in talimatı işlediğinin kanıtı DEĞİL. vulnapp gibi
+        # query'yi yansıtan her endpoint canary'yi echo'lar → eski hâl sahte
+        # "LLM Prompt Injection" üretiyordu. Gerçek injection'da model canary'yi
+        # ÜRETİR (ham talimat metni yanıtta olmaz).
+        def _llm_confirmed(body: str, payload: str) -> bool:
+            if canary not in body:
+                return False
+            # Ham payloadın ayırt edici (canary'siz) kısmı yansımışsa = reflection.
+            distinctive = payload.replace(canary, "").strip()
+            if distinctive and distinctive[:24] in body:
+                return False
+            return True
+
         for param in params:
             for payload in prompt_payloads:
                 injected = self.inject_param(url, param, payload)
@@ -357,12 +380,12 @@ class SSTIScanner(BaseScanner):
                     resp = self.session.get(injected, timeout=10)
                 except Exception:
                     continue
-                if canary in (resp.text or ""):
+                if _llm_confirmed(resp.text or "", payload):
                     self.report_finding(
                         vuln_type="LLM Prompt Injection",
                         url=url, param=param, payload=payload,
                         severity="High",
-                        evidence=f"Canary '{canary}' reflected in LLM response",
+                        evidence=f"Canary '{canary}' generated WITHOUT raw payload reflection",
                     )
                     return
 
@@ -373,12 +396,12 @@ class SSTIScanner(BaseScanner):
                     resp = self.session.get(url, headers={hdr: payload}, timeout=10)
                 except Exception:
                     continue
-                if canary in (resp.text or ""):
+                if _llm_confirmed(resp.text or "", payload):
                     self.report_finding(
                         vuln_type="LLM Prompt Injection (via Header)",
                         url=url, param=hdr, payload=payload,
                         severity="High",
-                        evidence=f"Canary '{canary}' in response via header {hdr}",
+                        evidence=f"Canary '{canary}' via header {hdr} WITHOUT raw payload reflection",
                     )
                     return
 

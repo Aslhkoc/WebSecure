@@ -1887,34 +1887,73 @@ class BOLAIDORChain(BaseScanner):
         return results
 
     def _probe_query_params(self, endpoint: str, victim_hdrs: Dict, attacker_hdrs: Dict) -> List[Dict]:
-        """Inject ID params into query string."""
+        """Inject ID params into query string — yalnız param ÇIKTIYI gerçekten
+        etkilediğinde IDOR raporla.
+
+        NEDEN diferansiyel: Endpoint enjekte edilen param'ı yok sayıyorsa (SPA/parked/
+        catch-all — baskın durum) her id için 200 ana sayfa döner. Eski hâl bunu
+        'IDOR' sayıp her güvenli app'te 3 param × 3 id = 9 SAHTE bulgu üretiyordu.
+        Gerçek IDOR için param, nesne seçimini DEĞİŞTİRMELİ: (1) yanıt param'sız
+        kontrolden farklı, (2) farklı id'ler farklı gövde döndürmeli (reflection
+        gürültüsü, id değerini placeholder'la nötrleyerek elenir)."""
         results = []
         parsed  = urlparse(endpoint)
         qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
         id_pairs = [(k, v) for k, v in qs_pairs if k.lower() in self._ID_PARAMS]
-        if not id_pairs:
-            # Inject common ID params
-            for id_param in self._ID_PARAMS[:3]:
-                for test_id in [1, 2, 999]:
-                    fuzz_qs  = urlencode(list(qs_pairs) + [(id_param, test_id)])
-                    fuzz_url = urlunparse(parsed._replace(query=fuzz_qs))
-                    try:
-                        r = self.session.get(fuzz_url, headers=attacker_hdrs or victim_hdrs, timeout=8)
-                        if r.status_code == 200 and not _is_auth_error(r):
-                            body = (r.text or "")
-                            if len(body) > 50:
-                                results.append({
-                                    "vuln_type": "IDOR — Query Param ID Injection",
-                                    "url": fuzz_url, "severity": "Medium",
-                                    "description": (
-                                        f"Endpoint returned 200 with injected '{id_param}={test_id}'. "
-                                        "May expose other users' data."
-                                    ),
-                                    "evidence": {"param": id_param, "id": test_id,
-                                                 "status": r.status_code, "body_len": len(body)},
-                                })
-                    except Exception as _fix_e:
-                        _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
+        if id_pairs:
+            return results
+
+        # Param'sız KONTROL: app param'ı yok sayıyorsa enjekte edilenler buna eşittir.
+        try:
+            _c = self.session.get(endpoint, headers=attacker_hdrs or victim_hdrs, timeout=8)
+            ctrl_body = (_c.text or "") if _c.status_code == 200 else None
+        except Exception:
+            ctrl_body = None
+
+        for id_param in self._ID_PARAMS[:3]:
+            bodies: Dict[int, str] = {}
+            urls: Dict[int, str] = {}
+            for test_id in [1, 2, 999]:
+                fuzz_qs  = urlencode(list(qs_pairs) + [(id_param, test_id)])
+                fuzz_url = urlunparse(parsed._replace(query=fuzz_qs))
+                try:
+                    r = self.session.get(fuzz_url, headers=attacker_hdrs or victim_hdrs, timeout=8)
+                    if r.status_code == 200 and not _is_auth_error(r):
+                        body = (r.text or "")
+                        if len(body) > 50:
+                            bodies[test_id] = body
+                            urls[test_id] = fuzz_url
+                except Exception as _fix_e:
+                    _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
+
+            if len(bodies) < 2:
+                continue
+            # Reflection'ı nötrle: enjekte edilen id değerini gövdelerden çıkar.
+            def _norm(b: str, tid: int) -> str:
+                return b.replace(str(tid), "#ID#")
+            normed = {tid: _norm(b, tid) for tid, b in bodies.items()}
+            # (1) param'sız kontrolden farklı mı (id reflection'ı nötrlenmiş hâliyle)
+            differs_from_ctrl = (
+                ctrl_body is None
+                or any(nb != _norm(ctrl_body, tid) for tid, nb in normed.items())
+            )
+            # (2) farklı id'ler farklı nesne mi döndürüyor (sadece reflection değil)
+            varies_across_ids = len(set(normed.values())) > 1
+            if differs_from_ctrl and varies_across_ids:
+                tid = sorted(bodies.keys())[0]
+                results.append({
+                    "vuln_type": "IDOR — Query Param ID Injection",
+                    "url": urls[tid], "severity": "Medium",
+                    "description": (
+                        f"Injected '{id_param}' farklı id'lerde farklı içerik döndürdü "
+                        "(param nesne seçimini etkiliyor) — başka kullanıcıların verisini "
+                        "açığa çıkarabilir."
+                    ),
+                    "evidence": {"param": id_param, "tested_ids": sorted(bodies.keys()),
+                                 "body_lens": {k: len(v) for k, v in bodies.items()},
+                                 "varies_across_ids": True,
+                                 "differs_from_control": bool(differs_from_ctrl)},
+                })
         return results
 
 

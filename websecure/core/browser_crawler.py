@@ -12,7 +12,7 @@ import random as _random
 import re
 import time as _time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 _logger = logging.getLogger(__name__)

@@ -1504,6 +1504,12 @@ def _chain_finding_to_dict(cf: ChainFinding) -> Dict[str, Any]:
         "chain_id":     cf.chain_id,
         "title":        cf.title,
         "severity":     cf.severity,
+        # Zincir severity'si zaten birleşik (amplified) CVSS'ten türetilmiş
+        # OTORİTATİF değerdir; reporting.add_result'ın tip-bazlı CVSS yeniden
+        # türetmesi `type="Chain: ...IDOR..."` gibi substring'lere takılıp bir
+        # bileşenin (örn. IDOR=Medium) severity'sine DÜŞÜRMEMELİ. severity_locked
+        # bu chokepoint'i atlatır → "XSS+CSRF→ATO" Critical, Medium'a inmez.
+        "severity_locked": True,
         "confidence":   cf.confidence,
         "cvss_score":   cf.cvss_score,
         "cvss_vector":  cf.cvss_vector,

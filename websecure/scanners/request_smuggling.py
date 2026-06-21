@@ -122,9 +122,10 @@ class SmugglingFinding:
     severity:    str
     description: str
     evidence:    Dict[str, Any] = field(default_factory=dict)
+    unconfirmed: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "type":        "Request Smuggling",
             "technique":   self.technique,
             "url":         self.url,
@@ -132,6 +133,9 @@ class SmugglingFinding:
             "description": self.description,
             "evidence":    self.evidence,
         }
+        if self.unconfirmed:
+            d["unconfirmed"] = True
+        return d
 
 
 # -----------------------------------------------------------------------------
@@ -379,37 +383,58 @@ def _probe_differential(
         "\r\n"
     ).encode()
 
-    try:
-        s = _make_socket(host, port, use_ssl, timeout=10.0)
-        s.settimeout(6.0)
-        s.sendall(poison)
-        time.sleep(0.1)
-        s.sendall(normal)
+    def _drain(sock) -> bytes:
         chunks = []
         try:
             while True:
-                c = s.recv(4096)
+                c = sock.recv(4096)
                 if not c:
                     break
                 chunks.append(c)
         except socket.timeout as _fix_e:
             logger.debug(f"[scanners.request_smuggling] {type(_fix_e).__name__}: {_fix_e!r}")
-        s.close()
-        raw  = b"".join(chunks)
-        body = _response_body(raw)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        return b"".join(chunks)
 
-        if b"Unrecognized method" in body or b"GPOST" in body or b"Invalid method" in body:
+    _SMUGGLE_MARKERS = (b"Unrecognized method", b"GPOST", b"Invalid method")
+    try:
+        # 1) ZEHİR bağlantısı (s1): poison'un KENDİ yanıtını oku ve AT. Tek-sunucu
+        #    malformed "GPOST"u doğrudan reddedip 501 hata sayfasında "GPOST"u
+        #    echo'lar — bu desync DEĞİL, bu yüzden burada flag'lemiyoruz.
+        s1 = _make_socket(host, port, use_ssl, timeout=10.0)
+        s1.settimeout(6.0)
+        s1.sendall(poison)
+        time.sleep(0.1)
+        _drain(s1)  # poison'un kendi (doğrudan) yanıtını tüket ve AT
+
+        # 2) AYRI/TAZE bağlantı (s2): temiz, GEÇERLİ bir GET gönder. Gerçek CL.TE
+        #    desync'te poison, paylaşılan front→back bağlantısını zehirler ve bu
+        #    AYRI istemci bağlantısındaki kurban GET'e sızar. Tek sunucuda taze
+        #    bağlantı temiz 200 döner → sahte 'CONFIRMED' üretilmez.
+        s2 = _make_socket(host, port, use_ssl, timeout=10.0)
+        s2.settimeout(6.0)
+        s2.sendall(normal)
+        victim_body = _response_body(_drain(s2))
+
+        # Kanıt YALNIZ taze kurban yanıtında (s2) olmalı; poison'un kendi reddinde
+        # (s1) varsa görmezden gel — o doğrudan reddi, çapraz-bağlantı sızıntısı değil.
+        leaked = any(m in victim_body for m in _SMUGGLE_MARKERS)
+        if leaked:
             return SmugglingFinding(
                 technique   = "CL.TE (confirmed)",
                 url         = url,
                 severity    = "Critical",
                 description = (
-                    "CL.TE request smuggling CONFIRMED via differential probe. "
-                    "The normal GET response contains evidence of the smuggled "
-                    "prefix (GPOST method), proving the back-end processed the "
-                    "smuggled request."
+                    "CL.TE request smuggling CONFIRMED via cross-connection differential "
+                    "probe. A separate, syntactically valid victim GET returned evidence "
+                    "of the smuggled prefix (GPOST), proving the smuggled bytes crossed "
+                    "into another connection's request — a true front/back-end desync."
                 ),
-                evidence    = {"body_fragment": body[:300].decode("utf-8", "replace")},
+                evidence    = {"victim_body_fragment": victim_body[:300].decode("utf-8", "replace")},
             )
     except Exception as exc:
         logger.debug("[Smuggling] differential probe error: %s", exc)
@@ -513,19 +538,23 @@ def _probe_h2_te(
         raw, elapsed = _send_recv(host, port, use_ssl, payload, timeout=10.0, read_timeout=5.0)
         st = _status_code(raw)
 
-        # A non-400 response to a deliberately malformed double-TE request
-        # indicates the server accepted it — prerequisite for H2.TE desync
+        # A non-400 response to a deliberately malformed double-TE request only
+        # means the (single) server ACCEPTED/ignored the extra TE header — a
+        # PRECONDITION for H2.TE, NOT proof of desync. Tek H1 sunucu fazladan TE'yi
+        # yok sayıp 200 döndüğünde eskiden High FP üretiyordu (POST'a 200 dönen HER
+        # site). Gerçek desync H2 front-end + H1 back-end uyuşmazlığı gerektirir;
+        # status tek başına bunu gösteremez → Info + unconfirmed (precondition).
         if st is not None and st not in (400, 408, 413, 501, 502, 503, 504):
             return SmugglingFinding(
-                technique="H2.TE",
+                technique="H2.TE (precondition)",
                 url=url,
-                severity="High",
+                severity="Info",
                 description=(
-                    f"Possible H2.TE desynchronisation: server accepted duplicate "
-                    f"Transfer-Encoding header ({obf!r}) with status {st}. "
-                    "In H2->H1 downgrade scenarios the front-end strips the second TE "
-                    "header (per RFC 9113) while the back-end processes it, enabling "
-                    "request smuggling."
+                    f"H2.TE PRECONDITION (unconfirmed): server accepted duplicate "
+                    f"Transfer-Encoding header ({obf!r}) with status {st}. Bu yalnız bir "
+                    "ön koşuldur — tek başına zafiyet DEĞİL. H2->H1 downgrade'li bir "
+                    "mimaride front-end ikinci TE'yi strip ederken back-end işlerse "
+                    "desync mümkün olur; gerçek desync differential probe ile doğrulanmalı."
                 ),
                 evidence={
                     "duplicate_te": obf,
@@ -533,6 +562,7 @@ def _probe_h2_te(
                     "elapsed_s": round(elapsed, 3),
                     "raw_head": (raw or b"")[:200].decode("utf-8", "replace"),
                 },
+                unconfirmed=True,
             )
     return None
 
