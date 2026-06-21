@@ -355,8 +355,32 @@ class CVSSScorer:
         # no vector for. There is no separate `cvss_severity` field anymore (it was
         # redundant and could diverge from `severity`); `severity` is the single
         # source of truth and `cvss_score`/`cvss_vector` are its numeric evidence.
+        #
+        # FALSE-POSITIVE FIX (2026-06-21): tarayıcının BİLEREK düşük tuttuğu
+        # "ön koşul / doğrulanmamış / severity-kilitli" bulguları CVSS map'i YENİDEN
+        # ŞİŞİRMEMELİ. reporting.add_result bu guard'a sahipti ama `final` listesi
+        # verify_and_score → score_findings → buradan (score()) üretildiğinden guard
+        # ATLANINIYORDU: örn. "Request Smuggling — TE.TE (precondition)" severity=Info
+        # (501=sunucu reddetti, tek başına zafiyet değil) idi ama type="Request
+        # Smuggling" → CVSS Critical (CWE-444) ile final/rapor manşetinde Critical
+        # oluyordu. Açık precondition/unconfirmed/severity_locked işaretli bulgular
+        # için CVSS YALNIZ İNDİREBİLİR, yükseltemez.
+        _scanner_sev = str(finding.get("severity") or "")
+        _locked = (
+            bool(finding.get("severity_locked"))
+            or bool(finding.get("unconfirmed"))
+            or "precondition" in str(finding.get("technique", "")).lower()
+            or "precondition" in str(finding_type).lower()
+            or "unconfirmed" in str(finding_type).lower()
+        )
         if _is_known_type(finding_type):
-            result["severity"] = severity_label
+            if _locked and _scanner_sev and (
+                _SEV_RANK.get(severity_label, 0) > _SEV_RANK.get(_scanner_sev, 0)
+            ):
+                # CVSS yükseltecekti — işaretli zayıf bulguyu koru.
+                result["severity"] = _scanner_sev
+            else:
+                result["severity"] = severity_label
         elif not result.get("severity"):
             result["severity"] = severity_label
 
@@ -427,6 +451,10 @@ def cvss_to_severity(score: float) -> str:
 
 # Geriye dönük iç alias — cvss.py içi çağrılar _severity_label kullanıyor.
 _severity_label = cvss_to_severity
+
+# Severity sıralaması — score() içindeki "CVSS yalnız indirebilir" guard'ı için
+# (precondition/unconfirmed/severity_locked bulgularını yükseltmeyi engeller).
+_SEV_RANK = {"Info": 0, "Informational": 0, "Low": 1, "Medium": 2, "High": 3, "Critical": 4}
 
 
 def score_findings(findings: list, auth_required: bool = False,

@@ -574,6 +574,16 @@ class OAuth2AttackSurface(BaseScanner):
     ]
 
     def run(self, target: str, **kwargs) -> List[Dict]:
+        # FALSE-POSITIVE FIX (2026-06-21): SPA hedefleri (#/...) için ``target``
+        # genelde fragment'li gelir (örn. https://app/#/). Fragment SUNUCUYA HİÇ
+        # GÖNDERİLMEZ — client-side'dır. Eski kod ``base.rstrip('/') + path`` ile
+        # ``https://app/#/oauth/introspect`` gibi URL'ler üretiyordu; sunucu yalnız
+        # ``/`` görüp SPA index.html (200) dönüyor, gevşek substring kontrolü
+        # ("exp"/"sub" gövdede) tutuyor → sahte "OAuth2 Token Introspection Exposed
+        # [High]". Fragment'i (ve sorgu dizesini) en başta atarak tüm OAuth
+        # URL-kurulumlarını gerçek sunucu yoluna sabitleriz.
+        _p0 = urlparse(target)
+        target = urlunparse(_p0._replace(fragment="", query=""))
         parsed   = urlparse(target)
         legit    = parsed.netloc or "app.example.com"
         results: List[Dict] = []
@@ -966,8 +976,22 @@ class OAuth2AttackSurface(BaseScanner):
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     timeout=6, verify=False,
                 )
-                body = (r.text or "").lower()
-                if r.status_code == 200 and ("active" in body or "exp" in body or "sub" in body):
+                # FALSE-POSITIVE FIX (2026-06-21): RFC 7662 introspection yanıtı
+                # ZORUNLU olarak application/json + üst düzey ``active`` (boolean)
+                # alanı içerir. Eski gevşek kontrol (gövdede "exp"/"sub" substring'i)
+                # her SPA index.html'ine (içinde "export"/"submit"/"subscribe" geçen)
+                # takılıp sahte High üretiyordu. Artık gerçek introspection JSON'u şart.
+                ctype = (r.headers.get("Content-Type", "") or "").lower()
+                if r.status_code != 200 or "json" not in ctype:
+                    continue
+                try:
+                    payload = r.json()
+                except (ValueError, TypeError):
+                    continue
+                if not (isinstance(payload, dict) and "active" in payload
+                        and isinstance(payload.get("active"), bool)):
+                    continue
+                if True:
                     results.append({
                         "vuln_type": "OAuth2 Token Introspection Endpoint Exposed",
                         "url": url, "severity": "High",

@@ -705,6 +705,23 @@ _POSTMESSAGE_INTERCEPT_JS = r"""
 """
 
 
+# FALSE-POSITIVE GUARD (2026-06-21): bu "sink" adları GERÇEK bir yürütme sink'i
+# DEĞİL — yalnız bir 'message' dinleyicisinin gönderdiğimiz canary'yi ALDIĞINI
+# gösteren MAKBUZ kayıtlarıdır (monkey-patch'in kendi satır-669 dinleyicisi her
+# postMessage canary'sinde tetiklenir). Salt "alındı" DOM XSS kanıtı değildir;
+# gerçek XSS verinin innerHTML/eval/document.write/Function/setTimeout-string vb.
+# TEHLİKELİ sink'e aktığını gerektirir. Bu kümeyi Critical sink yolundan eleriz.
+_RECEIPT_ONLY_SINKS = frozenset({"postMessage_received"})
+
+
+def _drop_receipt_only_hits(hits):
+    """__domxss_hits__ listesinden makbuz-yalnız (FP) sink kayıtlarını eler."""
+    if not isinstance(hits, list):
+        return []
+    return [h for h in hits
+            if isinstance(h, dict) and str(h.get("sink", "")) not in _RECEIPT_ONLY_SINKS]
+
+
 class DOMXSSMonkeyPatchProber(BaseScanner):
     """
     JS sink override via Playwright add_init_script + canary injection.
@@ -800,7 +817,7 @@ class DOMXSSMonkeyPatchProber(BaseScanner):
             hits = await page.evaluate("window.__domxss_hits__ || []")
             # Reset for next probe
             await page.evaluate("window.__domxss_hits__ = []")
-            return hits if isinstance(hits, list) else []
+            return _drop_receipt_only_hits(hits)
         except Exception as exc:
             _logger.debug(f"[DOMXSSMonkeyPatchProber] Navigate error on {url}: {exc!r}")
             return []
@@ -825,7 +842,7 @@ class DOMXSSMonkeyPatchProber(BaseScanner):
             # Reload to trigger code that reads storage on load
             await page.reload(timeout=self.timeout_ms, wait_until="domcontentloaded")
             await page.wait_for_timeout(800)
-            hits = await page.evaluate("window.__domxss_hits__ || []")
+            hits = _drop_receipt_only_hits(await page.evaluate("window.__domxss_hits__ || []"))
             await page.evaluate(
                 "() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e) {} }"
             )
@@ -1003,8 +1020,22 @@ class PostMessageInterceptionProber(BaseScanner):
                 "addEventListener(\"message\"", "__pm_intercept",
                 "__pm_listeners", "__domxss_hits__", "=> {", "function(",
             )
+            # FALSE-POSITIVE FIX (2026-06-21): ``postMessage_received`` GERÇEK bir DOM
+            # XSS sink DEĞİL — yalnızca bir 'message' dinleyicisinin (üstelik bizim
+            # monkey-patch'imizin KENDİ kurduğu satır-669 dinleyicisinin) gönderdiğimiz
+            # canary'yi ALDIĞINI gösteren bir MAKBUZ'dur. Prober canary'yi
+            # ``window.postMessage`` ile yollar → kendi dinleyicimiz onu alır → sink=
+            # "postMessage_received", val=çıplak canary kaydeder; harness-marker ve
+            # canary filtreleri bunu yakalayamaz (val sadece canary). Bu yüzden 16 sahte
+            # "Sink Reached [Critical]" üretiyordu (preview.owasp-juice.shop SPA'sının
+            # her hash-route'unda aynı sayfa). GERÇEK postMessage→XSS, verinin TEHLİKELİ
+            # bir yürütme sink'ine (innerHTML/outerHTML/document.write/eval/Function/
+            # setTimeout-string/location.*/insertAdjacentHTML) aktığını gerektirir —
+            # bunlar zaten ayrı, gerçek sink adıyla kaydedilir. Salt "alındı" Critical olamaz.
             real_sink_hits = []
             for hit in (sink_hits or []):
+                if str(hit.get("sink", "")) in _RECEIPT_ONLY_SINKS:
+                    continue  # makbuz — yürütme sink'i değil, FP (modül sabiti)
                 val = str(hit.get("val", ""))
                 if any(m in val for m in _HARNESS_MARKERS):
                     continue  # kendi harness'ımız — sahte

@@ -264,6 +264,14 @@ def render_html_dashboard(results: dict) -> str:
     Generates a modern, dark-mode, single-file HTML dashboard from the scan results.
     """
     # --- Data Prep ---
+    # Kanonik bulgu-sayılabilirlik kapısı (reporting ile birebir aynı) — lazy import
+    # (reporting çok geç-yüklenen modülleri çeker; döngüsel import riskini önler).
+    try:
+        from websecure.core.reporting import _is_countable_finding as _is_countable
+    except Exception:
+        def _is_countable(_item):  # pragma: no cover — reporting yoksa eski davranış
+            return True
+
     meta = results.get("meta") or {}
     if isinstance(meta, list):
          meta = next((x for x in meta if isinstance(x, dict)), {})
@@ -377,6 +385,14 @@ def render_html_dashboard(results: dict) -> str:
             if not _has_substance:
                 continue
 
+            # SAYIM BİRLİĞİ (2026-06-21): report.html == summary.json == SARIF olması
+            # için bulgu kümesini reporting.build_summary ile AYNI kanonik kapıdan
+            # geçir. Eski kod kendi _has_label/_has_substance filtresini + kendi
+            # dedup'ını kullanıyordu; _is_countable_finding'ın type'sız (yalnız
+            # title/issue taşıyan) artefakt elemesini KAÇIRIYORDU → 145 vs 141 çelişki.
+            if not _is_countable(item):
+                continue
+
             # Skip status/meta-only items
             if bucket == "sqlmap" and item.get("status") in ("skipped", "finished") and "findings" in item:
                 continue
@@ -431,12 +447,22 @@ def render_html_dashboard(results: dict) -> str:
     # This keeps the highest-severity version when multiple buckets report the same finding.
     _dedup_map: dict = {}
     for _f in findings:
-        _base = _f["type"].split(" (")[0].strip()
+        # YALNIZ HTML'in eklediği son " (bucket)" ekini at — meşru parantezli
+        # niteleyiciyi (örn. "JS Secret Exposure (Google OAuth)" vs "(Password)")
+        # KORU. Eski .split(" (")[0] ilk parantezden bölüp iki FARKLI sırrı tek
+        # bulguya çöküyordu (H10→H9 sayım sapması).
+        _base = _f["type"].rsplit(" (", 1)[0].strip()
         # Normalize URL (strip trailing slash) so the same finding on "host/" and
         # "host" is not double-counted — e.g. the duplicate "Teknoloji Tespiti —
         # HSTS, Vercel" rows on https://site/ and https://site.
         _url_norm = (_f["url"] or "").rstrip("/")
-        _key = (_base, _url_norm, _f["param"])
+        # SAYIM BİRLİĞİ (2026-06-21): reporting._dedupe_findings anahtarı
+        # (type,url,location,param) ile hizala — ``location``'ı dahil et ki HTML ile
+        # summary.json AYNI kümeye çöksün (eski anahtar location'ı atlayıp farklı
+        # temsilci seçiyordu → 145 vs 141).
+        _detail = _f.get("detail") or {}
+        _loc = _detail.get("location") if isinstance(_detail, dict) else None
+        _key = (_base, _url_norm, _loc, _f["param"])
         _ex = _dedup_map.get(_key)
         if _ex is None:
             _dedup_map[_key] = _f

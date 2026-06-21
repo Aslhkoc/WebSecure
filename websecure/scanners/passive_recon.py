@@ -55,6 +55,27 @@ def _load_sensitive_files() -> List[str]:
 
 SENSITIVE_FILES: List[str] = _load_sensitive_files()
 
+# FALSE-POSITIVE FIX (2026-06-21): bu dosyalar STANDART GEREĞİ HERKESE AÇIK olacak
+# şekilde tasarlanmıştır — varlıkları bir zafiyet/sızıntı DEĞİL, çoğu kez İYİ bir
+# güvenlik pratiğidir. "Sensitive File Exposure" olarak (üstelik CVSS-otoritesi onu
+# High'a şişirerek) raporlanmaları FP'dir (gerçek taramada security.txt +
+# .well-known/security.txt iki sahte High üretti). Bunları duyarlı-dosya bulgu
+# yolundan eleriz; robots/sitemap zaten ayrı Info kayıtlarıyla raporlanır.
+_PUBLIC_BY_DESIGN_FILES: frozenset = frozenset({
+    "security.txt", ".well-known/security.txt",
+    "robots.txt", "humans.txt", "sitemap.xml", "sitemap_index.xml",
+    ".well-known/change-password",
+    ".well-known/apple-app-site-association",
+    ".well-known/assetlinks.json",
+    ".well-known/openid-configuration",
+})
+
+
+def _is_public_by_design(fname: str) -> bool:
+    """RFC/konvansiyon gereği herkese açık olması beklenen dosya mı?"""
+    f = (fname or "").lstrip("/").lower()
+    return f in _PUBLIC_BY_DESIGN_FILES
+
 # --- Soft-404 / SPA-fallback aware sensitive-file probing -------------------
 # Many modern targets (Angular/React SPAs, or catch-all frameworks) reply with
 # HTTP 200 and the SAME app-shell HTML for EVERY path — including files that do
@@ -403,6 +424,9 @@ class ContentDiscoveryScanner(BaseScanner):
                 "duyarlı dosya bulguları içerik imzasıyla doğrulanacak.", len(baseline)
             )
         for f in SENSITIVE_FILES:
+            # Standartça herkese açık dosyalar duyarlı-sızıntı sayılmaz (FP fix).
+            if _is_public_by_design(f):
+                continue
             url = urljoin(base_url, f"/{f}")
             try:
                 resp = self.session.get(url, timeout=4, allow_redirects=False)

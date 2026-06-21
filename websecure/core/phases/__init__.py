@@ -1285,6 +1285,22 @@ _NO_TIMEOUT_UNBOUNDED_PHASES: set = {
 # no_timeout is on. Large on purpose: only a genuine hang trips it.
 _NO_TIMEOUT_WATCHDOG_FACTOR = 6
 
+# TOR/PROXY-FARKINDA WATCHDOG (2026-06-21). Tor/SOCKS üzerinde HER istek 10-30x
+# yavaştır; bir saldırı tarayıcısı onlarca-yüzlerce payload gönderir → sabit
+# 600-720s failsafe MEŞRU İLERLEYEN fazı erkenden öldürür. Gerçek bir taramada
+# (preview.owasp-juice.shop, Tor+Stealth) idor/xxe/lfi/ssrf/ssti/graphql/race/
+# mass_assignment/cors/crlf/prototype_pollution dahil ~23 offensive faz tam da bu
+# yüzden "exceeded …s — skipped" ile atlandı; saldırı yüzeyi neredeyse hiç
+# denenmedi. Çözüm: Tor aktifken SALDIRI fazlarının failsafe'ini bu çarpanla
+# büyüt (içteki her istek zaten _floor_request_timeout ile sınırlı olduğundan
+# gerçek bir donma yine yakalanır — yalnız "yavaş ama ilerliyor" fazı kesmeyiz).
+# DISCOVERY/RECON fazlarına UYGULANMAZ: onlar kısmi sonuç döndürür ve süreleri
+# büyürse offensive aşaması daha da geç başlar (bağımlı zincir). Direkt bağlantıda
+# (tor_active=False) ÇARPAN 1 → davranış ve benchmark AYNEN korunur.
+_TOR_WATCHDOG_FACTOR = 4
+# Tor'da saldırı fazı failsafe tabanı (sn) — 600s Tor'da bir-iki istekte biter.
+_TOR_OFFENSIVE_WATCHDOG_FLOOR = 1800
+
 # ---------------------------------------------------------------------------
 # STAGED + BACKGROUND execution model (Madde 4 — Adım B)
 # ---------------------------------------------------------------------------
@@ -1445,6 +1461,25 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
                 phase_timeout = float("inf")
             else:
                 phase_timeout = max(phase_timeout * _NO_TIMEOUT_WATCHDOG_FACTOR, 600)
+                # TOR-FARKINDA: Tor/proxy aktif + faz SALDIRI fazıysa (discovery/
+                # recon/background/finalizer/waf DEĞİL) failsafe'i büyüt — Tor'da
+                # her istek 10-30x yavaş olduğundan sabit bütçe meşru-yavaş fazı
+                # erkenden kesip ~23 offensive tarayıcıyı atlatıyordu. Direkt
+                # bağlantıda bu dal hiç çalışmaz (çarpan etkisi yok) → benchmark
+                # ve normal davranış korunur.
+                try:
+                    from websecure.core.http import tor_active as _tor_active
+                    _is_offensive = (
+                        phase_id not in _NON_OFFENSIVE_PHASES
+                        and phase_id not in _NO_TIMEOUT_UNBOUNDED_PHASES
+                    )
+                    if _tor_active() and _is_offensive:
+                        phase_timeout = max(
+                            phase_timeout * _TOR_WATCHDOG_FACTOR,
+                            _TOR_OFFENSIVE_WATCHDOG_FLOOR,
+                        )
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -1957,6 +1992,15 @@ def _runner_http_crawler_orchestrator(ctx) -> None:
         url = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or ""
         if not url:
             return
+        # İDEMPOTENCY (2026-06-21): bu runner HEM bağımsız 'http_crawler_orchestrator'
+        # fazı olarak HEM de _runner_discovery içinden (Katana sonrası) çağrılır →
+        # eskiden CrawlerOrchestrator İKİ KEZ koşuyordu. Normal bağlantıda sadece
+        # israf; Tor'da en pahalı crawl'ı (binlerce yavaş istek) İKİYE KATLAYIP
+        # discovery aşamasının bütçesini yiyor, offensive fazları geç başlatıyordu.
+        # Bir kez koştuysa tekrar etme (kısmi de olsa sonuç ctx.results'ta).
+        _cr = getattr(ctx, "results", None)
+        if isinstance(_cr, dict) and _cr.get("_http_crawler_orchestrator_done"):
+            return
         session = getattr(ctx, "session", None) or hardened_session()
         cfg = getattr(ctx, "config", {}) or {}
         disc_cfg = cfg.get("discovery") or {}
@@ -2023,6 +2067,8 @@ def _runner_http_crawler_orchestrator(ctx) -> None:
             "[phases] CrawlerOrchestrator: %d endpoints, %d API, %d gRPC",
             len(result.endpoints), len(result.api_endpoints), len(result.grpc_services),
         )
+        if isinstance(ctx_results, dict):
+            ctx_results["_http_crawler_orchestrator_done"] = True
     except Exception as exc:
         _logger.debug(f"[phases] CrawlerOrchestrator error: {exc!r}")
         _report_phase_error("http_crawler", "phases._runner_http_crawler_orchestrator", exc)

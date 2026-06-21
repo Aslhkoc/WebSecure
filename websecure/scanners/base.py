@@ -121,10 +121,23 @@ class BaseScanner:
         safe_entry = redact_sensitive(entry)
 
         # 3. Store — protected by lock
+        #
+        # BUG FIX (2026-06-21, file_upload çökmesi): scanner'lar global ``ctx.results``
+        # dict'ini paylaşır ve orada bazı kovalar LİSTE DEĞİL'dir — ``meta`` bir dict
+        # (reporting.build_summary onu metadata nesnesi olarak kullanır), ``*_summary``
+        # de dict'tir. Eski kod her kovayı liste varsayıp ``.append()`` çağırıyordu →
+        # ``self.add("meta", {...})`` (örn. file_upload "no_endpoints" durumu)
+        # ``AttributeError: 'dict' object has no attribute 'append'`` ile TÜM tarayıcıyı
+        # çökertiyordu. Artık liste-olmayan rezerve kovaya yerel append YAPMAYIZ; kayıt
+        # yine 4. adımda merkezi rapora (add_result, meta'yı doğru ele alır) gider.
         with self._results_lock:
-            if bucket not in self.results:
-                self.results[bucket] = []
-            self.results[bucket].append(safe_entry)
+            existing = self.results.get(bucket)
+            if existing is None:
+                self.results[bucket] = [safe_entry]
+            elif isinstance(existing, list):
+                existing.append(safe_entry)
+            # else: rezerve non-list kova (meta/-summary) — yerel kopyayı bozma,
+            #       merkezi rapora yazılması (aşağıda) yeterli.
 
         # 4. Central Report & Alert (has its own RLock internally)
         add_result(bucket, safe_entry)
