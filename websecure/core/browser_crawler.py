@@ -302,8 +302,27 @@ class BrowserCrawler:
                     pw.chromium.launch(**launch_opts), timeout=90
                 )
             except Exception as e:
-                _logger.error(f"[BrowserCrawler] Chromium başlatılamadı/zaman aşımı: {e}")
-                return self._result
+                # GÖRÜNÜR mod başarısızsa (kullanıcının ortamında sistem Chrome/GUI
+                # çökebilir — gerçek taramada Selenium "Chrome instance exited" verdi)
+                # HEADLESS'e DÜŞ. Aksi halde SPA form keşfi tamamen ölüyor → JS-render
+                # input alanlarına (login/register/ödeme) HİÇ enjeksiyon yapılamıyordu.
+                if not launch_opts.get("headless", True):
+                    _logger.warning(
+                        "[BrowserCrawler] Görünür Chrome başlatılamadı (%s) — headless'e "
+                        "düşülüyor ki SPA formları yine de keşfedilsin.", e
+                    )
+                    launch_opts["headless"] = True
+                    launch_opts.pop("slow_mo", None)
+                    try:
+                        browser = await asyncio.wait_for(
+                            pw.chromium.launch(**launch_opts), timeout=90
+                        )
+                    except Exception as e2:
+                        _logger.error(f"[BrowserCrawler] Chromium başlatılamadı (headless de): {e2}")
+                        return self._result
+                else:
+                    _logger.error(f"[BrowserCrawler] Chromium başlatılamadı/zaman aşımı: {e}")
+                    return self._result
             ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state
@@ -440,6 +459,19 @@ class BrowserCrawler:
                     # Scroll to trigger lazy loading
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await page.wait_for_timeout(500)
+
+                    # Yavaş SPA (Angular/Vue/React) + Tor: form alanları JS render'ı
+                    # BİTMEDEN çıkarılırsa forms_meta BOŞ döner → input alanları
+                    # (login/register/ödeme: name/email/password/kart) HİÇ fuzz'lanmaz.
+                    # Proxy (Tor) altında form/input elementlerinin görünmesini kısa,
+                    # SINIRLI bekle: form varsa anında döner; hiç yoksa en fazla bu süre.
+                    if self.config.proxy_url:
+                        try:
+                            await page.wait_for_selector(
+                                "form, input, textarea", timeout=6000, state="attached")
+                            await page.wait_for_timeout(400)  # kardeş alanlar da render olsun
+                        except Exception:
+                            pass  # gerçekten form yoksa sorun değil, keşfe devam
 
                     # Extract links
                     links = await page.evaluate("""
