@@ -1403,7 +1403,10 @@ class PrototypePollutionXSSProber:
     Single Responsibility: PP-based XSS surface detection.
     """
     _PAYLOADS: List[str] = _PROTO_POLLUTION_XSS_PAYLOADS
-    _XSS_SIGS = ("onerror=alert", "src=javascript:", "innerHTML", "onload=alert")
+    # NOT: "innerHTML" KALDIRILDI — normal JS bundle'larında (özellikle SPA) her
+    # yerde geçer ve kick.com gibi hedeflerde ~105x sahte "PP→XSS" üretiyordu.
+    # Kalanlar gerçek gadget imzaları (executable XSS sink).
+    _XSS_SIGS = ("onerror=alert", "src=javascript:", "onload=alert")
 
     def probe(
         self,
@@ -1414,19 +1417,33 @@ class PrototypePollutionXSSProber:
         findings: List[Dict[str, Any]] = []
         parsed = urlparse(url)
         existing = parse_qsl(parsed.query)
+        # Baseline: PP payload OLMADAN yanıt. İmza zaten baseline'da varsa (sitenin
+        # kendi JS'i) bu PP değil — gürültü. Bir kez çek.
+        try:
+            base_text = session.get(url, timeout=timeout).text or ""
+        except Exception:
+            base_text = ""
         for payload in self._PAYLOADS:
             key, _, val = payload.partition("=")
             params = existing + [(key, val or payload)]
             test_url = urlunparse(parsed._replace(query=urlencode(params)))
             try:
                 resp = session.get(test_url, timeout=timeout)
-                if any(sig in resp.text for sig in self._XSS_SIGS):
+                text = resp.text or ""
+                # KANIT: imza yanıtta var + baseline'da YOK + ham payload'ın
+                # echo'su DEĞİL (reflection ≠ PP gadget tetiklenmesi).
+                hit = next(
+                    (s for s in self._XSS_SIGS
+                     if s in text and s not in base_text and s not in payload),
+                    None,
+                )
+                if hit:
                     findings.append({
                         "vuln_type": "Prototype Pollution -> XSS",
                         "url": url,
                         "param": key,
                         "payload": payload,
-                        "evidence": "PP gadget XSS signature detected in response",
+                        "evidence": f"PP gadget XSS signature '{hit}' appeared (not in baseline, not reflected)",
                     })
             except Exception as _exc:
                 logger.debug(f"[PPXSSProber] probe failed for {url}: {_exc!r}")

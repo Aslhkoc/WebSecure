@@ -957,7 +957,10 @@ class HPPWAFBypassProber(BaseScanner):
             return None
 
         body = _safe_text(resp)
-        if expected_canary.lower() in body.lower() or "<script>" in body.lower():
+        # Bare "<script>" in body KALDIRILDI: hemen her HTML sayfasında <script> tag'i
+        # vardır → her sayfada sahte "WAF Bypass" (kick.com'da ~30x). Benzersiz canary'nin
+        # reflection'ı, split fragment'in WAF'ı geçip uygulamaya ULAŞTIĞININ kanıtıdır.
+        if expected_canary.lower() in body.lower():
             waf_note = "WAF fingerprinted — bypass confirmed." if waf_present else "No WAF detected."
             return {
                 "vuln_type": f"WAF Bypass via HPP Split Payload ({attack_type})",
@@ -1017,10 +1020,15 @@ class HPPWAFBypassProber(BaseScanner):
         # NOTE: "union" alone is too broad (FP on any page mentioning unions).
         # "sql" alone is too broad (FP on SQL documentation/framework pages).
         # Use specific SQL error messages or canary reflection only.
+        # SQLi için canary'nin DÜZ echo'su SQL ÇALIŞTIĞINI kanıtlamaz (metin yansıması);
+        # eski "canary in body" reflect eden her endpoint'te sahte "UNION reassembled
+        # Critical" üretiyordu (~35x). UNION-reassembly kanıtı = gerçek SQL hatası.
         reflected = (
-            canary.lower() in body.lower()
-            or "syntax error" in body.lower()
+            "syntax error" in body.lower()
             or "you have an error in your sql" in body.lower()
+            or "sql syntax" in body.lower()
+            or "ora-0" in body.lower()
+            or "unclosed quotation" in body.lower()
         )
         if reflected:
             waf_note = "WAF fingerprinted — bypass confirmed." if waf_present else "No WAF detected."
@@ -1108,13 +1116,16 @@ class HPPWAFBypassProber(BaseScanner):
             if attack_type == "XSS":
                 reflected = evil_payload.lower() in body.lower()
             elif attack_type == "SQLi":
-                # "sql" alone is too broad (FP on SQL docs/framework pages); use specific errors.
+                # "sql" alone is too broad (FP on SQL docs/framework pages); use specific
+                # errors. evil_payload'ın DÜZ echo'su KALDIRILDI: payload metninin
+                # yansıması SQL çalıştığını göstermez (reflection FP); yalnız gerçek SQL
+                # hata imzaları kanıttır.
                 reflected = (
                     "syntax error" in body.lower()
                     or "you have an error in your sql" in body.lower()
                     or "sql syntax" in body.lower()
                     or "ora-0" in body.lower()
-                    or evil_payload.lower() in body.lower()
+                    or "unclosed quotation" in body.lower()
                 )
             elif attack_type == "PathTraversal":
                 reflected = (
