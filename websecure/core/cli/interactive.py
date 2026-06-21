@@ -292,6 +292,53 @@ def setup_show_browser(cfg: dict, args: Namespace) -> None:
     print("=" * 60 + "\n")
 
 
+def confirm_stealth_browser_injection(cfg: dict, args: Namespace, profile: str) -> None:
+    """
+    Stealth profili + görünür form enjeksiyonu ÇELİŞKİSİ: uyar ve YENİDEN sor.
+
+    Görünür Chrome'da alanlara SQLi/XSS payload'ı yazıp form göndermek stealth'in
+    (sessiz tarama) amacının tam tersidir — gürültülüdür, WAF/IDS kolay yakalar,
+    hedef loglarında belirgin görünür. Kullanıcı 'E' derse devam; 'H' derse görünür
+    enjeksiyonu kapatır ve tarayıcıyı stealth'e uygun headless'e geri alır.
+    Profil-aşamasından SONRA (main Phase 5b) çağrılır. dry-run/batch'te no-op.
+    """
+    if args.dry_run or args.batch:
+        return
+    if str(profile or "").lower() != "stealth":
+        return
+    if not bool((cfg.get("browser_injection") or {}).get("enabled")):
+        return
+
+    print("\n" + "=" * 60)
+    print("  +======================================================+")
+    print("  |  [!]  STEALTH CELISKI UYARISI                        |")
+    print("  +======================================================+")
+    print("  Stealth (sessiz) profili sectiniz AMA gorunur tarayici")
+    print("  form enjeksiyonu ACIK.")
+    print("")
+    print("  Gorunur Chrome'da alanlara SQLi/XSS payload'i yazip form")
+    print("  gondermek STEALTH'IN TAM TERSIDIR:")
+    print("   - Cok sayida anormal istek -> WAF/IDS kolayca yakalar")
+    print("   - Tarayici parmak izi + JS yurutme hedef loglarinda belirgin")
+    print("   - 'Sessiz tarama' amaci bozulur")
+    print("")
+
+    _ans = _read("  Yine de gorunur form enjeksiyonu yapilsin mi? (e/H): ", "h").lower()
+
+    if _ans.startswith("e"):
+        print("  [+] Onaylandi — stealth'e ragmen gorunur enjeksiyon ACIK kalacak.")
+    else:
+        cfg.setdefault("browser_injection", {})["enabled"] = False
+        br = cfg.setdefault("browser", {})
+        br["headless"] = True
+        br["show_browser"] = False
+        br.pop("slow_mo_ms", None)
+        print("  [i] Gorunur enjeksiyon KAPATILDI — tarayici headless (sessiz) calisacak.")
+        print("      Form testleri yine arka planda (HTTP) yapilir.")
+
+    print("=" * 60 + "\n")
+
+
 def setup_proxy(cfg: dict, args: Namespace) -> None:
     """
     Interactive proxy / IP-rotation setup and OpSec summary.

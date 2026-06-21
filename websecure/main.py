@@ -1429,6 +1429,10 @@ def main() -> None:
     # Phase 5 — profile selection
     profile, cfg = _select_profile(cfg, args)
 
+    # Phase 5b — stealth + görünür enjeksiyon çelişkisi: uyar ve yeniden sor
+    from websecure.core.cli.interactive import confirm_stealth_browser_injection  # noqa: PLC0415
+    confirm_stealth_browser_injection(cfg, args, profile)
+
     # Phase 6 — full scan execution
     _run_scan_phases(cfg, args, url, scheme, profile, results)
 
