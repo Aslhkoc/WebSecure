@@ -1384,6 +1384,109 @@ _PHASE_PRIORITY: Dict[str, int] = {
 _DEFAULT_PHASE_PRIORITY = 50
 
 
+# ---------------------------------------------------------------------------
+# OFFENSIVE HEDEF ÖNCELİKLENDİRME + BÜTÇE (2026-06-22)
+# ---------------------------------------------------------------------------
+# Problem: büyük sitelerde keşif 400-500+ "endpoint" bulur ama bunların ÇOĞU
+# statik JS/CSS/asset ve enjeksiyon yüzeyi OLMAYAN SPA-route'larıdır. Offensive
+# tarayıcılar (lfi/ssrf/xxe/sqli/xss/idor…) bu listenin TAMAMINI × her payload
+# deneyince faz-watchdog'unu (600-720s) aşıp ATLANIYOR → saldırı yüzeyi hiç
+# test edilmiyor (kullanıcının gördüğü ~23 faz "skipped").
+#
+# Çözüm: offensive aşamasından ÖNCE endpoint'leri ENJEKTE-EDİLEBİLİRLİĞE göre
+# önceliklendir (parametreli > form > API > dinamik-yol > statik-asset) ve
+# bütçeye göre cap'le. Böylece tarayıcılar EN DEĞERLİ hedefleri ÖNCE ve BÜTÇE
+# İÇİNDE test eder, statik gürültüyle zaman harcamaz → fazlar BİTER (atlanmaz).
+# Tam liste rapor için `all_endpoints`'te saklanır; offensive sonrası geri yüklenir.
+# Cap config: offensive.max_target_endpoints (Tor'da tabanı düşük).
+
+def _offensive_target_score(url: str) -> int:
+    """Bir URL'in enjeksiyon-yüzeyi değeri (yüksek = önce test et)."""
+    u = str(url or "")
+    low = u.lower()
+    score = 0
+    # En değerli: sorgu parametresi (doğrudan enjekte edilebilir)
+    if "?" in u and "=" in u.split("?", 1)[1]:
+        score += 100
+    # API/REST/GraphQL yüzeyi
+    if any(s in low for s in ("/api/", "/rest/", "/graphql", "/v1/", "/v2/", "/v3/")):
+        score += 60
+    # Dinamik yol işaretleri (id/sayı/uzantılı dosya)
+    if re.search(r"/\d+(?:/|$|\?)", u) or low.split("?", 1)[0].endswith(
+            (".php", ".asp", ".aspx", ".jsp", ".json", ".xml", ".do", ".action")):
+        score += 30
+    # Statik asset = enjeksiyon yüzeyi yok → en sona
+    try:
+        from websecure.core.utils.net import is_static_asset as _isa
+        if _isa(u):
+            score -= 80
+    except Exception:
+        if low.split("?", 1)[0].endswith(
+                (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+                 ".woff", ".woff2", ".ttf", ".map", ".webp", ".mp4", ".pdf")):
+            score -= 80
+    return score
+
+
+def _prioritize_offensive_targets(ctx) -> None:
+    """Aşama 1 (keşif) → Aşama 2 (saldırı) köprüsü: endpoints'i enjekte-
+    edilebilirliğe göre önceliklendir + bütçeye göre cap'le. Tam liste
+    `all_endpoints`'te korunur (offensive sonrası geri yüklenir)."""
+    results = getattr(ctx, "results", None)
+    if not isinstance(results, dict):
+        return
+    eps = list(results.get("endpoints") or [])
+    if len(eps) <= 1:
+        return
+    cfg = getattr(ctx, "config", {}) or {}
+    try:
+        from websecure.core.http import tor_active as _tor_active
+        _tor = bool(_tor_active())
+    except Exception:
+        _tor = False
+    _off = (cfg.get("offensive") or {}) if isinstance(cfg, dict) else {}
+    try:
+        cap = int(_off.get("max_target_endpoints") or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        cap = 60 if _tor else 150   # makul varsayılan (Tor'da daha az)
+    # Form sayfaları + base url her zaman dahil edilsin (yüksek değer).
+    _form_urls = {
+        str(p.get("url")).split("#")[0]
+        for p in (results.get("forms_meta") or [])
+        if isinstance(p, dict) and p.get("url")
+    }
+    base = getattr(ctx, "url", "") or getattr(ctx, "base_url", "") or ""
+
+    def _key(u: str) -> int:
+        s = _offensive_target_score(u)
+        if u in _form_urls:
+            s += 90
+        if base and u.split("#")[0] == base.split("#")[0]:
+            s += 1000  # base url asla elenmesin
+        return s
+
+    if len(eps) <= cap:
+        return  # zaten bütçede — dokunma
+    results["all_endpoints"] = eps  # tam liste rapor için korunur
+    ranked = sorted(eps, key=_key, reverse=True)
+    results["endpoints"] = ranked[:cap]
+    add_result("meta", {
+        "stage": "offensive_target_budget",
+        "discovered": len(eps),
+        "selected": cap,
+        "tor": _tor,
+        "note": (f"{len(eps)} endpoint'ten enjeksiyon-yüzeyi en yüksek {cap} tanesi "
+                 "offensive fazlara verildi (statik asset/route gürültüsü elendi); "
+                 "tam liste rapora dahil."),
+    })
+    _logger.info(
+        "[phases] Offensive hedef bütçesi: %d endpoint → öncelikli %d "
+        "(statik/asset gürültüsü elendi, tor=%s)", len(eps), cap, _tor,
+    )
+
+
 def _resolve_sqlmap_budget(ctx) -> int:
     """sqlmap subprocess'inin TAMAMI için FİRM duvar-saati tavanı (saniye).
 
@@ -4720,6 +4823,13 @@ def run_plan_if_needed(ctx: dict):
         # Aşama 1 — keşif/crawl (endpoint + forms_meta)
         if not _deadline_or_cancel():
             _run_stage(_enabled(_STAGE_DISCOVERY), "Aşama 1 — Keşif/Crawl")
+        # KÖPRÜ: offensive hedeflerini önceliklendir + bütçele (büyük sitede ~23
+        # offensive fazın watchdog'a takılıp atlanmasını engeller; statik gürültü
+        # elenir, enjekte-edilebilir hedefler öne alınır). Tam liste all_endpoints'te.
+        try:
+            _prioritize_offensive_targets(ctx)
+        except Exception as _pe:
+            _logger.debug("[phases] offensive hedef bütçeleme atlandı: %r", _pe)
         # Aşama 2 — saldırı (catch-all: sınıflandırılmamış HER etkin faz)
         if not _deadline_or_cancel():
             _mid_items = [
@@ -4729,6 +4839,16 @@ def run_plan_if_needed(ctx: dict):
                 and it.get("enabled", False) and callable(it.get("runner"))
             ]
             _run_stage(_mid_items, "Aşama 2 — Saldırı")
+        # Offensive bitti — rapor/finalizer'lar TAM endpoint listesini görsün diye
+        # geri yükle (offensive sırasında bulunan yeni endpoint'lerle birleştir).
+        try:
+            _full = getattr(ctx, "results", {}).get("all_endpoints")
+            if isinstance(_full, list) and _full:
+                _cur = getattr(ctx, "results", {}).get("endpoints") or []
+                _merged = list(dict.fromkeys(list(_full) + list(_cur)))
+                ctx.results["endpoints"] = _merged
+        except Exception:
+            pass
     finally:
         # Background'ı finalizer'lardan ÖNCE join et (bulgular tam olmalı).
         if _bg_pool is not None:

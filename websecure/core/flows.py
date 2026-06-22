@@ -256,7 +256,20 @@ def run_business_logic_flows(session, base_url: str, cfg: Mapping[str, Any], res
             add_result("meta", {"source": "bizlogic_flow", "name": fname, "status": "ok"})
         else:
             findings += 1
-            add_result("vulnerability", {"source": "bizlogic_flow", "severity": "Medium", "type": "Business Logic Flow Failure", "name": fname, "status": "failed"})
+            # FALSE-POSITIVE FIX (2026-06-22): bir iş-akışının assertion'ları
+            # BAŞARISIZ olması tek başına ZAFİYET DEĞİLDİR — çoğu kez akış hedefte
+            # tamamlanamamıştır (kimlik yok / SPA / adım değişmiş / ağ). Gerçek
+            # iş-mantığı zafiyeti TERSİDİR: başarısız OLMASI gereken akışın (örn.
+            # ödemesiz checkout) BAŞARMASI. Eski kod bunu Medium "vulnerability"
+            # yazıp rapora sahte Medium koyuyordu. Artık Info + unconfirmed: triyaj
+            # sinyali olarak kalır ama manşeti şişirmez (manuel doğrulama gerekir).
+            add_result("vulnerability", {
+                "source": "bizlogic_flow", "severity": "Info",
+                "type": "Business Logic Flow Incomplete", "name": fname,
+                "status": "failed", "unconfirmed": True, "severity_locked": True,
+                "note": ("Tanımlı akış beklenen assertion'ları geçemedi — bu bir "
+                         "ZAFİYET KANITI DEĞİL; akış tamamlanamadı. Manuel inceleyin."),
+            })
 
     results.setdefault("bizlogic_summary", {})["flow_failures"] = findings  # type: ignore[index]
     add_result("meta", {"stage":"bizlogic","flows_defined": len(flows), "flows_failed": findings})

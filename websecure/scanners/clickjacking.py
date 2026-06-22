@@ -670,6 +670,14 @@ class ClickjackingExplorer(BaseScanner):
         # Hardened by XFO
         if xfo == "DENY":
             return False
+        # FALSE-POSITIVE FIX (2026-06-22): SAMEORIGIN da clickjacking'e karşı KORUR.
+        # Clickjacking tehdidi ÇAPRAZ-ORIGIN framing'dir (saldırganın sitesi kurbanı
+        # iframe'ler); SAMEORIGIN tam da bunu engeller — saldırgan kendi origin'inden
+        # frameleyemez. Eski kod yalnız DENY'yi sayıp SAMEORIGIN'i "korumasız" kabul
+        # ediyordu → SAMEORIGIN'li /profile için sahte "Clickjacking PoC Generated
+        # [High]". (FrameOptionsAnalyzer SAMEORIGIN'i zaten doğru: Info/partial.)
+        if xfo == "SAMEORIGIN":
+            return False
 
         # Hardened by CSP frame-ancestors
         if fa is not None:
@@ -782,6 +790,12 @@ class ClickjackingPoCGenerator(BaseScanner):
         """Return True if neither XFO nor CSP frame-ancestors properly protects the page."""
         if xfo == "DENY":
             return False
+        # FALSE-POSITIVE FIX (2026-06-22): SAMEORIGIN clickjacking'e KARŞI KORUR —
+        # tehdit çapraz-origin framing'dir, SAMEORIGIN tam da onu engeller. Eski kod
+        # SAMEORIGIN'i "frameable" sayıp sahte "Clickjacking PoC Generated [High]"
+        # üretiyordu (SAMEORIGIN'li /profile sayfasında). DENY ile aynı: korur.
+        if xfo == "SAMEORIGIN":
+            return False
         if fa is not None:
             fa_lower = fa.lower().strip()
             if fa_lower == "'none'":
@@ -790,10 +804,7 @@ class ClickjackingPoCGenerator(BaseScanner):
             if fa_lower in ("*", "http:", "https:"):
                 return True
             return False
-        # No frame-ancestors directive
-        if xfo in ("SAMEORIGIN",):
-            # Partially protected — still frameable by same-origin, flag as frameable
-            return True
+        # No XFO and no frame-ancestors directive → genuinely frameable cross-origin.
         return True
 
 

@@ -373,16 +373,31 @@ class CVSSScorer:
             or "precondition" in str(finding_type).lower()
             or "unconfirmed" in str(finding_type).lower()
         )
+        # LOCUS GUARD (2026-06-22): reporting.add_result, locus'u OLMAYAN (url/target/
+        # endpoint/matched_at YOK) bir bulguyu CVSS ile YÜKSELTMEZ — çünkü locus'suz
+        # kayıtlar genelde "bulunamadı/taranıyor/tavsiye" DURUM mesajıdır, gerçek bir
+        # zafiyet değil. Ama `final` verify_and_score→score()'tan üretildiğinden bu
+        # guard burada YOKTU: csrf.py "CSRF Scan"/"API CSRF Check"i severity=Info +
+        # url'siz yazıyordu, type "CSRF" → CWE-352 High'a ŞİŞİYORDU (gerçek taramada
+        # 'Scanning 0 forms...' durum mesajı raporda 2× sahte High). Aynı kapı burada.
+        _has_locus = any(finding.get(k) for k in (
+            "url", "target", "endpoint", "matched_at", "matched-at"))
         if _is_known_type(finding_type):
-            if _locked and _scanner_sev and (
-                _SEV_RANK.get(severity_label, 0) > _SEV_RANK.get(_scanner_sev, 0)
-            ):
-                # CVSS yükseltecekti — işaretli zayıf bulguyu koru.
+            _would_inflate = _SEV_RANK.get(severity_label, 0) > _SEV_RANK.get(_scanner_sev, 0)
+            if _scanner_sev and _would_inflate and (_locked or not _has_locus):
+                # CVSS yükseltecekti ama bulgu (a) işaretli-zayıf VEYA (b) locus'suz
+                # → tarayıcının değerini koru (yükseltme).
                 result["severity"] = _scanner_sev
             else:
                 result["severity"] = severity_label
         elif not result.get("severity"):
-            result["severity"] = severity_label
+            # FALSE-POSITIVE FIX (2026-06-22): BİLİNMEYEN tip + severity YOK → Info.
+            # Eski kod _lookup_vector("") fallback'ini (6.1 = Medium) uyguluyordu →
+            # findings akışına sızan TİP'siz DURUM mesajları ("Tespit edilen
+            # teknolojiler: rest_api", "sqlmap bitti: 0 SQLi" gibi) otomatik Medium
+            # oluyordu (gerçek taramada 2 sahte Medium). Bilinmeyen-tip bir kaydın
+            # ZAFİYET olduğunu bilmiyoruz → varsayılan Info olmalı, Medium değil.
+            result["severity"] = "Info"
 
         return result
 
