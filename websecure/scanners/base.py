@@ -780,9 +780,13 @@ class BaseScanner:
             curr_params = dict(parse_qsl(parsed.query))
             curr_params[param] = payload          # add or replace — always inject
             new_query = urlencode(curr_params)
+            # Fragment (#...) SUNUCUYA HİÇ gönderilmez (yalnız tarayıcı görür).
+            # SPA hedeflerinde kanonik URL '.../#/' biçiminde gelir; bunu korumak
+            # '/?param=payload#/' gibi gürültülü, sunucu tarafında anlamsız istek
+            # URL'leri üretir. Server-side enjeksiyonda fragment'i DÜŞÜR.
             req_kwargs["url"] = urlunparse((
                 parsed.scheme, parsed.netloc, parsed.path,
-                parsed.params, new_query, parsed.fragment,
+                parsed.params, new_query, "",
             ))
         else:
             req_kwargs["url"] = url

@@ -1810,7 +1810,12 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
             "anti_block_events": len(abe),
         },
         "coverage": cov,
-        "artefacts": {"findings": len(proofs_index), "paths": proofs_index},
+        # `findings` = GERÇEK bulgu sayısı (scan_meta.total_findings ile birebir).
+        # Eskiden len(proofs_index) yazılıyordu → bir bulgunun birden çok kanıt
+        # paketi olabildiği için summary.json içinde tutarsız iki sayı çıkıyordu
+        # (örn. artefacts.findings=143 ≠ total_findings=135). Kanıt-paketi sayısı
+        # ayrı `proof_bundles` alanında verilir.
+        "artefacts": {"findings": total, "proof_bundles": len(proofs_index), "paths": proofs_index},
         "scan_meta": {
             "total_findings": total,
             "verified_findings": verified_count,

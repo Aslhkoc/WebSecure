@@ -131,6 +131,21 @@ _SECRET_PATTERNS: List[tuple] = [
     ("Internal IP",         re.compile(r"""["'`]((?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3})["'`]""")),
 ]
 
+# TASARIMI GEREĞİ PUBLIC olan "secret" türleri. Bunlar client-side JS bundle'a
+# KASITLI gömülür ve tek başlarına sömürülemez (güvenlik server tarafı kural/
+# kısıtlamasıyla sağlanır). Bir client bundle'da bulununca "High hardcoded
+# secret" demek severity ŞİŞMESİdir (juice-shop main.js'teki Google OAuth
+# CLIENT ID'si bu yüzden sahte High çıkıyordu). Low/Info'ya indirilir + CVSS
+# şişmesini önlemek için severity_locked. (OAuth client SECRET'ı, AWS/Stripe
+# anahtarı gibi GERÇEK sırlar bu listede DEĞİL → High/Critical kalır.)
+_PUBLIC_CLIENT_SECRET_TYPES: frozenset = frozenset({
+    "Google OAuth",     # OAuth2 client ID — public clients için gizli değildir
+    "Firebase URL",     # public proje tanımlayıcısı
+    "Firebase API Key", # web API key = tanımlayıcı, sır değil (güvenlik = rules)
+    "Sentry DSN",       # client'a gömülmek üzere tasarlanmış public endpoint
+    "Internal IP",      # bilgi sızıntısı sinyali — sömürülebilir sır değil
+})
+
 # JS file extensions we want to analyse
 _JS_EXTENSIONS = {".js", ".mjs", ".jsx", ".ts", ".tsx", ".vue"}
 
@@ -459,12 +474,24 @@ class JSAnalyzer:
                     "AWS Access Key", "AWS Secret Key", "Private Key",
                     "Database URL", "Stripe Key",
                 ) else "High"
+                # Public-by-design türler client bundle'da High değil Low'dur.
+                _public_locked = False
+                if secret_type in _PUBLIC_CLIENT_SECRET_TYPES:
+                    _sev = "Low"
+                    _public_locked = True
                 _evidence: Dict[str, Any] = {
                     "redacted_value": redacted,
                     "location": js_url,
                     "match": f"Pattern '{secret_type}' matched in JS bundle",
                 }
-                _locked = False
+                _locked = _public_locked
+                if _public_locked:
+                    _evidence["note"] = (
+                        f"{secret_type} client-side JS'e TASARIMI GEREĞİ gömülür "
+                        "(public tanımlayıcı/endpoint) — tek başına sömürülemez. "
+                        "Gerçek risk için karşılık gelen SERVER-SIDE sırrı (client "
+                        "secret / private key) arayın."
+                    )
                 # [Fix-4] JWT'ye özel: Next.js/SPA client bundle'larında JWT yapısına
                 # benzeyen base64 (Flight data, config) çok yaygın FP. Token'ı GERÇEKTEN
                 # çöz: header'da `alg` yoksa SAHTE eşleşme → bulguyu at. Çözülürse

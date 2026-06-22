@@ -78,6 +78,69 @@ _CLOUD_FINGERPRINTS: List[Dict] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Çok-kiracılı (multi-tenant) PaaS / hosting public-suffix'leri.
+# Bir hedef DOĞRUDAN bu suffix'lerin biri üzerindeyse (örn.
+# juice-shop-staging.herokuapp.com), `parts[-2:]` ile "herokuapp.com" tabanını
+# çıkarıp `mail/pop/dev/...herokuapp.com` üretmek YANLIŞTIR: bunlar hedefin
+# alt-domain'i değil, aynı platformdaki BAŞKA kiracılardır (kapsam dışı) ve
+# platformun jenerik "No such app" 404'ü her boş ada çıktığından SAHTE
+# "Subdomain Takeover — Confirmed" üretir. PSL (tldextract private-section)
+# birincil kaynaktır; bu liste tldextract yoksa yedek savunmadır.
+_MULTI_TENANT_SUFFIXES: frozenset = frozenset({
+    "herokuapp.com", "herokussl.com", "github.io", "githubusercontent.com",
+    "netlify.app", "netlify.com", "vercel.app", "now.sh", "pages.dev",
+    "web.app", "firebaseapp.com", "azurewebsites.net", "azureedge.net",
+    "cloudfront.net", "s3.amazonaws.com", "onrender.com", "fly.dev",
+    "surge.sh", "gitlab.io", "bitbucket.io", "appspot.com", "run.app",
+    "wpengine.com", "myshopify.com", "wordpress.com", "blogspot.com",
+    "readthedocs.io", "ghost.io", "pantheonsite.io", "wixsite.com",
+})
+
+# PSL (private-section dahil) çözücü — herokuapp.com & benzerlerini bilir.
+# Offline gömülü snapshot kullanır (suffix_list_urls=()) → tarama sırasında ağ
+# isteği yapmaz (air-gapped / Tor güvenli). Başarısızsa _MULTI_TENANT_SUFFIXES
+# yedeğine düşülür.
+try:
+    import tldextract as _tldextract_mod
+    _PSL_EXTRACT = _tldextract_mod.TLDExtract(
+        suffix_list_urls=(), include_psl_private_domains=True
+    )
+except Exception:  # pragma: no cover - tldextract yoksa
+    _PSL_EXTRACT = None
+
+
+def _registrable_base(domain: str) -> str:
+    """
+    Sibling-subdomain enumerasyonu için DOĞRU tabanı (eTLD+1) döndürür.
+    Çok-kiracılı bir public-suffix üzerindeki hedef için taban = hedefin KENDİSİ
+    olur → yalnız hedefin kendi alt-ağacı denenir, platformun yabancı kiracıları
+    (mail.herokuapp.com) ASLA üretilmez.
+    """
+    domain = (domain or "").lower().strip().strip(".")
+    if not domain:
+        return ""
+    # 1) PSL (private section) — en doğru kaynak
+    if _PSL_EXTRACT is not None:
+        try:
+            ext = _PSL_EXTRACT(domain)
+            base = (
+                getattr(ext, "top_domain_under_public_suffix", "")
+                or getattr(ext, "registered_domain", "")
+            )
+            if base:
+                return base
+        except Exception as _psl_e:  # pragma: no cover
+            logger.debug("[subdomain_takeover] PSL extract failed: %r", _psl_e)
+    # 2) Yedek: hedef bilinen bir multi-tenant suffix üzerinde mi?
+    for suf in _MULTI_TENANT_SUFFIXES:
+        if domain == suf or domain.endswith("." + suf):
+            return domain  # taban = hedef → yabancı kiracı üretme
+    # 3) Normal kayıt-edilebilir alan: son 2 etiket
+    parts = domain.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else domain
+
+
 def _resolve_cname(domain: str) -> Optional[str]:
     try:
         import dns.resolver
@@ -145,7 +208,15 @@ class CNAMEDanglingChecker(BaseScanner):
                 if re.search(fp["cname_pattern"], cname, re.I):
                     status, body = _http_get_body(f"http://{candidate}", self.session)
                     takeover_confirmed = bool(fp["error_pattern"].search(body))
-                    sev = "Critical" if (dangling or takeover_confirmed) else "High"
+                    # GERÇEK takeover kanıtı şarttır: ya CNAME hedefi çözülmüyor
+                    # (dangling/NXDOMAIN) ya da platformun "claim edilmemiş" hata
+                    # sayfası dönüyor. İkisi de yoksa CNAME CANLI bir servise
+                    # işaret ediyordur (hedefin kendisi gibi) → takeover DEĞİL.
+                    # Bu guard olmadan her canlı Heroku/Netlify/GitHub-Pages app'i
+                    # "Subdomain Takeover — Potential High" FP'si üretiyordu.
+                    if not (dangling or takeover_confirmed):
+                        break
+                    sev = "Critical"
                     finding = {
                         "vuln_type": "Subdomain Takeover" + (" — Confirmed" if takeover_confirmed else " — Potential"),
                         "url": f"http://{candidate}", "severity": sev,
@@ -170,11 +241,21 @@ class CNAMEDanglingChecker(BaseScanner):
         return results
 
     def _gen_subdomains(self, domain: str) -> List[str]:
-        """Generate common subdomain candidates."""
+        """
+        Hedefin kayıt-edilebilir alanı (PSL eTLD+1) altında yaygın subdomain
+        adayları üretir. Çok-kiracılı bir PaaS suffix'i (herokuapp.com,
+        github.io, netlify.app …) üzerindeki hedefte taban hedefin KENDİSİdir →
+        yalnız hedefin kendi alt-ağacı denenir; platformun yabancı kiracıları
+        (mail.herokuapp.com) ÜRETİLMEZ — bu sahte 'Subdomain Takeover —
+        Confirmed' selinin kök nedeniydi.
+        """
+        domain = (domain or "").lower().strip().strip(".")
         parts = domain.split(".")
         if len(parts) < 2:
             return []
-        base = ".".join(parts[-2:])
+        base = _registrable_base(domain)
+        if not base or "." not in base:
+            return []
         prefixes = [
             "www", "mail", "ftp", "smtp", "pop", "imap",
             "dev", "staging", "test", "beta", "demo",

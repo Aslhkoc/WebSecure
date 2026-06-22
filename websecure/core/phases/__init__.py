@@ -1302,6 +1302,19 @@ _TOR_WATCHDOG_FACTOR = 4
 # Tor'da saldırı fazı failsafe tabanı (sn) — 600s Tor'da bir-iki istekte biter.
 _TOR_OFFENSIVE_WATCHDOG_FLOOR = 1800
 
+# STEALTH-FARKINDA WATCHDOG (2026-06-22). Stealth profili Tor gibi YAVAŞTIR:
+# düşük RPS + rastgele insan-benzeri gecikme + ~20 offensive faz global AIMD
+# admission gate'i paylaşır → her faz efektif ~0.5 req/s ile ilerler ve sabit
+# 600/720s failsafe meşru-ilerleyen fazı erkenden "exceeded — skipped" ile atar.
+# (juice-shop staging DIRECT+Stealth taramasında xxe/lfi/ssrf/crlf/file_upload/
+# graphql/cors/tls/mass_assignment/prototype_pollution/race/auth_matrix/
+# business_logic dahil ~20 faz tam da bu yüzden atlandı — Tor KAPALIYDI, bu yüzden
+# yukarıdaki Tor boost'u devreye girmedi.) Tor zaten ayrıca boost'lanır; Tor
+# YOKKEN stealth de aynı muameleyi alır. NORMAL/AGRESİF profilde + doğrudan
+# bağlantıda bu dal HİÇ çalışmaz → benchmark ve varsayılan davranış AYNEN korunur.
+_STEALTH_WATCHDOG_FACTOR = 4
+_STEALTH_OFFENSIVE_WATCHDOG_FLOOR = 1800
+
 # ---------------------------------------------------------------------------
 # STAGED + BACKGROUND execution model (Madde 4 — Adım B)
 # ---------------------------------------------------------------------------
@@ -1568,23 +1581,34 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
                 phase_timeout = float("inf")
             else:
                 phase_timeout = max(phase_timeout * _NO_TIMEOUT_WATCHDOG_FACTOR, 600)
-                # TOR-FARKINDA: Tor/proxy aktif + faz SALDIRI fazıysa (discovery/
-                # recon/background/finalizer/waf DEĞİL) failsafe'i büyüt — Tor'da
-                # her istek 10-30x yavaş olduğundan sabit bütçe meşru-yavaş fazı
-                # erkenden kesip ~23 offensive tarayıcıyı atlatıyordu. Direkt
-                # bağlantıda bu dal hiç çalışmaz (çarpan etkisi yok) → benchmark
-                # ve normal davranış korunur.
+                # TOR/STEALTH-FARKINDA: faz SALDIRI fazıysa (discovery/recon/
+                # background/finalizer/waf DEĞİL) failsafe'i büyüt. Hem Tor hem
+                # stealth profili her isteği belirgin yavaşlatır → sabit 600/720s
+                # bütçe meşru-yavaş fazı erkenden kesip ~20 offensive tarayıcıyı
+                # atlatıyordu. NORMAL/AGRESİF + doğrudan bağlantıda bu dal hiç
+                # çalışmaz (çarpan etkisi yok) → benchmark ve normal davranış korunur.
                 try:
-                    from websecure.core.http import tor_active as _tor_active
                     _is_offensive = (
                         phase_id not in _NON_OFFENSIVE_PHASES
                         and phase_id not in _NO_TIMEOUT_UNBOUNDED_PHASES
                     )
-                    if _tor_active() and _is_offensive:
-                        phase_timeout = max(
-                            phase_timeout * _TOR_WATCHDOG_FACTOR,
-                            _TOR_OFFENSIVE_WATCHDOG_FLOOR,
-                        )
+                    if _is_offensive:
+                        _tor_on = False
+                        try:
+                            from websecure.core.http import tor_active as _tor_active
+                            _tor_on = bool(_tor_active())
+                        except Exception:
+                            _tor_on = False
+                        if _tor_on:
+                            phase_timeout = max(
+                                phase_timeout * _TOR_WATCHDOG_FACTOR,
+                                _TOR_OFFENSIVE_WATCHDOG_FLOOR,
+                            )
+                        elif _scan_profile == "stealth":
+                            phase_timeout = max(
+                                phase_timeout * _STEALTH_WATCHDOG_FACTOR,
+                                _STEALTH_OFFENSIVE_WATCHDOG_FLOOR,
+                            )
                 except Exception:
                     pass
     except Exception:
