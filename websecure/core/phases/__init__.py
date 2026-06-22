@@ -1222,6 +1222,7 @@ _PHASE_TIMEOUTS: Dict[str, int] = {
     # ── Active injection scanners (have their own internal budgets) ────────
     "ssti":               260,   # internal _SCAN_BUDGET_S = 240s
     "xss":                240,
+    "browser_inject":     300,   # görünür Chrome form enjeksiyonu (iç bütçe max_total_seconds)
     "dalfox_verify":      180,
     "nosqli":              90,   # internal JS_PHASE_BUDGET = 25s
     "idor":                90,
@@ -1369,6 +1370,9 @@ _PHASE_PRIORITY: Dict[str, int] = {
     "crlf_injection": 80, "prototype_pollution": 80, "cors": 78,
     "scanners.graphql": 78, "scanners.graphql_attacks": 78,
     "races": 76, "race_condition": 76, "dom_xss": 75,
+    # Görünür enjeksiyon kullanıcı tarafından bilerek istendi → Stage-2'de erken
+    # gönderilsin ki kullanıcı izlemeye hemen başlasın (eşzamanlılık aynı).
+    "browser_inject": 88,
     # Orta
     "scanners.tls": 55, "scanners.ws_fuzz": 55, "param_pollution": 55,
     "business_logic": 55, "clickjacking": 50, "waf_bypass_validate": 50,
@@ -1621,6 +1625,13 @@ def flush(ctx=None):
 def _runner_katana(ctx) -> None:
     """katana web crawler — keşif fazı öncesi JS-aware endpoint tarama."""
     try:
+        # İDEMPOTENCY (2026-06-22): katana HEM bağımsız 'katana' fazı HEM de
+        # _runner_discovery içinden çağrılır (ikisi de Stage-1, paralel) → eskiden
+        # iki kez koşup discovery'nin watchdog bütçesini yiyordu. Bir kez koştuysa
+        # tekrar etme (sonuç ctx.results["endpoints"]'te).
+        _cr = getattr(ctx, "results", None)
+        if isinstance(_cr, dict) and _cr.get("_katana_done"):
+            return
         from websecure.integrations.katana import KatanaWrapper
         wrapper = KatanaWrapper()
         if not wrapper.is_available():
@@ -1698,6 +1709,8 @@ def _runner_katana(ctx) -> None:
             f"[phases] katana: {len(unique_urls)} URL keşfedildi"
             f"{'  [kısmi-timeout]' if timed_out else ''}"
         )
+        if isinstance(_cr, dict):
+            _cr["_katana_done"] = True
     except Exception as e:
         _logger.warning(f"[phases] katana runner error: {e}")
         _report_phase_error("katana", "phases._runner_katana", e)
@@ -1710,6 +1723,12 @@ def _runner_browser_crawler(ctx) -> None:
     Playwright yoksa veya site JS-heavy değilse sessizce atlar.
     """
     try:
+        # İDEMPOTENCY (2026-06-22): browser_crawler HEM bağımsız faz HEM de
+        # _runner_discovery içinden çağrılır → çift Playwright crawl'ı discovery
+        # bütçesini yiyordu. Bir kez koştuysa tekrar etme.
+        _cr0 = getattr(ctx, "results", None)
+        if isinstance(_cr0, dict) and _cr0.get("_browser_crawler_done"):
+            return
         from websecure.core.browser_crawler import (
             BrowserCrawler, BrowserCrawlConfig, should_use_browser_crawler,
         )
@@ -1885,6 +1904,8 @@ def _runner_browser_crawler(ctx) -> None:
             f"[phases] BrowserCrawler: {len(new_urls)} URL, "
             f"{len(result.secrets_found)} secret, {result.tech_stack}"
         )
+        if isinstance(_cr0, dict):
+            _cr0["_browser_crawler_done"] = True
     except Exception as e:
         _logger.debug(f"[phases] BrowserCrawler error (Playwright not available?): {e}")
         add_result("meta", {"stage": "browser_crawler", "status": "skipped:error",
@@ -2085,10 +2106,14 @@ def _runner_discovery(ctx) -> None:
     run_discovery_extended(ctx)
     # BrowserCrawler: HTTP crawler az endpoint bulduysa veya JS-heavy SPA ise devreye girer
     _runner_browser_crawler(ctx)
-    # Görünür-tarayıcı form enjeksiyonu (yalnız kullanıcı 'E' dediyse) — forms_meta
-    # browser_crawler tarafından doldurulduktan SONRA çalışır ki login/yorum/ödeme
-    # alanları görünür Chrome'da payload'larla denensin.
-    _runner_browser_inject(ctx)
+    # NOT (2026-06-22): Görünür-tarayıcı form enjeksiyonu ARTIK buradan çağrılmıyor.
+    # Eskiden discovery'nin EN SONUNDA çağrılıyordu; ama discovery ağır crawl yükü
+    # yüzünden faz-watchdog'una (1440s) takılıp ATLANINCA bu satıra hiç ULAŞILMIYOR
+    # → kullanıcının 'E' dediği görünür payload enjeksiyonu HİÇ çalışmıyordu (sadece
+    # browser_crawler Chrome'u açıp geziyor, payload denemiyordu). Çözüm: kendi
+    # bağımsız 'browser_inject' fazı (aşağıda kayıtlı) — discovery'nin kaderinden
+    # bağımsız, kendi bütçesiyle koşar. forms_meta/endpoints discovery'den (kısmi
+    # olsa bile) gelir; injector ayrıca her sayfada formu kendisi de keşfeder.
 
 def _runner_fuzz_and_param_discovery(ctx) -> None:
     run_fuzz_and_param_discovery(ctx)
@@ -3634,6 +3659,19 @@ def _offensive_phases(ctx) -> List[Phase]:
             enabled=_flag("session_analysis", default=True),
             runner=lambda c: _safe(c, lambda: _runner_session_analysis(c), "session_analysis"),
             tags=["session", "cookie", "passive", "auth"],
+        ),
+        # Görünür-tarayıcı FORM ENJEKSİYONU — BAĞIMSIZ faz (2026-06-22). Yalnız
+        # kullanıcı başlangıçta 'E' dediyse fiilen çalışır (runner içi flag guard).
+        # Eskiden discovery'ye gömülüydü ve discovery watchdog'a takılınca HİÇ
+        # çalışmıyordu (kullanıcının tekrarlayan şikâyeti: "input'a giriyor ama
+        # payload denemiyor"). Kendi fazı olarak discovery'den BAĞIMSIZ koşar; Stage-2
+        # (offensive) catch-all'a düşer → keşif forms_meta/endpoints'i ürettikten sonra.
+        Phase(
+            id="browser_inject",
+            title="Görünür Tarayıcı Form Enjeksiyonu (SQLi/XSS)",
+            enabled=True,  # gerçek tetik runner içindeki browser_injection.enabled
+            runner=lambda c: _safe(c, lambda: _runner_browser_inject(c), "browser_inject"),
+            tags=["active", "xss", "sqli", "browser", "forms", "visible"],
         ),
         Phase(id="discovery", title="Keşif", enabled=True, runner=lambda c: _safe(c, lambda: _runner_discovery(c), "discovery"), tags=["crawl","map"]),
         Phase(
