@@ -705,17 +705,35 @@ _POSTMESSAGE_INTERCEPT_JS = r"""
 """
 
 
-# FALSE-POSITIVE GUARD (2026-06-21): bu "sink" adları GERÇEK bir yürütme sink'i
-# DEĞİL — yalnız bir 'message' dinleyicisinin gönderdiğimiz canary'yi ALDIĞINI
-# gösteren MAKBUZ kayıtlarıdır (monkey-patch'in kendi satır-669 dinleyicisi her
-# postMessage canary'sinde tetiklenir). Salt "alındı" DOM XSS kanıtı değildir;
-# gerçek XSS verinin innerHTML/eval/document.write/Function/setTimeout-string vb.
-# TEHLİKELİ sink'e aktığını gerektirir. Bu kümeyi Critical sink yolundan eleriz.
-_RECEIPT_ONLY_SINKS = frozenset({"postMessage_received"})
+# FALSE-POSITIVE GUARD (2026-06-21 → genişletildi 2026-06-23): aşağıdaki "sink"
+# adları GERÇEK bir JS YÜRÜTME sink'i DEĞİL — kanary onlara aksa bile kod çalışmaz,
+# dolayısıyla tek başlarına DOM XSS KANITI değildir:
+#   • postMessage_received    → yalnız 'message' dinleyicisinin canary'yi ALDIĞINI
+#                               gösteren makbuz (satır-669 kendi dinleyicimiz her
+#                               postMessage canary'sinde tetiklenir).
+#   • localStorage.setItem    → DEPOLAMA yazımı; veriyi saklamak çalıştırmak değildir.
+#   • sessionStorage.setItem  → DEPOLAMA yazımı; aynı şekilde zararsız.
+#   • location.href / .assign → NAVİGASYON; kanary'miz `javascript:`/`data:` şeması
+#                               DEĞİL (düz işaretçi) → açık-yönlendirme adayı olabilir
+#                               ama XSS yürütmesi değildir.
+# GERÇEK DOM XSS, verinin innerHTML/outerHTML/document.write/eval/Function/
+# setTimeout(string)/setInterval(string) gibi YÜRÜTME sink'ine aktığını gerektirir
+# (bunlar `_record`/`_recordExec` ile aynı listeye yazılır ve burada KORUNUR).
+# 2026-06-23 (atlassian.com denetimi): SPA'lar URL parametrelerini rutin olarak
+# localStorage.setItem'e yazar → bu küme elenmeden 19 sahte "Critical DOM XSS"
+# (param=localStorage.setItem) üretiliyordu. Bu kümeyi Critical sink yolundan eleriz;
+# eğer aynı veri AYRICA bir yürütme sink'ine de akarsa o hit ayrı kaydedilir ve kalır.
+_RECEIPT_ONLY_SINKS = frozenset({
+    "postMessage_received",
+    "localStorage.setItem",
+    "sessionStorage.setItem",
+    "location.href",
+    "location.assign",
+})
 
 
 def _drop_receipt_only_hits(hits):
-    """__domxss_hits__ listesinden makbuz-yalnız (FP) sink kayıtlarını eler."""
+    """__domxss_hits__ listesinden YÜRÜTME-olmayan (FP) sink kayıtlarını eler."""
     if not isinstance(hits, list):
         return []
     return [h for h in hits

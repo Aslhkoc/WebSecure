@@ -150,18 +150,35 @@ def _canary() -> str:
 
 
 def _lfi_sensitive_content(body: str) -> Optional[str]:
-    patterns = [
-        r"root:.*:0:0:",          # /etc/passwd
-        r"\[fonts\]",             # win.ini
+    # FALSE-POSITIVE FIX (2026-06-23, atlassian.com denetimi): eski ``environ``
+    # imzası ``APACHE|nginx|SERVER`` (re.I) ÇOK GENİŞTİ — "server"/"nginx"/"apache"
+    # kelimesi neredeyse HER HTML sayfasında (footer/meta/hata-sayfası/WAF blok
+    # sayfası) geçer → /etc/passwd çekemeyen bir 403 WAF blok sayfası bile "LFI
+    # Critical" olarak raporlanıyordu (ve bu sahte LFI 2 sahte exploit-zinciri
+    # besliyordu). Gerçek /proc/self/environ içeriği CGI ortam değişkenlerini
+    # ``KEY=value`` biçiminde taşır; bu yüzden bare kelime yerine ortam-değişkeni
+    # ATAMASI ararız (normal HTML'de bulunmaz). re.I yalnız case-insensitive
+    # passwd/hosts gibi imzalarda kalır; environ imzası case-sensitive (env var
+    # adları daima BÜYÜK harf) → "Server:" başlığı/HTML'i eşleşmez.
+    ci_patterns = [
+        r"root:.*:0:0:",              # /etc/passwd
+        r"\[fonts\]",                 # win.ini
         r"127\.0\.0\.1\s+localhost",  # /etc/hosts
-        r"Linux version \d",      # /proc/version
-        r"APACHE|nginx|SERVER",   # environ
-        r"#!/bin/(ba)?sh",        # scripts
+        r"Linux version \d",          # /proc/version
+        r"#!/bin/(ba)?sh",            # scripts (shebang)
     ]
-    for pat in patterns:
+    for pat in ci_patterns:
         m = re.search(pat, body, re.I)
         if m:
             return m.group(0)
+    # /proc/self/environ — gerçek CGI env-var ATAMASI (case-sensitive, KEY=...)
+    m = re.search(
+        r"(?:SERVER_SOFTWARE|DOCUMENT_ROOT|SCRIPT_FILENAME|GATEWAY_INTERFACE|"
+        r"SERVER_SIGNATURE|HTTP_USER_AGENT|REQUEST_URI|PATH_TRANSLATED)=\S",
+        body,
+    )
+    if m:
+        return m.group(0)
     return None
 
 
@@ -199,6 +216,15 @@ class LFIDirectoryTraversalProber(BaseScanner):
                 for test_url in _inject_lfi(target, payload)[:2]:
                     try:
                         resp = self.session.get(test_url, timeout=8)
+                        # STATUS GUARD (2026-06-23): gerçek LFI, dosya içeriğini bir
+                        # 200 gövdesinde döndürür. 401/403 (WAF/erişim bloğu), 404/405
+                        # ya da 5xx bir blok/hata sayfasıdır — gövdesi imzaya rastlasa
+                        # bile (eski geniş environ imzası gibi) LFI DEĞİLDİR. atlassian
+                        # taramasında /etc/passwd denemeleri 403 ile bloklanıyordu ama
+                        # blok-sayfası gövdesi "Critical LFI" üretiyordu.
+                        _st = getattr(resp, "status_code", 0) or 0
+                        if _st != 200:
+                            continue
                         body = getattr(resp, "text", "")[:3000]
                         hit  = _lfi_sensitive_content(body)
                         if hit:

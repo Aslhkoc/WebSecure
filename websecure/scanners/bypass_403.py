@@ -60,6 +60,25 @@ def _body_length_diff_pct(a: Optional[str], b: Optional[str]) -> float:
     return abs(la - lb) / mx
 
 
+def _is_served_status(status: int) -> bool:
+    """True only when a *blocked* (401/403) path's variant was actually SERVED.
+
+    FALSE-POSITIVE FIX (2026-06-23): a 403/401-blocked resource is only
+    "bypassed" when the variant returns a 2xx success or a 3xx redirect — i.e.
+    the resource was actually reached. Any other status (405 Method Not Allowed,
+    429 throttle, 400/404/410, every 5xx) is just a *different* form of
+    rejection, NOT access to the protected resource. Treating a 403→405 (or
+    403→429/5xx) transition as a "bypass" produced a flood of phantom High
+    findings on WAF-fronted sites (atlassian.com: 21 sahte 403-Bypass — hepsi
+    probe_status=405). The VerbTampering path already excluded 405; this unifies
+    that correct gate across Path-Normalisation and Encoding-Variant probes too.
+    """
+    try:
+        return 200 <= int(status) < 400
+    except (TypeError, ValueError):
+        return False
+
+
 def _join_url(base: str, path: str) -> str:
     """Join base URL and path segment safely."""
     return base.rstrip("/") + "/" + path.lstrip("/")
@@ -192,15 +211,21 @@ class PathNormalizationBypass(BaseScanner):
                         }
                         results.append(finding)
                         self.report_finding(**finding)
-                    elif _body_length_diff_pct(baseline_body, body) > 0.20 and status not in _BLOCKED_STATUSES:
+                    elif _is_served_status(status) and _body_length_diff_pct(baseline_body, body) > 0.20:
                         finding = {
                             "vuln_type": "403 Bypass — Path Normalisation (Potential)",
                             "url": url,
-                            "severity": "High",
+                            # Body-diff alone on a *served* (2xx/3xx) variant is an
+                            # UNCONFIRMED signal — not a demonstrated access. Keep it
+                            # Medium + unconfirmed so the CVSS-authoritative layer
+                            # (reporting.add_result / cvss.score) does not re-inflate
+                            # an unproven "potential" to High/Critical in the report.
+                            "severity": "Medium",
+                            "unconfirmed": True,
                             "description": (
                                 f"Path variant '{variant}' for '{path}' returned HTTP {status} "
                                 f"with significantly different body (>{20}% length diff). "
-                                "Possible partial bypass."
+                                "Possible partial bypass (unconfirmed)."
                             ),
                             "evidence": {
                                 "original_path": path,
@@ -404,12 +429,10 @@ class VerbTamperingBypass(BaseScanner):
                     )
                     status = resp.status_code
 
-                    # HEAD 200 on a 403 GET is particularly interesting
-                    is_interesting = (
-                        status not in _BLOCKED_STATUSES
-                        and status != 405  # Method Not Allowed — expected
-                        and status not in (0, 400, 404, 410)
-                    )
+                    # HEAD 200 on a 403 GET is particularly interesting.
+                    # Only a SERVED (2xx/3xx) response is a real verb-tampering
+                    # bypass — 405/429/5xx are different rejections, not access.
+                    is_interesting = _is_served_status(status)
                     if is_interesting:
                         note = ""
                         if method == "HEAD" and status == 200:
@@ -473,7 +496,7 @@ class EncodingBypass(BaseScanner):
                 try:
                     resp = self.session.get(url, timeout=7, verify=False, allow_redirects=False)
                     status = resp.status_code
-                    if status not in _BLOCKED_STATUSES and status not in (0, 400, 404, 410):
+                    if _is_served_status(status):
                         finding = {
                             "vuln_type": "403 Bypass — Encoding Variant",
                             "url": url,

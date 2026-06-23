@@ -3075,8 +3075,15 @@ class AdaptiveWAFBypass:
                 blocked = resp.status_code in (403, 406, 429)
                 self._scorer.record_attempt(b_type, blocked=blocked, status_code=resp.status_code, response_time_ms=elapsed_ms)
 
-                # A non-403/non-406 status indicates the WAF was bypassed
-                if not blocked:
+                # A WAF bypass is CONFIRMED only when the malicious payload was
+                # actually SERVED with a 2xx success — i.e. the application
+                # processed the request. FALSE-POSITIVE FIX (2026-06-23,
+                # atlassian.com): the old check ``not in (403,406,429)`` treated a
+                # 405 (Method Not Allowed), 400/404 or any 5xx as a "bypass" even
+                # though those are the WAF/server rejecting the request a DIFFERENT
+                # way — the payload never got through. The scan reported a Critical
+                # "WAF Bypass" with response_code=405 (a method rejection).
+                if 200 <= resp.status_code < 300:
                     _logger.debug(
                         f"[AdaptiveWAFBypass] Bypass SUCCESS: type={b_type} "
                         f"status={resp.status_code} waf={self.waf_name}"
@@ -3097,7 +3104,7 @@ class AdaptiveWAFBypass:
                             timeout=timeout,
                             allow_redirects=True,
                         )
-                        if resp2.status_code not in (403, 406, 429):
+                        if 200 <= resp2.status_code < 300:
                             _logger.debug(
                                 f"[AdaptiveWAFBypass] Mutation bypass SUCCESS: type={b_type} "
                                 f"status={resp2.status_code} waf={self.waf_name}"
