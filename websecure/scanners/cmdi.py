@@ -257,7 +257,10 @@ class CmdiScanner(BaseScanner):
                     }
             return None
 
-        hits = self.run_parallel_probes(probe, _CMDI_PAYLOADS, max_workers=MAX_WORKERS)
+        # WAF varsa ayraç/komut payload'larını bypass varyantlarıyla genişlet
+        # (etiket=teknik korunur); WAF yoksa no-op. {{OOB}}'li payload'lar atlanır.
+        cmdi_payloads = self.waf_evade_tagged("cmdi", _CMDI_PAYLOADS)
+        hits = self.run_parallel_probes(probe, cmdi_payloads, max_workers=MAX_WORKERS)
         for hit in hits:
             self.report_finding(severity="Critical", **hit)
         return bool(hits)

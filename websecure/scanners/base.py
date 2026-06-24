@@ -705,15 +705,20 @@ class BaseScanner:
         seen: set = set(payloads)
         _CAP = 1000
         # Famous multi-context polyglots first (high-value one-shot bypass) so they
-        # are never crowded out by the mutation cap.
-        try:
-            from websecure.core.mutator import Mutator
-            for pg in Mutator.mutate_polyglot("", max_variants=6):
-                if pg and pg not in seen:
-                    seen.add(pg)
-                    out.append(pg)
-        except Exception:
-            pass
+        # are never crowded out by the mutation cap. Bunlar XSS/şablon-merkezli
+        # (<svg/onload=…>, {{7*7}}); sqli/cmdi/nosqli/lfi'ye eklemek ALAKASIZ gürültü
+        # üretir (ve tam da kaçınmak istediğimiz imzaları taşır) → yalnız XSS-benzeri
+        # kategorilerde ekle. Diğerleri saf kategori-özgü mutasyon alır.
+        _POLYGLOT_CATEGORIES = {"xss", "dom_xss", "stored_xss", "ssti", "generic", ""}
+        if (category or "").lower() in _POLYGLOT_CATEGORIES:
+            try:
+                from websecure.core.mutator import Mutator
+                for pg in Mutator.mutate_polyglot("", max_variants=6):
+                    if pg and pg not in seen:
+                        seen.add(pg)
+                        out.append(pg)
+            except Exception:
+                pass
         # AdaptiveMutationEngine combines the generic tricks (case/comment/whitespace/
         # URL/double-URL/hex/concat) + UNICODE CONFUSABLES (Cyrillic look-alikes that
         # visually match but differ at byte level) + the full core.mutator.Mutator
@@ -760,6 +765,71 @@ class BaseScanner:
             f"[SmartPayload] creative WAF-bypass: {len(payloads)} -> {len(out)} payload ({category})"
         )
         return out
+
+    # ------------------------------------------------------------------
+    # Runtime WAF-evasion (gated) — reusable by every injection scanner
+    # ------------------------------------------------------------------
+
+    def waf_evade(self, category: str, payloads: List[str]) -> List[str]:
+        """
+        Bir WAF parmak-izlenmiş/engelleme gözlenmişse `payloads`'ı WAF-bypass
+        mutasyon/encoding/yaratıcı varyantlarıyla genişletir — yani imza-içeren
+        ham payload'ları (' OR '1'='1, <script>alert(1)</script>) WAF'ın regex'inin
+        kaçırdığı kılıklara çevirir. Böylece imza-seli → ban riski düşer ve bypass
+        bulunur.
+
+        WAF YOKSA tam no-op: orijinal liste aynen döner → temiz hedefte/benchmark'ta
+        davranış ve FP=0/Recall=100% AYNEN korunur. XSS bunu zaten get_smart_payloads
+        üzerinden alır; bu yardımcı aynı katmanı diğer enjeksiyon tarayıcılarına
+        (sqli/cmdi/nosqli…) get_smart_payloads'ı yeniden yazmadan taşır.
+        """
+        try:
+            if not payloads or not self._waf_detected():
+                return payloads
+            # OOB token taşıyan payload'ları mutasyona SOKMA — encoding token'ı
+            # ({{OOB}}) bozar ve send-time substitute_oob eşleşmesini kaçırır.
+            mutable = [p for p in payloads if "{{OOB}}" not in p]
+            if not mutable:
+                return payloads
+            evaded = self._apply_creative_waf_bypass(category, mutable)
+            if not evaded:
+                return payloads
+            # Token'lı (mutasyona girmeyen) payload'ları başta koru.
+            keep = [p for p in payloads if "{{OOB}}" in p]
+            merged = keep + [e for e in evaded if e not in set(keep)]
+            return merged or payloads
+        except Exception as exc:
+            self.logger.debug(f"[waf_evade] atlandı ({category}): {exc!r}")
+            return payloads
+
+    def waf_evade_tagged(self, category: str, tagged: List[tuple]) -> List[tuple]:
+        """
+        waf_evade'in (payload, tag) demet listeleri için sürümü (cmdi/nosqli/ssti
+        gibi her payload'ı bir teknik/regex etiketiyle taşıyan tarayıcılar). Üretilen
+        her bypass varyantı, türetildiği orijinal payload'ın ETİKETİNİ devralır →
+        tespit mantığı (success regex/technique) bozulmaz. WAF yoksa no-op.
+        """
+        try:
+            if not tagged or not self._waf_detected():
+                return tagged
+            out: List[tuple] = list(tagged)
+            seen = {t[0] for t in tagged if t and t[0]}
+            # Yalnız ilk N tabanı mutasyona uğrat (istek sayısı patlamasın).
+            for entry in list(tagged)[:25]:
+                if not entry or not entry[0]:
+                    continue
+                base, tag = entry[0], (entry[1] if len(entry) > 1 else "")
+                # OOB token taşıyanları atla (encoding token'ı bozar).
+                if "{{OOB}}" in str(base):
+                    continue
+                for v in self._apply_creative_waf_bypass(category, [base]):
+                    if v and v not in seen and v != base:
+                        seen.add(v)
+                        out.append((v, tag))
+            return out
+        except Exception as exc:
+            self.logger.debug(f"[waf_evade_tagged] atlandı ({category}): {exc!r}")
+            return tagged
 
     # ------------------------------------------------------------------
     # prepare_injection (unchanged — used by form submission logic)

