@@ -148,7 +148,6 @@ wp-config.bak
 wp-config.save
 wp-config-sample.php
 wp-config.php.orig
-configuration.php
 configuration.php.bak
 configuration.php.old
 Joomla/configuration.php
@@ -440,7 +439,6 @@ dbadmin.php
 myadmin.php
 mysql.php
 sql.php
-database.php
 dbconsole.php
 console.php
 composer.json
@@ -464,7 +462,6 @@ cronjob.php
 tasks.php
 job.php
 cli.php
-artisan
 index.php~
 index.php.bak
 index.php.old
@@ -473,7 +470,6 @@ php.ini
 php.ini.bak
 .htaccess
 .htaccess.bak
-.htpasswd
 
 # ── NODE.JS / JAVASCRIPT ──
 package.json
@@ -528,9 +524,6 @@ pytest.ini
 MANIFEST.in
 __pycache__/
 *.pyc
-manage.py
-wsgi.py
-asgi.py
 gunicorn.conf.py
 uwsgi.ini
 celery.py
@@ -544,7 +537,6 @@ serializers.py
 tests.py
 conftest.py
 secret_settings.py
-local_settings.py
 prod_settings.py
 
 # ── JAVA / JVM ──
@@ -584,7 +576,6 @@ bitbucket-pipelines.yml
 appveyor.yml
 sonar-project.properties
 .sonarcloud.properties
-Vagrantfile
 Terraform.tfvars
 terraform.tfvars
 .terraform/

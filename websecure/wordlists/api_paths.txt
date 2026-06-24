@@ -31,7 +31,6 @@
 /api/token/revoke
 /api/sessions
 /api/session
-/api/logout
 /api/signout
 /api/sign-in
 /api/sign-out
@@ -432,8 +431,6 @@
 /api/invoices
 /api/invoice
 /api/billing
-/api/subscription
-/api/subscriptions
 /api/plans
 /api/plan
 /api/products
@@ -560,7 +557,6 @@
 /api/issues
 /api/issue
 /api/bugs
-/api/features
 /api/releases
 /api/release
 /api/deployments

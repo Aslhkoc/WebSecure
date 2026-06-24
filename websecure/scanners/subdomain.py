@@ -36,14 +36,61 @@ logger = logging.getLogger(__name__)
 # Yardımcılar
 # ---------------------------------------------------------------------------
 
+# PSL (private-section dahil) çözücü — eTLD+1 tabanını DOĞRU çıkarır.
+# Offline gömülü snapshot (suffix_list_urls=()) → tarama sırasında ağ isteği
+# yapmaz (air-gapped / Tor güvenli). Başarısızsa utils.net.registrable_domain
+# sezgiseline düşülür.
+try:
+    import tldextract as _tldextract_mod
+    _PSL_EXTRACT = _tldextract_mod.TLDExtract(
+        suffix_list_urls=(), include_psl_private_domains=True
+    )
+except Exception:  # pragma: no cover - tldextract yoksa
+    _PSL_EXTRACT = None
+
+
 def _extract_domain(target: str) -> str:
-    """URL veya hostname'den kök domain çıkarır."""
+    """
+    URL veya hostname'den KAYIT-EDİLEBİLİR kök domain'i (eTLD+1) çıkarır.
+
+    Subdomain enumerasyonu hedefin TÜM kardeş alt-alanlarını keşfetmelidir;
+    bu yüzden taban apex olmalı: 'https://www.atlassian.com' -> 'atlassian.com',
+    'shop.example.co.uk' -> 'example.co.uk'. Eskiden ham hostname (www.atlassian.com)
+    döndürülüyordu → crt.sh/HackerTarget/amass '%.www.atlassian.com' ve DNS-brute
+    '{word}.www.atlassian.com' sorgulardı → her zaman ~0 sonuç (hedef bir alt-alan
+    önekiyle verildiğinde keşif RAPORA HİÇ düşmüyordu). PSL birincil, sezgisel yedek.
+    """
     if "://" in target:
         host = urlparse(target).hostname or target
     else:
         host = target
     # Strip port
-    host = host.split(":")[0].strip()
+    host = host.split(":")[0].strip().lower().strip(".")
+    if not host:
+        return ""
+    # Salt IP ise (subdomain anlamsız) olduğu gibi döndür.
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        return host
+    # 1) PSL (private section dahil) — en doğru eTLD+1 kaynağı
+    if _PSL_EXTRACT is not None:
+        try:
+            ext = _PSL_EXTRACT(host)
+            base = (
+                getattr(ext, "top_domain_under_public_suffix", "")
+                or getattr(ext, "registered_domain", "")
+            )
+            if base:
+                return base
+        except Exception as _psl_e:  # pragma: no cover
+            logger.debug("[Subdomain] PSL extract başarısız: %r", _psl_e)
+    # 2) Sezgisel yedek (utils.net.registrable_domain — eTLD+1, çok-parçalı ccTLD)
+    try:
+        from websecure.core.utils.net import registrable_domain as _rd
+        base = _rd(host)
+        if base:
+            return base
+    except Exception as _rd_e:  # pragma: no cover
+        logger.debug("[Subdomain] registrable_domain yedeği başarısız: %r", _rd_e)
     return host
 
 

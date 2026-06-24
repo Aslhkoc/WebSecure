@@ -79,22 +79,17 @@ slack
 teams
 
 # ── GELİŞTİRME / TEST ──
-dev
 dev1
 dev2
 dev3
 development
 develop
-developer
 local
 localhost
-test
 test1
 test2
 test3
 testing
-staging
-stage
 stage1
 stage2
 uat
@@ -107,7 +102,6 @@ demo1
 demo2
 sandbox
 preview
-beta
 beta1
 beta2
 beta3
@@ -127,7 +121,6 @@ stg
 stg1
 
 # ── YÖNETİM / KONTROl PANELİ ──
-admin
 admin1
 admin2
 admin3
@@ -140,10 +133,7 @@ manager
 backend
 backoffice
 back-office
-portal
 panel
-cpanel
-whm
 plesk
 control
 console
@@ -165,9 +155,7 @@ loggly
 papertrail
 
 # ── API / SERVİS ──
-api
 api1
-api2
 api3
 api4
 api5
@@ -190,7 +178,6 @@ grpc
 service
 services
 microservice
-backend
 internal-api
 external-api
 sandbox-api
@@ -210,33 +197,20 @@ v3
 v4
 
 # ── MAIL / E-POSTA ──
-mail
 mail1
-mail2
 mail3
 mail4
 mail5
-webmail
-smtp
 smtp1
 smtp2
-pop
-pop3
-imap
 imap1
 imap2
-mx
-mx1
-mx2
 mx3
 relay
 mail-relay
 mailserver
 exchange
 outlook
-owa
-autodiscover
-autoconfig
 mailin
 mailout
 mailsend
@@ -253,30 +227,24 @@ ses
 mandrill
 
 # ── CDN / STATİK İÇERİK ──
-cdn
 cdn1
 cdn2
 cdn3
-static
 static1
 static2
 static3
 assets
 assets1
-img
 images
 image
-media
 media1
 media2
-files
 file
 content
 resources
 s3
 storage
 blob
-download
 downloads
 uploads
 upload
@@ -286,16 +254,13 @@ js
 css
 video
 audio
-docs
 pub
 public
 
 # ── GÜVENLİK / AĞIRLAMA ──
-vpn
 vpn1
 vpn2
 vpn3
-remote
 remote1
 remote2
 sso
@@ -305,7 +270,6 @@ sts
 idp
 id
 identity
-login
 oauth
 oauth2
 openid
@@ -325,7 +289,6 @@ ssh
 gateway
 
 # ── BULUT / ALTYAPI ──
-cloud
 cloud1
 cloud2
 aws
@@ -342,8 +305,6 @@ ci-cd
 cicd
 jenkins
 gitlab
-github
-bitbucket
 circleci
 travis
 bamboo
@@ -397,15 +358,12 @@ crm
 erp
 intranet
 extranet
-partner
 partners
 affiliate
-affiliates
 b2b
 b2c
 customer
 clients
-support
 helpdesk
 ticket
 ticketing
@@ -413,8 +371,6 @@ billing
 invoicing
 payment
 payments
-shop
-store
 ecommerce
 cart
 order
@@ -423,30 +379,21 @@ checkout
 account
 accounts
 member
-members
 user
 users
 profile
 
 # ── UYGULAMA TİPİ ──
-app
 app1
 app2
 app3
 apps
-mobile
-m
 m1
 ios
 android
-web
 web1
 web2
 platform
-dashboard
-portal
-service
-services
 tool
 tools
 bot
@@ -467,7 +414,6 @@ hooks
 us
 eu
 ap
-na
 sa
 af
 me
@@ -532,7 +478,6 @@ splunk
 elk
 graylog
 syslog
-sentry
 bugsnag
 rollbar
 airbrake
@@ -549,7 +494,6 @@ trace
 tracing
 telemetry
 health
-status
 uptime
 heartbeat
 

