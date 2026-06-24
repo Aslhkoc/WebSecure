@@ -1286,20 +1286,6 @@ _NO_TIMEOUT_UNBOUNDED_PHASES: set = {
 # no_timeout is on. Large on purpose: only a genuine hang trips it.
 _NO_TIMEOUT_WATCHDOG_FACTOR = 6
 
-# STAGE-1 KEŞİF/CRAWL FAZLARI — DAHA SIKI no_timeout tavanı (2026-06-24, kullanıcı
-# onayı). Bu fazlar bağımlı zincirde Stage-2 SALDIRI fazlarından ÖNCE koşar; uzamaları
-# offensive aşamayı geciktirir ve aç bırakır. Yavaş/aşırı-yüklü hedefte discovery
-# 240×6=1440s (24dk) tüm agresif bütçeyi yiyip ~25 offensive fazı "exceeded — skipped"e
-# itiyordu (juice-shop agresif/torsuz; ~30dk profil 82dk sürdü, saldırı yüzeyi neredeyse
-# hiç denenmedi). Bu fazlar KISMİ keşif sonucu döndürür → daha erken (ama yine cömert)
-# terk edip saldırıya geçmek net kazanç. Genel çarpan yerine DÜŞÜK çarpan: discovery
-# 240×3=720s, http_crawler 120×3→max(600). Hızlı hedefte saniyeler içinde biterler →
-# bu tavan HİÇ ısırmaz (benchmark ve normal davranış AYNEN). NOT: browser_crawler/katana
-# HARİÇ — onların KENDİ iç duvar-saati bütçeleri var (overall_budget_seconds); watchdog'u
-# kısmak iç bütçeden önce keserek SPA taramasını budar.
-_NO_TIMEOUT_DISCOVERY_FACTOR = 3
-_NO_TIMEOUT_DISCOVERY_PHASES: set = {"discovery", "http_crawler_orchestrator"}
-
 # TOR/PROXY-FARKINDA WATCHDOG (2026-06-21). Tor/SOCKS üzerinde HER istek 10-30x
 # yavaştır; bir saldırı tarayıcısı onlarca-yüzlerce payload gönderir → sabit
 # 600-720s failsafe MEŞRU İLERLEYEN fazı erkenden öldürür. Gerçek bir taramada
@@ -1594,14 +1580,7 @@ def _safe(ctx, fn: Callable[[], None], phase_id: str) -> None:
             if phase_id in _NO_TIMEOUT_UNBOUNDED_PHASES:
                 phase_timeout = float("inf")
             else:
-                # Keşif/crawl fazları (Stage-1) saldırıdan ÖNCE koşar → daha sıkı tavan
-                # (offensive'i geciktirmesinler). Diğer her faz genel cömert çarpanı alır.
-                _wd_factor = (
-                    _NO_TIMEOUT_DISCOVERY_FACTOR
-                    if phase_id in _NO_TIMEOUT_DISCOVERY_PHASES
-                    else _NO_TIMEOUT_WATCHDOG_FACTOR
-                )
-                phase_timeout = max(phase_timeout * _wd_factor, 600)
+                phase_timeout = max(phase_timeout * _NO_TIMEOUT_WATCHDOG_FACTOR, 600)
                 # TOR/STEALTH-FARKINDA: faz SALDIRI fazıysa (discovery/recon/
                 # background/finalizer/waf DEĞİL) failsafe'i büyüt. Hem Tor hem
                 # stealth profili her isteği belirgin yavaşlatır → sabit 600/720s
