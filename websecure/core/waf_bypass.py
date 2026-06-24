@@ -3205,10 +3205,12 @@ class WAFBypassScanner:
 
         # ---- Step 1: Probe baseline response to fingerprint WAF ----
         waf_vendor = "unknown"
+        baseline_status = None
         try:
             baseline_resp = self.session.get(
                 target, timeout=10, allow_redirects=True
             )
+            baseline_status = baseline_resp.status_code
             fingerprinter = WAFFingerprint()
             waf_vendor = fingerprinter.detect(baseline_resp)
             self.logger.debug(f"[WAFBypassScanner] WAF fingerprint: {waf_vendor}")
@@ -3226,6 +3228,14 @@ class WAFBypassScanner:
             self.logger.debug(f"[WAFBypassScanner] WAFDetector failed: {exc!r}")
 
         # ---- Step 3: Confirm WAF blocks the XSS payload ----
+        # [FP-fix] 503 is server overload / unavailability (e.g. an overloaded
+        # Heroku free dyno returning application-error.html), NOT a WAF
+        # content-filtering decision. Counting 503 as a block produced phantom
+        # "WAF Bypass (Critical)" findings on slow/overloaded targets: the probe
+        # hit a transient 503, the mutation later hit a 200, and the scanner
+        # declared a "bypass" although no WAF ever existed. A genuine WAF block
+        # is payload-specific — the baseline (no payload) must succeed while the
+        # payload request is rejected with 403/406/429.
         waf_blocks_payload = False
         if waf_vendor != "unknown" or (waf_profile and waf_profile.detected):
             try:
@@ -3235,10 +3245,12 @@ class WAFBypassScanner:
                     timeout=10,
                     allow_redirects=True,
                 )
-                waf_blocks_payload = probe_resp.status_code in (403, 406, 429, 503)
+                _payload_rejected = probe_resp.status_code in (403, 406, 429)
+                _baseline_ok = baseline_status is not None and baseline_status < 400
+                waf_blocks_payload = _payload_rejected and _baseline_ok
                 self.logger.debug(
                     f"[WAFBypassScanner] Probe status={probe_resp.status_code} "
-                    f"blocks_payload={waf_blocks_payload}"
+                    f"baseline={baseline_status} blocks_payload={waf_blocks_payload}"
                 )
             except Exception as exc:
                 self.logger.debug(f"[WAFBypassScanner] Payload probe failed: {exc!r}")

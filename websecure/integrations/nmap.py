@@ -45,6 +45,15 @@ logger = logging.getLogger(__name__)
 # Kritik UDP portları — root ile taranır
 _UDP_PORTS = "53,67,68,69,111,123,137,138,161,162,500,514,520,1900,4500,5353,11211"
 
+# Faz-2 detayı eksik kalırsa Faz-1 portlarına temel servis adı vermek için (merge-fix)
+_COMMON_TCP_SERVICES = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "domain", 80: "http",
+    110: "pop3", 143: "imap", 443: "https", 445: "microsoft-ds", 587: "smtp",
+    993: "imaps", 995: "pop3s", 1433: "ms-sql-s", 3306: "mysql", 3389: "ms-wbt-server",
+    5432: "postgresql", 6379: "redis", 8080: "http-proxy", 8443: "https-alt",
+    9200: "elasticsearch", 27017: "mongodb",
+}
+
 # Windows'ta raw socket desteklenmiyor — bu returncode assertion failure'ı gösterir
 _WINDOWS_CRASH_CODES = {3221226505, 3221225477, 3221225725, 0xC0000005, 0xC000013A}
 
@@ -867,6 +876,28 @@ class NmapWrapper(ToolIntegration):
             print(f"\033[33m[Nmap AGRESİF Faz-2]\033[0m rc={rc2} — kısmi XML kurtarılıyor...")
         results = NmapParser.parse_xml(xml2) if xml2 else []
         _rm_xml(xml2)
+
+        # [merge-fix] Faz-1 KESİN açık portların (open_ports) otoritesidir; Faz-2 yalnız
+        # servis/script detayı zenginleştirir. Faz-2 bir portu döndürmezse (host-timeout,
+        # DNS round-robin ile farklı backend IP, kısmi/boş XML) o port DÜŞMEMELİ. Eskiden
+        # results YALNIZ Faz-2'den kuruluyordu → Faz-2 boş dönünce sadece UDP sonuçları
+        # kalıyor, web portları (80/443) raporda kaybolup yerini 53/udp alıyordu. Faz-2'de
+        # eksik kalan her açık TCP portunu Faz-1'den temel kayıtla tamamla.
+        _seen_tcp = {r.get("port") for r in results if r.get("port") and r.get("protocol", "tcp") == "tcp"}
+        for _p in sorted(open_ports):
+            if _p in _seen_tcp:
+                continue
+            results.append({
+                "port": _p,
+                "protocol": "tcp",
+                "service": _COMMON_TCP_SERVICES.get(_p, "unknown"),
+                "product": "",
+                "version": "",
+                "cpe": [],
+                "os_guess": "",
+                "scripts": {},
+                "state": "open",
+            })
 
         # --- UDP: raw socket varsa kritik portlar ---
         if raw:

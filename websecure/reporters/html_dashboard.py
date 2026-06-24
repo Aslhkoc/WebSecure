@@ -1314,8 +1314,17 @@ def render_html_dashboard(results: dict) -> str:
             slot = status_locations.setdefault(_u, {})
             slot[_cls] = int(slot.get(_cls, 0)) + 1
 
-    # Onaylı exploit = gerçekten doğrulanmış orta+ önemdeki bulgular
-    exploit_count = stats["Critical"] + stats["High"] + stats["Medium"]
+    # Onaylı exploit = GERÇEKTEN doğrulanmış (verified/confirmed) orta+ önemdeki bulgular.
+    # [tutarlılık-fix] Eskiden bu sayı yalnız severity sayımıydı (Critical+High+Medium) —
+    # hiçbir doğrulama filtresi yoktu. Bu yüzden hiçbir bulgu doğrulanmamışken bile (ör.
+    # summary.json verified_findings=0) pano "6 Onaylı Exploit" gösterip FP'leri (WAF
+    # bypass vb.) "onaylı exploit" gibi sunuyordu. Artık yalnız d.verified/d.confirmed
+    # truthy olan orta+ bulgular sayılır (report JS'teki verified mantığıyla birebir).
+    exploit_count = sum(
+        1 for _f in findings
+        if _f.get("severity") in ("Critical", "High", "Medium")
+        and (_f.get("verified") or _f.get("confirmed"))
+    )
 
     # Response-code dağılım barı
     _dist = [
