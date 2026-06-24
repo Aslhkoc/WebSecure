@@ -6947,6 +6947,14 @@ def _setup_oast_domain(ctx) -> Optional[str]:
         if domain:
             setattr(ctx, "oast_domain", domain)
             setattr(ctx, "oast_correlation_id", data.get("correlation-id", ""))
+            # Payload yükleyiciye canlı OOB domain'ini bildir → wordlist'lerdeki
+            # {{OOB}} token'ı (xss/sqli/graphql/lfi/nosqli/ssti…) bu domain'le
+            # çözülür; statik attacker.com imzası kalkar + OOB callback doğrulanabilir.
+            try:
+                from websecure.core.payloads import set_active_oob_domain
+                set_active_oob_domain(domain)
+            except Exception as _oe:
+                _logger.debug(f"[OAST] set_active_oob_domain atlandı: {_oe!r}")
             _logger.info(f"[OAST] interactsh subdomain alındı: {domain}")
             return domain
     except Exception as exc:

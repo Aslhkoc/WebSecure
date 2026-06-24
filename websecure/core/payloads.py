@@ -99,6 +99,62 @@ def _apply_marker(payloads: list[str], marker: str | None) -> list[str]:
         out.append(repl)
     return out
 
+# --- OOB (out-of-band) collaborator domain templating ----------------------
+# WAF GERÇEKÇİLİĞİ: wordlist'lerdeki literal `attacker.com`/`evil.com` gibi
+# yer-tutucu domain'ler (a) her ticari WAF'ın çekirdek imzasıdır → anında ban,
+# (b) kör/OOB payload'larında callback bizim KONTROL ETMEDİĞİMİZ bir host'a gider
+# → asla doğrulanamaz. Çözüm: korpusta tek kanonik token `{{OOB}}` kullan; kullanım
+# (gönderim) anında canlı interactsh/collaborator domain'iyle değiştir. Domain
+# yoksa RFC-2606 ayrılmış `.invalid` çukuruna düşür (çözülmez → üçüncü-parti
+# trafiği YOK, statik imza YOK). open_redirect KENDİ canary'sini kullandığından
+# (scanners/open_redirect.py) bu kategoride OOB değişimi UYGULANMAZ.
+OOB_TOKEN = "{{OOB}}"
+# Literal yer-tutucular — korpusta kalan/sonradan eklenen varyantları token'a
+# normalize etmek için (idempotent güvenlik ağı).
+_OOB_PLACEHOLDER_DOMAINS = ("attacker.com", "evil.com", "oastify.com", "burpcollaborator.net")
+_OOB_FALLBACK_HOST = "oob.invalid"
+_OOB_SKIP_CATEGORIES = {"open_redirect", "redirect"}
+
+_ACTIVE_OOB_DOMAIN: str | None = None
+_OOB_LOCK = threading.Lock()
+
+
+def set_active_oob_domain(domain: str | None) -> None:
+    """Aktif OAST/collaborator domain'ini kaydeder (interactsh kaydında çağrılır).
+    Bundan sonra get_payloads() ve substitute_oob() canlı domain'i kullanır."""
+    global _ACTIVE_OOB_DOMAIN
+    with _OOB_LOCK:
+        _ACTIVE_OOB_DOMAIN = (domain or "").strip() or None
+
+
+def get_active_oob_domain() -> str | None:
+    return _ACTIVE_OOB_DOMAIN
+
+
+def _normalize_oob_placeholders(payload: str) -> str:
+    """Literal yer-tutucu domain'leri kanonik {{OOB}} token'ına çevirir (de-signature)."""
+    if not payload:
+        return payload
+    out = payload
+    for ph in _OOB_PLACEHOLDER_DOMAINS:
+        if ph in out:
+            out = out.replace(ph, OOB_TOKEN)
+    return out
+
+
+def substitute_oob(payload: str, oob_domain: str | None = None) -> str:
+    """
+    {{OOB}} token'ını (ve kalan literal yer-tutucuları) canlı OAST/collaborator
+    domain'iyle — yoksa çözülmeyen `.invalid` çukuruyla — değiştirir. Gönderim
+    anında çağrılır: statik `attacker.com` imzasını kaldırır + OOB callback'i
+    gerçekten kontrol ettiğimiz bir host'a yönlendirir.
+    """
+    if not payload:
+        return payload
+    dom = (oob_domain or _ACTIVE_OOB_DOMAIN or _OOB_FALLBACK_HOST)
+    out = _normalize_oob_placeholders(payload)
+    return out.replace(OOB_TOKEN, dom)
+
 # --- Defaults for common repos ---------------------------------------------
 
 # Helper to find package root dynamically
@@ -318,10 +374,24 @@ def _provider_roots(cfg_section: dict) -> dict:
         out[prov] = entry
     return out
 
-def load_external_payloads(category: str, marker: str | None = None) -> list[str]:
+def load_external_payloads(
+    category: str,
+    marker: str | None = None,
+    *,
+    oob_domain: str | None = None,
+    keep_oob_token: bool = False,
+) -> list[str]:
     """
     category: 'xss','sqli','rce', veya ALLOWED_CATEGORIES içinde tanımlı diğerleri.
     Sağlayıcıların pattern haritaları üzerinden tarama yapar.
+
+    OOB davranışı (open_redirect hariç):
+      • keep_oob_token=True  → literal yer-tutucular {{OOB}} token'ına normalize
+        edilir ama token KORUNUR. Import-time donan listeler (ssrf_xxe/cmdi) bunu
+        kullanır ve gönderim anında substitute_oob() ile canlı domain'e çevirir.
+      • aksi halde {{OOB}} token'ı oob_domain (verilmişse) veya çözülmeyen .invalid
+        çukuruyla değiştirilir. get_payloads() bunun yerine post-cache canlı domain
+        ile çözer (token'ı cache'te tutmak için keep_oob_token=True geçirir).
     """
     category = (category or "").lower().strip()
 
@@ -356,6 +426,13 @@ def load_external_payloads(category: str, marker: str | None = None) -> list[str
         items = _dedup_preserve(items, limit=maxn)
     else:
         items = items[:maxn]
+
+    # OOB de-signature/çözümleme (open_redirect kendi canary'sini kullanır → atla).
+    if category not in _OOB_SKIP_CATEGORIES:
+        if keep_oob_token:
+            items = [_normalize_oob_placeholders(s) for s in items]
+        else:
+            items = [substitute_oob(s, oob_domain) for s in items]
     return items
 
 # --- Learned payloads (runtime feedback loop) -------------------------------
@@ -472,12 +549,18 @@ def get_payloads(
     if do_sync or (do_sync is None and bool(pl_cfg.get("sync", False))):
         sync_wordlists(cfg)
 
+    # NOT: cache {{OOB}} token'lı (domain-bağımsız) formu tutar; OOB çözümlemesi
+    # her dönüşte canlı domain ile yapılır → çok-hedefli koşumda bayat domain olmaz.
+    _cat = (category or "").lower().strip()
+    _resolve_oob = _cat not in _OOB_SKIP_CATEGORIES
+
     ck = _cache_key(category, marker, tech_tags)
     with _PAYLOAD_CACHE_LOCK:
         if ck in _PAYLOAD_CACHE:
-            return list(_PAYLOAD_CACHE[ck])
+            cached = list(_PAYLOAD_CACHE[ck])
+            return [substitute_oob(s) for s in cached] if _resolve_oob else cached
 
-    items = load_external_payloads(category, marker=marker)
+    items = load_external_payloads(category, marker=marker, keep_oob_token=True)
 
     if not items:
         items = get_builtin_payloads(category)
@@ -503,7 +586,8 @@ def get_payloads(
 
     with _PAYLOAD_CACHE_LOCK:
         _PAYLOAD_CACHE[ck] = list(items)
-    return items
+    # Cache token'lı formu tuttu; dönüşte canlı OOB domain ile çöz.
+    return [substitute_oob(s) for s in items] if _resolve_oob else items
 
 __all__ = [
     "load_external_payloads",
@@ -512,6 +596,10 @@ __all__ = [
     "sync_wordlists",
     "record_learned_payload",
     "load_learned_payloads",
+    "substitute_oob",
+    "set_active_oob_domain",
+    "get_active_oob_domain",
+    "OOB_TOKEN",
 ]
 
 # === PATCH: WebSecure Upgrade (auto-applied) @ 2025-09-07T16:43:08.489221 ===

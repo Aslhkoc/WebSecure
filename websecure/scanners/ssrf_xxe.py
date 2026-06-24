@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse, urljoin, quote
 
 from .base import BaseScanner
-from websecure.core.payloads import load_external_payloads
+from websecure.core.payloads import load_external_payloads, substitute_oob
 
 try:
     from websecure.core.oast import OASTScannerMixin as _OASTScannerMixin
@@ -196,7 +196,10 @@ _PROTOCOL_DETECT: Dict[str, re.Pattern] = {
 def _load_ssrf_payloads() -> list:
     seen = set(_SCHEME_PAYLOADS_CORE)
     ext = []
-    for line in load_external_payloads("ssrf"):
+    # keep_oob_token: {{OOB}} token'ı KORU → gönderim anında canlı OAST domain'iyle
+    # değiştirilir (aşağıdaki döngülerde substitute_oob). Import-time çözüm domain'i
+    # henüz bilmediğinden token'ı dondurup send-time'da çözmek gerekir.
+    for line in load_external_payloads("ssrf", keep_oob_token=True):
         if line and line not in seen:
             seen.add(line)
             ext.append(line)
@@ -244,7 +247,7 @@ _XXE_TARGET_FILES = [
 def _load_xxe_targets() -> list:
     seen = set(_XXE_TARGETS_CORE)
     ext = []
-    for line in load_external_payloads("xxe"):
+    for line in load_external_payloads("xxe", keep_oob_token=True):
         for m in re.finditer(r'(?:SYSTEM\s+"([^"]+)"|href="([^"]+)")', line):
             uri = m.group(1) or m.group(2)
             if uri and uri not in seen:
@@ -658,6 +661,8 @@ class SSRFScanner(_OASTScannerMixin, BaseScanner):
             return
 
         for payload in _SCHEME_PAYLOADS:
+            # {{OOB}} token → canlı OAST domain (yoksa .invalid). Statik imza yok.
+            payload = substitute_oob(payload, self.config.oast.dns_domain)
             t_url = _inject_url_param(url, param, payload)
             try:
                 resp = self.session.get(t_url, timeout=6, allow_redirects=False)
@@ -986,6 +991,7 @@ class XXEScanner(BaseScanner):
 
     def _test_xml_post(self, url: str, bucket: str):
         for target_file in _XXE_TARGETS:
+            target_file = substitute_oob(target_file, self.config.oast.dns_domain)
             payload = XXE_POC.replace("{U}", target_file)
             try:
                 resp = self.session.post(
@@ -1151,6 +1157,7 @@ class XXEScanner(BaseScanner):
 
     def _test_svg_xxe(self, url: str, bucket: str):
         for target_file in _XXE_TARGETS[:2]:
+            target_file = substitute_oob(target_file, self.config.oast.dns_domain)
             svg_payload = XXE_SVG.replace("{U}", target_file).encode()
             try:
                 resp = self.session.post(

