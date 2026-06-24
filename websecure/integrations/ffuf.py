@@ -41,6 +41,69 @@ from websecure.integrations.base import (
 logger = logging.getLogger(__name__)
 
 
+def _collapse_path_slashes(url: Optional[str]) -> Optional[str]:
+    """Bir URL'nin PATH bölümündeki kazara oluşan '//' (veya daha fazla) tekrarını
+    tek '/' ya indir; şema (`https://`), host ve query/fragment'e DOKUNMA.
+
+    FALSE-POSITIVE FIX (2026-06-23, atlassian.com): ffuf FUZZ şablonu
+    `{base}/FUZZ` her zaman FUZZ'tan önce bir '/' koyar; wordlist girdisi de
+    `/api/login` gibi lider '/' taşıyınca ffuf GERÇEKTEN `https://host//api/login`
+    ister. Bu çift-slash URL bazı CDN'lerde (CloudFront) farklı sayfa/40x üretir
+    (atlassian: `//api/login` → 403 block-page; doğru `/api/login` → 404) →
+    raporda hem yanlış URL hem sahte 'keşfedildi' (403) seli. İstek tarafı
+    _sanitize_wordlist ile, görüntü/veri tarafı bu fonksiyonla normalize edilir.
+    """
+    if not url or "://" not in url:
+        return url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        import re as _re
+        parts = urlsplit(url)
+        new_path = _re.sub(r"/{2,}", "/", parts.path)
+        return urlunsplit((parts.scheme, parts.netloc, new_path,
+                           parts.query, parts.fragment))
+    except Exception:
+        return url
+
+
+def _sanitize_wordlist(wordlist: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Wordlist'i FUZZ şablonuyla ('{base}/FUZZ') uyumlu hale getir: her girdinin
+    LİDER '/' karakter(ler)ini at (şablon zaten tam bir '/' sağlıyor). Yalnız
+    gerçekten lider-slash içeren bir wordlist için geçici sanitize edilmiş kopya
+    üretir; aksi halde orijinali döndürür (gereksiz I/O yok).
+
+    Döner: (kullanılacak_wordlist_yolu, silinecek_geçici_dosya_or_None).
+    """
+    if not wordlist or not os.path.exists(wordlist):
+        return wordlist, None
+    try:
+        with open(wordlist, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except Exception as exc:
+        logger.debug(f"[Ffuf] wordlist okunamadı ({wordlist}): {exc!r}")
+        return wordlist, None
+    # Lider '/' taşıyan (yorum olmayan) en az bir girdi var mı?
+    if not any(ln.lstrip().startswith("/") and not ln.lstrip().startswith("#")
+               for ln in lines):
+        return wordlist, None
+    cleaned: List[str] = []
+    for ln in lines:
+        stripped = ln.rstrip("\n").rstrip("\r")
+        if stripped.startswith("#") or stripped == "":
+            cleaned.append(stripped)
+        else:
+            cleaned.append(stripped.lstrip("/"))
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".txt", prefix="ws_ffuf_wl_")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(cleaned) + "\n")
+        logger.debug(f"[Ffuf] wordlist lider-'/' normalize edildi → {tmp}")
+        return tmp, tmp
+    except Exception as exc:
+        logger.debug(f"[Ffuf] wordlist sanitize edilemedi: {exc!r}")
+        return wordlist, None
+
+
 def _run_proc_tracked(
     cmd: List[str], **kw
 ) -> Tuple[subprocess.Popen, Optional[Callable]]:
@@ -184,6 +247,13 @@ class FFUFWrapper(ToolIntegration):
                 url += "/"
             url += "FUZZ"
 
+        # Şablon FUZZ'tan önce her zaman tek bir '/' koyar ('{base}/FUZZ'). Wordlist
+        # girdileri de lider '/' taşıyorsa (örn. '/api/login') ffuf '{base}//api/login'
+        # ister → çift-slash, CDN'lerde yanlış sayfa/40x (atlassian: 403 block →
+        # sahte 'keşfedildi' seli). Girdilerin lider '/'ını normalize et ki ffuf
+        # DOĞRU URL'i istesin. Yalnız gerekirse geçici kopya üretir.
+        wordlist, _tmp_wordlist = _sanitize_wordlist(wordlist)
+
         # Auto-baseline: if no explicit filter_size, probe a 404 to suppress soft-404 FPs
         if not filter_size:
             base = url.split("FUZZ")[0]
@@ -282,6 +352,12 @@ class FFUFWrapper(ToolIntegration):
                     os.remove(temp_output)
                 except OSError:
                     pass
+            # Sanitize edilmiş geçici wordlist kopyası (varsa) temizlenir.
+            if _tmp_wordlist and os.path.exists(_tmp_wordlist):
+                try:
+                    os.remove(_tmp_wordlist)
+                except OSError:
+                    pass
 
         return findings
 
@@ -291,9 +367,12 @@ class FFUFWrapper(ToolIntegration):
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for item in data.get("results", []):
+                # URL'deki kazara '//' (eski çift-slash bug'ı / wordlist artığı) PATH'te
+                # tek '/'ya indirilir — rapor/veri tarafı her hâlükârda temiz kalsın.
+                _u = _collapse_path_slashes(item.get("url"))
                 results.append({
                     "input": item.get("input", {}).get("FUZZ", ""),
-                    "url": item.get("url"),
+                    "url": _u,
                     "status": item.get("status"),
                     "length": item.get("length"),
                     "words": item.get("words"),
@@ -707,7 +786,7 @@ class FeroxbusterWrapper(ToolIntegration):
                             data = json.loads(line)
                             if data.get("type") == "response":
                                 results.append({
-                                    "url": data.get("url"),
+                                    "url": _collapse_path_slashes(data.get("url")),
                                     "status": data.get("status"),
                                     "length": data.get("content_length"),
                                     "words": data.get("word_count"),
