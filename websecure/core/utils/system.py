@@ -258,12 +258,17 @@ def setup_webdriver(headless: bool = True, proxy: str = None, shared: bool = Tru
         last_exc: Optional[Exception] = None
         for is_headless, new_hl, swift, use_profile, label in attempts:
             # GUI (görünür) modda her başarısız deneme kullanıcının gördüğü bir
-            # Chrome penceresi AÇIP çökertir. "session not created / Chrome
-            # instance exited" görünür modda neredeyse her zaman Chrome↔ChromeDriver
-            # SÜRÜM UYUMSUZLUĞUDUR (çevresel) — tekrar denemek kendiliğinden
-            # düzelmez, yalnız "bir ton pencere" patlatır. Bu yüzden görünür modda
-            # config başına tek deneme yap (headless'ta 3 retry korunur).
-            _retries = 3 if is_headless else 1
+            # Chrome penceresi AÇIP çökertir → "bir ton pencere" şikâyetinin kaynağı
+            # eskiden config başına 3 retry × 2 config = 6 penceredir. ANCAK "session
+            # not created / Chrome instance exited" çoğu zaman SÜRÜM DEĞİL, GEÇİCİDİR
+            # (Chrome oto-güncelleme yarışı: salesforce.com taramasında Chrome .158'e
+            # YENİ geçmiş, tam-eşleşen sürücü ertesi gün inmişti — major eşleşse bile
+            # hiccup). Tek denemede (retry=1) geçici bir hata GÖRÜNÜR ENJEKSİYONU tüm
+            # tarama boyunca KALICI öldürüyordu. Denge: config başına 2 deneme
+            # (backoff'lu) → geçici hata toparlanır + başarı singleton'a cache'lenir
+            # (sonraki fazlar yeni pencere AÇMAZ); en kötü saf-hatada 4 kısa flash,
+            # "ton" değil. service.stop() her başarısız pencereyi anında reap eder.
+            _retries = 3 if is_headless else 2
             for retry in range(_retries):  # geçici hata için aynı config'i dene
                 # Her denemeye TAZE Service VE TAZE profil dizini ver — başarısız
                 # bir denemenin yarı-başlamış chromedriver'ı veya bıraktığı
