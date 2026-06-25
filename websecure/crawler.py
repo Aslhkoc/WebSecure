@@ -269,6 +269,11 @@ class CrawlerConfig:
     # Basic Limits
     max_depth: int = 4
     max_pages: int = 1000
+    # Wall-clock ceiling for the whole crawl. max_pages alone is NOT a safe
+    # bound: over a slow path (Tor) a 1000-page crawl of a large site (e.g.
+    # salesforce.com) runs for HOURS. 0 = derive a sane default at runtime
+    # (see start()); any positive value is honoured verbatim.
+    max_seconds: int = 0
     timeout_http: int = 12
     fingerprint_head_count: int = 20
     strict_same_origin: bool = True
@@ -413,6 +418,48 @@ class WebCrawler:
             logger.debug(f"[Crawler] Checkpoint load failed: {exc!r}")
             return None
 
+    def _resolve_deadline(self) -> float:
+        """Wall-clock deadline (monotonic) for the whole crawl, or 0 = none.
+
+        Honours an explicit cfg.max_seconds. When unset, derive a finite default
+        so a large site over a slow path can never run for hours: budget grows
+        with max_pages but is hard-capped (tighter when going through a proxy/Tor,
+        since each page costs several seconds there)."""
+        explicit = int(getattr(self.cfg, "max_seconds", 0) or 0)
+        if explicit > 0:
+            return time.monotonic() + explicit
+        proxied = bool(getattr(self.cfg, "proxy_url", None))
+        # ~per-page allowance × page budget, clamped to a firm ceiling.
+        per_page = 8.0 if proxied else 3.0
+        cap = 1200.0 if proxied else 1800.0  # 20 min on Tor / 30 min direct
+        derived = min(cap, max(120.0, per_page * float(self.cfg.max_pages)))
+        return time.monotonic() + derived
+
+    @staticmethod
+    def _scan_over_probe():
+        """Return a callable -> bool reporting whether the scan was finished or
+        cancelled (Ctrl+C / global kill-switch). Best-effort: if the signal
+        modules can't be imported, the crawl simply relies on its deadline."""
+        try:
+            from websecure.core.http import scan_is_over as _over
+        except Exception:
+            def _over() -> bool:  # type: ignore[misc]
+                return False
+        try:
+            from websecure.core.phases import _SCAN_CANCEL as _cancel
+        except Exception:
+            _cancel = None
+
+        def _probe() -> bool:
+            try:
+                if _over():
+                    return True
+            except Exception:
+                pass
+            return bool(_cancel is not None and _cancel.is_set())
+
+        return _probe
+
     def start(self) -> Dict[str, Any]:
         """Main crawl loop."""
         queue: Deque[Tuple[str, int]] = deque()
@@ -454,10 +501,26 @@ class WebCrawler:
         # Prevents getting stuck on /product/1, /product/2 ...
         governor = make_queue_governor(self.root)
 
+        # Wall-clock budget + cooperative cancellation. max_pages alone let a
+        # large site over Tor crawl for hours and (when launched via _safe_call
+        # and orphaned) keep running long after the scan reported "Tamamlandı".
+        _deadline = self._resolve_deadline()
+        _scan_over = self._scan_over_probe()
+
         while queue:
             if pages_crawled >= self.cfg.max_pages:
                 break
-            
+            if _deadline and time.monotonic() > _deadline:
+                logger.info(
+                    "[Crawler] Süre bütçesi doldu (%ss) — %d sayfada durduruldu.",
+                    self.cfg.max_seconds or "auto", pages_crawled,
+                )
+                break
+            if _scan_over():
+                logger.info("[Crawler] Tarama bitti/iptal — crawl durduruldu (%d sayfa).",
+                            pages_crawled)
+                break
+
             url, depth = queue.popleft()
             if url in seen: continue
             

@@ -159,6 +159,34 @@ def is_phase_abandoned(name: Optional[str] = None) -> bool:
         return nm in _ABANDONED_PHASES
 
 
+# ---- Global "scan finished" kill-switch -----------------------------------
+# Phase abandonment is per-phase, but some long-running daemons (e.g. the
+# legacy WebCrawler launched via _safe_call) run with the DEFAULT active-phase
+# "discovery" and are orphaned when _safe_call times out — they then keep
+# crawling for hours AFTER the main pipeline has already reported "Tamamlandı"
+# and printed the "press Enter to exit" prompt (observed on the salesforce.com
+# Tor run: a 1000-page crawl ran ~4h past scan completion). This event is set
+# once, right before the program waits on stdin at the very end of the scan;
+# every subsequent request short-circuits so any surviving daemon drains in
+# seconds instead of running for hours. It is NOT set during the scan, so it
+# never affects legitimate in-progress work.
+_SCAN_OVER = threading.Event()
+
+
+def signal_scan_over() -> None:
+    """Mark the scan as finished — orphaned daemon requests abort immediately."""
+    _SCAN_OVER.set()
+
+
+def clear_scan_over() -> None:
+    """Reset the kill-switch (e.g. before a fresh scan in a long-lived process)."""
+    _SCAN_OVER.clear()
+
+
+def scan_is_over() -> bool:
+    return _SCAN_OVER.is_set()
+
+
 # ---------------------------------------------------------------------------
 # Global "max power" / timeout-free runtime flags
 # ---------------------------------------------------------------------------
@@ -757,6 +785,13 @@ def _maybe_recover_from_backoff() -> None:
 
 def _smart_request(self, method, url, **kwargs):
     phase = ACTIVE_PHASE.get()
+
+    # Hard stop: the scan has finished and we are only waiting for the user to
+    # press Enter. Any request reaching here belongs to an orphaned daemon
+    # (e.g. a detached crawler) — abort it so it drains in seconds instead of
+    # crawling for hours past completion.
+    if _SCAN_OVER.is_set():
+        raise PhaseAbandoned("scan finished — orphaned request aborted")
 
     # Cooperative cancellation: if this phase was abandoned by the watchdog
     # (exceeded its timeout), abort immediately — before sleeping or touching

@@ -257,7 +257,14 @@ def setup_webdriver(headless: bool = True, proxy: str = None, shared: bool = Tru
 
         last_exc: Optional[Exception] = None
         for is_headless, new_hl, swift, use_profile, label in attempts:
-            for retry in range(3):  # geçici hata için aynı config'i 3 kez dene
+            # GUI (görünür) modda her başarısız deneme kullanıcının gördüğü bir
+            # Chrome penceresi AÇIP çökertir. "session not created / Chrome
+            # instance exited" görünür modda neredeyse her zaman Chrome↔ChromeDriver
+            # SÜRÜM UYUMSUZLUĞUDUR (çevresel) — tekrar denemek kendiliğinden
+            # düzelmez, yalnız "bir ton pencere" patlatır. Bu yüzden görünür modda
+            # config başına tek deneme yap (headless'ta 3 retry korunur).
+            _retries = 3 if is_headless else 1
+            for retry in range(_retries):  # geçici hata için aynı config'i dene
                 # Her denemeye TAZE Service VE TAZE profil dizini ver — başarısız
                 # bir denemenin yarı-başlamış chromedriver'ı veya bıraktığı
                 # SingletonLock, sonraki denemeleri zincirleme düşürmesin.
@@ -283,9 +290,9 @@ def setup_webdriver(headless: bool = True, proxy: str = None, shared: bool = Tru
                         pass
                     raw = str(exc).strip()
                     first = raw.splitlines()[0] if raw else type(exc).__name__
-                    if _is_transient(exc) and retry < 2:
+                    if _is_transient(exc) and retry < _retries - 1:
                         logging.warning(
-                            f"[WebDriver] {label} geçici hata (deneme {retry+1}/3): "
+                            f"[WebDriver] {label} geçici hata (deneme {retry+1}/{_retries}): "
                             f"{first[:180]} — kısa bekleyip tekrar..."
                         )
                         time.sleep(1.5 * (retry + 1))  # 1.5s, 3.0s backoff

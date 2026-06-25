@@ -2016,8 +2016,18 @@ def _run_scan_phases(
 
         crawl_cfg = (cfg.get("crawler") or {}) if isinstance(cfg, dict) else {}
 
+        # Legacy stand-alone crawl. The Unified plan (run_plan_if_needed) ALREADY
+        # performs full discovery (Katana + CrawlerOrchestrator + WebCrawler via
+        # _runner_discovery), so re-running a 1000-page WebCrawler here is pure
+        # duplicate work. Worse: it is launched through _safe_call(timeout=600s),
+        # which ORPHANS the crawler thread on timeout — on a large site over Tor
+        # it then kept crawling for ~4h AFTER the scan had already reported done
+        # and printed the "press Enter to exit" prompt (salesforce.com Tor run).
+        # Run it ONLY as a fallback when the plan did not run.
+        _legacy_crawl = not (results.get("_plan_ran", False) or getattr(ctx, "_plan_ran", False))
+
         # Static crawler via WebCrawler if available
-        if 'WebCrawler' in globals() and callable(globals().get("WebCrawler")) and callable(
+        if _legacy_crawl and 'WebCrawler' in globals() and callable(globals().get("WebCrawler")) and callable(
                 globals().get("CrawlerConfig")):
             wc = WebCrawler(
                 session,
@@ -2041,7 +2051,7 @@ def _run_scan_phases(
             elif not ok_wc and callable(globals().get("add_result")):
                 add_result("errors", {"stage": "crawl_static", "error": str(cout)})
 
-        if bool(crawl_cfg.get("browser_js_discovery", True)) and callable(globals().get("discover_dynamic_endpoints")):
+        if _legacy_crawl and bool(crawl_cfg.get("browser_js_discovery", True)) and callable(globals().get("discover_dynamic_endpoints")):
             ok_dyn, res = _safe_call(
                 discover_dynamic_endpoints,
                 url,
@@ -2762,7 +2772,15 @@ if __name__ == "__main__":
     except Exception as exc:
         _logger.debug(f"[main] AlertManager.play_success hatası: {exc!r}")
 
-    # Keep window open
+    # Keep window open. First flip the global kill-switch so ANY orphaned
+    # background daemon (e.g. a detached crawler) stops issuing requests
+    # immediately — otherwise it keeps crawling/printing while we block on
+    # stdin, which looks like "the scan is still running for hours".
+    try:
+        from websecure.core.http import signal_scan_over as _sso
+        _sso()
+    except Exception as _sso_e:
+        _logger.debug(f"[main] signal_scan_over unavailable: {_sso_e!r}")
 
     try:
         sys.stdout.write("\n[i] Cikmak icin Enter'a basin...\n")
