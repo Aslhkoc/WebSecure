@@ -350,6 +350,36 @@ def _has_npcap() -> bool:
     # DLL var ama servis sorgulanamadı — yine de True say
     return True
 
+
+def _npcap_allows_nonadmin() -> bool:
+    """Npcap 'AdminOnly=0' modunda kuruluysa raw-socket erişimi YÖNETİCİSİZ açıktır.
+
+    Npcap kurulumundaki "Restrict Npcap driver's access to Administrators only"
+    kutusu KALDIRILDIYSA registry'de AdminOnly=0 olur → normal kullanıcı da
+    SYN/OS/UDP (-sS/-O/-sU) yapabilir. Bu, "nmap tam gücü için yönetici, ama
+    yönetici Chrome'u kırıyor" çatışmasının doğru çözümüdür: Npcap'i non-admin
+    kurup programı normal kullanıcı olarak çalıştır → hem nmap tam güç hem Chrome.
+    """
+    if not _is_windows():
+        return False
+    try:
+        import winreg
+    except Exception:
+        return False
+    # 64-bit Python WOW6432Node'u açıkça açar; 32-bit'te SOFTWARE\Npcap zaten
+    # oraya yönlenir. İkisini de dene.
+    for hive_path in (r"SOFTWARE\WOW6432Node\Npcap", r"SOFTWARE\Npcap"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, hive_path) as k:
+                val, _ = winreg.QueryValueEx(k, "AdminOnly")
+                return int(val) == 0
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+    return False
+
+
 # Servis adına göre ek NSE scriptler
 _SERVICE_SCRIPTS: Dict[str, str] = {
     "http":    "http-title,http-headers,http-methods,http-auth-finder,http-robots.txt,"
@@ -690,11 +720,19 @@ class NmapWrapper(ToolIntegration):
 
         on_windows = _is_windows()
         root = _is_root()
-        _npcap_ok = on_windows and root and _has_npcap()
+        _npcap_present = on_windows and _has_npcap()
+        # Raw socket erişimi: ya yönetici, YA DA Npcap non-admin (AdminOnly=0) kurulu.
+        # İkincisi → yönetici GEREKMEDEN tam güç (Chrome'u kırmadan).
+        _npcap_nonadmin = _npcap_present and _npcap_allows_nonadmin()
+        _npcap_ok = _npcap_present and (root or _npcap_nonadmin)
         _raw = (root and not on_windows) or _npcap_ok   # SYN / raw socket erişimi var mı
 
         if _raw and _npcap_ok:
-            print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN/OS/UDP tam güç aktif")
+            if root:
+                print("\033[36m[Nmap]\033[0m Windows Admin + Npcap — SYN/OS/UDP tam güç aktif")
+            else:
+                print("\033[36m[Nmap]\033[0m Npcap non-admin (AdminOnly=0) — "
+                      "YÖNETİCİSİZ SYN/OS/UDP tam güç aktif")
         elif _raw:
             print("\033[36m[Nmap]\033[0m Root — SYN/OS/UDP tam güç aktif")
 
@@ -711,9 +749,12 @@ class NmapWrapper(ToolIntegration):
             print("\033[36m[Nmap]\033[0m TCP connect modu (-sT) — port/servis/NSE tam çalışır.")
             if on_windows:
                 if _has_npcap() and not root:
-                    # Npcap kurulu ama yönetici değil → elevation kilidi açar
-                    print("\033[33m[Nmap]\033[0m Npcap kurulu ama yönetici değil — "
-                          "SYN-stealth + OS tespiti + UDP için CMD'yi 'Yönetici olarak' çalıştırın.")
+                    # Npcap kurulu ama AdminOnly=1 → yönetici gerekiyor. İKİ çözüm:
+                    print("\033[33m[Nmap]\033[0m Npcap kurulu ama AdminOnly=1 — "
+                          "SYN-stealth + OS tespiti + UDP için ya CMD'yi 'Yönetici olarak' "
+                          "çalıştırın, YA DA Npcap'i 'Restrict Npcap driver's access to "
+                          "Administrators only' kutusunu KALDIRARAK yeniden kurun → o zaman "
+                          "yönetici GEREKMEZ (Chrome/görünür tarayıcı da kırılmaz).")
                 elif not _has_npcap():
                     print("\033[33m[Nmap]\033[0m Npcap kurulu değil — SYN/OS/UDP için "
                           "npcap.com'dan Npcap kurup yönetici olarak çalıştırın.")
