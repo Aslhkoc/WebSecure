@@ -150,7 +150,7 @@ class CmdiScanner(BaseScanner):
                 baseline_text = (baseline_resp.text or "") if baseline_resp else ""
                 mk_result = mk_extractor.extract(url, param, self.session, baseline_text)
                 if mk_result:
-                    summary = mk_extractor.format_summary(mk_result)
+                    _mk_summary = mk_extractor.format_summary(mk_result)
                     self.report_finding(
                         vuln_type="OS Command Injection — RCE Confirmed (Output Extracted)",
                         url=url,
@@ -160,6 +160,7 @@ class CmdiScanner(BaseScanner):
                         evidence=(
                             f"Command '{mk_result['command']}' sandwich-marker output: "
                             f"{mk_result['raw_output'][:300]}"
+                            + (f" | {_mk_summary}" if _mk_summary else "")
                         ),
                         rce_confirmed=True,
                         command=mk_result["command"],

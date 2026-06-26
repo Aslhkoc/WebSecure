@@ -13,7 +13,7 @@ from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
 from websecure.core.response_analyzer import ResponseBehaviorAnalyzer, SQLErrorDetector
 from websecure.core.timing_analyzer import TimingAnalyzer
-from websecure.core.evidence_extractor import SQLiEvidenceExtractor, MARK_S, MARK_E, extract_marked
+from websecure.core.evidence_extractor import SQLiEvidenceExtractor
 
 logger = logging.getLogger(__name__)
 
