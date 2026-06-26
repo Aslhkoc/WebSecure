@@ -22,6 +22,7 @@ import urllib.parse
 from typing import Dict, List, Optional
 
 from websecure.scanners.base import BaseScanner
+from websecure.core.evidence_extractor import LFIEvidenceExtractor as _LFIExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -228,15 +229,24 @@ class LFIDirectoryTraversalProber(BaseScanner):
                         body = getattr(resp, "text", "")[:3000]
                         hit  = _lfi_sensitive_content(body)
                         if hit:
+                            _lfi_ext = _LFIExtractor()
+                            _extracted = _lfi_ext.extract(body, tfile)
+                            _summary   = _lfi_ext.format_summary(_extracted)
                             finding = {
                                 "vuln_type": "LFI — Directory Traversal",
                                 "url": test_url, "severity": "Critical",
                                 "description": (
                                     f"LFI via path traversal: {payload!r} -> {tfile}. "
                                     f"Content detected: {hit!r}"
+                                    + (f" | {_summary}" if _summary else "")
                                 ),
-                                "evidence": {"payload": payload, "file": tfile,
-                                             "snippet": body[:300], "status": resp.status_code},
+                                "evidence": {
+                                    "payload": payload,
+                                    "file":    tfile,
+                                    "snippet": body[:300],
+                                    "status":  resp.status_code,
+                                },
+                                "extracted_data": _extracted,
                             }
                             results.append(finding)
                             self.report_finding(**finding)
@@ -258,12 +268,23 @@ class LFIDirectoryTraversalProber(BaseScanner):
                             logger.debug(f"[scanners.lfi] {type(_fix_e).__name__}: {_fix_e!r}")
                         hit = _lfi_sensitive_content(body) or _lfi_sensitive_content(decoded)
                         if hit:
+                            _src = decoded if decoded else body
+                            _lfi_ext2 = _LFIExtractor()
+                            _ext2 = _lfi_ext2.extract(_src, tfile)
+                            _sum2 = _lfi_ext2.format_summary(_ext2)
                             finding = {
                                 "vuln_type": "LFI — PHP Wrapper",
                                 "url": test_url, "severity": "Critical",
-                                "description": f"LFI via PHP wrapper {wrapper!r} -> {tfile}. Hit: {hit!r}",
-                                "evidence": {"wrapper": wrapper, "file": tfile,
-                                             "decoded_snippet": decoded[:200]},
+                                "description": (
+                                    f"LFI via PHP wrapper {wrapper!r} -> {tfile}. Hit: {hit!r}"
+                                    + (f" | {_sum2}" if _sum2 else "")
+                                ),
+                                "evidence": {
+                                    "wrapper":          wrapper,
+                                    "file":             tfile,
+                                    "decoded_snippet":  decoded[:200],
+                                },
+                                "extracted_data": _ext2,
                             }
                             results.append(finding)
                             self.report_finding(**finding)

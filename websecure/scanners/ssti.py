@@ -19,6 +19,7 @@ import requests as _requests
 
 from websecure.scanners.base import BaseScanner
 from websecure.core.payloads import load_external_payloads
+from websecure.core.evidence_extractor import SSTIEvidenceExtractor as _SSTIExtractor
 
 _logger = logging.getLogger(__name__)
 
@@ -462,10 +463,28 @@ class SSTIScanner(BaseScanner):
             engine = self._tier2_fingerprint(url, parsed, params, param_name)
 
             poc_evidence = None
+            extracted_data: Dict = {}
             if engine:
                 poc_evidence = self._tier3_poc(url, parsed, params, param_name, engine)
+                # Sandwich-marker ile config dump + RCE çıktısı yakala
+                _ssti_ext = _SSTIExtractor()
+                def _inject_fn(u, p, pl):
+                    _np = dict(params)
+                    _np[p] = pl
+                    return self._build_url(parsed, _np)
+                cfg = _ssti_ext.extract_config(url, param_name, self.session, _inject_fn, engine)
+                if cfg:
+                    extracted_data.update(cfg)
+                baseline_resp = self.session.get(url, timeout=8)
+                baseline_text = getattr(baseline_resp, "text", "") or ""
+                rce = _ssti_ext.extract_rce(
+                    url, param_name, self.session, _inject_fn, engine, baseline_text
+                )
+                if rce:
+                    extracted_data.update(rce)
+                    poc_evidence = (poc_evidence or "") + f" | RCE: {rce.get('rce_output','')[:200]}"
 
-            self._emit_finding(url, param_name, payload, evidence, engine, poc_evidence)
+            self._emit_finding(url, param_name, payload, evidence, engine, poc_evidence, extracted_data)
 
     def _confirm_with_canary(self, url: str, parsed, params: List, param_name: str) -> bool:
         """
@@ -800,7 +819,8 @@ class SSTIScanner(BaseScanner):
         return urlunparse(parsed._replace(query=urlencode(params)))
 
     def _emit_finding(self, url: str, param: str, payload: str, evidence: str,
-                      engine: Optional[str], poc: Optional[str]):
+                      engine: Optional[str], poc: Optional[str],
+                      extracted_data: Optional[Dict] = None):
         """Emit SSTI finding via BaseScanner.report_finding() (single reporting path)."""
         extra: Dict = {
             "engine": engine or "unknown",
@@ -817,6 +837,7 @@ class SSTIScanner(BaseScanner):
             severity="Critical",
             evidence=evidence,
             extra=extra,
+            extracted_data=extracted_data if extracted_data else None,
         )
 
 

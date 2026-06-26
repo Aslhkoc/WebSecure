@@ -1484,6 +1484,68 @@ def _render_markdown_report_inline(results: Dict) -> str:
             lines.append(
                 f"| {_norm_sev_tr(e.get('severity'))} | {esc_md(e.get('type') or '')} | {esc_md(e.get('url') or '')} | {esc_md(e.get('param') or '')} | `{pocv}` |")
 
+        # Extracted Evidence — extracted_data içeren bulgular için ek bölüm
+        extracted_items = [e for e in exploitable if e.get("extracted_data")]
+        if extracted_items:
+            lines.append("")
+            lines.append("### Çıkarılan Gerçek Veri (Hedef Sistem Cevabı)")
+            lines.append("")
+            try:
+                from websecure.core.evidence_extractor import format_extracted_data
+                for e in extracted_items:
+                    etype = esc_md(e.get("type") or "")
+                    eurl  = esc_md((e.get("url") or "")[:80])
+                    eparam= esc_md(e.get("param") or "-")
+                    lines.append(f"**{etype}** @ `{eurl}` param=`{eparam}`")
+                    ed = e.get("extracted_data") or {}
+                    # SQL Injection veri çıktısı
+                    if ed.get("db_version"):
+                        lines.append(f"- DB Sürüm   : `{ed['db_version']}`")
+                    if ed.get("db_user"):
+                        lines.append(f"- DB Kullanıcı: `{ed['db_user']}`")
+                    if ed.get("db_name"):
+                        lines.append(f"- Veritabanı  : `{ed['db_name']}`")
+                    if ed.get("tables"):
+                        tbls = ed["tables"]
+                        shown = tbls[:10]
+                        extra_n = len(tbls) - len(shown)
+                        tbl_str = ", ".join(f"`{t}`" for t in shown)
+                        if extra_n:
+                            tbl_str += f" _(+{extra_n} daha)_"
+                        lines.append(f"- Tablolar [{len(tbls)}]: {tbl_str}")
+                    if ed.get("sensitive_tables"):
+                        lines.append(f"- ⚠ Hassas Tablolar: {', '.join(f'`{t}`' for t in ed['sensitive_tables'])}")
+                    # CMDi / RCE veri çıktısı
+                    if ed.get("username"):
+                        lines.append(f"- Sistem Kullanıcı: `{ed['username']}` (uid={ed.get('uid','?')})")
+                    if ed.get("groups"):
+                        lines.append(f"- Gruplar: {', '.join(ed['groups'][:6])}")
+                    if ed.get("raw_output") and not ed.get("db_version"):
+                        out = str(ed["raw_output"])[:200].replace("\n", " ")
+                        lines.append(f"- Komut Çıktısı: `{out}`")
+                    # LFI dosya içeriği
+                    if ed.get("file_desc"):
+                        lines.append(f"- Okunan Dosya: `{ed['file_desc']}`")
+                    if ed.get("lines_total"):
+                        lines.append(f"- Satır Sayısı: {ed['lines_total']}")
+                    if ed.get("users"):
+                        lines.append(f"- Sistem Kullanıcıları: {', '.join(f'`{u}`' for u in ed['users'][:8])}")
+                    if ed.get("shell_users"):
+                        lines.append(f"- ⚠ Shell Erişimi: {', '.join(f'`{u}`' for u in ed['shell_users'])}")
+                    if ed.get("sensitive_keys"):
+                        lines.append(f"- ⚠ Kimlik Bilgisi ({len(ed['sensitive_keys'])} adet): `{ed['sensitive_keys'][0][:80]}`...")
+                    if ed.get("env_vars"):
+                        lines.append(f"- Ortam Değişkenleri: {len(ed['env_vars'])} adet okundu")
+                    # SSTI veri çıktısı
+                    if ed.get("leaked_keys"):
+                        lines.append(f"- ⚠ Config Sızdı: {', '.join(ed['leaked_keys'].keys())}")
+                    if ed.get("rce_confirmed"):
+                        rce_out = str(ed.get("rce_output",""))[:120].replace("\n"," ")
+                        lines.append(f"- ⚠ RCE Onaylandı: `{rce_out}`")
+                    lines.append("")
+            except Exception as _ee:
+                pass
+
     # Kullanılan Parametreler (frekans)
     from collections import Counter
     params = [str((it.get("param") or "")).strip() for it in items if (it.get("param") or "").strip()]

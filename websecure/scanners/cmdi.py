@@ -135,12 +135,38 @@ class CmdiScanner(BaseScanner):
             for f in (self.results or {}).get("offensive", [])
             if "Command Injection" in f.get("type", "")
         }
+        # Sandwich-marker extractor — ham çıktıyı izole eder
+        from websecure.core.evidence_extractor import CMDiEvidenceExtractor
+        mk_extractor = CMDiEvidenceExtractor()
+
         for url in urls[:5]:
             if url not in confirmed_urls:
                 continue
             parsed = urlparse(url)
             params = [p for p, _ in parse_qsl(parsed.query)]
             for param in params[:3]:
+                # Önce sandwich-marker extractor'ı dene (daha kesin izolasyon)
+                baseline_resp = self.fetch_baseline(url, timeout=10)
+                baseline_text = (baseline_resp.text or "") if baseline_resp else ""
+                mk_result = mk_extractor.extract(url, param, self.session, baseline_text)
+                if mk_result:
+                    summary = mk_extractor.format_summary(mk_result)
+                    self.report_finding(
+                        vuln_type="OS Command Injection — RCE Confirmed (Output Extracted)",
+                        url=url,
+                        param=param,
+                        payload=mk_result["payload"],
+                        severity="Critical",
+                        evidence=(
+                            f"Command '{mk_result['command']}' sandwich-marker output: "
+                            f"{mk_result['raw_output'][:300]}"
+                        ),
+                        rce_confirmed=True,
+                        command=mk_result["command"],
+                        extracted_data=mk_result,
+                    )
+                    continue
+                # Fallback: klasik CMDIRCEChain
                 result = rce.extract(url, param, self.session)
                 if result:
                     self.report_finding(
@@ -155,6 +181,11 @@ class CmdiScanner(BaseScanner):
                         ),
                         rce_confirmed=True,
                         command=result["command"],
+                        extracted_data={
+                            "command":      result["command"],
+                            "raw_output":   result["output_snippet"],
+                            "technique":    result.get("technique", ""),
+                        },
                     )
 
     def scan_url(self, url: str) -> bool:

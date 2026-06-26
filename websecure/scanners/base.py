@@ -281,6 +281,18 @@ class BaseScanner:
             f"[{self.name.upper()}] {resolved_type} FOUND: {url} [{entry['severity']}]"
             + (f" (param={param})" if param else "")
         )
+        # extracted_data varsa terminalde okunabilir özet göster
+        _ed = entry.get("extracted_data")
+        if _ed and isinstance(_ed, dict):
+            try:
+                from websecure.core.evidence_extractor import format_extracted_data
+                _summary = format_extracted_data(entry)
+                if _summary:
+                    self.logger.warning(
+                        f"[{self.name.upper()}] EXTRACTED DATA:\n{_summary}"
+                    )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Per-finding exploit evidence (request sent + response received)
