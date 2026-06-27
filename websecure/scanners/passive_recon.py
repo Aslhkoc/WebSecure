@@ -130,8 +130,15 @@ _FILE_CONTENT_SIGNATURES = [
 # Madde 3). Import edilemezse sınıf-içi SECRET_PATTERNS (18 pattern alt-küme) fallback olur.
 try:
     from websecure.scanners.js_analyzer import _SECRET_PATTERNS as _JS_SECRET_PATTERNS
+    # Public-by-design tipler (Google OAuth client ID, Firebase API key, Sentry DSN,
+    # Internal IP) client bundle'a TASARIMI GEREĞİ gömülür → js_analyzer bunları Low'a
+    # indirir. passive_recon aynı pattern'leri kullandığından AYNI downgrade'i uygulamalı;
+    # yoksa juice-shop Google-OAuth-client-ID gibi public tanımlayıcılar burada sahte
+    # High çıkar (severity-inflation FP).
+    from websecure.scanners.js_analyzer import _PUBLIC_CLIENT_SECRET_TYPES
 except Exception:  # pragma: no cover - defensive
     _JS_SECRET_PATTERNS = None
+    _PUBLIC_CLIENT_SECRET_TYPES = frozenset()
 
 
 class PassiveJSScanner(BaseScanner):
@@ -181,12 +188,15 @@ class PassiveJSScanner(BaseScanner):
                 for match in rx.finditer(content):
                     secret = match.group(match.lastindex) if match.lastindex else match.group(0)
                     if not self._is_false_positive(secret):
+                        # Public-by-design tanımlayıcılar Low (js_analyzer ile tutarlı)
+                        _is_public = name in _PUBLIC_CLIENT_SECRET_TYPES
                         results.append(self.create_finding(
                             type=f"JS Secret Exposure ({name})",
                             url=url,
-                            severity="High",
+                            severity="Low" if _is_public else "High",
                             details=f"Found potential {name}: {secret[:10]}...",
-                            evidence={"snippet": secret}
+                            evidence={"snippet": secret},
+                            severity_locked=_is_public,
                         ))
         else:
             for name, pattern in self.SECRET_PATTERNS.items():

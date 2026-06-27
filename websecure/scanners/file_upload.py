@@ -559,10 +559,15 @@ class FileUploadScanner(BaseScanner):
             severity = "High"
             evidence["detail"] = "Path-traversal filename was accepted and reflected"
 
-        elif check == "zip_slip" and (name_reflected or r.status_code in (200, 201)):
+        elif check == "zip_slip" and name_reflected:
+            # FP FIX: eski koşul `name_reflected or status in (200,201)` idi; ama 535.
+            # satırda status ZATEN (200,201,202) garantili → `or status` daima True →
+            # zip kabul eden HER endpoint'te sahte High "zip-slip" üretiyordu. Zip-slip
+            # extraction yanıttan gözlemlenemez; tek indikatif kanıt traversal entry
+            # adının yansımasıdır (path_traversal/rce dallarıyla tutarlı).
             is_vuln = True
             severity = "High"
-            evidence["detail"] = "ZIP archive with traversal path accepted"
+            evidence["detail"] = "ZIP archive with traversal path accepted and reflected"
 
         elif uploaded_url and check in _EXEC_MARKERS:
             # Verify actual execution by fetching the uploaded file

@@ -521,15 +521,19 @@ class HeaderScanner(BaseScanner):
                 except Exception:
                     pass
 
-            # Cache poisoning: response changed significantly when critical header dropped
+            # Cache poisoning: yalnız Connection-strip DİREKTİFİ yanıtı değiştirdiyse.
+            # FP FIX: eski kontrol düz GET ile karşılaştırıyordu → garbage header'ın
+            # VARLIĞI (veya sayfanın doğal varyansı) >200 bayt fark üretip her dinamik/
+            # auth-duyarlı sayfada sahte Medium çıkarıyordu. Kontrol artık AYNI header'ı
+            # taşır ama Connection-strip TAŞIMAZ → fark yalnız hop-by-hop direktifinden gelir.
             try:
-                clean = self.session.get(url, timeout=8)
-                if abs(len(text) - len(clean.text or "")) > 200:
+                control = self.session.get(url, headers={drop_hdr: "ws-hop-probe-value"}, timeout=8)
+                if abs(len(text) - len(control.text or "")) > 200:
                     self.report_finding(
                         vuln_type="Hop-by-Hop Header Manipulation (Cache Poisoning Risk)",
                         url=url,
                         severity="Medium",
-                        evidence=f"Response differs by {abs(len(text)-len(clean.text or ''))} bytes when {drop_hdr} dropped via Connection",
+                        evidence=f"Response differs by {abs(len(text)-len(control.text or ''))} bytes when {drop_hdr} is marked hop-by-hop (vs same header without Connection-strip)",
                     )
                     return
             except Exception:

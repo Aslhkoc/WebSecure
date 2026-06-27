@@ -273,8 +273,15 @@ class JSAnalyzer:
         findings: List[Dict[str, Any]] = []
 
         # Internal package naming patterns (e.g., @company/package, internal-utils)
+        # FP FIX: jenerik son-ekler (-lib/-utils/-sdk/-core/-common/-shared) MEŞRU
+        # public paketlerle eşleşiyordu (aws-sdk, date-utils …) → public npm'de var →
+        # sahte High "Dependency Confusion". Yalnız güçlü iç-paket işaretleri tutuldu
+        # (@scope/ + -internal/-private/-corp/-company).
+        # `\(?\s*`: `require('x')` CommonJS biçimi parantezli gelir; eski regex
+        # `require` sonrası doğrudan tırnak beklediğinden `(` yüzünden CommonJS
+        # import'larını HİÇ yakalamıyordu (yalnız ES `from 'x'`) — yarı-ölü kontrol (md10).
         internal_pkg_re = _re.compile(
-            r"""(?:require|from)\s*['"]((?:@[a-z0-9_-]+/[a-z0-9_-]+)|(?:[a-z][a-z0-9_-]*-(?:internal|private|corp|company|lib|utils|shared|common|core|sdk)))['"]""",
+            r"""(?:require|from)\s*\(?\s*['"]((?:@[a-z0-9_-]+/[a-z0-9_-]+)|(?:[a-z][a-z0-9_-]*-(?:internal|private|corp|company)))['"]""",
             _re.IGNORECASE,
         )
 
