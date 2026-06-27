@@ -18,11 +18,10 @@ import math
 import random
 import logging
 import base64
-import binascii
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Iterable, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Protocol, runtime_checkable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin, parse_qsl
 
@@ -105,22 +104,6 @@ def safe_compile(pattern: str, flags: int = 0) -> re.Pattern:
 
 def safe_search(pattern: str, string: str, flags: int = 0, timeout_ms: int = None):
     return _run_with_timeout(lambda: re.search(pattern, string, flags), timeout_ms)
-
-# ============================================================================
-# SECTION 2: ENDPOINT STORE (formerly endpoint_store.py)
-# ============================================================================
-
-@dataclass
-class EndpointStore:
-    items: Set[str] = field(default_factory=set)
-
-    def add_many(self, urls: Iterable[str]) -> None:
-        for u in urls:
-            if isinstance(u, str) and u.strip():
-                self.items.add(u.strip())
-
-    def to_list(self) -> List[str]:
-        return sorted(self.items)
 
 # ============================================================================
 # SECTION 3: ANOMALY DETECTION (formerly detect.py)
@@ -244,13 +227,13 @@ def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, 
     url = normalize_url(url)
     parsed = urlparse(url)
     get_params = [k for k, _ in parse_qsl(parsed.query, keep_blank_values=True)]
-    
+
     html = ""
     if callable(fetcher): html = fetcher(url) or ""
     elif driver:
         driver.get(url)
         html = getattr(driver, "page_source", "")
-        
+
     forms = []
     if html and BeautifulSoup:
         soup = BeautifulSoup(html, "html.parser")
@@ -274,12 +257,8 @@ def detect_get_parameters_and_forms(url: str, driver=None, debug: bool = False, 
                 "method": infer_form_method(_action, inputs_meta, form.get("method")),
                 "inputs": inputs_meta
             })
-            
-    return url, get_params, forms
 
-def detect_graphql(url: str, body: str | bytes) -> bool:
-    t = (body if isinstance(body, str) else body.decode("utf-8", "ignore")).lower()
-    return "__schema" in t or "graphql" in t or url.lower().endswith("/graphql")
+    return url, get_params, forms
 
 # ============================================================================
 # SECTION 4: WAF DETECTION & EVASION (formerly waf.py)
@@ -290,11 +269,6 @@ _WAF_SIGNS = [
     ("akamai", ["akamai", "akamai-ghost"]),
     ("imperva", ["incapsula", "visid_incap"]),
     ("modsecurity", ["mod_security", "modsecurity"]),
-]
-
-_UA_LIST = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15",
 ]
 
 def _load_cfg() -> Dict[str, Any]:
@@ -428,15 +402,6 @@ def mutate_payload(category: str, payload: str, cfg: Dict[str, Any] | None) -> L
 
     return list(dict.fromkeys(variants))[:int(cfg.get("max_variants_per_payload", 10))]
 
-def mutate_payloads(category: str, payloads: Iterable[str], cfg: Dict[str, Any] | None) -> List[str]:
-    out = []
-    seen = set()
-    for p in payloads:
-        for v in mutate_payload(category, p, cfg):
-            if v not in seen:
-                seen.add(v); out.append(v)
-    return out
-
 # --- WAF Detection ---
 
 @dataclass
@@ -470,33 +435,6 @@ def detect_waf_from_response(resp: requests.Response, cfg: Dict[str, Any] | None
         reasons.append("body_block_marker")
         
     return WAFDetection(vendor=vendor, blocked=bool(reasons), reasons=reasons)
-
-def next_user_agent() -> str:
-    return random.choice(_UA_LIST)
-
-def build_waf_headers(existing: Dict[str,str] = None, cfg: Dict[str,Any] = None) -> Dict[str,str]:
-    h = dict(existing or {})
-    cfg = cfg or get_waf_cfg()
-    if not cfg.get("enabled"): return h
-    
-    tactics = set(cfg.get("header_tactics") or [])
-    if "random_ua" in tactics:
-        h["User-Agent"] = next_user_agent()
-    if "x_forwarded" in tactics:
-        h["X-Forwarded-For"] = f"127.0.{random.randint(1,255)}.{random.randint(1,255)}"
-    if "cache_bust" in tactics:
-        h["Cache-Control"] = "no-cache"
-    return h
-
-def request_with_waf(session: requests.Session, method: str, url: str, **kwargs) -> requests.Response:
-    cfg = kwargs.get("cfg") or get_waf_cfg()
-    if "cfg" in kwargs: del kwargs["cfg"]
-    
-    kwargs["headers"] = build_waf_headers(kwargs.get("headers"), cfg)
-    resp = session.request(method, url, **kwargs)
-    
-    # Simple retry logic could go here if blocked
-    return resp
 
 # ============================================================================
 # SECTION 5: CAPTCHA (formerly captcha.py)
@@ -855,38 +793,6 @@ def _select_solver(cfg: CaptchaConfig):
     if cfg.provider == "capsolver":
         return CapSolverProvider()
     return NoneProvider()
-
-
-def solve_image_captcha_png_bytes(img_bytes: bytes, cfg: CaptchaConfig) -> Optional[str]:
-    return _select_solver(cfg).solve(img_bytes, cfg)
-
-
-def solve_recaptcha_v2_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
-    s = _select_solver(cfg)
-    if hasattr(s, "solve_recaptcha"):
-        return s.solve_recaptcha(site_key, site_url, cfg)  # type: ignore
-    return None
-
-
-def solve_recaptcha_v3_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
-    s = _select_solver(cfg)
-    if hasattr(s, "solve_recaptcha_v3"):
-        return s.solve_recaptcha_v3(site_key, site_url, cfg)  # type: ignore
-    return None
-
-
-def solve_hcaptcha_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
-    s = _select_solver(cfg)
-    if hasattr(s, "solve_hcaptcha"):
-        return s.solve_hcaptcha(site_key, site_url, cfg)  # type: ignore
-    return None
-
-
-def solve_turnstile_token(site_key: str, site_url: str, cfg: CaptchaConfig) -> Optional[str]:
-    s = _select_solver(cfg)
-    if hasattr(s, "solve_turnstile"):
-        return s.solve_turnstile(site_key, site_url, cfg)  # type: ignore
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1341,19 +1247,6 @@ def _is_jwt(s: str) -> bool:
         return False
     return True
 
-def _is_base64(s: str) -> bool:
-    # Minimal length heuristic + pattern
-    if len(s) < 4 or len(s) % 4 != 0:
-        return False
-    if not re.match(r'^[A-Za-z0-9+/]+={0,2}$', s):
-        return False
-    # Try decode
-    try:
-        base64.b64decode(s, validate=True)
-        return True
-    except (ValueError, binascii.Error):
-        return False
-
 # =============================================================================
 # PUBLIC API
 # =============================================================================
@@ -1478,19 +1371,6 @@ def should_skip_payload_category(context: InputContext, category: str, tech_stac
 
     return False
 
-def get_applicable_attacks(context: InputContext) -> List[str]:
-    return list(_CONTEXT_ATTACKS.get(context, _CONTEXT_ATTACKS[InputContext.GENERIC]))
-
-def format_analysis_log(name: str, result: ContextAnalysisResult) -> str:
-    attacks = ", ".join(result.applicable_attacks) if result.applicable_attacks else "SKIP"
-    info = f"[Context] {name} -> {result.context.name}"
-    if result.confidence > 0.8:
-        info += " [fire]"
-    info += f" -> {attacks}"
-    if result.skip_reason:
-        info += f" ({result.skip_reason})"
-    return info
-
 # Compatibility Wrappers for existing scanners
 def analyze_form_inputs(inputs: List[Dict[str, Any]]) -> Dict[str, ContextAnalysisResult]:
     # ... Same as before ...
@@ -1500,9 +1380,3 @@ def analyze_form_inputs(inputs: List[Dict[str, Any]]) -> Dict[str, ContextAnalys
         if name:
             results[name] = analyze_input_context(name, input_type=inp.get("type"), value=inp.get("value"), source="form")
     return results
-
-def get_context_stats(results: Dict[str, ContextAnalysisResult]) -> Dict[str, int]:
-    stats: Dict[str, int] = {}
-    for r in results.values():
-        stats[r.context.name] = stats.get(r.context.name, 0) + 1
-    return stats
