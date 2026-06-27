@@ -543,6 +543,29 @@ class GateTechniqueExploiter(BaseScanner):
     def _gate_probe(self, host: str, port: int, use_tls: bool,
                     path: str, n: int) -> Optional[Dict]:
         body   = '{"amount":1,"to":"test"}'
+
+        # Sequential baseline (FP guard, send≠confirm): aynı mutasyonu ardışık iki kez
+        # dene. (a) İlk istek bile başarısızsa (auth/4xx) test edilecek başarılı op yok.
+        # (b) İkisi de 2xx ise endpoint'in op-başına limiti YOK demektir → gate'te
+        # çoklu 2xx yarış KANITI değildir (sadece idempotent/limitsiz işlem). Yarış
+        # ancak ardışık-sınırlı (1 başarı) ama eşzamanlı-aşılan durumda kanıtlanır.
+        scheme = "https" if use_tls else "http"
+        full_url = f"{scheme}://{host}{path}"
+        try:
+            seq_ok = 0
+            for _ in range(2):
+                rr = self.session.post(
+                    full_url, data=body,
+                    headers={"Content-Type": "application/json"}, timeout=6,
+                )
+                if rr.status_code in (200, 201, 204):
+                    seq_ok += 1
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            return None
+        if seq_ok == 0 or seq_ok >= 2:
+            return None
+
         head, tail = self._build_gate_request(host, path, body)
 
         sockets: List[socket.socket] = []
@@ -770,6 +793,26 @@ class RaceDoubleSpendProber(BaseScanner):
         return results
 
     def _probe_parallel(self, url: str, payload: str, n: int) -> Optional[Dict]:
+        # Sequential baseline (FP guard, send≠confirm): aynı isteği tek istemciyle
+        # ardışık iki kez gönder. İlk istek başarısızsa (auth/4xx) yarışacak başarılı
+        # op yoktur; ikisi de başarılıysa op-başına limit YOK demektir → eşzamanlı çoklu
+        # 200 "double-spend" KANITI değildir. Yarış ancak ardışık-sınırlı (1 başarı) ama
+        # eşzamanlı-aşılan durumda gerçektir. Eski kod salt "≥2 paralel 200" ile
+        # sahte Critical üretiyordu.
+        try:
+            s0 = _hardened_session({})
+            seq_ok = 0
+            for _ in range(2):
+                rr = s0.post(url, data=payload,
+                             headers={"Content-Type": "application/json"}, timeout=8)
+                if rr.status_code in (200, 201):
+                    seq_ok += 1
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.race_condition] {type(_fix_e).__name__}: {_fix_e!r}")
+            return None
+        if seq_ok == 0 or seq_ok >= 2:
+            return None
+
         successes: List[Dict] = []
         lock = threading.Lock()
         gate = threading.Barrier(n, timeout=5)

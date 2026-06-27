@@ -422,6 +422,23 @@ class JWTExpiryBypassProber(BaseScanner):
         if not payload:
             return findings
 
+        # Anon baseline (FP guard): protected_url token'sız da 200 dönüyorsa endpoint
+        # PUBLIC demektir → süresi-dolmuş token'ın 200 dönmesi expiry-bypass değil,
+        # yalnızca herkese-açık sayfadır. Bu kontrol olmadan /api/me public ise her
+        # tampered token sahte Critical üretiyordu.
+        try:
+            anon_r = self.session.get(
+                protected_url, timeout=_TIMEOUT, verify=False,
+                headers={auth_header: ""},
+            )
+            if anon_r.status_code == 200:
+                logger.debug(
+                    "[JWTExpiry] %s public (anon 200) — skipping to avoid FP", protected_url
+                )
+                return findings
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.session_scanner] {type(_fix_e).__name__}: {_fix_e!r}")
+
         # --- Test 1: Set exp to 0 (past) ---
         tampered_payload = {**payload, "exp": 0}
         tampered_token = self._encode_jwt_parts(header or {}, tampered_payload, sig)

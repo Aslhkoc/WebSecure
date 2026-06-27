@@ -1380,24 +1380,48 @@ class TwoFABypassProber(BaseScanner):
         return None
 
     def _try_otp_reuse(self, two_fa_url: str) -> Optional[Dict]:
-        """Check if a recently-used OTP can be submitted twice."""
+        """Check whether a (random) OTP code is *accepted* on repeated submission.
+
+        FP FIX: eski koşul iki AYNI geçersiz kodun TUTARLI yanıt vermesini (sim>0.95)
+        "OTP reuse" sayıyordu — bu tam da NORMAL ret davranışıdır (geçersiz kod hep
+        aynı "hatalı kod" yanıtını döndürür) → her 2FA endpoint'inde sahte High.
+        Rastgele canary geçerli bir OTP olmadığından gerçek "reuse" zaten kanıtlanamaz.
+        Anlamlı tek sinyal: rastgele/tekrarlı kodun KABUL edilmesidir (success göstergesi
+        + negatif gösterge yok) — ki bu "2FA zayıf doğrulama: rastgele/tekrar kod kabul
+        ediliyor" demektir.
+        """
         canary = "".join(random.choices(string.digits, k=6))
+
+        def _accepted(resp) -> bool:
+            if getattr(resp, "status_code", 0) not in (200, 201):
+                return False
+            if _is_auth_error(resp):
+                return False
+            low = (resp.text if hasattr(resp, "text") else "").lower()[:500]
+            if any(neg in low for neg in (
+                "false", "invalid", "incorrect", "denied", "expired", "wrong",
+                "error", "failed", "try again",
+            )):
+                return False
+            return any(pos in low for pos in (
+                "success", "verified", "valid", "welcome", "authenticated", "granted",
+            ))
+
         try:
             r1 = self.session.post(two_fa_url, data={"otp": canary, "code": canary}, timeout=8)
             r2 = self.session.post(two_fa_url, data={"otp": canary, "code": canary}, timeout=8)
-            if r1.status_code == r2.status_code and r2.status_code not in (429, 400):
-                sim = _response_similarity(r1, r2)
-                if sim > 0.95:
-                    return {
-                        "vuln_type": "2FA OTP Reuse Possible",
-                        "url": two_fa_url, "severity": "High",
-                        "description": (
-                            "Same OTP code accepted on second submission with identical responses. "
-                            "OTP should be invalidated after first use."
-                        ),
-                        "evidence": {"otp": canary, "r1_status": r1.status_code,
-                                     "r2_status": r2.status_code, "similarity": round(sim, 3)},
-                    }
+            if _accepted(r1) and _accepted(r2):
+                return {
+                    "vuln_type": "2FA Weak Verification — Code Accepted Without Validation",
+                    "url": two_fa_url, "severity": "High",
+                    "description": (
+                        "A random OTP code was accepted (success response) on repeated submission. "
+                        "The endpoint does not properly validate/invalidate one-time codes."
+                    ),
+                    "evidence": {"otp": canary, "r1_status": r1.status_code,
+                                 "r2_status": r2.status_code,
+                                 "similarity": round(_response_similarity(r1, r2), 3)},
+                }
         except Exception as exc:
             _logger6.debug("[2FA] OTP reuse: %s", exc)
         return None
@@ -1502,7 +1526,6 @@ class PasswordResetAttacker(BaseScanner):
                     headers=poison_headers,
                     timeout=8,
                 )
-                body = (r.text or "").lower()
                 # Reflection in response = confirmed poison
                 if evil_host in (r.text or "") or evil_host in str(r.headers):
                     results.append({
@@ -1516,17 +1539,11 @@ class PasswordResetAttacker(BaseScanner):
                                      "status": r.status_code, "reflection": True},
                     })
                     break
-                # Heuristic: no error on a weird host = likely using it
-                if r.status_code == 200 and "error" not in body[:200]:
-                    results.append({
-                        "vuln_type": "Password Reset Host Header Injection (Probable)",
-                        "url": reset_url, "severity": "High",
-                        "description": (
-                            f"Reset endpoint accepted request with '{hdr}: {evil_host}' without error. "
-                            "Reset link may embed attacker host if header is trusted."
-                        ),
-                        "evidence": {"header": hdr, "evil_host": evil_host, "status": r.status_code},
-                    })
+                # FP FIX: "200 + body'de 'error' yok" KALDIRILDI. Reset endpoint'leri
+                # kullanıcı-enumerasyonunu önlemek için poison host'a bile DAİMA 200
+                # "e-posta gönderildi" döner → bu dal her çalışan reset endpoint'inde
+                # sahte High üretiyordu. Host header injection ancak yansıma (yukarıdaki
+                # Critical dal) ile onaylanabilir; OOB callback olmadan 200 kanıt değildir.
             except Exception as exc:
                 _logger6.debug("[PassReset] host header injection: %s", exc)
         return results
@@ -1544,15 +1561,21 @@ class PasswordResetAttacker(BaseScanner):
         for test_url, technique in variants:
             try:
                 r = self.session.post(test_url, data={"email": victim}, timeout=8)
-                if r.status_code == 200:
+                # FP FIX: salt `status == 200` KALDIRILDI — reset endpoint'i her isteğe
+                # (geçerli/geçersiz) 200 "e-posta gönderildi" döner, bu manipülasyonun
+                # işe yaradığını KANITLAMAZ. Gerçek sinyal: saldırgan adresinin yanıtta
+                # yansıması (sunucunun ikinci email parametresini işlediğini gösterir).
+                if r.status_code == 200 and attacker in (r.text or ""):
                     results.append({
                         "vuln_type": f"Password Reset Email Param Manipulation ({technique})",
                         "url": test_url, "severity": "High",
                         "description": (
-                            f"Reset accepted with {technique} — server may send reset link "
-                            f"to attacker address ({attacker}) while appearing to reset victim account."
+                            f"Reset endpoint reflected the attacker address ({attacker}) when sent "
+                            f"via {technique} — server may deliver the reset link to the attacker "
+                            "while appearing to reset the victim account."
                         ),
-                        "evidence": {"technique": technique, "status": r.status_code},
+                        "evidence": {"technique": technique, "status": r.status_code,
+                                     "attacker_reflected": True},
                     })
             except Exception as exc:
                 _logger6.debug("[PassReset] email manipulation: %s", exc)
@@ -1732,19 +1755,32 @@ class PrivilegeEscalationProber(BaseScanner):
             {"X-HTTP-Method": "DELETE"},
             {"X-Method-Override": "PUT"},
         ]
+        # Baseline: override header'sız düz GET. Override'ın "honored" olduğu ancak
+        # SONUCU DEĞİŞTİRMESİYLE kanıtlanır. FP FIX: eski kod düz GET zaten 200
+        # dönen her endpoint'te (override yok sayılsa bile) High üretiyordu —
+        # override başlığı işlenmemiş olsa dahi GET normalde 200 döner.
+        try:
+            base = self.session.get(url, headers=auth_headers, timeout=8)
+        except Exception as _fix_e:
+            _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")
+            return None
+        base_status = base.status_code
         for extra_hdrs in override_headers_list:
             hdrs = {**auth_headers, **extra_hdrs}
             try:
                 r = self.session.get(url, headers=hdrs, timeout=8)
-                if r.status_code in (200, 204):
+                # Override honored = düz GET başarısızken (401/403/404/405) override 200/204 verdi
+                if r.status_code in (200, 204) and base_status not in (200, 204):
                     return {
                         "vuln_type": "HTTP Method Override Bypass",
                         "url": url, "severity": "High",
                         "description": (
-                            f"Server honored '{list(extra_hdrs.keys())[0]}' override header. "
+                            f"Server honored '{list(extra_hdrs.keys())[0]}' override header: "
+                            f"plain GET={base_status} but override={r.status_code}. "
                             "GET request processed as DELETE/PUT — authorization bypass possible."
                         ),
-                        "evidence": {"override_header": extra_hdrs, "status": r.status_code},
+                        "evidence": {"override_header": extra_hdrs,
+                                     "base_status": base_status, "status": r.status_code},
                     }
             except Exception as _fix_e:
                 _logger.debug(f"[scanners.auth_scanners] {type(_fix_e).__name__}: {_fix_e!r}")

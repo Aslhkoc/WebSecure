@@ -855,18 +855,29 @@ class JWTJKUSSRFProber(BaseScanner):
             for ep in ["/api/me", "/api/admin", "/dashboard"]:
                 url = urljoin(target.rstrip("/") + "/", ep.lstrip("/"))
                 try:
+                    anon = self.session.get(url, timeout=8)
                     resp = self.session.get(url, headers={"Authorization": f"Bearer {forged}"}, timeout=8)
-                    if resp.status_code not in (400, 422):
+                    # FP FIX: eski koşul `status not in (400, 422)` korumalı endpoint'in
+                    # DOĞRU reddini (401/403) ve 404/200/301'i bile "SSRF riski" sayıyordu →
+                    # neredeyse her hedefte sahte High. OOB altyapısı (oob-wsp.invalid =
+                    # çözümlenmeyen placeholder) callback yakalayamadığından SSRF körlemesine
+                    # onaylanamaz. Gerçek sinyal: anon endpoint REDDEDERKEN (401/403) forged
+                    # jku-token KABUL EDİLMESİ (200, auth-error değil) — sunucu saldırgan
+                    # JWKS'ini çekip güvenmiş demektir (jku tabanlı bypass).
+                    if (resp.status_code == 200 and not _is_auth_error(resp)
+                            and anon.status_code in (401, 403)):
                         results.append({
                             "vuln_type": "JWT JKU/X5U SSRF Risk",
                             "url": url, "severity": "High",
                             "description": (
-                                f"Server did not reject JWT with forged '{hdr_key}' header pointing to "
-                                f"{evil_jwks}. Server may fetch the attacker-controlled JWKS URL (SSRF)."
+                                f"Server accepted a JWT with forged '{hdr_key}' header pointing to "
+                                f"{evil_jwks} (anon={anon.status_code} → forged=200). Server fetched/"
+                                "trusted the attacker-controlled JWKS URL (SSRF + key injection)."
                             ),
                             "evidence": {
                                 "jku_header": hdr_key, "evil_url": evil_jwks,
-                                "status": resp.status_code,
+                                "anon_status": anon.status_code,
+                                "forged_status": resp.status_code,
                             },
                         })
                         self.report_finding(**results[-1])

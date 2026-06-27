@@ -432,15 +432,38 @@ class PrivilegeEscalationProber(BaseScanner):
                 logger.debug("[priv_esc] path check %s: %s", url, exc)
                 continue
 
+            # Baseline: privilege param OLMADAN benign POST. "admin"/"settings"/
+            # "dashboard" gibi escalation kelimeleri çoğu sayfanın nav menüsünde zaten
+            # vardır → salt kelime varlığı tampering KANITI değildir. Yalnız tampering'in
+            # baseline'a EKLEDİĞİ (yansıttığı) değerler diferansiyel olarak sayılır.
+            base_text = ""
+            try:
+                base_resp = self.session.post(
+                    url, data={"username": "test", "email": "test@example.com"},
+                    timeout=8, verify=False,
+                )
+                base_text = base_resp.text or ""
+            except Exception as exc:
+                logger.debug("[priv_esc] baseline POST %s: %s", url, exc)
+
             for param in self._PRIV_PARAMS:
                 for value in self._ELEVATED_VALUES:
                     results.extend(
-                        self._send_priv_probe(url, param, value)
+                        self._send_priv_probe(url, param, value, base_text)
                     )
         return results
 
-    def _send_priv_probe(self, url: str, param: str, value: str) -> List[Dict]:
-        """Try to POST the privilege parameter in multiple casing variants."""
+    def _send_priv_probe(self, url: str, param: str, value: str, base_text: str = "") -> List[Dict]:
+        """Try to POST the privilege parameter in multiple casing variants.
+
+        FP FIX: eski koşul ``_is_success() and _response_suggests_escalation()`` idi;
+        ``_response_suggests_escalation`` salt "welcome/dashboard/admin/settings"
+        gibi her HTML sayfasında bulunan kelimeleri arıyordu → herhangi bir 200
+        profil sayfası sahte **Critical** üretiyordu (baseline diferansiyeli yok).
+        Artık mass_assignment-seviyesi kanıt şart: enjekte edilen privilege DEĞERİ
+        yanıta YANSIMALI ve bu yansıma baseline'da OLMAMALI (tampering'in eklediği),
+        ayrıca yanıt elevated-içerik göstermeli.
+        """
         variants = [
             {param: value},
             {param.capitalize(): value.capitalize()},
@@ -448,6 +471,8 @@ class PrivilegeEscalationProber(BaseScanner):
             {f"{param}[]": value},
         ]
         results: List[Dict] = []
+        str_val = str(value).lower()
+        base_low = (base_text or "").lower()
         for payload in variants:
             try:
                 # Try both form and JSON
@@ -460,14 +485,23 @@ class PrivilegeEscalationProber(BaseScanner):
                         resp = self.session.post(
                             url, data=payload, timeout=8, verify=False,
                         )
-                    if _is_success(resp.status_code) and self._response_suggests_escalation(resp.text):
+                    if not _is_success(resp.status_code):
+                        continue
+                    resp_low = (resp.text or "").lower()
+                    # Diferansiyel: param+değer yanıtta YENİ olarak (baseline'da yokken) yansımalı.
+                    value_reflected_new = (
+                        param.lower() in resp_low and str_val in resp_low
+                        and not (param.lower() in base_low and str_val in base_low)
+                    )
+                    if value_reflected_new and self._response_suggests_escalation(resp.text):
                         finding = {
                             "vuln_type": "Business Logic — Privilege Escalation via Parameter Tampering",
                             "url": url,
                             "severity": "Critical",
                             "description": (
                                 f"Submitting {{{param}: {value}}} to '{url}' returned "
-                                f"HTTP {resp.status_code} with admin/elevated content in body. "
+                                f"HTTP {resp.status_code}; the injected privilege field was reflected "
+                                "back (absent from the benign baseline) alongside elevated content. "
                                 "Server may have granted elevated privileges."
                             ),
                             "evidence": {
