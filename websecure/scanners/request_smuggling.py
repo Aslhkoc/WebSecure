@@ -480,15 +480,19 @@ def _probe_h2_cl(
     st = _status_code(raw)
     body = _response_body(raw)
 
-    if raw and (b"ws-h2cl-probe" in body or (st is not None and st == 400 and elapsed < 3.0)):
+    # FP FIX: `st == 400 and elapsed < 3.0` dalı KALDIRILDI. TE+CL çelişkili/biçimsiz
+    # bir isteğe 400 dönmek RFC 7230 uyumlu DOĞRU reddir (desync DEĞİL) → uyumlu her
+    # sunucuda sahte High üretiyordu. Tek geçerli kanıt: smuggled prefix'in (GET
+    # /ws-h2cl-probe) GERÇEKTEN işlenip yanıta yansıması.
+    if raw and b"ws-h2cl-probe" in body:
         return SmugglingFinding(
-            technique="H2.CL",
+            technique="H2.CL (confirmed)",
             url=url,
-            severity="High",
+            severity="Critical",
             description=(
-                "Possible H2.CL desynchronisation: the back-end returned evidence "
-                "of processing the smuggled request prefix. "
-                f"Status={st}, elapsed={elapsed:.2f}s. "
+                "H2.CL desynchronisation CONFIRMED: the smuggled request prefix "
+                "(GET /ws-h2cl-probe) was processed by the back-end and reflected in "
+                f"the response. Status={st}, elapsed={elapsed:.2f}s. "
                 "Typical in HTTP/2-to-HTTP/1.1 reverse proxy deployments where the "
                 "front-end forwards the H2 pseudo-frame Content-Length header as-is."
             ),

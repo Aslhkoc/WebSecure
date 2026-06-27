@@ -285,9 +285,15 @@ class OpenRedirectScanner(BaseScanner):
         parsed_base = urlparse(base_url)
         origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
-        # -- 1. Crawler URL'lerindeki redirect parametrelerini paralel test et --
+        # -- 1. HEDEF + crawler URL'lerindeki redirect parametrelerini paralel test et --
+        # FIX: Hedefin KENDİ redirect param'ları (örn. /redirect?url=...) de canary
+        # yöntemiyle test edilmeli. Aksi halde hedef yalnız uydurma probe path'lerine
+        # kalır; MAX_PROBE_REQUESTS bütçesi ilk path'te (/login: 15 param × 20 payload
+        # = 300 > 120) dolduğundan /redirect probe fazında HİÇ denenmez → gerçek open
+        # redirect yalnız FP-üreten chain dallarına kalırdı.
         crawler_tasks: List[Tuple] = []
-        for url in (urls or []):
+        candidate_urls = [base_url] + [u for u in (urls or []) if u != base_url]
+        for url in candidate_urls:
             for param in _find_redirect_params(url):
                 for payload in _PAYLOADS:
                     key = f"{url}|{param}|{payload}"
@@ -608,19 +614,11 @@ class OpenRedirectOAuthTheftChain(BaseScanner):
                         })
                         self.report_finding(**results[-1])
                         return results
-                    # Partial bypass: redirected without rejecting evil host
-                    if resp.status_code in (301, 302, 303, 307) and "error" not in loc.lower():
-                        results.append({
-                            "vuln_type": "Open Redirect -> OAuth redirect_uri Bypass (Probable)",
-                            "url": test_url, "severity": "High",
-                            "description": (
-                                f"OAuth endpoint accepted redirect_uri={evil_uri!r} "
-                                "without error. Code/token may be sent to attacker on full exploit."
-                            ),
-                            "evidence": {"evil_uri": evil_uri, "location": loc, "status": resp.status_code},
-                        })
-                        self.report_finding(**results[-1])
-                        break
+                    # FP FIX: "3xx + Location'da 'error' yok" → High "Probable" dalı
+                    # KALDIRILDI. OAuth authorize endpoint'i kimliksiz istekte normalde
+                    # /login'e 302 döner — bu bir redirect_uri bypass DEĞİL, normal
+                    # akıştır; her OAuth endpoint'inde sahte High üretiyordu. Gerçek bypass
+                    # zaten yukarıdaki `_EVIL_HOST in loc` (Critical) dalıyla yakalanır.
                 except Exception as exc:
                     _or_logger.debug("[OAuthTheft] %s", exc)
 
@@ -694,6 +692,18 @@ class OpenRedirectSSRFChain(BaseScanner):
         # Find server-side fetching endpoints (url/src/fetch params)
         fetch_params = ["url", "src", "fetch", "proxy", "resource", "remote", "load"]
 
+        # Baseline (FP guard): hedefi SSRF param'ı OLMADAN bir kez çek. "Internal
+        # Service" dalı eskiden salt "non-HTML 200" ile High üretiyordu — uygulama
+        # `url` param'ını YOK SAYIP normal (çoğu zaman JSON, non-HTML) yanıtını
+        # döndürdüğünde bu sahte SSRF demekti. Param GERÇEKTEN bir şey getiriyorsa
+        # yanıt baseline'dan FARKLI olmalı.
+        base_body = ""
+        try:
+            _b = self.session.get(target, timeout=8, allow_redirects=True)
+            base_body = getattr(_b, "text", "")[:2000]
+        except Exception as _fix_e:
+            logger.debug(f"[scanners.open_redirect] {type(_fix_e).__name__}: {_fix_e!r}")
+
         for ssrf_target in _SSRF_INTERNAL[:4]:
             for param in fetch_params:
                 # Direct SSRF via redirect param
@@ -718,14 +728,18 @@ class OpenRedirectSSRFChain(BaseScanner):
                         })
                         self.report_finding(**results[-1])
                         return results
-                    # Internal service response
+                    # Internal service response — yalnız baseline'dan FARKLIYSA (param
+                    # gerçekten farklı içerik getiriyorsa); aksi halde param yok sayılmış
+                    # demektir (FP). Ayrıca non-HTML + anlamlı gövde şartı korunur.
                     if resp.status_code == 200 and len(body) > 30 and \
-                       not re.search(r"<html|<!doctype", body[:100], re.I):
+                       not re.search(r"<html|<!doctype", body[:100], re.I) and \
+                       body[:2000] != base_body:
                         results.append({
                             "vuln_type": "Open Redirect -> SSRF (Internal Service)",
                             "url": url, "severity": "High",
                             "description": (
-                                f"Param '{param}' caused server to fetch {ssrf_target}. "
+                                f"Param '{param}' caused server to fetch {ssrf_target}; the response "
+                                "differs from the no-param baseline (param is server-side followed). "
                                 "Internal service response received."
                             ),
                             "evidence": {"param": param, "ssrf_target": ssrf_target,

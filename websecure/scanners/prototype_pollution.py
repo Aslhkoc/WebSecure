@@ -169,7 +169,36 @@ class ServerSidePPProber(BaseScanner):
         r"RangeError.*Maximum call",     # Stack overflow from pollution
     ]
 
+    _ADMIN_RE = re.compile(
+        r'"admin"\s*:\s*true|"isAdmin"\s*:\s*true|"role"\s*:\s*"admin"', re.I
+    )
+
+    def _admin_present(self, text: str) -> bool:
+        return bool(self._ADMIN_RE.search(text or ""))
+
+    def _confirm_persistent_pollution(self, target: str, base_had_admin: bool) -> bool:
+        """Gerçek server-side PP, KİRLETMEDEN SONRA bağımsız bir TEMİZ istekte de
+        property'yi gösterir (global prototype kirlendi). Echo API'leri (gönderdiğimiz
+        gövdeyi geri yansıtan) bunu YAPAMAZ → echo-FP elenir. Baseline'da zaten varsa
+        (uygulama her zaman admin:true döndürüyor) onaylama."""
+        if base_had_admin:
+            return False
+        try:
+            clean = self.session.get(target, timeout=10, allow_redirects=True)
+            return self._admin_present(clean.text or "")
+        except Exception as exc:
+            logger.debug("[ServerSidePPProber] clean-probe confirm error: %s", exc)
+            return False
+
     def run(self, target: str, **kwargs) -> None:
+        # Pre-pollution baseline: uygulama temiz halde de admin:true döndürüyor mu?
+        try:
+            _b = self.session.get(target, timeout=10, allow_redirects=True)
+            base_had_admin = self._admin_present(_b.text or "")
+        except Exception as exc:
+            logger.debug("[ServerSidePPProber] baseline error: %s", exc)
+            base_had_admin = False
+
         # -- JSON body injection -----------------------------------------------
         for payload in self._SSPP_JSON_PAYLOADS:
             for method in ("POST", "PUT", "PATCH"):
@@ -183,18 +212,22 @@ class ServerSidePPProber(BaseScanner):
                         allow_redirects=True,
                     )
                     text = resp.text or ""
-                    # Check for reflected admin/isAdmin
-                    if re.search(r'"admin"\s*:\s*true', text, re.I) or re.search(
-                        r'"isAdmin"\s*:\s*true', text, re.I
-                    ) or re.search(r'"role"\s*:\s*"admin"', text, re.I):
+                    # FP FIX: aynı yanıtta `"admin":true` görmek KANIT DEĞİL — gönderdiğimiz
+                    # `{"__proto__":{"admin":true}}` payload'ını geri yansıtan (echo) her API
+                    # bunu sağlar → sahte Critical. Gerçek SSPP, kirletmeden sonra bağımsız
+                    # TEMİZ istekte de property'yi gösterir; clean-probe ile onaylanır.
+                    if self._admin_present(text) and self._confirm_persistent_pollution(
+                        target, base_had_admin
+                    ):
                         self.report_finding(
-                            vuln_type="Server-Side Prototype Pollution (Admin Reflection)",
+                            vuln_type="Server-Side Prototype Pollution (Persisted Admin Property)",
                             url=target,
                             param=f"[JSON body {method}]",
                             payload=json.dumps(payload),
                             severity="Critical",
                             evidence=(
-                                f"__proto__ admin property reflected in {method} response. "
+                                f"__proto__ admin property persisted into an independent clean "
+                                f"request after {method} pollution (global prototype polluted). "
                                 f"Payload: {json.dumps(payload)[:200]}"
                             ),
                         )
@@ -226,18 +259,18 @@ class ServerSidePPProber(BaseScanner):
             try:
                 resp = self.session.get(test_url, timeout=10, allow_redirects=True)
                 text = resp.text or ""
-                if re.search(r'"admin"\s*:\s*true', text, re.I) or re.search(
-                    r'"isAdmin"\s*:\s*true', text, re.I
+                if self._admin_present(text) and self._confirm_persistent_pollution(
+                    target, base_had_admin
                 ):
                     self.report_finding(
-                        vuln_type="Server-Side Prototype Pollution (QS Admin Reflection)",
+                        vuln_type="Server-Side Prototype Pollution (QS Persisted Admin Property)",
                         url=target,
                         param=f"[Query: {qs_param}]",
                         payload=qs_param,
                         severity="Critical",
                         evidence=(
-                            f"__proto__ admin property reflected via query string. "
-                            f"Param: {qs_param}"
+                            f"__proto__ admin property persisted into an independent clean "
+                            f"request after query-string pollution. Param: {qs_param}"
                         ),
                     )
                     return

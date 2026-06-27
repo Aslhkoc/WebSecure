@@ -542,11 +542,16 @@ class CORSXSSChainDetector(BaseScanner):
             resp = self.session.get(target, headers={"Origin": evil_origin}, timeout=8)
             acao = resp.headers.get("Access-Control-Allow-Origin", "")
             acac = resp.headers.get("Access-Control-Allow-Credentials", "").lower()
-            if acao == evil_origin or acao == "*":
+            # FP FIX: zincir ancak KİMLİK-OKUNUR CORS ile gerçektir. `ACAO:*` (creds yok)
+            # ya da reflection-ama-creds-yok, saldırganın kurbanın authenticated yanıtını
+            # OKUMASINA izin vermez → "XSS ile veri çalma zinciri" kurulamaz. Eski koşul
+            # (`acao == evil_origin or acao == "*"`, creds kontrolsüz) salt wildcard'da bile
+            # Critical zincir üretiyordu. Yalnız evil-origin yansıması + ACAC:true gerçektir.
+            if acao == evil_origin and acac == "true":
                 cors_evidence = {
                     "ACAO": acao,
                     "ACAC": acac,
-                    "with_credentials": acac == "true",
+                    "with_credentials": True,
                 }
         except Exception as exc:
             logger.debug("[CORSXSSChain] CORS check: %s", exc)
@@ -571,16 +576,10 @@ class CORSXSSChainDetector(BaseScanner):
                         "csp_present": bool(csp_header),
                     }
                     break
-                # No CSP + X-XSS-Protection: 0 is also suspicious
-                xss_protection = xss_resp.headers.get("X-XSS-Protection", "")
-                if not csp_header and xss_protection == "0":
-                    xss_evidence = {
-                        "payload": payload,
-                        "xss_url": xss_url,
-                        "reflected": False,
-                        "csp_present": False,
-                        "note": "No CSP + X-XSS-Protection: 0 detected",
-                    }
+                # FP FIX: "CSP yok + X-XSS-Protection: 0" dalı KALDIRILDI — bu bir XSS
+                # AÇIĞI değil, yalnız zayıf header duruşudur. Onu "XSS göstergesi" sayıp
+                # CORS ile birleştirmek (reflection olmadan) sahte Critical zincir
+                # üretiyordu. Zincir artık yalnız GERÇEK yansıyan XSS payload'ı ile kurulur.
             except Exception as exc:
                 logger.debug("[CORSXSSChain] XSS probe: %s", exc)
 
