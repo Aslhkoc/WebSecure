@@ -45,18 +45,6 @@ class ToolManager:
         self.project_root = _paths.writable_root()
         self.tools_dir = _paths.tools_dir()
         self.sqlmap_process = None
-        self.sqlmap_client = None
-
-    def get_sqlmap_client(self):
-        """Lazy loader for SQLMapClient"""
-        if self.sqlmap_client: return self.sqlmap_client
-        try:
-            from websecure.integrations.sqlmap import SQLMapClient
-            self.sqlmap_client = SQLMapClient()
-        except ImportError as exc:
-            logger.debug(f"[ToolManager] SQLMapClient yüklenemedi: {exc!r}")
-        return self.sqlmap_client
-
 
     # ------------------------------------------------------------------ #
     # Araç tespiti yardımcıları
