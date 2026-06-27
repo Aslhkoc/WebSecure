@@ -297,8 +297,19 @@ class SSTIScanner(BaseScanner):
             r"DOCUMENT_ROOT=", r"SERVER_SOFTWARE=", r"GATEWAY_INTERFACE=",
             r"SERVER_PROTOCOL=", r"HTTP_USER_AGENT=",  # printenv SSI çıktısı
         ]
-        esi_markers = [
-            r"esi:include", r"X-Edge-Server", r"Surrogate-Control",
+        # faz9 FP FIX: ESI onayı için ham `<esi:...>` tag yansıması ya da CDN infra
+        # header'ı (Surrogate-Control/X-Edge-Server) TEK BAŞINA KANIT DEĞİLDİR:
+        #   • `esi:include` body marker'ı payload'ın KENDİSİ → param input'u yansıtırsa
+        #     eşleşir (reflection FP). Üstelik GERÇEK ESI işleyince tag'i KALDIRIR;
+        #     tag'in gövdede DURMASI işlenMEdiğinin (zafiyet YOK) kanıtıdır → ters mantık.
+        #   • Surrogate-Control/X-Edge-Server her ESI-CDN (Akamai/Varnish) yanıtında
+        #     payload'tan BAĞIMSIZ bulunur → her param'da sahte ESI FP'si.
+        # Gerçek ESI injection kanıtı: include'ın İÇ KAYNAĞI gerçekten getirmesi
+        # (SSRF→cloud metadata). Yalnız işlenmiş include İÇERİĞİ görülürse onayla.
+        esi_metadata_markers = [
+            r"\bami-id\b", r"\binstance-id\b", r"\binstance-action\b",
+            r"iam/security-credentials", r"\bsecurity-credentials\b",
+            r"computeMetadata", r"\bproject-id\b", r"\bhostname\b.*\binstance\b",
         ]
 
         for param in params:
@@ -309,22 +320,29 @@ class SSTIScanner(BaseScanner):
                 except Exception:
                     continue
                 text = resp.text or ""
-                hdrs = str(resp.headers)
 
-                is_esi = payload.startswith("<esi")
-                # ESI markerları header'da da olabilir (Surrogate-Control vs.); SSI
-                # gövde çıktısıdır → yalnız gövdede ara, ham payload yansımasını sayma.
-                haystack = (text + hdrs) if is_esi else text
-                markers = esi_markers if is_esi else ssi_body_markers
-                for sig in markers:
-                    if re.search(sig, haystack, re.IGNORECASE):
-                        vuln_type = "ESI Injection" if is_esi else "SSI Injection (Server-Side Include)"
+                if payload.lower().startswith("<esi"):
+                    # ESI: yalnız işlenmiş include İÇERİĞİ (cloud metadata) kanıttır.
+                    for sig in esi_metadata_markers:
+                        if re.search(sig, text, re.IGNORECASE):
+                            self.report_finding(
+                                vuln_type="ESI Injection (SSRF → Cloud Metadata)",
+                                url=url, param=param, payload=payload,
+                                severity="High",
+                                evidence=f"ESI include iç metadata getirdi: '{sig}'",
+                            )
+                            return
+                    continue
+                # SSI: gövde çıktısına ÖZGÜ imzalar (printenv/passwd/uid) — ham payload
+                # yansımasını saymaz; yalnız gerçek SSI çıktısı eşleşir.
+                for sig in ssi_body_markers:
+                    if re.search(sig, text, re.IGNORECASE):
                         severity = "High" if "exec" in payload or "meta-data" in payload else "Medium"
                         self.report_finding(
-                            vuln_type=vuln_type,
+                            vuln_type="SSI Injection (Server-Side Include)",
                             url=url, param=param, payload=payload,
                             severity=severity,
-                            evidence=f"Marker '{sig}' found in response",
+                            evidence=f"SSI marker '{sig}' gövdede bulundu",
                         )
                         return
 
