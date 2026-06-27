@@ -341,15 +341,25 @@ class ThreadEngine(RaceEngine):
             _gate_wait()
             for _ in range(iter_count):
                 rg.acquire()
-                if spec.jitter_ms > 0:
-                    time.sleep(random.uniform(0, spec.jitter_ms / 1000.0))
-                rg.throttle()
-                st, txt = execu.run_with_retries(spec.method, spec.url, headers=spec.headers, data=spec.data, jsn=spec.jsn)
-                fp = _body_fingerprint(txt)
-                sigs.append((st, len(txt or ""), fp))
-                if spec.debug:
-                    bodies.append((txt or "")[:_BODY_SAMPLE])
-                rg.release()
+                # FIX (faz5): acquire→release try/finally ile dengelendi. Önceden
+                # run_with_retries bir ConnectionError/Timeout fırlatınca rg.release()
+                # ATLANIYORDU → max_inflight ayarlıyken RateGate semaphore'u sızıp
+                # kalan worker'lar acquire()'da süresiz bloke oluyordu (deadlock).
+                # Ayrıca exception worker thread'ini sessizce öldürüp sig kaybına yol
+                # açıyordu; artık hata `errors`e yazılır (list.append GIL altında atomik).
+                try:
+                    if spec.jitter_ms > 0:
+                        time.sleep(random.uniform(0, spec.jitter_ms / 1000.0))
+                    rg.throttle()
+                    st, txt = execu.run_with_retries(spec.method, spec.url, headers=spec.headers, data=spec.data, jsn=spec.jsn)
+                    fp = _body_fingerprint(txt)
+                    sigs.append((st, len(txt or ""), fp))
+                    if spec.debug:
+                        bodies.append((txt or "")[:_BODY_SAMPLE])
+                except Exception as _werr:
+                    errors.append(f"{type(_werr).__name__}: {_werr!r}"[:200])
+                finally:
+                    rg.release()
 
         threads: List[threading.Thread] = []
         for i in range(spec.conc):
@@ -394,23 +404,35 @@ class AsyncioEngine(RaceEngine):
 
                 async def one_task() -> Tuple[int, int, str, str]:
                     await rg.acquire()
-                    if spec.jitter_ms > 0:
-                        await asyncio.sleep(random.uniform(0, spec.jitter_ms / 1000.0))
-                    await rg.throttle()
-                    st, txt = await execu.run_with_retries(spec.method, spec.url, headers=spec.headers, data=spec.data, jsn=spec.jsn)
-                    ln = len(txt or "")
-                    fp = _body_fingerprint(txt or "")
-                    sample = txt[:_BODY_SAMPLE] if spec.debug else ""
-                    rg.release()
-                    return (st, ln, fp, sample)
+                    # FIX (faz5): rg.release() try/finally'e alındı — istek exception
+                    # atınca AsyncRateGate semaphore'u sızıyordu (deadlock riski).
+                    try:
+                        if spec.jitter_ms > 0:
+                            await asyncio.sleep(random.uniform(0, spec.jitter_ms / 1000.0))
+                        await rg.throttle()
+                        st, txt = await execu.run_with_retries(spec.method, spec.url, headers=spec.headers, data=spec.data, jsn=spec.jsn)
+                        ln = len(txt or "")
+                        fp = _body_fingerprint(txt or "")
+                        sample = txt[:_BODY_SAMPLE] if spec.debug else ""
+                        return (st, ln, fp, sample)
+                    finally:
+                        rg.release()
 
                 tasks: List["asyncio.Task[Any]"] = []
                 for _ in range(spec.conc * spec.repeat):
                     tasks.append(asyncio.create_task(one_task()))
 
                 await asyncio.sleep(0.01)  # mikro senkron kapı
-                results = await asyncio.gather(*tasks, return_exceptions=False)
-                for st, ln, fp, sample in results:
+                # FIX (faz5): return_exceptions=True — önceden False idi, tek bir
+                # bağlantı hatası gather'ı patlatıp TÜM race testini (run_race_conditions)
+                # çökertiyordu. Artık hatalı task'lar `errors`e yazılır, sağlam task'lar
+                # sonuç üretmeye devam eder.
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, BaseException):
+                        errors.append(f"{type(r).__name__}: {r!r}"[:200])
+                        continue
+                    st, ln, fp, sample = r
                     sigs.append((st, ln, fp))
                     if spec.debug and sample:
                         bodies.append(sample)
