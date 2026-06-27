@@ -7,7 +7,6 @@ from typing import Dict, Any, List, Mapping
 from urllib.parse import urljoin
 import importlib.util as _iul
 import importlib
-import requests
 
 # add_result (opsiyonel, try/except yok)
 if _iul.find_spec("websecure.core.reporting") is not None:
@@ -95,17 +94,6 @@ def _tpl(s: str, state: Dict[str, Any]) -> str:
         return str(state.get(key, m.group(0)))
     return _VAR_RE.sub(rep, s)
 
-# Extractor: response.text regex yakala -> state['var']=value
-def _apply_extractors(text: str, extractors: List[Dict[str, Any]], state: Dict[str, Any]):
-    for ex in (extractors or []):
-        var = ex.get("var")
-        pat = ex.get("regex")
-        if not (var and pat):
-            continue
-        m = re.search(pat, text or "", re.I | re.S)
-        if m:
-            state[var] = m.group(1) if m.groups() else m.group(0)
-
 def _as_dict(v: Any) -> Dict[str, Any]:
     """Hatalı yapılandırılmış config değerini güvenle dict'e indirger.
 
@@ -122,68 +110,10 @@ def _merge_headers(base: Dict[str, str], add: Dict[str, str]) -> Dict[str,str]:
         h[str(k)] = str(v)
     return h
 
-# ================== Eski Koşucu (korundu) ==================
-
-def run_business_logic_flows_legacy(session: requests.Session, base_url: str, cfg: Dict[str, Any], results: Dict[str, Any], *, debug: bool=False) -> int:
-    """
-    config.business_logic.flows tanımlı DSL'i yürütür.
-    DSL: name, steps[]. step: method,url,headers,body/json,extract[],expect[]
-    """
-    bl = (cfg.get("business_logic") or {})
-    flows = bl.get("flows") or []
-    if not flows:
-        add_result("meta", {"stage":"bizlogic","status":"skipped:no-flows"})
-        return 0
-
-    state: Dict[str, Any] = {}
-    completed = 0
-
-    for flow in flows:
-        name = str(flow.get("name") or "flow")
-        steps: List[Dict[str, Any]] = list(flow.get("steps") or [])
-        base_headers = flow.get("base_headers") or {}
-        base_cookies = flow.get("base_cookies") or {}
-        ok = True
-        step_report: List[Dict[str, Any]] = []
-
-        for i, st in enumerate(steps, start=1):
-            method = str(st.get("method","GET")).upper()
-            url = st.get("url") or "/"
-            url = url if url.startswith("http") else urljoin(base_url if base_url.endswith("/") else base_url+"/", url.lstrip("/"))
-            url = _tpl(url, state)
-            headers = _merge_headers(base_headers, {k:_tpl(str(v), state) for k,v in _as_dict(st.get("headers")).items()})
-            data = st.get("body")
-            jsn = st.get("json")
-            if isinstance(data, str): data = _tpl(data, state)
-            if isinstance(jsn, dict): jsn = {k:_tpl(str(v), state) for k,v in jsn.items()}
-
-            r = session.request(method, url, headers=headers, data=data, json=jsn, allow_redirects=True, timeout=bl.get("timeout", 12), verify=bl.get("verify_tls", False), cookies=base_cookies)
-            item = {"flow": name, "step": i, "method": method, "url": url, "status": r.status_code, "len": len(r.text or "")}
-            expects = st.get("expect") or []
-            passed = True
-            for ex in expects:
-                if "status" in ex and int(ex["status"]) != r.status_code:
-                    passed = False; item.setdefault("expect_failures", []).append({"status": [ex["status"], r.status_code]})
-                if "contains" in ex and str(ex["contains"]) not in (r.text or ""):
-                    passed = False; item.setdefault("expect_failures", []).append({"contains": ex["contains"]})
-                if "not_contains" in ex and str(ex["not_contains"]) in (r.text or ""):
-                    passed = False; item.setdefault("expect_failures", []).append({"not_contains": ex["not_contains"]})
-            item["passed"] = passed
-
-            _apply_extractors(r.text or "", st.get("extract") or [], state)
-            step_report.append(item)
-            if debug: item["_debug_sample"] = (r.text or "")[:400]
-            if not passed and st.get("required", True):
-                ok = False; break
-
-        add_result("vulnerability", {"source": "bizlogic_flows", "name": name, "ok": ok, "steps": step_report})
-        completed += int(ok)
-
-    add_result("meta", {"stage":"bizlogic","flows_defined": len(flows), "flows_ok": completed})
-    results.setdefault("bizlogic_summary", {})["flows_ok"] = completed
-    return completed
-
-# ================== PATCH: Modern Koşucu ==================
+# ================== Modern Koşucu ==================
+# faz6: eski run_business_logic_flows_legacy + yalnız onun kullandığı _apply_extractors
+# KALDIRILDI — modern run_business_logic_flows (aşağıda) tamamen ikame ediyordu;
+# legacy hiçbir yerden çağrılmıyordu (0 ref/test, ölü duplikasyon).
 
 # Yerel http istemcisi (opsiyonel)
 if _iul.find_spec("websecure.core.http") is not None:

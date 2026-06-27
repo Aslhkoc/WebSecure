@@ -146,81 +146,16 @@ def _install_sigint_handler():
         _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 from websecure.core.http import hardened_session
 from websecure.core.reporting import add_result, redact_sensitive
-# Safe imports for optional scanners
-_rs = _ma = _jwt = _nq = _ws = _sx = _gql = _fu = None
-
-try:
-    from websecure.scanners import request_smuggling as _rs
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import mass_assignment as _ma
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import jwt as _jwt
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import nosqli as _nq
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import ws_fuzz as _ws
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import ssrf_xxe as _sx
-except ImportError:
-    pass
-
-
-try:
-    from websecure.scanners import graphql as _gql
-except ImportError:
-    pass
-
+# Safe imports for optional scanners — yalnız doğrudan alias'la KULLANILAN modüller
+# eager import edilir (_fu→file_upload :1011, _wfp→waf_fingerprint :1026). Diğer
+# scanner'lar _call_if_exists/importlib.import_module ile DİNAMİK dispatch edildiğinden
+# (request_smuggling/mass_assignment/jwt/nosqli/ws_fuzz/ssrf_xxe/graphql/cmdi/lfi/cors/
+# subdomain_takeover/session_scanner/crlf_injection) eager alias-import'ları ÖLÜYDÜ —
+# alias hiç okunmuyordu → boşuna eager import; faz6'da kaldırıldı (dinamik dispatch korunur).
+_fu = _wfp = None
 
 try:
     from websecure.scanners import file_upload as _fu
-except ImportError:
-    pass
-
-# --- Yeni tarayıcı modülleri ---
-_cmdi = _lfi = _cors = _st = _ss = _crlf = _wfp = None
-
-try:
-    from websecure.scanners import cmdi as _cmdi
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import lfi as _lfi
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import cors as _cors
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import subdomain_takeover as _st
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import session_scanner as _ss
-except ImportError:
-    pass
-
-try:
-    from websecure.scanners import crlf_injection as _crlf
 except ImportError:
     pass
 
@@ -4682,19 +4617,10 @@ def run_plan_if_needed(ctx: dict):
     except Exception as _fix_e:
         _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
 
-    # Inject AsyncScanRunner into ctx so individual scanners can use parallel HTTP probes
-    try:
-        from websecure.core.async_runner import AsyncScanRunner as _AsyncScanRunner
-        cfg = ctx.get("config", {}) if isinstance(ctx, dict) else getattr(ctx, "config", {}) or {}
-        max_concurrent = int((cfg.get("async", {}) or {}).get("max_concurrent", 30))
-        timeout_s = float((cfg.get("async", {}) or {}).get("timeout_s", 10.0))
-        _ar = _AsyncScanRunner(max_concurrent=max_concurrent, timeout_s=timeout_s)
-        if isinstance(ctx, dict):
-            ctx["async_runner"] = _ar
-        else:
-            setattr(ctx, "async_runner", _ar)
-    except Exception as _fix_e:
-        _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
+    # faz6: önceki "Inject AsyncScanRunner into ctx" bloğu KALDIRILDI — ctx["async_runner"]
+    # her taramada kuruluyordu ama HİÇBİR scanner okumuyordu (0 tüketici, faz5'te doğrulandı);
+    # yanıltıcı ölü-wiring + boşuna instantiation idi. async_runner modülü public-API facade
+    # olarak korunur; gerçek paralel-probe wiring'i ayrı eforda yapılacak ([[orphan_yetenekler_audit]]).
 
     plan = build_plan(ctx)
     if not plan:
@@ -5805,6 +5731,11 @@ def run_sqlmap_scan(ctx) -> None:
                 _reason = "zaman bütçesi doldu (kısmi)"
             elif any(isinstance(w, dict) and w.get("detected") for w in (_waf if isinstance(_waf, list) else [])):
                 _reason = "hedef WAF/403 ile blokluyor — enjeksiyon yüzeyi erişilemedi"
+            elif _cb:
+                # faz6 fix: circuit_breaker bucket'ı çekiliyordu ama hiç kullanılmıyordu.
+                # CB devreye girmişse (hedef throttle/blok etti) "param yok" demek YANILTICI;
+                # dürüst teşhis: tarama devre-kesici ile durduruldu.
+                _reason = "circuit breaker devreye girdi — hedef taramayı throttle/blok etti"
             elif _self_discover and _tested_params == 0:
                 _reason = "test edilebilir parametre/form yok (statik/parametresiz yüzey)"
         except Exception:

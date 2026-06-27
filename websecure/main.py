@@ -760,6 +760,10 @@ if run_oast_on_target is None:
 # --- Business Logic & Advanced Scanners ---
 _flows_mod = _im.import_module("websecure.core.flows") if _ws_spec("websecure.core.flows") is not None else None
 run_business_logic_flows = getattr(_flows_mod, "run_business_logic_flows", None) if _flows_mod else None
+# faz6: run_idempotency_checks core/flows.py'de tanımlıydı ama hiçbir yerde çağrılmıyordu
+# (orphan iş-mantığı testi). config.business_logic.idempotency.checks ile gated → bizlogic
+# bloğuna wire edildi; checks yoksa "skipped" döner (gate-safe).
+run_idempotency_checks = getattr(_flows_mod, "run_idempotency_checks", None) if _flows_mod else None
 
 _bl_mod = _im.import_module("websecure.core.bl_concurrency") if _ws_spec(
     "websecure.core.bl_concurrency") is not None else None
@@ -2476,6 +2480,21 @@ def _run_scan_phases(
                 if callable(globals().get("add_result")):
                     add_result("errors", {"stage": "bizlogic_race", "error": "module_missing"})
             mark("bizlogic_race", t)
+
+            # faz6: idempotency anomali testi (config.business_logic.idempotency.checks).
+            # checks tanımlı değilse run_idempotency_checks içinde "skipped" döner → gate-safe.
+            print("[•] İdempotensi (tekrarlı istek) testleri…")
+            t = mark("bizlogic_idempotency")
+            if callable(globals().get("run_idempotency_checks")):
+                ok_idem, err_or_none = _safe_call(run_idempotency_checks, session, url, cfg, results,
+                                                  debug=debug,
+                                                  call_timeout=900.0)
+                if not ok_idem and callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_idempotency", "error": str(err_or_none)})
+            else:
+                if callable(globals().get("add_result")):
+                    add_result("errors", {"stage": "bizlogic_idempotency", "error": "module_missing"})
+            mark("bizlogic_idempotency", t)
 
         oast_cfg = (cfg.get("oast") or {})
         if bool(oast_cfg.get("enabled")) and callable(globals().get("OASTClient")) and callable(
