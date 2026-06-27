@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 # Sub-module re-exports (extracted from this monolith for future incremental splitting)
 from websecure.core.phases._context import ScanMode, ScanContext  # noqa: F401

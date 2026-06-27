@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.core.live_monitor
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Gerçek zamanlı terminal monitörü (LiveMonitor) ve konsol uyarı sistemi.

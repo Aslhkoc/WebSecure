@@ -1,4 +1,4 @@
-﻿"""
+"""
 websecure.scanners.session_scanner
 -----------------------------------
 Session & Cookie güvenlik tarayıcıları.
