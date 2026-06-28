@@ -1328,9 +1328,9 @@ def _render_ssl_table(results: Dict) -> str:
 
 
 def _render_markdown_report_inline(results: Dict) -> str:
-    # Hazırlık
-    items_raw = _coerce_final(results)
-    items = _dedupe_findings(items_raw)
+    # Hazırlık — SAYIM BİRLİĞİ: summary/html/sarif/junit ile AYNI kanonik küme
+    # (recon + tekrar elenmiş). Eskiden _is_countable_finding filtresi atlanıyordu.
+    items = _canonical_report_findings(results)
     items.sort(key=lambda i: (
     -_sev_rank(i.get("severity")), -(i.get("score") or 0), str(i.get("type") or ""), str(i.get("url") or "")))
 
@@ -3690,19 +3690,14 @@ def _render_skipped_summary(items: list[dict]) -> str:
 
 
 def export_sarif(results: dict, out_path: str) -> None:
-    """Minimal SARIF exporter; callers pass full results."""
-    run = {
-        "tool": {"driver": {"name": "WebSecure", "informationUri": "https://example.invalid"}},
-        "results": []
-    }
-    for it in results.get("findings", []):
-        rule_id = (it.get("cwe") or it.get("type") or "generic")
-        msg = it.get("message") or it.get("title") or it.get("type") or "finding"
-        run["results"].append({"ruleId": str(rule_id), "message": {"text": str(msg)}})
-    sarif = {"version": "2.1.0", "runs": [run]}
-    import json
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(sarif, f, indent=2, ensure_ascii=False)
+    """SARIF exporter — kanonik report_generator.export_sarif'e delege eder.
+
+    FORMAT TUTARLILIĞI (FAZ15): bu fonksiyon eskiden AYRI bir minimal SARIF üretiyordu
+    (integrations/sarif'in fingerprint-dedup + CWE-linking zenginliği OLMADAN) =
+    ikinci, sapan bir SARIF yolu. Çağıran yok (aktif yol report_generator.export_sarif)
+    ama olası dış importlar için tek-kaynağa bağlandı → her SARIF aynı üreticiden çıkar."""
+    from websecure.core.report_generator import export_sarif as _gen_export_sarif
+    _gen_export_sarif(results, out_path)
 
 
 def phase_summary(ctx, results):

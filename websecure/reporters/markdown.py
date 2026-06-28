@@ -270,9 +270,15 @@ def render(results: Dict) -> str:
     Renders the comprehensive Markdown report.
     Replaces logic previously in core/reporting.py
     """
-    # Prep
-    items_raw = _coerce_final(results)
-    items = _dedupe_findings(items_raw)
+    # Prep — SAYIM BİRLİĞİ: summary.json / report.html / SARIF / JUnit ile AYNI kanonik
+    # bulgu kümesi. Eskiden yerel _coerce_final+_dedupe_findings kullanıp
+    # _is_countable_finding filtresini ATLIYORDU → markdown raporu recon-çöpünü
+    # (nmap port / discovery / subdomain / passive) sayıp diğer formatlarla çelişiyordu.
+    try:
+        from websecure.core.reporting import _canonical_report_findings as _canon
+        items = list(_canon(results))
+    except Exception:  # reporting import edilemezse eski davranışa düş (defansif)
+        items = _dedupe_findings(_coerce_final(results))
     items.sort(key=lambda i: (-_sev_rank(i.get("severity")), -(i.get("score") or 0), str(i.get("type") or ""), str(i.get("url") or "")))
 
     meta = (results.get("meta") if isinstance(results, dict) else {})

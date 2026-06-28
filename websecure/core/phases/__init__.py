@@ -6797,11 +6797,15 @@ def run_reporting_and_integration(ctx) -> None:
     if "sarif" not in _formats:
         try:
             from websecure.core.report_generator import export_sarif as _export_sarif
-            from websecure.core.reporting import get_global_results as _get_gr
-            _all_findings: List[Dict] = []
-            for _bucket in _get_gr().values():
-                if isinstance(_bucket, list):
-                    _all_findings.extend(_bucket)
+            from websecure.core.reporting import (
+                get_global_results as _get_gr,
+                _canonical_report_findings as _canon_findings,
+            )
+            # SAYIM BİRLİĞİ: report.sarif.json / summary.json / report.html ile AYNI
+            # kanonik bulgu kümesi. Eskiden TÜM kovalar ham düzleştiriliyordu (recon:
+            # nmap port / discovery / subdomain / httpx + tekrarlar) → websecure.sarif
+            # şişiyordu (FAZ14 report.sarif fix'inin atladığı ikinci, always-on yol).
+            _all_findings: List[Dict] = _canon_findings(_get_gr())
             import os as _os2
             _sarif_path = _os2.path.join(_out_dir, "websecure.sarif")
             _export_sarif({"findings": _all_findings}, _sarif_path)
@@ -6812,11 +6816,12 @@ def run_reporting_and_integration(ctx) -> None:
     if "junit" not in _formats:
         try:
             from websecure.core.report_generator import export_junit as _export_junit
-            from websecure.core.reporting import get_global_results as _get_gr2
-            _all_findings2: List[Dict] = []
-            for _bucket2 in _get_gr2().values():
-                if isinstance(_bucket2, list):
-                    _all_findings2.extend(_bucket2)
+            from websecure.core.reporting import (
+                get_global_results as _get_gr2,
+                _canonical_report_findings as _canon_findings2,
+            )
+            # SAYIM BİRLİĞİ: diğer formatlarla AYNI kanonik küme (recon + tekrar elenmiş).
+            _all_findings2: List[Dict] = _canon_findings2(_get_gr2())
             import os as _os3
             _junit_path = _os3.path.join(_out_dir, "websecure.junit.xml")
             _export_junit({"findings": _all_findings2}, _junit_path)

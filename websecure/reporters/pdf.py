@@ -119,7 +119,17 @@ class PDFReporter:
 
     def _render_html(self, results: Dict, config: Dict) -> Optional[str]:
         """Render the Jinja2 template with report data."""
-        findings = _flatten_findings(results)
+        # SAYIM BİRLİĞİ: summary.json / report.html / SARIF / JUnit / markdown ile AYNI
+        # kanonik bulgu kümesi. Eskiden yerel _flatten_findings (elle bakımlı, drift etmiş
+        # kova listesi — recon 'subdomain' dahil, gerçek 'subdomains'i kaçırır — ve
+        # _is_countable_finding filtresi YOK) kullanıyordu → PDF sayısı diğer formatlardan
+        # sapıyordu. open_ports/tls/auth_matrix gibi dedike recon bölümleri aşağıda kendi
+        # kovalarından ayrıca türetilir (bunlar bulgu sayısına katılmaz).
+        try:
+            from websecure.core.reporting import _canonical_report_findings as _canon
+            findings = list(_canon(results))
+        except Exception:  # reporting import edilemezse eski davranışa düş (defansif)
+            findings = _flatten_findings(results)
         severity_counts = _count_by_severity(findings)
 
         # Compute overall risk rating
