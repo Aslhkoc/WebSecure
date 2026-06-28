@@ -48,3 +48,6 @@ DEDUP_LOG.md
 audit_full.py
 fix_silent_failures.py
 websecure/tests/
+
+# Git Bash crash dumps
+*.stackdump
