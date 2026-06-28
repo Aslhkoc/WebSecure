@@ -5901,6 +5901,9 @@ _FFUF_NON_DISCOVERY_HINTS = (
     "nosqli", "payload", "deserial", "smuggl", "prototype", "jwt", "secret",
     "redirect", "passwd", "password", "cred", "param", "subdomain", "graphql",
     "values", "special-char", "special_char", "fuzz",
+    # learned.txt = kategori-etiketli (category<TAB>payload) runtime cache; dizin
+    # adı olarak denenince hep 404 → bütçe israfı. Discovery havuzundan ele.
+    "learned",
 )
 
 
@@ -6131,19 +6134,20 @@ def run_ffuf_scan(ctx) -> None:
             if forms_meta:
                 _logger.info(f"[Login-Audit] Found {len(forms_meta)} potential login forms. Starting Smart Audit (1000+ words)...")
                 
-                # Resolve wordlist path
-                # NOT: burada `import os` YAPMA. Modül seviyesinde zaten import edildi
-                # (satır 19). Fonksiyon-içi koşullu `import os`, `os`'u TÜM fonksiyon
-                # için local değişken yapıyordu; forms_meta boşsa (SPA/login formu statik
-                # HTML'de yoksa) bu satır hiç çalışmaz ve aşağıdaki `os.path.join` (API
-                # wordlist dalı) `UnboundLocalError: 'os'` ile çökerdi → ffuf fazı komple
-                # düşüyordu. Modül-düzeyi import'a güven.
-                wl_path = os.path.join(os.getcwd(), "websecure/wordlists/passwords_top1000.txt")
+                # Parola wordlist'ini KANONİK kaynaktan çöz (paths.py — frozen-aware, tek
+                # kaynak). Eski kod `os.getcwd()`'e dayanıyordu → süreç proje-kökü DIŞINDAN
+                # (veya frozen exe olarak) çalışınca passwords_top1000.txt asla bulunamıyor,
+                # login-audit 3-kelimelik stub'a düşüyor ya da olmayan dizine yazmaya çalışıp
+                # çöküyordu. wordlists_dir() cwd'den bağımsızdır.
+                # (NOT: fonksiyon-içi `import os` YAPMA — `os` modül düzeyinde global; koşullu
+                # local import aşağıdaki `os.path.join` API dalını UnboundLocalError ile çökertir.)
+                from websecure.core.paths import wordlists_dir as _wl_dir
+                wl_path = str(_wl_dir() / "passwords_top1000.txt")
                 if not os.path.exists(wl_path):
-                     _logger.warning("[Login-Audit] Wordlist not found, generating default...")
-                     # write basic if missing (failsafe)
-                     with open(wl_path, "w", encoding="utf-8") as f: f.write("admin\n123456\npassword\n")
-                
+                     # Paketli liste yoksa KAYNAĞA YAZMA — LoginAuditor'ın yerleşik
+                     # in-memory fallback'ine (admin/123456/password/admin123) bırak.
+                     _logger.warning("[Login-Audit] passwords_top1000.txt bulunamadı (%s) — yerleşik fallback kullanılacak.", wl_path)
+
                 auditor = LoginAuditor(getattr(ctx, "session"), url, wl_path)
                 
                 # Re-feed forms into auditor (since auditor heuristic runs on HTML, 
