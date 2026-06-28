@@ -652,8 +652,17 @@ desktop.ini
 
 # ── [v2026-06] MODERN / ADVANCED ADDITIONS ──
 # .env varyantları
+.env.vault
+.env.keys
+.env.ci
 # CI/CD & container
+.drone.yml
+buildspec.yml
+cloudbuild.yaml
 # uygulama config
+vault-agent.hcl
+consul.hcl
+nomad.hcl
 # paket / secret yöneticileri
 .pypirc
 .netrc
@@ -667,3 +676,5 @@ kubeconfig
 # DB dump / backup
 db.sqlite3
 # misc
+.dockercfg
+gcp-key.json

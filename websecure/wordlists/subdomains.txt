@@ -520,5 +520,21 @@ kafka
 vault
 keycloak
 # depolama / CDN
+bucket
+objects
+minio
+swift
+edge
 # ortamlar
+prod
+production
+canary
+live
+nonprod
 # iş
+pay
+invoice
+careers
+my
+wallet
+kyc

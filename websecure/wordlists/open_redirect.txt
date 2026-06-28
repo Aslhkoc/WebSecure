@@ -226,6 +226,11 @@ https://attacker.com%23.trusted.com
 https://attacker.com%2f.trusted.com
 https://attacker.com%3f.trusted.com
 # unicode / whitespace bypass
+/%0d/attacker.com
+/%0a/attacker.com
+/%00/attacker.com
+/%E2%80%A8attacker.com
+/%E2%80%A9attacker.com
 # IP obfuscation redirect
 http://0x7f000001
 http://127.0.0.1%2f@attacker.com
