@@ -1491,7 +1491,8 @@ def _render_markdown_report_inline(results: Dict) -> str:
             lines.append("### Çıkarılan Gerçek Veri (Hedef Sistem Cevabı)")
             lines.append("")
             try:
-                from websecure.core.evidence_extractor import format_extracted_data
+                # NOT: format_extracted_data importu kaldırıldı — bu blok çıkarılan
+                # veriyi SATIR-İÇİ formatlıyor (helper hiç çağrılmıyordu = ölü import).
                 for e in extracted_items:
                     etype = esc_md(e.get("type") or "")
                     eurl  = esc_md((e.get("url") or "")[:80])
@@ -1544,7 +1545,9 @@ def _render_markdown_report_inline(results: Dict) -> str:
                         lines.append(f"- ⚠ RCE Onaylandı: `{rce_out}`")
                     lines.append("")
             except Exception as _ee:
-                pass
+                # Çıkarılan-veri formatlaması rapor üretimini ÇÖKERTMEMELİ (best-effort),
+                # ama sessizce yutma — debug'a düşür ki teşhis edilebilsin (madde 9).
+                _ci_logger.debug("[reporting] extracted-data format hatası: %r", _ee)
 
     # Kullanılan Parametreler (frekans)
     from collections import Counter
@@ -1802,6 +1805,22 @@ def _is_countable_finding(item: Dict[str, Any]) -> bool:
     return True
 
 
+def _canonical_report_findings(results: Dict[str, Any]) -> List[Dict]:
+    """Tek kanonik bulgu kümesi — report.html / summary.json / SARIF / JUnit AYNI
+    sayıyı göstersin diye (SAYIM BİRLİĞİ).
+
+    _coerce_final (otoriter 'final' ya da tüm kovaların birleşimi) → _dedupe_findings
+    → _is_countable_finding (etiketsiz crawl/port/durum artefaktları elenir).
+    build_summary, to_sarif ve to_junit bu TEK kaynağı kullanır. Aksi halde SARIF/JUnit
+    ham `_iter_findings` ile recon kovalarını (nmap portları, ffuf 'discovery' hit'leri,
+    subdomain'ler, passive recon) bulgu sayıp DEDUP de yapmadan summary.json/report.html
+    ile çelişiyordu (FAZ14: tek gerçek bulgu + recon → SARIF 24, summary 1)."""
+    return [
+        f for f in _dedupe_findings(_coerce_final(results))
+        if _is_countable_finding(f)
+    ]
+
+
 def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict[str, Any]:
     counters = get_counters()
     rl = results.get("rate_limit_obs") or []
@@ -1812,13 +1831,11 @@ def build_summary(results: Dict[str, Any], proofs_index: Dict[str, Any]) -> Dict
     confidence_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
     severity_counts: Dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
     verified_count = 0
-    # [Fix-5] DEDUP: HTML panosu bulguları tekilleştirip gösterir; summary.json ise
-    # ham sayıyordu → 218 vs 150 çelişki. Aynı dedup'ı burada da uygula → tüm
-    # artefaktlar (summary/SARIF/JUnit) tutarlı tek sayı.
-    all_findings = _dedupe_findings(_coerce_final(results))
-    # [Fix-5] HTML panosuyla AYNI bulgu kümesini say (etiketsiz crawl/port/durum
-    # artefaktlarını ele) → summary.json total/severity == report.html.
-    all_findings = [f for f in all_findings if _is_countable_finding(f)]
+    # [Fix-5 / FAZ14] Kanonik TEK bulgu kümesi — summary.json / report.html / SARIF /
+    # JUnit hepsi AYNI sayıyı göstersin (sayım birliği). Aynı _canonical_report_findings
+    # helper'ını to_sarif/to_junit de kullanır; eskiden HTML dedup'lu (150), summary ham
+    # (218) çatışıyordu, SARIF/JUnit ise recon kovalarını da sayıyordu.
+    all_findings = _canonical_report_findings(results)
     # Honest FP/zayıflık ölçümü için non-Info bulguları izle.
     scored_total = 0      # severity >= Low olan gerçek "bulgu"lar (Info recon hariç)
     weak_count = 0        # doğrulanmamış VE kanıtsız (evidence/proof/payload yok)
@@ -2667,7 +2684,10 @@ def _cwe_for(rule_id: str) -> Optional[str]:
     return None
 
 def to_sarif(results: Dict, tool_name: str = "WebSec") -> Dict:
-    items = _iter_findings(results)
+    # SAYIM BİRLİĞİ: summary.json/report.html ile AYNI kanonik kümeyi kullan — ham
+    # _iter_findings recon kovalarını (nmap port/discovery/subdomain/passive) ve
+    # tekrarları da SARIF'a yazıp sayıyı şişiriyordu.
+    items = _canonical_report_findings(results)
     rule_ids = sorted(set(str(i.get("type") or i.get("title") or "finding") for i in items))
 
     def _make_rule(rid: str) -> Dict:
@@ -2794,7 +2814,9 @@ def to_sarif(results: Dict, tool_name: str = "WebSec") -> Dict:
 
 def to_junit(results: Dict, suite_name: str = "websec") -> str:
     import xml.sax.saxutils as sx
-    items = _iter_findings(results)
+    # SAYIM BİRLİĞİ: summary.json/report.html/SARIF ile AYNI kanonik küme (recon ve
+    # tekrarlar elenmiş) — eskiden ham _iter_findings ile JUnit tests sayısı şişiyordu.
+    items = _canonical_report_findings(results)
     total = len(items)
     errors = sum(1 for i in items if str(i.get("severity", "")).lower() in ("critical", "high"))
     failures = sum(1 for i in items if str(i.get("severity", "")).lower() == "medium")
@@ -2804,7 +2826,7 @@ def to_junit(results: Dict, suite_name: str = "websec") -> str:
         f"<testsuite name='{sx.escape(suite_name)}' tests='{total}' errors='{errors}' failures='{failures}' skipped='{skipped}'>")
     for i in items:
         name = sx.escape(str(i.get("type") or i.get("title") or "finding"))
-        classname = sx.escape(str(i.get("_bucket") or "findings"))
+        classname = sx.escape(str(i.get("_bucket") or i.get("module") or "findings"))
         msg = sx.escape(str(i.get("description") or i.get("title") or ""))
         sev = str(i.get("severity", "")).lower()
         parts.append(f"  <testcase classname='{classname}' name='{name}'>")

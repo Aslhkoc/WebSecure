@@ -6950,8 +6950,30 @@ def run_oast_verification(ctx) -> None:
             _logger.debug(f"[OAST] Poll hatası: {exc!r}")
         _time.sleep(poll_interval)
 
+    # OOB callback'leri RAPORLANAN "oast" kovasına yaz. Eskiden orphan "oast_callbacks"
+    # kovasına yazılıyordu; oysa html_dashboard._FINDING_BUCKETS ve reporting (proofs
+    # korelasyonu) HEP "oast" okur → toplanan callback'ler rapora HİÇ düşmüyordu = sessiz
+    # veri kaybı (subdomain/httpx ile aynı kova-adı uyumsuzluğu sınıfı). Poll, token +
+    # correlation-id ile bizim altyapımıza scope'ludur → gelen her benzersiz callback,
+    # enjekte ettiğimiz payload'ın tetiklediği ONAYLI bir OOB etkileşimidir (kör
+    # SSRF/RCE/XXE'nin altın-standart doğrulaması). InteractshIntegration ile aynı
+    # konvansiyon: High + verified.
     for ev in all_events:
-        add_result("oast_callbacks", ev)
+        _e = ev or {}
+        proto = str(_e.get("protocol") or _e.get("type") or "dns").upper()
+        remote = _e.get("remote-address") or _e.get("remote_address") or "?"
+        uniq = _e.get("unique-id") or _e.get("full-id") or ""
+        add_result("oast", {
+            "type": f"OAST/OOB Interaction ({proto})",
+            "severity": "High",
+            "confidence": "high",
+            "verified": True,
+            "location": uniq,   # benzersiz id → farklı etkileşimler dedup'ta korunur
+            "message": f"Out-of-band {proto} callback alındı (kaynak: {remote}) — kör SSRF/RCE/XXE onayı",
+            "evidence": {"interactsh_event": _e},
+            "source": "interactsh",
+            "tags": ["oast", "oob", proto.lower()],
+        })
 
     add_result("meta", {
         "stage": "oast",
