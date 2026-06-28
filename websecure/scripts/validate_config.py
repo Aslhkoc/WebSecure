@@ -35,6 +35,35 @@ def main() -> None:
     # validate
     jsonschema.validate(instance=cfg, schema=schema)
 
+    # strict: şemada TANIMLI OLMAYAN anahtarları (yazım hatası/eskimiş ayar) reddet.
+    # Eskiden --strict yalnız çıktıda "[strict]" yazıyordu, doğrulamaya HİÇ etki
+    # etmiyordu (yanıltıcı no-op flag). Artık şema 'properties'iyle özyinelemeli
+    # karşılaştırıp bilinmeyen anahtar varsa hata verir (additionalProperties:false etkisi).
+    if strict:
+        def _unknown_keys(obj, sch, prefix=""):
+            found = []
+            if not isinstance(obj, dict) or not isinstance(sch, dict):
+                return found
+            props = sch.get("properties", {})
+            # Şema additionalProperties'e izin veriyorsa o dalı strict denetleme.
+            allow_extra = sch.get("additionalProperties", True) is not False
+            for k, v in obj.items():
+                path = f"{prefix}.{k}" if prefix else k
+                if k not in props:
+                    if not allow_extra:
+                        found.append(path)
+                    continue
+                found.extend(_unknown_keys(v, props.get(k, {}), path))
+            return found
+        # Üst seviyede her zaman katı: şema kökünde tanımlı olmayan anahtar = hata.
+        _top_props = schema.get("properties", {})
+        unknown = [k for k in cfg if k not in _top_props]
+        for k in cfg:
+            if k in _top_props:
+                unknown.extend(_unknown_keys(cfg[k], _top_props.get(k, {}), k))
+        if unknown:
+            die("strict: şemada tanımlı olmayan anahtar(lar): " + ", ".join(sorted(set(unknown))[:30]))
+
     # optional prune (best-effort: only top-level and first-level objects)
     if prune:
         def prune_obj(obj, sch):
