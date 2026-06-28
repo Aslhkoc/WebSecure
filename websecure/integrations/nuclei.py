@@ -112,12 +112,6 @@ _TECH_TAG_MAP: Dict[str, str] = {
     "fortinet":    "fortinet",
 }
 
-# Nuclei v3'te değiştirilen flag'ler (eski → yeni)
-_V3_FLAG_CHANGES: Dict[str, str] = {
-    "-update-templates": "-ut",
-    "-json":             "-je",        # v3'te -je <file> formatına geçti
-}
-
 # Rate limit profil ayarları
 _RATE_LIMIT_BY_PROFILE: Dict[str, int] = {
     "stealth":    10,

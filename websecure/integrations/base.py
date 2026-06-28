@@ -482,7 +482,14 @@ class ToolRegistry:
 
     def register(self, tool: ToolIntegration) -> None:
         self._tools[tool.tool_name] = tool
-        logger.debug(f"[ToolRegistry] Kayıtlı: {tool.tool_name} (mevcut={tool.is_available()})")
+        # is_available() bazı araçlarda PAHALIDIR (httpx → 'httpx -version' subprocess;
+        # nmap → winreg/FS taraması). Bu satır __init__._auto_register_tools() içinde
+        # import anında 11 araç için çağrılıyordu; f-string log-seviyesinden BAĞIMSIZ
+        # eager değerlendiğinden, paketi import etmek varsayılan (WARNING) seviyede bile
+        # bir subprocess doğurup ×11 availability probe yapıyordu (boşa iş — madde 10).
+        # isEnabledFor ile yalnız debug açıkken hesaplanır.
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"[ToolRegistry] Kayıtlı: {tool.tool_name} (mevcut={tool.is_available()})")
 
     def get(self, name: str) -> Optional[ToolIntegration]:
         return self._tools.get(name)
