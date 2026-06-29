@@ -395,34 +395,10 @@ def check_backup_files(url: str, results: Dict[str, Any], session, debug: bool =
 
     _summary(results, bucket, vulns)
 
-# ----------------- Diğer yer tutucular -----------------
-def check_code_injection(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a03_code_injection"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_insecure_design(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a04_insecure_design"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_security_logging(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a09_security_logging_monitoring"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_csrf(url: str, results: Dict, session, debug: bool = False):
-    """
-    Delegates to the dedicated CSRF scanner module if available.
-    """
-    try:
-        from websecure.scanners import csrf
-        csrf.run_scan(url, session, results, debug=debug)
-    except ImportError:
-        bucket = "a05_csrf"
-        _ensure_bucket(results, bucket)
-        _summary(results, bucket, 0)
-
+# A08:2021 — Insecure Deserialization (tek gerçek bağımsız kontrol; gerisi
+# vestigial boş stub'tı ve run() tarafından hiç çağrılmıyordu → kaldırıldı.
+# İlgili OWASP kategorileri zaten özel fazlarla kapsanıyor: A03 code/RCE → cmdi,
+# A10 SSRF → ssrf_xxe, A10 file upload → file_upload, A05 CSRF → CSRF Scanner fazı.)
 def check_insecure_deserialization(url: str, results: Dict, session, debug: bool = False):
     """
     Insecure Deserialization — Java, PHP, .NET ViewState, Python pickle, Ruby/Node payload tespiti.
@@ -534,36 +510,6 @@ def check_insecure_deserialization(url: str, results: Dict, session, debug: bool
                 pass
 
     _summary(results, bucket, len(results[bucket]))
-
-def check_file_upload(url: str, forms, results: Dict, session, debug: bool = False):
-    bucket = "a10_file_upload"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_rce(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a03_rce"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_ssrf(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a10_ssrf"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_session_hijacking(url: str, results: Dict, driver, debug: bool = False):
-    bucket = "a07_session"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_file_inclusion(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a03_file_inclusion"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
-
-def check_vulnerable_components(url: str, results: Dict, session, debug: bool = False):
-    bucket = "a06_components"
-    _ensure_bucket(results, bucket)
-    _summary(results, bucket, 0)
 
 # ----------------- Orchestrator -----------------
 def run(url: str = "", session=None, config: Dict[str, Any] | None = None, debug: bool = False, **kwargs) -> Dict[str, Any]:
@@ -983,16 +929,6 @@ def backup_hunt(url: str, session, results: Dict[str, Any], debug: bool = False)
             findings.append({"path": p, "status": code, "severity": "Yok"})
     results.setdefault("a05_backup_scan_ext", findings)
     return {"backup": findings}
-
-def get_payloads_from_config(cfg: dict, key: str = "xss") -> list:
-    if not isinstance(cfg, dict):
-        return []
-    payloads = cfg.get("payloads")
-    if not isinstance(payloads, dict):
-        return []
-    p = payloads.get(key)
-    return p if isinstance(p, list) else []
-
 
 def payload_sample(finding: dict) -> str:
     return str((finding or {}).get('payload') or (finding or {}).get('poc') or '')
