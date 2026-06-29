@@ -244,11 +244,38 @@ def render_risk_matrix(findings: List[Dict]) -> str:
             if not entry["advice"]:
                 entry["advice"] = "Review and remediate per OWASP guidance"
 
-    rows = sorted(type_map.items(), key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
+    # Bilgilendirici/pozitif/tanı girdilerini ELE — bunlar zafiyet değil, "düzeltme"
+    # matrisine girmemeli (HTML dashboard ile aynı mantık: Certificate Valid'i
+    # "yenile", WAF Detected'ı "OWASP'a bak" demek saçma; rapor alıcısı yanılır).
+    _NON_REMEDIABLE_TYPES = (
+        "certificate valid", "valid certificate", "cert valid", "geçerli sertifika",
+        "waf detected", "waf:", "waf generic", "waf davran", "waf bypass",
+        "waf tespit", "not blocking", "bloklamıyor",
+        "origin ip bulunamad", "arkasında", "arkasinda", "origin bulunamad",
+        "tech profile", "tech_profile", "teknoloji tespit", "technology detected",
+        "fingerprint",
+    )
 
-    lines = ["", "## Remediation Priority Matrix", "",
-             "| # | Vulnerability Type | Max Severity | Count | Recommended Fix | Fix Effort |",
-             "|:-:|---|:-:|:-:|---|:-:|"]
+    def _excluded(_vtype: str, _sev_label: str) -> bool:
+        tl = (_vtype or "").lower()
+        if any(p in tl for p in _NON_REMEDIABLE_TYPES):
+            return True
+        return str(_sev_label or "").strip().lower() in ("info", "informational", "bilgi")
+
+    rows = sorted(
+        ((t, i) for t, i in type_map.items() if not _excluded(t, i.get("sev_label", "Info"))),
+        key=lambda x: (-x[1]["max_sev"], -x[1]["count"]),
+    )
+
+    lines = ["", "## Remediation Priority Matrix", ""]
+    if not rows:
+        _obs = sum(1 for t, i in type_map.items() if _excluded(t, i.get("sev_label", "Info")))
+        lines.append("> Düzeltilecek (Low ve üzeri) onaylı zafiyet bulunamadı."
+                     + (f" {_obs} bilgilendirici gözlem (WAF/sertifika/teknoloji) "
+                        "zafiyet değildir, tam bulgu tablosunda listelenir." if _obs else ""))
+        return "\n".join(lines)
+    lines += ["| # | Vulnerability Type | Max Severity | Count | Recommended Fix | Fix Effort |",
+              "|:-:|---|:-:|:-:|---|:-:|"]
     for i, (vtype, info) in enumerate(rows[:20], 1):
         lines.append(
             f"| {i} | {_esc_md(vtype)} | {_esc_md(info['sev_label'])} | {info['count']} | {_esc_md(info['advice'])} | {_esc_md(info['effort'])} |"

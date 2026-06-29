@@ -833,7 +833,35 @@ def render_html_dashboard(results: dict) -> str:
         entry.setdefault("advice", "OWASP rehberine göre incele ve düzelt")
         entry.setdefault("effort", "Orta")
 
-    priority_rows = sorted(type_map.items(), key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
+    # --- Matristen BİLGİLENDİRİCİ / POZİTİF / TANI girdilerini ELE ---
+    # "Öncelikli Düzeltme Matrisi" YALNIZ düzeltilecek zafiyetleri göstermeli.
+    # Kullanıcı haklı: "Certificate Valid" (sertifika GEÇERLİ = İYİ) için "yenile",
+    # "WAF Detected" (WAF VAR = koruma) için "OWASP'a bak", "Vercel arkasında origin
+    # IP bulunamadı" (tarama TANISI, URL bile yok) için "düzeltme önerisi" SAÇMA —
+    # bunlar zafiyet değildir; rapor alıcısı "bu URL'nin nesini düzelteyim?" der.
+    # (a) Zafiyet OLMAYAN tip kalıpları (pozitif/tanı/gözlem) her severity'de elenir.
+    # (b) Info severity bir DÜZELTME ÖNCELİĞİ değildir → matristen çıkar (bulgu tam
+    #     bulgu tablosunda durmaya devam eder, yalnız "öncelikli düzelt" listesinde değil).
+    _NON_REMEDIABLE_TYPES = (
+        "certificate valid", "valid certificate", "cert valid", "geçerli sertifika",
+        "waf detected", "waf:", "waf generic", "waf davran", "waf bypass",
+        "waf tespit", "not blocking", "bloklamıyor",
+        "origin ip bulunamad", "arkasında —", "arkasinda -", "arkasında -",
+        "origin bulunamad", "tech profile", "tech_profile", "teknoloji tespit",
+        "technology detected", "fingerprint",
+    )
+
+    def _matrix_excluded(_vtype: str, _sev_label: str) -> bool:
+        tl = (_vtype or "").lower()
+        if any(p in tl for p in _NON_REMEDIABLE_TYPES):
+            return True
+        if str(_sev_label or "").strip().lower() in ("info", "informational", "bilgi", "bilgilendirme"):
+            return True
+        return False
+
+    _matrix_items = [(t, i) for t, i in type_map.items()
+                     if not _matrix_excluded(t, i.get("sev_label", "Info"))]
+    priority_rows = sorted(_matrix_items, key=lambda x: (-x[1]["max_sev"], -x[1]["count"]))
 
     # -----------------------------------------------------------------------
     # Inline SVG charts — canlı veriden üretilir (statik Matplotlib PNG yerine).
@@ -991,6 +1019,7 @@ def render_html_dashboard(results: dict) -> str:
                 <strong style="color:var(--text-main);">Satıra tıkla</strong> → etkilenen URL/parametreleri aç;
                 <strong style="color:var(--text-main);">severity etiketine tıkla</strong> → tabloyu o seviyeye filtrele.
                 <em>Çözüm Eforu</em> = düzeltmenin geliştirici maliyeti (severity ile aynı şey değildir).
+                <br><span style="color:var(--text-muted);">Not: WAF/sertifika/teknoloji gibi bilgilendirici gözlemler ZAFİYET değildir; bu matriste yer almaz.</span>
             </p>
             <div class="table-container">
                 <table>
@@ -1007,6 +1036,29 @@ def render_html_dashboard(results: dict) -> str:
                     <tbody>{_rem_rows_html}</tbody>
                 </table>
             </div>
+        </div>
+        """
+    else:
+        # MATRİS BOŞ → DÜRÜST SÖYLE. Eskiden boş kalınca bölüm tamamen kayboluyordu;
+        # ama daha kötüsü, filtre yokken Info/pozitif/tanı (Certificate Valid, WAF
+        # Detected, "origin IP bulunamadı") "düzeltilecek zafiyet" gibi listeleniyordu.
+        # Artık: düzeltilecek gerçek zafiyet yoksa bunu açıkça yaz; bilgilendirici
+        # gözlemleri "zafiyet değildir" diye ayır (rapor alıcısı yanılmasın).
+        _info_obs = max(0, len(type_map) - len(_matrix_items))
+        _obs_line = (
+            f"<br>Taramada <strong>{_info_obs} bilgilendirici gözlem</strong> "
+            f"(WAF varlığı, geçerli sertifika, teknoloji tespiti, CDN/origin notu) "
+            f"toplandı — <strong>bunlar zafiyet DEĞİLDİR, düzeltme gerektirmez</strong>; "
+            f"aşağıdaki tam bulgu tablosunda görülebilir."
+            if _info_obs else ""
+        )
+        remediation_html = f"""
+        <div class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+            <h3 style="margin-top:0;">[target] Öncelikli Düzeltme Matrisi</h3>
+            <p style="color:var(--text-main); font-size:0.92rem; margin:0;">
+                <span style="color:var(--sev-low); font-weight:600;">&#10003; Düzeltilecek (Low ve üzeri) onaylı zafiyet bulunamadı.</span>
+                {_obs_line}
+            </p>
         </div>
         """
 
