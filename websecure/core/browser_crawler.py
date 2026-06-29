@@ -104,6 +104,9 @@ class BrowserCrawlConfig:
     # onlarca dakika sürebilir. no_timeout faz-watchdog'unu kaldırdığından, crawl'ın
     # kendisi BİTMEYİ garanti etmeli — yoksa tüm tarama burada sonsuza dek donar.
     max_total_seconds: int = 0
+    # show_browser açıkken: tüm alanlar denendikten SONRA pencereyi bu kadar sn
+    # AÇIK TUT (kullanıcı son durumu izlesin, pencere aniden kapanmasın). 0 = bekleme.
+    keep_open_seconds: int = 0
     proxy_url: Optional[str] = None
     auth_cookies: List[Dict] = field(default_factory=list)
     auth_storage_state: Optional[str] = None  # path to playwright storage state JSON
@@ -783,16 +786,23 @@ def should_use_browser_crawler(http_result: Dict) -> bool:
 # Alan bağlamına göre benign (zararsız) varsayılan değerler — hedef-DIŞI alanlar
 # formun geçerli kalması için bunlarla doldurulur, böylece submit gerçekten gider.
 _BENIGN_BY_CONTEXT: Dict[str, str] = {
-    "email":    "tester@example.com",
-    "username": "tester",
-    "password": "Passw0rd!23",
-    "card":     "4111111111111111",
-    "cvv":      "123",
-    "iban":     "DE89370400440532013000",
-    "expiry":   "12/29",
-    "search":   "test",
-    "comment":  "test",
-    "generic":  "test",
+    "email":     "tester@example.com",
+    "username":  "tester",
+    "password":  "Passw0rd!23",
+    "card":      "4111111111111111",
+    "cvv":       "123",
+    "iban":      "DE89370400440532013000",
+    "expiry":    "12/29",
+    "phone":     "5551234567",
+    "name":      "Test User",
+    "address":   "Test Mah. 1 Sok. No:1",
+    "numeric":   "12",
+    "birthdate": "01/01/1990",
+    "url":       "https://example.com",
+    "raffle":    "TEST123",
+    "search":    "test",
+    "comment":   "test mesaji",
+    "generic":   "test",
 }
 
 # SQL hata imzaları (DB-bağımsız) — submit sonrası sayfa içeriğinde aranır.
@@ -847,34 +857,116 @@ _TAG_FIELDS_JS = """
 
 
 def _classify_input_context(meta: Dict[str, Any]) -> str:
-    """Bir input alanını içeriğine göre sınıflandır (name/id/type/placeholder/...)."""
+    """Bir input alanını içeriğine göre sınıflandır — site yapımcılarının kullandığı
+    GENİŞ id/name/placeholder/autocomplete/aria kalıp kümesiyle (Türkçe + İngilizce).
+
+    Amaç: sitedeki HER input alanını (ad, soyad, e-posta, telefon, kart no, CVV,
+    adres, posta kodu, doğum tarihi, çekiliş/kupon kodu, miktar, yorum...) doğru
+    sınıfa oturtup uygun payload'ı vermek. Önce HTML `autocomplete` standardı
+    token'larına bakar (en güvenilir), sonra serbest name/id/placeholder sezgisi.
+    """
     t = str(meta.get("type") or "text").lower()
+    ac = str(meta.get("autocomplete") or "").lower().strip()
     blob = " ".join(str(meta.get(k) or "") for k in
                     ("name", "id", "placeholder", "autocomplete", "aria")).lower()
-    if t == "password" or any(k in blob for k in ("password", "passwd", "pwd", "şifre", "sifre")):
+
+    def has(*ks: str) -> bool:
+        return any(k in blob for k in ks)
+
+    # --- 1) HTML autocomplete standardı (en yüksek güven) ---
+    _AC = {
+        "cc-number": "card", "cc-csc": "cvv", "cc-exp": "expiry",
+        "cc-exp-month": "expiry", "cc-exp-year": "expiry",
+        "email": "email", "username": "username",
+        "tel": "phone", "tel-national": "phone",
+        "given-name": "name", "family-name": "name", "additional-name": "name",
+        "street-address": "address", "address-line1": "address",
+        "address-line2": "address", "address-level1": "address",
+        "address-level2": "address", "country": "address", "country-name": "address",
+        "postal-code": "numeric", "bday": "birthdate", "organization": "address",
+    }
+    if ac in _AC:
+        return _AC[ac]
+    if ac in ("new-password", "current-password"):
         return "password"
-    if any(k in blob for k in ("cardnumber", "card_number", "card-number", "cc-number",
-                               "ccnumber", "cardno", "creditcard", "kartnumar", "kart no",
-                               "card number")):
+
+    # --- 2) Ödeme / gizli alanlar (en spesifik sezgi önce) ---
+    if t == "password" or has("password", "passwd", "pwd", "şifre", "sifre", "parola"):
+        return "password"
+    if has("cardnumber", "card_number", "card-number", "cc-number", "ccnumber", "cardno",
+           "card_no", "card-no", "creditcard", "credit-card", "cc_num", "kredikart",
+           "kartnumar", "kart_no", "kart-no", "kartno", "card number"):
         return "card"
-    if any(k in blob for k in ("cvv", "cvc", "securitycode", "security code", "güvenlik kod",
-                               "guvenlik kod")):
+    if has("cvv", "cvc", "cvv2", "cvc2", "csc ", "securitycode", "security-code",
+           "security code", "güvenlik kod", "guvenlik kod", "güvenlikkod", "guvenlikkod"):
         return "cvv"
     if "iban" in blob:
         return "iban"
-    if any(k in blob for k in ("expir", "exp-date", "exp_month", "exp_year", "son kullan",
-                               "mm/yy", "aa/yy")):
+    if has("expir", "exp-date", "exp_date", "expdate", "exp_month", "exp_year",
+           "exp-month", "exp-year", "son kullan", "sonkullan", "mm/yy", "aa/yy", "valid thru"):
         return "expiry"
-    if t == "email" or any(k in blob for k in ("email", "e-mail", "e-posta", "eposta", "mail")):
+
+    # --- 3) Kimlik / iletişim ---
+    if t == "email" or has("email", "e-mail", "e_mail", "e-posta", "eposta", "mailadr"):
         return "email"
-    if any(k in blob for k in ("user", "login", "uname", "nick", "account", "kullanıcı", "kullanici")):
+    if t == "tel" or has("phone", "telephone", "mobile", "gsm", "telefon", "phonenumber",
+           "phone_number", "phone-number", "msisdn", "contactnumber", "cellphone",
+           "cep telefon", "ceptelefon"):
+        return "phone"
+    if has("username", "user_name", "user-name", "userid", "user_id", "uname", "nickname",
+           "kullanıcıad", "kullaniciad", "kullanıcı ad", "kullanici ad", "loginname",
+           "login_name"):
         return "username"
-    if str(meta.get("name") or "").lower() == "q" or any(k in blob for k in ("search", "query", "ara")):
+
+    # --- 4) Ad / soyad / unvan (serbest metin) ---
+    if has("surname", "lastname", "last_name", "last-name", "familyname", "family_name",
+           "family-name", "soyad", "soyisim", "firstname", "first_name", "first-name",
+           "givenname", "given_name", "fname", "lname", "fullname", "full_name",
+           "full-name", "namesurname", "ad soyad", "adsoyad", "adınız", "adiniz",
+           "isim", "isminiz", "your name", "yourname"):
+        return "name"
+
+    # --- 5) Adres / lokasyon / kurum ---
+    if has("address", "adres", "street", "sokak", "mahalle", "cadde", "billing",
+           "shipping", "apartment", "building", "city", "şehir", "sehir", "town",
+           "ilçe", "ilce", "district", "province", "country", "ülke", "ulke",
+           "company", "organization", "organisation", "firma", "şirket", "sirket",
+           "kurum"):
+        return "address"
+
+    # --- 6) Sayısal alanlar (telefon dışı): posta/yaş/miktar/kimlik no ---
+    if has("zip", "postal", "postcode", "posta kod", "postakod", "posta_kod", "zipcode",
+           "plz", "age", "yaş", "quantity", "qty", "adet", "miktar", "amount", "tutar",
+           "price", "fiyat", "stok", "stock", "tckn", "kimlik no", "kimlikno",
+           "national id", "nationalid", "ssn", "vergi no", "vergino"):
+        return "numeric"
+
+    # --- 7) Doğum tarihi ---
+    if has("birth", "dob", "doğum", "dogum", "bday", "birthday", "dateofbirth",
+           "date_of_birth"):
+        return "birthdate"
+
+    # --- 8) Çekiliş / kupon / promosyon / davet kodu ---
+    if has("raffle", "çekiliş", "cekilis", "draw", "lottery", "kupon", "coupon", "promo",
+           "promocode", "promo_code", "indirim kod", "discount", "giftcard", "gift_card",
+           "voucher", "referral", "davet kod", "invite", "referans"):
+        return "raffle"
+
+    # --- 9) URL / link alanları ---
+    if t == "url" or has("website", "homepage", "weburl", "web site", " url", "url ",
+           "redirect", "return ", "callback", "goto", "site adres"):
+        return "url"
+
+    # --- 10) Arama / mesaj-yorum (textarea dahil) ---
+    if str(meta.get("name") or "").lower() == "q" or has("search", "query", "arama",
+           "filter", "keyword"):
         return "search"
-    if meta.get("tag") == "textarea" or any(k in blob for k in (
-            "comment", "message", "review", "feedback", "bio", "about", "description",
-            "content", "body", "post", "yorum", "mesaj", "açıklama", "aciklama")):
+    if meta.get("tag") == "textarea" or has("comment", "message", "mesaj", "review",
+           "feedback", "bio", "about", "description", "açıklama", "aciklama", "content",
+           "body", "post", "yorum", "note", "subject", "konu", "başlık", "baslik",
+           "detay", "title"):
         return "comment"
+
     return "generic"
 
 
@@ -896,12 +988,20 @@ def _payloads_for_context(context: str, marker: str, per_field: int = 2) -> List
     ]
     if context == "password":
         chosen = sqli_str
-    elif context in ("card", "cvv", "iban", "expiry"):
+    elif context in ("card", "cvv", "iban", "expiry", "birthdate"):
+        # Kısa/sayısal alanlar — tırnaksız sayısal SQLi + tek XSS (maxlength budamasına dayanıklı)
         chosen = sqli_num[:1] + xss[:1]
+    elif context in ("phone", "numeric"):
+        chosen = sqli_num + xss[:1]
     elif context == "comment":
-        chosen = xss
+        chosen = xss  # kalıcı/yansıyan XSS en olası (3 varyant)
     elif context in ("email", "username"):
         chosen = sqli_str[:1] + xss[:1]
+    elif context in ("name", "address", "raffle"):
+        # Serbest metin alanları: hem yansıyan/kalıcı XSS hem string SQLi
+        chosen = xss[:1] + sqli_str[:1] + xss[1:2]
+    elif context == "url":
+        chosen = xss[:1] + sqli_str[:1]
     else:  # search / generic
         chosen = xss[:1] + sqli_str[:1]
     # tekilleştir + kırp
@@ -918,9 +1018,12 @@ def _payloads_for_context(context: str, marker: str, per_field: int = 2) -> List
 
 
 # Time-based (blind) SQLi denenecek bağlamlar + stored-XSS bağlamları.
-_SQLI_CONTEXTS = {"username", "email", "password", "card", "cvv", "iban",
-                  "expiry", "search", "generic"}
-_STORED_XSS_CONTEXTS = {"comment", "generic"}
+# GENİŞ: her alan tipi bir DB sorgusuna girebilir (telefon/ad/adres/sayısal/çekiliş).
+_SQLI_CONTEXTS = {"username", "email", "password", "card", "cvv", "iban", "expiry",
+                  "phone", "name", "address", "numeric", "birthdate", "raffle",
+                  "url", "search", "generic"}
+# Kalıcı/yansıyan XSS en olası görüntülenen serbest-metin alanları (ad/adres/yorum/çekiliş).
+_STORED_XSS_CONTEXTS = {"comment", "name", "address", "raffle", "generic"}
 _TIME_SLEEP_SECONDS = 5
 
 
@@ -959,9 +1062,9 @@ class BrowserFormInjector:
         self,
         config: Optional[BrowserCrawlConfig] = None,
         *,
-        max_pages: int = 10,
-        max_forms_per_page: int = 5,
-        max_fields_per_form: int = 8,
+        max_pages: int = 25,
+        max_forms_per_page: int = 6,
+        max_fields_per_form: int = 15,
         payloads_per_field: int = 2,
         max_total_seconds: int = 300,
     ) -> None:
@@ -1173,7 +1276,19 @@ class BrowserFormInjector:
         try:
             await page.goto(page_url, timeout=self.config.timeout_ms,
                             wait_until="domcontentloaded")
-            await page.wait_for_timeout(400)
+            # SPA register/login sayfaları formu JS ile GEÇ render eder → 400ms
+            # yetmiyordu, alanlar görünmeden etiketleniyor ve enjeksiyon kaçıyordu
+            # (kullanıcı: "kaydol kısmına geçince deneme yapamadı"). En az bir input
+            # görünene kadar bekle (cap'li), sonra etiketle.
+            try:
+                # wait_for_selector = SPA'yı hallet AMA sabit gecikme DEĞİL: alan
+                # zaten görünürse ANINDA döner (statik sitede maliyet ~0). Re-navigasyon
+                # her payload'da olduğundan sabit 1500ms ÇOK pahalı (alanların çoğunu
+                # bütçeden eder); küçük settle yeter (form zaten wait_for_selector ile hazır).
+                await page.wait_for_selector("input, textarea", timeout=4000, state="visible")
+            except Exception:
+                pass
+            await page.wait_for_timeout(350)
             await page.evaluate(_TAG_FIELDS_JS)  # yeniden etiketle (indeks kararlı)
         except Exception:
             return False
@@ -1187,11 +1302,21 @@ class BrowserFormInjector:
             if not el:
                 continue
             if fld.get("idx") == target.get("idx"):
+                # HEDEF alan: GÖRÜNÜR, karakter karakter (kullanıcı izlesin).
                 ok = await self._type_into(el, payload)
                 filled_target = filled_target or ok
             else:
+                # Diğer (benign) alanlar: ANINDA doldur (fill) — karakter karakter
+                # YAZMA. Eskiden 9 alanı her navigasyonda tek tek yazmak alanların
+                # çoğunu bütçeden ediyordu (raffle/comment'e hiç sıra gelmiyordu).
+                # İzlenecek olan HEDEF alandır; benign doldurma sadece formu geçerli
+                # kılmak için → hızlı olmalı.
                 bctx = _classify_input_context(fld)
-                await self._type_into(el, _BENIGN_BY_CONTEXT.get(bctx, "test"))
+                _bval = _BENIGN_BY_CONTEXT.get(bctx, "test")
+                try:
+                    await el.fill(_bval)
+                except Exception:
+                    await self._type_into(el, _bval)
         return filled_target
 
     async def _attempt(self, page, page_url: str, form_index: int,
@@ -1418,6 +1543,28 @@ class BrowserFormInjector:
                         _logger.info("[BrowserFormInjector] süre bütçesi doldu — durduruluyor.")
                         break
                     await self._process_page(page, purl, dialog_box)
+
+                # GÖRÜNÜR modda pencereyi hemen kapatma — kullanıcı son durumu
+                # izlesin (kullanıcı: "ekran 10 sn açık kalabildi"). keep_open_seconds
+                # kadar açık tut; iptal/scan-over olursa erken çık (deadlock yok:
+                # SONLU bekleme, scan_is_over'a BAĞLI DEĞİL).
+                _keep = int(getattr(self.config, "keep_open_seconds", 0) or 0)
+                if _keep > 0 and not use_headless:
+                    try:
+                        print(f"  [i] Chrome {_keep} sn daha acik kalacak (sonuclari "
+                              f"inceleyebilirsiniz)...", flush=True)
+                    except Exception:
+                        pass
+                    _waited = 0
+                    while _waited < _keep:
+                        try:
+                            from websecure.core.http import scan_is_over as _sio
+                            if _sio():
+                                break
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(1000)
+                        _waited += 1
             finally:
                 try:
                     page.remove_listener("dialog", _on_dialog)

@@ -2046,11 +2046,17 @@ def _runner_browser_inject(ctx) -> None:
 
         bc_cfg = (cfg.get("browser_crawler") or cfg.get("browser")
                   or (cfg.get("crawl") or {}).get("browser") or {})
+        _show = bool(bc_cfg.get("show_browser", True))
         config = BrowserCrawlConfig(
             headless=bool(bc_cfg.get("headless", False)),
-            show_browser=bool(bc_cfg.get("show_browser", True)),
+            show_browser=_show,
             slow_mo_ms=int(bc_cfg.get("slow_mo_ms") or 120),
             timeout_ms=int(bc_cfg.get("timeout_ms") or 15000),
+            # SPA register/login formları geç render eder → daha cömert bekleme.
+            wait_after_load_ms=int(bc_cfg.get("wait_after_load_ms") or 1200),
+            # Görünür modda pencere son denemeden sonra ~25 sn açık kalsın (kullanıcı
+            # "ekran 10 sn açık kalabildi" dedi); headless'te beklemeye gerek yok.
+            keep_open_seconds=int(bc_cfg.get("keep_open_seconds") or (25 if _show else 0)),
             proxy_url=_resolve_proxy(ctx),
         )
 
