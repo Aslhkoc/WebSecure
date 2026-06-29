@@ -2551,17 +2551,22 @@ def _runner_scanners_ws_fuzz(ctx) -> None:
     add_result("meta", {"stage": "ws_fuzz", "tested": len(endpoints)})
 
 def _runner_graphql(ctx) -> None:
-    att_mod = _opt_import("websecure.scanners.graphql_attacks")
-    rpc_mod = _opt_import("websecure.scanners.graphql_rpc")
-    
-    # [WS3] Fallback to robust scanner if 'attacks' module missing
-    if not att_mod:
+    # 'GraphQL Saldırı Seti' — saldırı probe'ları ARTIK ayrı bir modül değil:
+    # websecure.scanners.graphql içindeki probe_* adaptörlerinden gelir
+    # (probe_persisted_query_bypass / probe_batch_alias_storm /
+    # probe_introspection_bypass). Eskiden var olmayan graphql_attacks aranıp her
+    # zaman "Attack module missing" notuyla standart tarayıcıya düşülüyordu.
+    att_mod = _opt_import("websecure.scanners.graphql_attacks") or _opt_import("websecure.scanners.graphql")
+    rpc_mod = _opt_import("websecure.scanners.graphql_rpc") or att_mod
+
+    # Saldırı adaptörleri yoksa GERÇEK bir hata → standart tarayıcıya düş
+    if not att_mod or not hasattr(att_mod, "probe_persisted_query_bypass"):
         mod_base = _opt_import("websecure.scanners.graphql")
         if mod_base and hasattr(mod_base, "GraphQLScanner"):
-             add_result("offensive", {"type": "GraphQL Attacks", "severity": "Note", "reason": "Attack module missing, running standard GraphQL Scanner"})
+             add_result("offensive", {"type": "GraphQL Attacks", "severity": "Note", "reason": "Saldırı adaptörü yüklenemedi; standart GraphQL tarayıcı çalıştırılıyor"})
              _runner_scanners_graphql(ctx)
              return
-        
+
         add_result("offensive", {"type": "GraphQL", "severity": "Info", "reason": "Modüller bulunamadı."})
         _phase_rec(get_results() if callable(globals().get('get_results')) else {}, 'flow', 'skipped', 'return')
         return
@@ -2583,6 +2588,26 @@ def _runner_graphql(ctx) -> None:
              return
         client = client_cls(getattr(ctx, "session", None),
                             timeout=float(_get(getattr(ctx, "config", {}) or {}, "timeouts.graphql", 20.0)))
+
+    # Hedefte GERÇEKTEN GraphQL var mı? Yoksa 100-op batch / alias-bomb gibi AGRESİF
+    # probe'ları boşuna salma (non-GraphQL endpoint'te gürültü + sahte-yüzey riski).
+    # Standart tarayıcının _discover_endpoints kapısıyla aynı ölçüt.
+    try:
+        _pc, _pj, _ptext, _ = client.post(gql_url, {"query": "{__typename}"})
+        _txt = _ptext or ""
+        _is_gql = (
+            (_pc == 200 and ("data" in _txt or "errors" in _txt))
+            or (_pc == 400 and "graphql" in _txt.lower())
+        )
+    except Exception:
+        _is_gql = False
+    if not _is_gql:
+        add_result("offensive", {
+            "type": "GraphQL Attacks",
+            "severity": "Info",
+            "reason": f"GraphQL endpoint doğrulanamadı ({gql_url}); saldırı seti atlandı.",
+        })
+        return
 
     probes: List[Tuple[str, Callable]] = []
     if hasattr(att_mod, "probe_persisted_query_bypass") and callable(getattr(att_mod, "probe_persisted_query_bypass")):
@@ -3081,6 +3106,65 @@ def _runner_crlf_injection(ctx) -> None:
         _report_phase_error("crlf_injection", "phases._runner_crlf_injection", e)
 
 
+def _known_waf_state(ctx) -> Dict[str, Any]:
+    """Bu hedef için TEK DOĞRULUK KAYNAĞI WAF verdiği.
+
+    WAF fazları (waf_fingerprint, waf_bypass_validate) kendi tek-atışlık prob'larıyla
+    `phase_waf_detect`'in zaten bulduğu kesin verdiği EZMESİN diye var. 403/429
+    fırtınasında fingerprint 'unknown' döner; aksi halde "No WAF" yanılgısı üretir.
+
+    Üç kaynağı birleştirir: (1) ctx.waf_profile, (2) global "waf" kovasındaki önceki
+    tespit kayıtları, (3) davranışsal 403/429 seli. Döner:
+    {"detected": bool, "vendor": str, "confidence": float}.
+    """
+    detected = False
+    vendor = ""
+    confidence = 0.0
+
+    # 1) phase_waf_detect'in ctx'e yazdığı WAFProfile
+    wp = getattr(ctx, "waf_profile", None)
+    if wp is None and isinstance(ctx, dict):
+        wp = ctx.get("waf_profile")
+    if wp is not None and getattr(wp, "detected", False):
+        detected = True
+        vendor = getattr(wp, "vendor", "") or vendor
+        try:
+            confidence = max(confidence, float(getattr(wp, "confidence", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pass
+
+    # 2) Global "waf" kovasındaki önceki tespit kayıtları
+    try:
+        from websecure.core.reporting import get_global_results
+        for entry in (get_global_results().get("waf") or []):
+            if isinstance(entry, dict) and entry.get("detected"):
+                detected = True
+                _v = entry.get("vendor")
+                if _v and str(_v).lower() not in ("unknown", "none", "") and not vendor:
+                    vendor = _v
+                try:
+                    confidence = max(confidence, float(entry.get("confidence") or 0.0))
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+
+    # 3) Davranışsal sinyal: 403/429 seli = WAF bloğu (imza kaçsa bile)
+    try:
+        from websecure.core.http import HTTP_METRICS as _M
+        blocked = (int(_M.get("403", 0) or 0)
+                   + int(_M.get("429", 0) or 0)
+                   + int(_M.get("ban_403", 0) or 0))
+        if blocked >= 5:
+            detected = True
+    except Exception:
+        pass
+
+    if not vendor or vendor.lower() in ("unknown", "none", ""):
+        vendor = "unknown"
+    return {"detected": detected, "vendor": vendor, "confidence": confidence}
+
+
 def _runner_waf_bypass_validate(ctx) -> None:
     """WAFBypassScanner — WAF bypass doğrulama ve bypass mümkünlüğü testi."""
     try:
@@ -3096,7 +3180,9 @@ def _runner_waf_bypass_validate(ctx) -> None:
     debug = getattr(ctx, "debug", False)
     try:
         scanner = _WAFBypassScanner(session=sess, results=results, debug=debug)
-        scanner.run(url)
+        # Önceki fazın WAF verdiğini ilet — tarayıcı kendi prob'u 'unknown' dönse
+        # bile bilinen WAF'ı "No WAF Detected" ile ezmesin.
+        scanner.run(url, known_waf=_known_waf_state(ctx))
     except Exception as e:
         _logger.warning(f"[phases] WAF bypass validate runner error: {e}")
         _report_phase_error("waf_bypass_validate", "phases._runner_waf_bypass_validate", e)
@@ -3116,14 +3202,26 @@ def _runner_waf_fingerprint(ctx) -> None:
             fp = fingerprinter_cls()
             report = fp.fingerprint(url, session=sess)
             if report:
+                _v = getattr(report, "vendor", "unknown")
+                _det = bool(getattr(report, "detected", False))
+                _conf = float(getattr(report, "confidence", 0.0) or 0.0)
+                # Önceki faz WAF tespit ettiyse bu faz onu 'unknown'/'yok' ile EZMESİN
+                # (403 fırtınasında davranışsal fingerprint körleşir). Vendor'ı taşı,
+                # varlık verdiğini düşürme.
+                _known = _known_waf_state(ctx)
+                if _known["detected"]:
+                    _det = True
+                    if (not _v) or str(_v).lower() in ("unknown", "none", ""):
+                        _v = _known["vendor"]
+                    _conf = max(_conf, _known["confidence"])
                 add_result("waf", {
                     "url": url,
-                    "vendor": getattr(report, "vendor", "unknown"),
-                    "confidence": getattr(report, "confidence", 0.0),
+                    "vendor": _v,
+                    "confidence": _conf,
                     "bypass_hints": getattr(report, "bypass_strategies", []),
                     "rate_limit": getattr(report, "rate_limit", {}),
-                    "detected": getattr(report, "detected", False),
-                    "message": f"WAF parmak izi: {getattr(report, 'vendor', 'unknown')}",
+                    "detected": _det,
+                    "message": f"WAF parmak izi: {_v}",
                 })
     except Exception as e:
         _logger.warning(f"[phases] WAF fingerprint runner error: {e}")
@@ -4616,6 +4714,14 @@ def run_plan_if_needed(ctx: dict):
         _reset_cb()
     except Exception as _fix_e:
         _logger.debug(f"[core.phases.__init__] {type(_fix_e).__name__}: {_fix_e!r}")
+
+    # Aynı şekilde mid-scan "hedef erişilemez" monitörünü de sıfırla (uzun ömürlü
+    # süreçte önceki taramanın 'decided/durduruldu' durumu yeni taramaya sızmasın).
+    try:
+        from websecure.core.http import reset_target_down_state as _reset_tdn
+        _reset_tdn()
+    except Exception as _fix_e2:
+        _logger.debug(f"[core.phases.__init__] {type(_fix_e2).__name__}: {_fix_e2!r}")
 
     # faz6: önceki "Inject AsyncScanRunner into ctx" bloğu KALDIRILDI — ctx["async_runner"]
     # her taramada kuruluyordu ama HİÇBİR scanner okumuyordu (0 tüketici, faz5'te doğrulandı);

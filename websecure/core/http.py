@@ -357,6 +357,135 @@ def _looks_like_proxy_error(exc: BaseException) -> bool:
     return any(k in txt for k in ("proxy", "socks", "sock_connect", "tor"))
 
 
+# ---------------------------------------------------------------------------
+# Target unreachable MID-SCAN — detect & ask the user instead of grinding
+# ---------------------------------------------------------------------------
+# Distinct from the circuit breaker (throttle/recover) and the Tor-egress notice
+# (proxy failure). Here the TARGET host stops answering: many requests in a row
+# fail at the connection level (timeout/refused/DNS) while it is NOT a proxy/Tor
+# problem. The breaker's no_timeout/Tor-tolerant config needs 30 consecutive
+# errors and then only THROTTLES — so a dead target grinds for ~45 min with an
+# endless "connection error" flood. This monitor counts consecutive FINAL
+# request failures (reset on ANY response — even 4xx/5xx means the host is up)
+# and, at a threshold, asks the user ONCE whether to stop (or stops the scan
+# non-interactively). Stopping flips the existing _SCAN_OVER kill-switch, which
+# every scanner batch already treats as a quiet abort → winds down to reporting.
+_TARGET_DOWN_LOCK = threading.Lock()
+_TARGET_DOWN_STATE: Dict[str, Any] = {
+    "consec": 0,         # consecutive FINAL connection failures (target-type)
+    "decided": False,    # user/agent already chose stop (terminal)
+    "prompting": False,  # a thread is currently asking the user
+    "threshold": 0,      # armed threshold (lazily set from _target_down_threshold)
+}
+
+
+def _target_down_threshold() -> int:
+    """Consecutive FINAL failures before alarming — Tor is far more tolerant."""
+    if tor_active() or os.environ.get("WEBSECURE_TOR_ACTIVE") == "1":
+        return 16  # Tor: timeouts/exit-blocks are routine, not "host down"
+    return 6
+
+
+def reset_target_down_state() -> None:
+    """Clear the mid-scan unreachable monitor (call at the start of a fresh scan)."""
+    with _TARGET_DOWN_LOCK:
+        _TARGET_DOWN_STATE.update(consec=0, decided=False, prompting=False, threshold=0)
+
+
+def note_target_response() -> None:
+    """Any HTTP response (even 4xx/5xx) proves the host is alive → reset streak."""
+    if _TARGET_DOWN_STATE["consec"]:
+        with _TARGET_DOWN_LOCK:
+            if not _TARGET_DOWN_STATE["decided"]:
+                _TARGET_DOWN_STATE["consec"] = 0
+
+
+def note_target_unreachable(exc: "BaseException | None" = None) -> None:
+    """
+    Record one FINAL (retries exhausted) target connection failure. When the
+    consecutive count crosses the threshold, prompt the user (interactive) or
+    stop the scan (non-interactive). Thread-safe; prompts at most once per arm.
+    """
+    # Proxy/Tor failures are a DIFFERENT problem (_note_tor_egress_down handles
+    # them); they must not be counted as the TARGET being down.
+    if exc is not None and _looks_like_proxy_error(exc):
+        return
+
+    should_prompt = False
+    consec = 0
+    with _TARGET_DOWN_LOCK:
+        if _TARGET_DOWN_STATE["decided"] or _TARGET_DOWN_STATE["prompting"]:
+            return
+        _TARGET_DOWN_STATE["consec"] += 1
+        consec = _TARGET_DOWN_STATE["consec"]
+        thr = _TARGET_DOWN_STATE["threshold"] or _target_down_threshold()
+        _TARGET_DOWN_STATE["threshold"] = thr
+        if consec >= thr:
+            _TARGET_DOWN_STATE["prompting"] = True
+            should_prompt = True
+
+    if should_prompt:
+        _decide_target_unreachable(consec)
+
+
+def _decide_target_unreachable(consec: int) -> None:
+    """Warn the user about the unreachable target and stop or keep trying."""
+    import sys as _sys
+    msg = (f"[!] HEDEFE ULASILAMIYOR: {consec} ardisik baglanti hatasi "
+           f"(timeout/refused/DNS), arada TEK basarili yanit yok. "
+           f"Hedef kapanmis ya da sizi engelliyor olabilir.")
+    _logger.warning(msg)
+    try:
+        print("\033[33m\n" + msg + "\033[0m", flush=True)
+    except Exception:
+        pass
+
+    try:
+        interactive = bool(_sys.stdin) and _sys.stdin.isatty()
+    except Exception:
+        interactive = False
+
+    stop = True
+    if interactive:
+        try:
+            ans = input(
+                "  Taramayi DURDURMAK ister misiniz? (D=Dur / Enter=devam dene): "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "d"
+        stop = ans in ("d", "dur", "s", "stop", "e", "evet", "y", "yes")
+    else:
+        try:
+            print("  [i] Etkilesimsiz: hedef erisilemez - tarama durduruluyor "
+                  "(bos ogutme onlendi).", flush=True)
+        except Exception:
+            pass
+
+    if stop:
+        with _TARGET_DOWN_LOCK:
+            _TARGET_DOWN_STATE["decided"] = True
+            _TARGET_DOWN_STATE["prompting"] = False
+        signal_scan_over()
+        try:
+            print("  [i] Tarama durduruldu (hedef erisilemez). "
+                  "O ana kadarki bulgular raporlanacak.\n", flush=True)
+        except Exception:
+            pass
+    else:
+        # Devam: sayaci sifirla, esigi ikiye katla (tekrar tekrar sormamak icin).
+        with _TARGET_DOWN_LOCK:
+            _TARGET_DOWN_STATE["consec"] = 0
+            _TARGET_DOWN_STATE["threshold"] = max(
+                _TARGET_DOWN_STATE["threshold"] * 2, _target_down_threshold() * 2
+            )
+            _TARGET_DOWN_STATE["prompting"] = False
+        try:
+            print("  [i] Devam ediliyor. Hedef yine yanit vermezse tekrar sorulacak.\n",
+                  flush=True)
+        except Exception:
+            pass
+
+
 _IDENTITY_POOLS = {
     "user_agents": [],
     "accept_language": [],
@@ -909,6 +1038,9 @@ def _smart_request(self, method, url, **kwargs):
 
             # Feed status into circuit breaker
             _cb_record(status)
+            # Host answered (any status, even 4xx/5xx) → reset mid-scan
+            # "target unreachable" streak so a transient blip never alarms.
+            note_target_response()
 
             if status in (403, 429):
                 _logger.debug(f"[Autopilot] Block detected ({status}) on attempt {attempt}/{max_retries + 1}…")
@@ -969,6 +1101,10 @@ def _smart_request(self, method, url, **kwargs):
                 continue
 
             _logger.debug(f"[Autopilot] Failed to connect to {url} after {max_retries} retries.")
+            # FINAL failure (retries exhausted) → feed the mid-scan unreachable
+            # monitor. If many requests fail in a row with NO success between,
+            # it asks the user to stop instead of grinding for ~45 min.
+            note_target_unreachable(e)
             if _wrap_requests_error is not None:
                 raise _wrap_requests_error(e, url=url) from e
             raise e
