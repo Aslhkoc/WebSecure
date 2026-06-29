@@ -252,6 +252,125 @@ def _session_priming(session, base_url, cfg):
         session.headers.update({"X-CSRF-Token": hdr_token})
 
 
+def _target_reachability_gate(session, base_url, cfg, results) -> bool:
+    """
+    Hızlı HEDEF erişilebilirlik kapısı — fail-fast.
+
+    `_egress_health_check` yalnız BİZİM çıkışımızın (api.ipify vb. IP-echo uçları)
+    çalıştığını doğrular; HEDEFE hiç dokunmaz. Hedef tamamen erişilemezse (host
+    kapalı, port filtreli/kapalı, DNS yok) tarama yine de başlıyor ve HER endpoint
+    için bağlantı timeout'una giriyordu. Devre kesici (circuit_breaker) varsayılan
+    `no_timeout`/Tor "tolerant" modunda 30 ARDIŞIK hata ister; istek başına ~90sn
+    retry × 30 ≈ ~45 dakikalık BOŞ öğütme. Bu kapı, çıkış sağlıklıyken hedef birkaç
+    HIZLI denemede yanıt vermezse taramayı ERKENDEN durdurur.
+
+    Dönüş: True → devam et, False → taramayı iptal et.
+    """
+    url = (base_url or "").strip()
+    if not url:
+        return True  # hedef yoksa kontrol edemeyiz → eski davranış (devam)
+    u = url if "://" in url else ("http://" + url)
+
+    _proxies = getattr(session, "proxies", {}) or {}
+    _via_tor = "socks" in str(_proxies.get("https") or _proxies.get("http") or "").lower()
+
+    # Çıkışımız sağlıklı mı? (en az bir IP-echo ucu 'code' döndürdüyse internet VAR)
+    egress_ok = any(
+        isinstance(o, dict) and o.get("code")
+        for o in ((results.get("egress_health") or {}).get("observations") or [])
+    )
+
+    # Tor: gecikme + exit-node engellemesi rutindir → daha çok deneme, uzun timeout.
+    attempts = 4 if _via_tor else 3
+    timeout = 25 if _via_tor else 6
+
+    # Probe SIRASINDA retry çarpanını KAPAT: aksi halde her deneme 5× urllib3 retry
+    # yapar (kapının kendisi dakikalarca sürer). Tek-thread startup'ta (fazlar henüz
+    # başlamadı) adapter.max_retries'i geçici sıfırla, finally'de GERİ YÜKLE.
+    try:
+        from urllib3.util.retry import Retry as _Retry  # noqa: PLC0415
+        _no_retry = _Retry(total=0, connect=0, read=0, redirect=0, status=0)
+    except Exception:
+        _no_retry = 0
+    _saved = []
+    for _scheme in ("http://", "https://"):
+        try:
+            _ad = session.get_adapter(_scheme)
+            _saved.append((_ad, _ad.max_retries))
+            _ad.max_retries = _no_retry
+        except Exception:
+            pass
+
+    alive = False
+    last_err = ""
+    try:
+        for _ in range(attempts):
+            try:
+                r = session.get(u, timeout=timeout, allow_redirects=True,
+                                verify=verify_for_phase(cfg, 'egress', u))
+                # HERHANGİ bir HTTP yanıtı (4xx/5xx dâhil) host'un AYAKTA olduğunu
+                # gösterir → kapı geçilir.
+                if getattr(r, "status_code", None) is not None:
+                    alive = True
+                    break
+            except Exception as exc:
+                last_err = f"{type(exc).__name__}: {str(exc)[:120]}"
+    finally:
+        for _ad, _orig in _saved:
+            try:
+                _ad.max_retries = _orig
+            except Exception:
+                pass
+
+    if alive:
+        return True
+
+    # --- Hedef erişilemez: kullanıcıyı NET bilgilendir ---
+    from urllib.parse import urlparse as _urlparse  # noqa: PLC0415
+    _hostport = (_urlparse(u).netloc or u)
+
+    print("\n" + "=" * 60)
+    print("  [!] HEDEF ERISILEMIYOR")
+    print(f"      {_hostport} -> {attempts} denemede yanit vermedi.")
+    if last_err:
+        print(f"      Son hata: {last_err}")
+    if egress_ok:
+        print("      Internet baglantiniz CALISIYOR (IP-echo uclari yanitladi).")
+        print("      Sorun HEDEFTE: host kapali, port filtreli ya da sizi engelliyor.")
+    else:
+        print("      DIKKAT: cikis saglik kontrolu de basarisiz - internet/proxy sorunu olabilir.")
+    if _via_tor:
+        print("      Tor aktif: hedef Tor exit node'larini engelliyor olabilir ->")
+        print("      Tor'suz deneyin ya da baska bir identity/exit ile tekrarlayin.")
+    print("=" * 60)
+
+    try:
+        _interactive = bool(sys.stdin) and sys.stdin.isatty()
+    except Exception:
+        _interactive = False
+
+    if _interactive:
+        try:
+            _ans = input(
+                "  Yine de devam edilsin mi? Tum istekler timeout olur, tarama bos doner. (e/H): "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _ans = ""
+        if _ans in ("e", "evet", "y", "yes"):
+            print("  [i] Devam ediliyor (hedef erisilemez olsa da).")
+            return True
+        print("  [i] Tarama iptal edildi - hedef erisilemez.\n")
+        return False
+
+    # Etkileşimsiz: Tor'da exit-node engellemesi YANLIŞ-NEGATİF olabilir → uyar+devam;
+    # Tor yokken hedef ölü demektir → iptal (CI'da 45 dk boş öğütmeyi önle).
+    if _via_tor:
+        print("  [i] Etkilesimsiz + Tor: uyari verildi, tarama DEVAM ediyor (Tor toleransi).")
+        return True
+    print("  [i] Etkilesimsiz: hedef erisilemez - tarama iptal edildi.\n")
+    return False
+
+
 _discover_func = None
 _mod = None  # if/elif'lerin ikisi de çalışmazsa _mod tanımlı kalsın (PyCharm undefined uyarısı)
 
@@ -1531,6 +1650,29 @@ def _run_scan_phases(
         oast_cfg = (cfg.get('oast') or {})
         _enforce_egress_policy(cfg)
         _egress_health_check(session, cfg, results)
+
+        # Hedef erişilebilirlik kapısı: çıkış sağlıklıyken hedef tamamen erişilemezse
+        # 30+ dk boş timeout öğütmesi yerine ERKENDEN dur (devre kesici no_timeout/Tor
+        # tolerant modunda 30 ardışık hata bekler → çok geç). Kullanıcı isterse devam
+        # edebilir; aksi halde sürücüyü kapat ve temiz çık.
+        if not _target_reachability_gate(session, url, cfg, results):
+            try:
+                if driver is not None:
+                    quit_driver(driver)
+            except Exception as _q_exc:
+                _logger.debug(f"[gate] driver kapatma: {_q_exc!r}")
+            try:
+                getattr(session, "close", lambda: None)()
+            except Exception:
+                pass
+            try:
+                from websecure.core.http import signal_scan_over as _sso  # noqa: PLC0415
+                _sso()
+            except Exception as _sso_exc:
+                _logger.debug(f"[gate] signal_scan_over: {_sso_exc!r}")
+            # Safety-net raporlamasını bastır: iptal edilen taramanın bulgusu yok.
+            globals()["_REPORTING_DONE"] = True
+            return
 
         # Not: eski 'prime_session' çağrısı kaldırıldı — bu sembol hiçbir yerde
         # tanımlanmıyordu (detect.py yok, core.http'de de yok) → globals().get hep None,

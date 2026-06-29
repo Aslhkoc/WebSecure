@@ -31,6 +31,11 @@ def setup_logging(level: str = "INFO", log_file: str = None):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("selenium").setLevel(logging.WARNING)
+    # `urllib3.connectionpool` her bağlantı denemesinde "Retrying (Retry(...))"
+    # WARNING basar → erişilemez/yavaş hedefte istek başına 5 satır SEL olur.
+    # Bunlar kullanıcı için eyleme dönük değil (uygulama nihai sonucu zaten
+    # loglar); retry telemetrisini ERROR'a çekerek seli kes, gerçek hataları tut.
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 # ========================== WebDriver ==========================
 # Açılan her WebDriver'ı merkezî olarak izle ve interpreter çıkışında GARANTİ
