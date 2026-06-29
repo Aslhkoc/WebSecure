@@ -394,10 +394,28 @@ def render(results: Dict) -> str:
         elif isinstance(ev, str) and ev:
             lines.append(f"- **Evidence**: {ev[:500]}")
 
+    # --- Ek bölümler: core.reporting'de tanımlı ama eskiden HİÇ bağlanmamış
+    # render'lar (Exploit Playbook / Taranan Alanlar / Atlanan Görevler). Kodu
+    # burada tekrar yazmak yerine kaynak fonksiyonları çağır (tek-kaynak). ---
+    try:
+        from websecure.core.reporting import (
+            _render_exploit_playbook as _r_playbook,
+            _render_scanned_areas as _r_areas,
+            _render_skipped_summary as _r_skipped,
+        )
+        _meta = results.get("meta")
+        _meta_list = _meta if isinstance(_meta, list) else ([_meta] if isinstance(_meta, dict) else [])
+        for _sec in (_r_playbook(items), _r_areas(results), _r_skipped(_meta_list)):
+            if _sec and _sec.strip():
+                lines.append("")
+                lines.append(_sec)
+    except Exception as _sec_e:
+        logger.debug(f"[reporters.markdown] ek bölüm render hatası: {_sec_e!r}")
+
     # Ports
     lines.append("")
     lines.append(_render_ports_section(results))
-    
+
     # SSL
     lines.append("")
     lines.append(_render_ssl_section(results))

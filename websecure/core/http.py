@@ -1602,32 +1602,6 @@ def _impersonation_headers(profile: str) -> dict:
     return {"User-Agent": _r.choice(_fallback_uas)}
 
 
-def _build_header_pool(cfg: Mapping[str, Any] | None) -> dict:
-    ab = (dict(cfg or {}).get("anti_blocking") or {})
-    ident = ab.get("identity") or {}
-    hp_conf = ident.get("header_pool") or {}
-    out: dict[str, list[str]] = {}
-    al = hp_conf.get("accept_language")
-    ua = hp_conf.get("ua_family")
-    if isinstance(al, list) and al:
-        out["accept_language"] = [str(x) for x in al]
-    if isinstance(ua, list) and ua:
-        out["ua"] = [str(x) for x in ua]
-    return out
-
-
-def _pick_header_variant(pool: Mapping[str, Sequence[str]], tick: int) -> dict:
-    out: dict[str, str] = {}
-    al = pool.get("accept_language")
-    if isinstance(al, Sequence) and al:
-        out["Accept-Language"] = str(al[tick % len(al)])
-    ua = pool.get("ua")
-    if isinstance(ua, Sequence) and ua:
-        fam = str(ua[tick % len(ua)])
-        out.update(_impersonation_headers(fam))
-    return out
-
-
 def _is_float(s: Any) -> bool:
     if s is None:
         return False
@@ -2330,39 +2304,6 @@ def get_http(cfg: Optional[Mapping[str, Any]] = None) -> HttpClient:
 # ffuf/ferox için header arg üretimi
 # ---------------------------------------------------------------------------
 
-def build_dirbust_headers(
-    session: Optional["requests.Session"] = None, auth_ctx: Optional[Mapping[str, Any]] = None
-) -> list[str]:
-    headers: dict[str, str] = {}
-    cookies: dict[str, str] = {}
-
-    if session is not None:
-        for k, v in dict(getattr(session, "headers", {}) or {}).items():
-            headers[str(k)] = str(v)
-        cjar = getattr(session, "cookies", None)
-        if cjar:
-            for c in cjar:
-                cookies[c.name] = c.value
-
-    if isinstance(auth_ctx, Mapping):
-        for k, v in (auth_ctx.get("headers") or {}).items():
-            headers[str(k)] = str(v)
-        for k, v in (auth_ctx.get("cookies") or {}).items():
-            cookies[str(k)] = str(v)
-
-    if cookies:
-        cookie_val = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-        headers["Cookie"] = cookie_val
-
-    banned = {"content-length", "host", "connection"}
-    out: list[str] = []
-    for k, v in headers.items():
-        if str(k).lower() in banned:
-            continue
-        out.append(f"-H {json.dumps(f'{k}: {v}')}")
-    return out
-
-
 # ---------------------------------------------------------------------------
 # requests oturumu sertleştirme
 # ---------------------------------------------------------------------------
@@ -2768,13 +2709,6 @@ def _request_via_curl(
     unified.http_version = fake.http_version  # _to_http_version_from_requests raw.version'u okur, fake'de yok
     return unified
 
-def build_xff_variants(ip: str = "127.0.0.1") -> list[dict[str, str]]:
-    return [
-        {"X-Forwarded-For": ip},
-        {"X-Real-IP": ip},
-        {"Forwarded": f"for={ip};proto=http"},
-    ]
-
 # ---------------------------------------------------------------------------
 # TLS Verify helper for phases (no try/except)
 # ---------------------------------------------------------------------------
@@ -2923,47 +2857,6 @@ def build_http_client(cfg: Dict[str, Any]) -> AntiBlockingHTTP:
     # P4 fix: pass full cfg so hardened_session() can read top-level waf/tls/privacy keys.
     sess = hardened_session(cfg)
     return AntiBlockingHTTP(sess, ab_cfg)
-
-
-# ---------------------------------------------------------------------------
-# Gizlilik başlıkları: IP leak ve parmak izi koruma
-# ---------------------------------------------------------------------------
-
-_PRIVACY_HEADERS = {
-    # Gerçek IP'yi sızdırabilecek başlıkları temizle
-    "X-Forwarded-For": None,
-    "X-Real-IP": None,
-    "X-Client-IP": None,
-    "Via": None,
-    "Forwarded": None,
-    # Tarayıcı parmak izini minimize et
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "DNT": "1",
-}
-
-
-def apply_privacy_headers(session, mode: str = "standard") -> None:
-    """
-    Session başlıklarını gizlilik için temizle/ayarla.
-    mode="paranoid": tüm parmak izi başlıklarını kaldır
-    mode="standard": sadece IP leak başlıklarını kaldır
-    """
-    if not session:
-        return
-    hdrs = getattr(session, "headers", {})
-    for k, v in _PRIVACY_HEADERS.items():
-        if v is None:
-            hdrs.pop(k, None)
-            hdrs.pop(k.lower(), None)
-        else:
-            hdrs[k] = v
-    if mode == "paranoid":
-        # Ek başlıkları da temizle
-        for k in ["Referer", "Origin", "X-Request-ID"]:
-            hdrs.pop(k, None)
 
 
 def build_session(cfg: dict) -> SmartSession:

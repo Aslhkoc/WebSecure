@@ -653,24 +653,9 @@ def _cache_key(category: str, marker: str | None, tech_tags: Iterable[str] | Non
     str, str | None, tuple[str, ...] | None]:
     return (category, marker, tuple(sorted([t for t in (tech_tags or []) if t])) or None)
 
-def url_encode_twice(s: str) -> str:
-    from urllib.parse import quote
-    return quote(quote(s, safe=""), safe="")
-
-def wrap_json(key: str, value: str) -> str:
-    return '{"%s":"%s"}' % (key, value.replace('"', '\\"'))
-
-def wrap_xml(tag: str, value: str) -> str:
-    return f"<{tag}>{value}</{tag}>"
-
 def form_urlencoded(k: str, v: str) -> str:
     from urllib.parse import urlencode
     return urlencode({k: v})
-
-def multipart_probe(name: str, value: str, boundary: str = "----WebSecBoundaryX"):
-    head = f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
-    tail = f"\r\n--{boundary}--\r\n"
-    return head + value + tail
 
 # --- Built-in Payloads (Advanced/Polyglots) ---
 BUILTIN_PAYLOADS = {
