@@ -2718,8 +2718,11 @@ def _run_scan_phases(
                     _oob_live = False
                     _logger.debug(f"[OAST] is_oob_live check failed: {_live_exc!r}")
             if ok_client and not _oob_live:
-                print("[i] OAST atlandı: OOB/interactsh kaydı başarısız "
-                      "(OOB doğrulama bu tarama için kullanılamıyor).")
+                print("[i] OAST (ikincil OOB testi) atlandı: public interact.sh "
+                      "kaydı yanıt vermedi. Bu, taramanın BAŞARISIZ olduğu anlamına "
+                      "GELMEZ — yalnız kör/OOB (sunucudan dışarı çağrı) doğrulaması "
+                      "bu tarama için devre dışı; diğer tüm fazlar normal çalışır. "
+                      "(interact.sh public sunucusu sık sık erişilemez olur.)")
                 if callable(globals().get("add_result")):
                     add_result("meta", {"stage": "oast",
                                         "status": "skipped:oob_registration_failed"})

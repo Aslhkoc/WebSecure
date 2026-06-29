@@ -975,6 +975,11 @@ class BrowserFormInjector:
         self._seen: Set[Tuple[str, str, str]] = set()
         self._deadline: float = 0.0
         self._display_urls: List[str] = []  # stored-XSS doğrulamasında ziyaret edilecek sayfalar
+        # Şeffaflık sayaçları — sonunda dürüst özet bas (kullanıcı "hiçbir şey
+        # olmadı" sanmasın: hedef WAF/403 ile tarayıcıyı da bloklamış olabilir).
+        self._pg_visited: int = 0
+        self._pg_blocked: int = 0   # HTTP 401/403/5xx (WAF/blok) dönen sayfa
+        self._pg_with_forms: int = 0
 
     # -- yardımcılar --------------------------------------------------------
 
@@ -1098,6 +1103,7 @@ class BrowserFormInjector:
     # -- ana akış -----------------------------------------------------------
 
     async def _process_page(self, page, page_url: str, dialog_box: List[str]) -> None:
+        self._pg_visited += 1
         try:
             resp = await page.goto(page_url, timeout=self.config.timeout_ms,
                                    wait_until="domcontentloaded")
@@ -1106,6 +1112,7 @@ class BrowserFormInjector:
             return
         status = getattr(resp, "status", None)
         if status is not None and (status in (401, 403) or status >= 500):
+            self._pg_blocked += 1
             _logger.debug("[BrowserFormInjector] blok/hata sayfası (HTTP %s) atlandı: %s",
                           status, page_url)
             return
@@ -1120,6 +1127,7 @@ class BrowserFormInjector:
                     if m.get("visible") and not m.get("disabled") and not m.get("skip")]
         if not fuzzable:
             return
+        self._pg_with_forms += 1
 
         # forma göre grupla (benign doldurma için)
         groups: Dict[int, List[Dict[str, Any]]] = {}
@@ -1419,6 +1427,22 @@ class BrowserFormInjector:
                     await browser.close()
                 except Exception:
                     pass
+
+        # DÜRÜST ÖZET — kullanıcı "hiçbir şey olmadı" sanmasın: gerçekte ne oldu?
+        try:
+            if self._pg_blocked and self._pg_blocked >= max(1, self._pg_visited - 1) \
+                    and self._pg_with_forms == 0:
+                print(f"  [!] Chrome {self._pg_visited} sayfayi denedi ama {self._pg_blocked}'i "
+                      f"HTTP 401/403 (WAF/blok) dondu -> hedef GERCEK TARAYICIYI da blokluyor; "
+                      f"denenecek form yuklenemedi.", flush=True)
+            elif self._pg_with_forms == 0:
+                print(f"  [i] Chrome {self._pg_visited} sayfayı gezdi; form içeren sayfa "
+                      f"bulunamadı (statik/SPA olabilir).", flush=True)
+            else:
+                print(f"  [i] Chrome: {self._pg_visited} sayfa gezildi, {self._pg_with_forms} "
+                      f"form sayfası bulundu, {self._pg_blocked} sayfa WAF/403.", flush=True)
+        except Exception:
+            pass
 
         return self._findings
 

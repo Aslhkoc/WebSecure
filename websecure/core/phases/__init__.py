@@ -2023,6 +2023,27 @@ def _runner_browser_inject(ctx) -> None:
             except Exception:
                 continue
 
+        # 3) ORTAK FORM YOLLARI tohumla — keşif WAF/403 ile bloklandıysa endpoints
+        # BOŞ kalır ve enjektör yalnız kök sayfayı dener (taramaveri.txt: "1 sayfa").
+        # GERÇEK Chrome (Playwright, hakiki tarayıcı parmak izi) çoğu zaman Python
+        # requests katmanını 403'leyen WAF'ı GEÇER → login/register/iletişim gibi
+        # form sayfalarını her hâlükârda gerçek tarayıcıyla DENE. Kapsam içi + tekil.
+        _common_form_paths = [
+            "/login", "/signin", "/sign-in", "/auth/login", "/account/login",
+            "/register", "/signup", "/sign-up", "/account/register",
+            "/contact", "/contact-us", "/iletisim", "/feedback",
+            "/account", "/profile", "/settings", "/password/reset",
+            "/checkout", "/cart", "/sepet", "/search",
+        ]
+        try:
+            _base = url.rstrip("/")
+            for _p in _common_form_paths:
+                _cand = _base + _p
+                if _cand not in page_urls:
+                    page_urls.append(_cand)
+        except Exception:
+            pass
+
         bc_cfg = (cfg.get("browser_crawler") or cfg.get("browser")
                   or (cfg.get("crawl") or {}).get("browser") or {})
         config = BrowserCrawlConfig(
