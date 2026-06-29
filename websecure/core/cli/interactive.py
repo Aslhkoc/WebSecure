@@ -261,15 +261,28 @@ def setup_show_browser(cfg: dict, args: Namespace) -> None:
         bi["enabled"] = False
         return
 
-    # CLI bayrağı (--show-browser / --visible) zaten açtıysa SORMA — bayrak
-    # interaktif varsayılanı ezer (kullanıcı açıkça istedi). Yalnız teyit yaz.
-    if cfg.get("_show_browser_forced") or bool(bi.get("enabled")):
+    # CLI --headless açıkça görünürü KAPATTIYSA: kapalı bırak, SORMA.
+    if cfg.get("_show_browser_forced") and not bool(bi.get("enabled")):
+        bi["enabled"] = False
+        print("\n  [i] Gorunur enjeksiyon kapali (--headless) — testler arka planda (HTTP).\n")
+        return
+
+    # Görünür istek 3 yoldan biriyle gelebilir → SORMADAN aktive et:
+    #   (a) CLI bayrağı --show-browser / --visible (_show_browser_forced),
+    #   (b) browser_injection.enabled config'de zaten True,
+    #   (c) config browser.show_browser=True & headless=False (kullanıcı config'inde
+    #       açıkça istemiş — PyCharm'dan bayraksız çalıştırınca da Chrome açılsın).
+    _br = cfg.get("browser") or {}
+    _cfg_wants_visible = bool(_br.get("show_browser")) and not bool(_br.get("headless"))
+    if cfg.get("_show_browser_forced") or bool(bi.get("enabled")) or _cfg_wants_visible:
         bi["enabled"] = True
         br = cfg.setdefault("browser", {})
         br["headless"] = False
         br["show_browser"] = True
         br.setdefault("slow_mo_ms", 120)
-        print("\n  [+] Gorunur form enjeksiyonu AKTIF (CLI/config) — Chrome acilacak.\n")
+        print("\n  [+] Gorunur form enjeksiyonu AKTIF (config/CLI) — tarama sirasinda "
+              "Chrome acilip\n      form alanlarina payload yazilisini izleyeceksiniz. "
+              "(Kapatmak icin: --headless)\n")
         return
 
     print("\n" + "=" * 60)
@@ -283,13 +296,10 @@ def setup_show_browser(cfg: dict, args: Namespace) -> None:
     print("      gorunur pencere acilmaz (daha hizli).")
     print("")
 
-    # Config'de browser.show_browser=True ise kullanıcı bunu zaten istemiş demektir →
-    # varsayılanı 'E' yap (Enter = aç). Aksi halde güvenli varsayılan 'H' (kapalı).
-    _cfg_wants = bool((cfg.get("browser") or {}).get("show_browser"))
-    _default = "e" if _cfg_wants else "h"
-    _hint = "E/h" if _cfg_wants else "e/H"
-    _ans = _read(f"  Gorunur Chrome'da form enjeksiyonunu izlemek ister misiniz? ({_hint}): ",
-                 _default).lower()
+    # Buraya yalnız config görünür istemiyorken gelinir (üstteki auto-aktivasyon
+    # config browser.show_browser=True'yu zaten yakalar) → güvenli varsayılan 'H'.
+    _ans = _read("  Gorunur Chrome'da form enjeksiyonunu izlemek ister misiniz? (e/H): ",
+                 "h").lower()
 
     if _ans.startswith("e"):
         bi["enabled"] = True

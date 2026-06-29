@@ -1377,6 +1377,13 @@ def _apply_cli_args(cfg: dict, args) -> None:
         cfg.setdefault("crawl", {})["headless"] = True
         cfg.setdefault("webdriver", {})["headless"] = True
         cfg.setdefault("settings", {}).setdefault("webdriver", {})["headless"] = True
+        # --headless = görünürü AÇIKÇA kapat: config browser.show_browser=True olsa bile
+        # görünür enjeksiyonu devre dışı bırak (setup_show_browser bunu görüp sormaz).
+        cfg.setdefault("browser_injection", {})["enabled"] = False
+        _b = cfg.setdefault("browser", {})
+        _b["headless"] = True
+        _b["show_browser"] = False
+        cfg["_show_browser_forced"] = True
         print("[*] Headless Mod Etkinleştirildi (Tarayıcı GİZLİ).")
     if args.visible or not args.headless:
         if args.visible:
