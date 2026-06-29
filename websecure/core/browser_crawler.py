@@ -1354,8 +1354,29 @@ class BrowserFormInjector:
                 browser = await asyncio.wait_for(
                     pw.chromium.launch(**launch_opts), timeout=90)
             except Exception as exc:
-                _logger.error("[BrowserFormInjector] Chromium başlatılamadı: %r", exc)
-                return self._findings
+                # GÖRÜNÜR launch başarısız: kullanıcıyı KANDIRMA — yüksek sesle söyle.
+                # Yine de bulguları kaybetmemek için headless'e düş (görünmez ama çalışır).
+                _logger.error("[BrowserFormInjector] Görünür Chromium başlatılamadı: %r", exc)
+                if not use_headless:
+                    try:
+                        print("\n  [!] GÖRÜNÜR Chrome açılamadı: "
+                              f"{str(exc).splitlines()[0][:160]}", flush=True)
+                        print("      Olası neden: CMD 'Yönetici olarak' açık / Chrome↔driver "
+                              "sürüm uyuşmazlığı / açık kalmış chrome.exe.", flush=True)
+                        print("      Enjeksiyon ARKA PLANDA (headless) sürdürülüyor — "
+                              "bulgular yine raporlanır.\n", flush=True)
+                    except Exception:
+                        pass
+                    launch_opts["headless"] = True
+                    launch_opts.pop("slow_mo", None)
+                    try:
+                        browser = await asyncio.wait_for(
+                            pw.chromium.launch(**launch_opts), timeout=90)
+                    except Exception as exc2:
+                        _logger.error("[BrowserFormInjector] Headless de başlatılamadı: %r", exc2)
+                        return self._findings
+                else:
+                    return self._findings
             ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state

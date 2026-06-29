@@ -1235,6 +1235,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
     p.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
     p.add_argument("--headless", action="store_true", help="Tarayıcıyı GİZLE (Arka planda çalıştır)")
+    p.add_argument("--show-browser", "--show-chrome", dest="show_browser", action="store_true",
+                   help="GÖRÜNÜR Chrome'da form alanlarına (kullanıcı adı/şifre/kart/yorum) "
+                        "SQLi+XSS payload'larını TEK TEK yazıp denemeyi AÇ — başlangıç sorusunu "
+                        "atlar, doğrudan etkinleştirir (demo/izleme için).")
     p.add_argument("--wizard", action="store_true", help="Kurulum sihirbazını çalıştır")
     return p
 
@@ -1381,6 +1385,24 @@ def _apply_cli_args(cfg: dict, args) -> None:
         cfg.setdefault("crawl", {})["headless"] = False
         cfg.setdefault("webdriver", {})["headless"] = False
         cfg.setdefault("settings", {}).setdefault("webdriver", {})["headless"] = False
+
+    # GÖRÜNÜR FORM ENJEKSİYONU — açık CLI bayrağı (--show-browser / --visible).
+    # KRİTİK: "görünür Chrome'da form alanlarına payload yazma" ayrı bir yetenektir
+    # ve `browser_injection.enabled` kapısına bağlıdır; `--visible`/`browser.show_browser`
+    # TEK BAŞINA bunu açmaz (yalnız crawler'ı görünür yapar). Kullanıcı bayrakla
+    # açıkça istediyse kapıyı burada aç + tarayıcıyı görünüre zorla; setup_show_browser
+    # bunu görüp soruyu ATLAR (bayrak interaktif varsayılanı EZER). --headless açıksa
+    # (görünür istenmemiş) dokunma.
+    if getattr(args, "show_browser", False) or (args.visible and not args.headless):
+        bi = cfg.setdefault("browser_injection", {})
+        bi["enabled"] = True
+        br = cfg.setdefault("browser", {})
+        br["headless"] = False
+        br["show_browser"] = True
+        br.setdefault("slow_mo_ms", 150)
+        cfg["_show_browser_forced"] = True  # setup_show_browser: soruyu atla
+        print("[*] GÖRÜNÜR FORM ENJEKSİYONU AÇIK — tarama sırasında Chrome açılıp "
+              "form alanlarına payload yazılışını izleyeceksiniz.")
 
     # Offensive mode
     off = cfg.setdefault("offensive", {}) if isinstance(cfg, dict) else {}

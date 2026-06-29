@@ -2039,10 +2039,20 @@ def _runner_browser_inject(ctx) -> None:
         except Exception:
             _budget = 300
 
-        _logger.info(
-            "[phases] Görünür form enjeksiyonu başlıyor — %d sayfa hedefleniyor.",
-            len(page_urls) + 1,
-        )
+        # LOUD çıktı: logger.info genelde WARNING'e filtrelenir → kullanıcı "hiçbir şey
+        # olmuyor" sanır. print ile garanti göster (Chrome açılıyor + ilerleme + sonuç).
+        _vis = not bool((config.headless and not config.show_browser))
+        print("\n" + "=" * 60, flush=True)
+        if _vis:
+            print(f"  [>] GÖRÜNÜR FORM ENJEKSİYONU — Chrome açılıyor "
+                  f"({len(page_urls) + 1} sayfa).", flush=True)
+            print("      Form alanlarına (kullanıcı adı/şifre/kart/yorum) SQLi+XSS "
+                  "payload'ları TEK TEK yazılacak; izleyin.", flush=True)
+        else:
+            print(f"  [>] Form enjeksiyonu (arka plan/headless) — "
+                  f"{len(page_urls) + 1} sayfa.", flush=True)
+        print("=" * 60, flush=True)
+
         findings = run_browser_form_injection(
             url, page_urls, config, max_total_seconds=_budget,
         )
@@ -2056,10 +2066,16 @@ def _runner_browser_inject(ctx) -> None:
             "pages": len(page_urls) + 1,
             "findings": len(findings or []),
         })
-        _logger.info(
-            "[phases] Görünür form enjeksiyonu bitti — %d onaylı bulgu.",
-            len(findings or []),
-        )
+        _n = len(findings or [])
+        if _n:
+            print(f"  [+] Görünür form enjeksiyonu bitti — {_n} ONAYLI bulgu:", flush=True)
+            for f in (findings or []):
+                print(f"      - {f.get('vuln_type', f.get('type', '?'))}: "
+                      f"{f.get('param', '?')} @ {f.get('url', '?')}", flush=True)
+        else:
+            print("  [i] Görünür form enjeksiyonu bitti — onaylı bulgu yok "
+                  "(form bulunamadı ya da alanlar enjeksiyona kapalı olabilir).", flush=True)
+        _logger.info("[phases] browser_inject bitti — %d onaylı bulgu.", _n)
     except Exception as exc:
         _logger.debug("[phases] browser_inject error: %r", exc)
         add_result("meta", {"stage": "browser_inject", "status": "skipped:error",
