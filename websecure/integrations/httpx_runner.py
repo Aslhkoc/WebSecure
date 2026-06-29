@@ -251,10 +251,11 @@ class HttpxWrapper(ToolIntegration):
                 custom_headers=custom_headers or {},
             )
 
-            # Gerçekçi timeout: paralel thread sayısına göre hesapla, max 300s
-            _timeout = max(60, min(
+            # Gerçekçi timeout: paralel thread sayısına göre hesapla, max 360s.
+            # Taban 180s (eski 60s çok kısaydı — gerçek taramada kısmi sonuçla kesildi).
+            _timeout = max(180, min(
                 (len(urls) * self.timeout_s) // max(self.threads, 1) + 30,
-                300
+                360
             ))
             logger.info(f"[httpx] {len(urls)} URL prob ediliyor (timeout={_timeout}s)...")
             proc = subprocess.Popen(

@@ -1711,8 +1711,9 @@ def _runner_katana(ctx) -> None:
         # max_depth default 2 — agresif 3 her zaman timeout sebebidir
         depth = int(katana_cfg.get("depth") or (cfg.get("discovery") or {}).get("max_depth") or 2)
         js_crawl = bool(katana_cfg.get("js_crawl", True))
-        # crawl_duration_s config'den alınabilir; default 120s
-        crawl_duration_s = int(katana_cfg.get("crawl_duration_s") or 120)
+        # crawl_duration_s config'den alınabilir; default 240s (eski 120s gerçek
+        # taramada kısmi sonuçla kesiliyordu — subprocess timeout buna bağlı)
+        crawl_duration_s = int(katana_cfg.get("crawl_duration_s") or 240)
         rate_limit = int(katana_cfg.get("rate_limit") or 50)
         wrapper.depth = depth
         wrapper.crawl_duration_s = crawl_duration_s

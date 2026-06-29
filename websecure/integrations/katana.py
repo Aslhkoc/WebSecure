@@ -85,7 +85,7 @@ class KatanaWrapper(ToolIntegration):
         parallelism: int = 10,
         rate_limit: int = 50,       # 150'den düşürüldü — WAF tetiklemez, timeout azalır
         timeout_s: int = 10,        # 30'dan düşürüldü — istek başına zaman aşımı
-        crawl_duration_s: int = 120,  # 300'den düşürüldü — toplam 2 dakika yeterli
+        crawl_duration_s: int = 240,  # 120'den çıkarıldı — gerçek taramada 120s'de kısmi sonuçla kesiliyordu
         scope_regex: str = "",
     ) -> None:
         super().__init__(binary_path or "katana")

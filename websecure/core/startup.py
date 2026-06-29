@@ -433,34 +433,6 @@ def ensure_nuclei(cfg: dict) -> bool:  # noqa: ARG001
     return _ensure_go_binary("nuclei")
 
 
-def ensure_httpx() -> bool:
-    return _ensure_go_binary("httpx")
-
-
-def ensure_katana() -> bool:
-    return _ensure_go_binary("katana")
-
-
-def ensure_subfinder() -> bool:
-    return _ensure_go_binary("subfinder")
-
-
-def ensure_dalfox() -> bool:
-    return _ensure_go_binary("dalfox")
-
-
-def ensure_ffuf() -> bool:
-    return _ensure_go_binary("ffuf")
-
-
-def ensure_feroxbuster() -> bool:
-    return _ensure_go_binary("feroxbuster")
-
-
-def ensure_amass() -> bool:
-    return _ensure_go_binary("amass")
-
-
 def ensure_sqlmap() -> bool:
     """sqlmap (Python projesi) — PATH'te yoksa tools/sqlmap'e git clone ile getirir.
 
