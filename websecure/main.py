@@ -1311,7 +1311,9 @@ def _startup_phase(cfg: dict) -> None:
         except Exception as _oast_ex:
             print(f"  [!] OAST poller baslanamadi: {_oast_ex}")
     else:
-        print("  [i] OAST kullanilamiyor. SSRF/XXE bulgulari dogrulanamayacak.")
+        print("  [i] OAST kullanilamiyor — SSRF/XXE/blind bulgular DOGRULANMADAN raporlanir.")
+        print("      Etkinlestirmek icin: config'de oast.interactsh.server + .token doldurun")
+        print("      ya da agdan oast.pro/interact.sh erisimini acin.")
     print("=" * 60 + "\n")
 
     # Interactive tool manager (skipped in --dry-run / --batch / --help)

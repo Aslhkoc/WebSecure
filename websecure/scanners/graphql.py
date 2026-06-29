@@ -44,9 +44,14 @@ COMMON_GRAPHQL_PATHS = ["/graphql", "/api/graphql", "/graph", "/gql", "/api/gql"
 
 # --- Client ---
 class GraphQLClient:
-    def __init__(self, session, timeout: int = 20):
+    def __init__(self, session, timeout: int = 20, verify_tls: bool = True, **_kwargs):
+        # NOT: verify_tls (ve diğer ileri-uyum kwarg'ları) kabul edilir; çağıran
+        # taraf (core.phases._runner_graphql) GraphQLClient'ı bu imzayla kurar.
+        # Eskiden yalnız (session, timeout) vardı → verify_tls geçilince TypeError
+        # ile tüm "GraphQL Saldırı Seti" fazı düşüyordu.
         self.session = session
         self.timeout = int(timeout)
+        self.verify_tls = bool(verify_tls)
 
     def _maybe_json(self, text: str, headers: Dict[str, Any]) -> Dict[str, Any]:
         ct = (headers.get("Content-Type") or "").lower()
@@ -1019,6 +1024,78 @@ class GraphQLScanner(BaseScanner):
 def run(target: str, session=None, results: dict = None, debug: bool = False, **kwargs):
     scanner = GraphQLScanner(session=session, results=results or {}, debug=debug)
     return scanner.run(target, **kwargs)
+
+
+# ===========================================================================
+# Saldırı-probe ADAPTÖRLERİ (core.phases._runner_graphql için)
+# ---------------------------------------------------------------------------
+# 'GraphQL Saldırı Seti' fazı eskiden ayrı bir `graphql_attacks` modülü arıyordu;
+# o modül hiç var olmadığı için faz her zaman standart tarayıcıya düşüyor ve
+# "Attack module missing" notu basıyordu. Saldırı yetenekleri ZATEN bu dosyada
+# (Persisted/Batch-Alias/AuthBypass prober'ları) mevcut — bu adaptörler runner'ın
+# beklediği {severity, endpoint, issue, payload, body_hint, extra} sözlük biçimine
+# çevirir. Böylece ayrı dosya açmadan faz gerçekten saldırı probe'ları çalıştırır.
+# ===========================================================================
+
+def _finding_to_dict(f: "Finding") -> Dict[str, Any]:
+    return {
+        "severity": getattr(f, "severity", "Informational"),
+        "endpoint": getattr(f, "endpoint", None),
+        "issue": getattr(f, "issue", None),
+        "payload": getattr(f, "payload", None),
+        "body_hint": getattr(f, "body_hint", None),
+        "extra": {"code": getattr(f, "code", None), "latency": getattr(f, "latency", None)},
+    }
+
+
+def _findings_from_results(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """BaseScanner prober'larının ürettiği {type,severity,url,evidence,...} kayıtlarını
+    runner'ın beklediği finding-dict biçimine çevir."""
+    out: List[Dict[str, Any]] = []
+    _known = ("severity", "url", "endpoint", "type", "issue", "payload", "evidence", "details")
+    for items in (results or {}).values():
+        if not isinstance(items, list):
+            continue
+        for d in items:
+            if not isinstance(d, dict):
+                continue
+            out.append({
+                "severity": d.get("severity", "Informational"),
+                "endpoint": d.get("url") or d.get("endpoint"),
+                "issue": d.get("type") or d.get("issue"),
+                "payload": d.get("payload"),
+                "body_hint": d.get("evidence") or d.get("details"),
+                "extra": {k: v for k, v in d.items() if k not in _known},
+            })
+    return out
+
+
+def probe_persisted_query_bypass(client: "GraphQLClient", url: str, **_) -> List[Dict[str, Any]]:
+    """APQ / legacy persisted-query bypass — GraphQLPersistedQueryBypassProber sarmalı."""
+    results: Dict[str, Any] = {}
+    GraphQLPersistedQueryBypassProber(session=client.session, results=results).run(url, endpoints=[url])
+    return _findings_from_results(results)
+
+
+def probe_batch_alias_storm(client: "GraphQLClient", url: str, **_) -> List[Dict[str, Any]]:
+    """Batch amplification + alias-bomb DoS — GraphQLBatchDoSProber sarmalı."""
+    results: Dict[str, Any] = {}
+    GraphQLBatchDoSProber(session=client.session, results=results).run(url, endpoints=[url])
+    return _findings_from_results(results)
+
+
+def probe_introspection_bypass(client: "GraphQLClient", url: str, **_) -> List[Dict[str, Any]]:
+    """Introspection erişimi + auth'suz introspection/no-auth veri erişimi."""
+    out: List[Dict[str, Any]] = []
+    try:
+        for f in IntrospectionProbe().run(client, url):
+            out.append(_finding_to_dict(f))
+    except Exception as exc:
+        logger.debug(f"[GraphQL] introspection probe failed for {url}: {exc!r}")
+    results: Dict[str, Any] = {}
+    GraphQLAuthBypassProber(session=client.session, results=results).run(url, endpoints=[url])
+    out.extend(_findings_from_results(results))
+    return out
 
 
 

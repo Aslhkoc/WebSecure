@@ -361,6 +361,7 @@ def ensure_interactsh(cfg: dict) -> bool:
         token, host = None, None
         _ansi_re   = re.compile(r'\x1b\[[0-9;]*m|\[[0-9]+m')
         _domain_re = re.compile(r'([a-z0-9]{10,})\.(oast\.[a-z]+|interact\.sh)', re.IGNORECASE)
+        _tail: list = []  # tanı için son satırlar (başarısızlıkta gösterilir)
 
         for _ in range(100):
             line = proc.stdout.readline()
@@ -368,6 +369,9 @@ def ensure_interactsh(cfg: dict) -> bool:
                 time.sleep(0.1)
                 continue
             clean = _ansi_re.sub("", line).strip()
+            if clean:
+                _tail.append(clean)
+                _tail = _tail[-8:]
             m = re.search(r"Listing on\s+(\S+)", clean)
             if m:
                 subdomain = m.group(1).strip()
@@ -394,7 +398,20 @@ def ensure_interactsh(cfg: dict) -> bool:
             print(f"[+] interactsh aktif → {host}")
             return True
         else:
-            print("[!] interactsh token alınamadı. Config'deki token kullanılacak.")
+            # GERÇEK durum: ortak interactsh sunucusundan (oast.pro vb.) token
+            # alınamadı — genelde egress engeli/DNS ya da sunucu erişilemez. Eskiden
+            # "Config'deki token kullanılacak" deniyordu ama config'de geçerli token
+            # YOK (yer-tutucu); bu yanıltıcıydı. Nedeni ve çözümü açıkça yaz.
+            print("[!] interactsh kaydı başarısız — OOB/OAST doğrulama DEVRE DIŞI.")
+            if _tail:
+                print("    interactsh-client son çıktı:")
+                for _l in _tail:
+                    print(f"      | {_l}")
+            print("    Neden: ortak interactsh sunucusuna (oast.pro/interact.sh) erişilemedi")
+            print("           (egress/DNS engeli veya sunucu down).")
+            print("    Çözüm: (1) ağ erişimini açın, ya da (2) config'de")
+            print("           oast.interactsh.server + .token alanlarını KENDİ sunucunuzla doldurun.")
+            print("    Etki:  SSRF/XXE/blind enjeksiyon bulguları DOĞRULANMADAN raporlanır.")
             proc.terminate()
             try:
                 proc.wait(timeout=3)

@@ -3227,6 +3227,24 @@ class WAFBypassScanner:
         except Exception as exc:
             self.logger.debug(f"[WAFBypassScanner] WAFDetector failed: {exc!r}")
 
+        # ---- Step 2b: Reconcile with prior-phase / behavioral WAF verdict ----
+        # Bu tarayıcının kendi tek-atışlık fingerprint'i 403/429 fırtınasında
+        # 'unknown' döner; oysa phase_waf_detect zaten WAF tespit etmiş olabilir.
+        # Önceki kesin verdiği EZME: bilinen vendor'ı taşı, varlık verdiğini koru.
+        known = kwargs.get("known_waf") or {}
+        known_vendor = str(known.get("vendor") or "").strip()
+        if known_vendor.lower() in ("unknown", "none", ""):
+            known_vendor = ""
+        if waf_vendor == "unknown" and known_vendor:
+            waf_vendor = known_vendor
+        baseline_blocked = baseline_status in (403, 406, 429)
+        waf_is_present = (
+            waf_vendor != "unknown"
+            or bool(waf_profile and waf_profile.detected)
+            or bool(known.get("detected"))
+            or baseline_blocked
+        )
+
         # ---- Step 3: Confirm WAF blocks the XSS payload ----
         # [FP-fix] 503 is server overload / unavailability (e.g. an overloaded
         # Heroku free dyno returning application-error.html), NOT a WAF
@@ -3237,7 +3255,7 @@ class WAFBypassScanner:
         # is payload-specific — the baseline (no payload) must succeed while the
         # payload request is rejected with 403/406/429.
         waf_blocks_payload = False
-        if waf_vendor != "unknown" or (waf_profile and waf_profile.detected):
+        if waf_is_present:
             try:
                 probe_resp = self.session.get(
                     target,
@@ -3318,6 +3336,31 @@ class WAFBypassScanner:
                     f"[WAFBypassScanner] WAF detected ({waf_vendor}), no bypass found."
                 )
 
+        elif waf_is_present and baseline_blocked:
+            # WAF, payload'sız DÜZ baseline isteğini bile blokluyor (403/429 duvarı).
+            # Aktif zorlayan bir WAF/edge — "bypass" ölçülemez ama varlık kesindir.
+            _v = waf_vendor if waf_vendor != "unknown" else (known_vendor or "unknown")
+            finding = {
+                "type": "WAF Detected",
+                "url": target,
+                "severity": "Medium",
+                "detail": (
+                    f"WAF ({_v}) is blocking even the plain baseline request "
+                    f"(HTTP {baseline_status}). Target sits behind an actively "
+                    f"enforcing WAF/edge (full block wall)."
+                ),
+                "evidence": {
+                    "waf_vendor": _v,
+                    "baseline_status": baseline_status,
+                    "confidence": getattr(waf_profile, "confidence", None) or known.get("confidence"),
+                },
+            }
+            findings.append(finding)
+            self._add("waf_bypass", finding)
+            self.logger.info(
+                f"[WAFBypassScanner] WAF blocking baseline ({_v}, HTTP {baseline_status})."
+            )
+
         elif waf_vendor != "unknown" and not waf_blocks_payload:
             # WAF present but not blocking this payload (misconfigured or benign)
             finding = {
@@ -3335,6 +3378,31 @@ class WAFBypassScanner:
             }
             findings.append(finding)
             self._add("waf_bypass", finding)
+
+        elif waf_is_present:
+            # Varlık önceki faz / davranışsal sinyalle KESİN ama bu fazın kendi
+            # tek-atışlık fingerprint'i vendor'ı çözemedi (blok sayfası maskeliyor).
+            # Kurulu verdiği "No WAF Detected" ile ÇELİŞTİRME.
+            _v = waf_vendor if waf_vendor != "unknown" else (known_vendor or "unknown")
+            finding = {
+                "type": "WAF Detected",
+                "url": target,
+                "severity": "Low",
+                "detail": (
+                    f"WAF ({_v}) present per prior detection / behavioral blocking. "
+                    f"Vendor fingerprint inconclusive in this phase (likely masked "
+                    f"by the block page)."
+                ),
+                "evidence": {
+                    "waf_vendor": _v,
+                    "source": "prior_phase_or_behavioral",
+                },
+            }
+            findings.append(finding)
+            self._add("waf_bypass", finding)
+            self.logger.info(
+                f"[WAFBypassScanner] WAF present (prior/behavioral), vendor={_v}."
+            )
 
         else:
             # No WAF detected — Informational
