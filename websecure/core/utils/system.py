@@ -248,6 +248,12 @@ def setup_webdriver(headless: bool = True, proxy: str = None, shared: bool = Tru
             attempts = [
                 (False, False, False, True,  "GUI mod"),
                 (False, False, True,  False, "GUI + SwiftShader (profil yok)"),
+                # GUI tamamen başarısızsa (ör. "session not created: Chrome instance
+                # exited") GÖRÜNÜR enjeksiyonu büsbütün kaybetmek yerine HEADLESS'e DÜŞ.
+                # Enjeksiyon arka planda yine de çalışır; bu headless→GUI'nin TERSİ,
+                # yani güvenli yön: görünür pencere AÇILMAZ → "ton pencere" riski yok.
+                (True,  True,  False, True,  "headless=new (GUI fallback)"),
+                (True,  True,  True,  True,  "headless=new + SwiftShader (GUI fallback)"),
             ]
 
         # "Chrome instance exited" çoğu zaman GEÇİCİDİR (Chrome otomatik-güncelleme
