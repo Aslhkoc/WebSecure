@@ -739,10 +739,24 @@ class GitHubDorkScanner(BaseScanner):
 
     def scan(self, domain: str) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []
+        # GitHub CODE SEARCH (/search/code) kimlik-doğrulama ZORUNLU kılar: token
+        # yoksa HER istek 403 döner (rate-limit değil, auth-required). Token yoksa
+        # 12 dork'u boşuna atıp 403 yemek yerine baştan, dürüstçe atla.
+        token = os.environ.get("GITHUB_TOKEN") or (self.results or {}).get("github_token", "")
+        if not token:
+            logger.info("[GitHub] GITHUB_TOKEN yok — kod-arama API'si auth zorunlu kılar, "
+                        "GitHub dork atlanıyor. Ücretsiz token: github.com/settings/tokens")
+            return findings
+
+        import time as _time
         org = domain.split(".")[0]
         dorks = [t.format(domain=domain, org=org) for t in self._DORK_TEMPLATES]
 
-        for dork in dorks:
+        for _i, dork in enumerate(dorks):
+            # GitHub kod-arama ikincil rate-limit'i ~10 istek/dk → dork'lar arası
+            # kısa bekleme (ilk hariç) abuse-dedektörünü tetiklemesin.
+            if _i:
+                _time.sleep(2.0)
             try:
                 r = self.session.get(
                     self._API,
@@ -750,7 +764,7 @@ class GitHubDorkScanner(BaseScanner):
                     headers=self._headers(),
                     timeout=15,
                 )
-                if r.status_code in (403, 422):
+                if r.status_code in (403, 422, 429):
                     logger.debug(f"[GitHub] Rate limit / hatalı dork: {dork}")
                     continue
                 if r.status_code != 200:

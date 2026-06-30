@@ -2720,30 +2720,50 @@ def _runner_passive_recon(ctx) -> None:
     sess = getattr(ctx, "session", None)
     results = _ensure_results_bucket(ctx)
 
-    # 1. Content Discovery (Robots, Sitemap, Common Files)
+    # TÜM pasif keşif paketini çalıştır (passive_recon.run orchestrator'ı):
+    # ContentDiscovery + API-şeması + JS-sır + Cloud + Wayback + S3 + **GitHub-dork**
+    # + **Shodan** + e-posta + e-posta-güvenliği + cloud-bucket.
+    #
+    # BUG FIX (2026-06-30): bu runner ÖNCEDEN orchestrator'ı (mod.run) HİÇ çağırmıyor,
+    # yalnız ContentDiscovery + PassiveJS'i elle koşuyordu → Shodan/GitHub/Wayback/S3/
+    # Cloud/Email tarayıcıları ÖKSÜZ kalıyordu (SHODAN_API_KEY/GITHUB_TOKEN eklense
+    # bile HİÇ çalışmıyordu). Orchestrator results['passive']'ı yerinde doldurur;
+    # yeni eklenen bulguları merkezî rapora köprüle (ctx.results tek başına rapora
+    # düşmeyebilir — subdomain/httpx ile aynı sınıf). Rapor dedup'ı (type,url,param)
+    # olası çift kaydı eler.
+    if hasattr(mod, "run") and callable(getattr(mod, "run")):
+        _before = len(results.get("passive", []) or [])
+        try:
+            mod.run(base_url, session=sess, results=results)
+        except Exception as e:
+            _logger.warning(f"[phases] passive_recon orchestrator hatası: {e}")
+            _report_phase_error("passive_recon", "phases._runner_passive_recon", e)
+        _seen: set = set()
+        for f in (results.get("passive", []) or [])[_before:]:
+            if not isinstance(f, dict):
+                continue
+            _k = (str(f.get("type")), str(f.get("url")),
+                  str(f.get("parameter") or f.get("param") or ""))
+            if _k in _seen:
+                continue
+            _seen.add(_k)
+            add_result("passive", f)
+        _logger.info(f"[phases] Pasif keşif tamamlandı: {len(_seen)} bulgu (Shodan/GitHub/Wayback/S3/Cloud/Email dahil)")
+        return
+
+    # Fallback (orchestrator yoksa): eski kısmi yol
     if hasattr(mod, "ContentDiscoveryScanner"):
         cds = mod.ContentDiscoveryScanner(sess)
-        findings = cds.scan(base_url)
-        for f in findings:
+        for f in cds.scan(base_url):
             add_result("discovery", f)
-
-    # 2. Passive JS Analysis
     if hasattr(mod, "PassiveJSScanner"):
-        pjs = mod.PassiveJSScanner(sess)
-        # Get endpoints from discovery results
         endpoints = results.get("endpoints", [])
-        # Also include base_url
-        if base_url not in endpoints:
+        if base_url and base_url not in endpoints:
             endpoints.append(base_url)
-        
-        # Filter for likely JS files or pages that might contain JS
-        # For simplicity, we scan explicitly .js files found
-        js_urls = [u for u in endpoints if u.split('?')[0].endswith(".js")]
-        
+        js_urls = [u for u in endpoints if isinstance(u, str) and u.split('?')[0].endswith(".js")]
         if js_urls:
-            js_findings = pjs.scan(js_urls)
-            for f in js_findings:
-                add_result("offensive", f) # JS secrets are offensive/vulnerability findings
+            for f in mod.PassiveJSScanner(sess).scan(js_urls):
+                add_result("offensive", f)
 
 def _runner_owasp_nuclei(ctx) -> None:
     mod = _opt_import("websecure.scanners.owasp")
