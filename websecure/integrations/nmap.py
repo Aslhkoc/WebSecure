@@ -1019,8 +1019,35 @@ class NmapWrapper(ToolIntegration):
         open_ports = NmapParser.extract_open_ports_safe(xml1)
         _rm_xml(xml1)
 
+        # STEALTH EVASION YANLIŞ-NEGATİFİ → GÜVENİLİR DOĞRULAMA PROBU.
+        # -f -f (double-frag, 8-byte IP paketleri) + -D decoy (spoof'lu kaynak IP) +
+        # -T1 + --max-retries 1 kombinasyonu ÇOK kırılgandır: ara router/firewall/
+        # ISP-egress(BCP38)/Npcap küçük fragmentleri ve spoof'lu decoy paketlerini
+        # sık sık DÜŞÜRÜR → 80/443 AÇIK bir web sitesinde bile "0 port" döner
+        # (demo.testfire.net'in canlı örneği buydu). Erişilebilir bir hedefte 0 port
+        # neredeyse her zaman TARAMA HATASIDIR, gerçek sonuç değil. Evasion'sız
+        # (frag/decoy yok, makul timing) bir doğrulama çalıştır.
+        _evasion_broke = False
+        if not open_ports and raw:
+            print(f"\033[33m[Nmap STEALTH]\033[0m Faz-1 (fragmentasyon+decoy'lu) 0 port "
+                  f"döndü — bu genelde evasion'ın paketleri düşürmesidir. GÜVENİLİR "
+                  f"doğrulama probu çalıştırılıyor (frag/decoy YOK)...")
+            verify = (["-sS", "-Pn", "--open"] + port_args +
+                      ["-T3", "--max-retries", "2", "--host-timeout", "600s"])
+            self._inject_proxy(verify, proxy)
+            _, xmlv, _, _ = _run_nmap(self.binary, verify, target, timeout=max(t1, 300))
+            open_ports = NmapParser.extract_open_ports_safe(xmlv)
+            _rm_xml(xmlv)
+            if open_ports:
+                _evasion_broke = True
+                print(f"\033[33m[Nmap STEALTH]\033[0m Doğrulama {len(open_ports)} port buldu "
+                      f"→ stealth evasion (fragmentasyon/decoy) Faz-1'i BOZMUŞTU. Sonuçlar "
+                      f"kullanılıyor (NOT: doğrulama probu stealth DEĞİL — daha gürültülü, "
+                      f"hedef logunda görülebilir).")
+
         if not open_ports:
-            print(f"\033[33m[Nmap STEALTH]\033[0m {target} üzerinde açık port yok.")
+            print(f"\033[33m[Nmap STEALTH]\033[0m {target} üzerinde açık port yok "
+                  f"(evasion'sız doğrulandı).")
             return []
 
         print(f"\033[35m[Nmap STEALTH Faz-1]\033[0m {len(open_ports)} port -> "
@@ -1039,10 +1066,13 @@ class NmapWrapper(ToolIntegration):
                 "--script-args", "http.useragent=Mozilla/5.0",
                 "--script-timeout", "45s",
                 "--host-timeout", "900s",
-                "-f", "-f", "--data-length", "40",  # Double frag korunuyor
-                "-D", "RND:3,ME",                    # Faz 2'de de decoy
                 "-p", ports_str,
             ]
+            # Fragmentasyon/decoy SADECE evasion Faz-1'i bozMADIYSA. Bozduysa (doğrulama
+            # probu gerekmişse) aynı teknikler Faz-2 servis/versiyon tespitini de
+            # düşürür → boş banner/servis kalır. O durumda evasion'sız tara.
+            if not _evasion_broke:
+                phase2[1:1] = ["-f", "-f", "--data-length", "40", "-D", "RND:3,ME"]
         else:
             # TCP connect stealth: T2 + scan-delay + minimal script
             phase2 = [
