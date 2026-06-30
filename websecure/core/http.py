@@ -123,8 +123,146 @@ def _record_exchange(method, url, kwargs, resp, elapsed_ms) -> None:
                 )
         except Exception:
             pass
+
+        # Attack-attempt telemetry — record WHICH payload was tried at WHICH input
+        # and WHAT came back, so the report can show a per-location log of attempts
+        # (the misses collapsed; the hits also become findings). Only values that
+        # actually carry an injection marker are recorded → no crawl/baseline noise.
+        try:
+            _status_at = int(getattr(resp, "status_code", 0) or 0)
+            from urllib.parse import urlparse as _up_at, parse_qsl as _pql_at
+            _ep_at = _up_at(url)
+            _endpoint_at = (f"{_ep_at.scheme}://{_ep_at.netloc}{_ep_at.path}"
+                            if _ep_at.netloc else url.split("?", 1)[0])
+            _snip_at = (_body or "")[:600]
+            _did_at = False
+            # query/body params sent via params=/data=
+            for _src_at in (_params, _data):
+                if isinstance(_src_at, dict):
+                    for _k_at, _v_at in _src_at.items():
+                        if isinstance(_v_at, (str, int, float)) and _looks_like_attack_value(_v_at):
+                            record_attack_attempt(method, _endpoint_at, _k_at, _v_at, _status_at, _snip_at)
+                            _did_at = True
+            # payload embedded directly in the URL query string
+            if _ep_at.query and _looks_like_attack_value(_ep_at.query):
+                for _k_at, _v_at in _pql_at(_ep_at.query):
+                    if _looks_like_attack_value(_v_at):
+                        record_attack_attempt(method, _endpoint_at, _k_at, _v_at, _status_at, _snip_at)
+                        _did_at = True
+            # path-based payloads (403-bypass variants, traversal) — no param
+            if not _did_at and _looks_like_attack_value(_ep_at.path):
+                record_attack_attempt(method, _endpoint_at, "(path)", _ep_at.path, _status_at, _snip_at)
+        except Exception:
+            pass
     except Exception:
         pass
+
+
+# ---- Attack-attempt telemetry store --------------------------------------
+# So the report can answer "şu inputta şu payloadları denedik, şu cevap döndü"
+# for BOTH the hits (→ findings) and the misses (→ collapsed attempts log).
+# A full scan fires tens of thousands of requests, so this is aggressively
+# bounded: keyed by (method, endpoint-path, input-name); only values carrying an
+# attack marker are recorded; payloads/samples capped per key.
+import re as _re_http
+_ATTEMPTS_LOCK = threading.Lock()
+_ATTEMPTS: Dict[tuple, dict] = {}
+_ATTEMPTS_MAX_KEYS = 600
+_ATTEMPTS_MAX_PAYLOADS_PER_KEY = 30
+_ATTEMPTS_MAX_SAMPLES_PER_KEY = 4
+_ATTEMPTS_TOTAL_CAP = 5000          # per-key bookkeeping hard stop
+
+# Markers that flag a value as an injection payload (raw + URL-encoded forms).
+_ATTACK_MARK_RE = _re_http.compile(
+    r"""['"<>;|`$(){}]|--|/\*|\bUNION\b|\bSELECT\b|\bSLEEP\b|\bWAITFOR\b|"""
+    r"""\.\./|\.\.\\|%27|%22|%3c|%3e|%3b|%7c|%00|\$\{|\{\{|javascript:|onerror=|<svg""",
+    _re_http.IGNORECASE,
+)
+_ATTEMPT_BLOCK_STATUS = frozenset({401, 403, 406, 419, 429, 503})
+
+
+def _looks_like_attack_value(v) -> bool:
+    try:
+        s = str(v)
+    except Exception:
+        return False
+    return len(s) >= 2 and bool(_ATTACK_MARK_RE.search(s))
+
+
+def _attempt_outcome(status: int) -> str:
+    if status in _ATTEMPT_BLOCK_STATUS:
+        return "blocked"
+    if status == 0:
+        return "error"
+    if 500 <= status < 600:
+        return "server_error"     # payload may have broken the backend — interesting
+    if 200 <= status < 400:
+        return "passed"
+    return "other"
+
+
+def record_attack_attempt(method, endpoint, param, payload, status, snippet="") -> None:
+    """Record one injection attempt under (method, endpoint, input). Bounded; never raises."""
+    try:
+        payload = str(payload or "")
+        if not payload:
+            return
+        method = str(method or "GET").upper()
+        endpoint = str(endpoint or "")[:300]
+        param = str(param or "(url)")[:120]
+        key = (method, endpoint, param)
+        outcome = _attempt_outcome(int(status or 0))
+        pl_short = payload[:200]
+        with _ATTEMPTS_LOCK:
+            rec = _ATTEMPTS.get(key)
+            if rec is None:
+                if len(_ATTEMPTS) >= _ATTEMPTS_MAX_KEYS:
+                    return
+                rec = {"method": method, "endpoint": endpoint, "param": param,
+                       "total": 0, "outcomes": {}, "payloads": [], "samples": []}
+                _ATTEMPTS[key] = rec
+            if rec["total"] >= _ATTEMPTS_TOTAL_CAP:
+                return
+            rec["total"] += 1
+            rec["outcomes"][outcome] = rec["outcomes"].get(outcome, 0) + 1
+            if pl_short not in rec["payloads"] and len(rec["payloads"]) < _ATTEMPTS_MAX_PAYLOADS_PER_KEY:
+                rec["payloads"].append(pl_short)
+            # Keep a few full samples; prefer interesting outcomes over plain blocks.
+            if len(rec["samples"]) < _ATTEMPTS_MAX_SAMPLES_PER_KEY or outcome in ("server_error", "passed"):
+                sample = {"payload": pl_short, "status": int(status or 0),
+                          "outcome": outcome, "response": str(snippet or "")[:600]}
+                rec["samples"].append(sample)
+                if len(rec["samples"]) > _ATTEMPTS_MAX_SAMPLES_PER_KEY + 3:
+                    # bound: drop the oldest plain-blocked sample
+                    for _i, _s in enumerate(rec["samples"]):
+                        if _s.get("outcome") == "blocked":
+                            rec["samples"].pop(_i)
+                            break
+                    else:
+                        rec["samples"].pop(0)
+    except Exception:
+        pass
+
+
+def snapshot_attack_attempts() -> list:
+    """Render-ready list of attack-attempt aggregates, sorted by volume."""
+    try:
+        with _ATTEMPTS_LOCK:
+            out = [{
+                "method": r["method"], "endpoint": r["endpoint"], "param": r["param"],
+                "total": r["total"], "outcomes": dict(r["outcomes"]),
+                "payloads": list(r["payloads"]), "samples": list(r["samples"]),
+            } for r in _ATTEMPTS.values()]
+        out.sort(key=lambda r: r["total"], reverse=True)
+        return out
+    except Exception:
+        return []
+
+
+def clear_attack_attempts() -> None:
+    with _ATTEMPTS_LOCK:
+        _ATTEMPTS.clear()
+
 
 # ---- Abandoned-phase cooperative cancellation ----------------------------
 # A phase that exceeds its watchdog timeout is logged as "skipped", but Python

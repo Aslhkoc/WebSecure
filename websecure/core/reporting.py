@@ -347,6 +347,9 @@ def finalize_reports(ctx: dict, cfg: dict) -> dict:
     except Exception as _waf_rec_exc:
         log_warn(f"[reporting] behavioral WAF reconcile skipped: {_waf_rec_exc!r}")
 
+    # Attack-attempt telemetry → results (per-input "denenen payloadlar" log)
+    _attach_runtime_telemetry(results)
+
     # Ensure output dir exists
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -607,6 +610,13 @@ def reset() -> None:
         _buckets.clear()
     with _GLOBAL_LOCK:
         _GLOBAL_RESULTS.clear()
+    # Attack-attempt telemetry is process-global too — clear it so payload tries
+    # from a previous target don't leak into the next scan's report.
+    try:
+        from websecure.core.http import clear_attack_attempts
+        clear_attack_attempts()
+    except Exception:
+        pass
 
 
 def _normalize_item(item: Any) -> Dict[str, Any]:
@@ -691,6 +701,21 @@ _EVID_PAYLOAD_KEYS = (
     "payload", "poc", "bypass_variant", "injection", "test_value",
     "injected_value", "mutation", "vector", "marker_value",
 )
+
+
+def _attach_runtime_telemetry(results: Dict[str, Any]) -> None:
+    """Flush the HTTP layer's bounded attack-attempt telemetry into ``results`` so
+    the report can render a per-input log of payloads tried + outcomes. Idempotent;
+    best-effort. Only sets the key when there is something to show."""
+    try:
+        if not isinstance(results, dict):
+            return
+        from websecure.core.http import snapshot_attack_attempts
+        attempts = snapshot_attack_attempts()
+        if attempts:
+            results["attack_attempts"] = attempts
+    except Exception as exc:
+        log_warn(f"[reporting] attack-attempt telemetry flush skipped: {exc!r}")
 
 
 def _hoist_injection_evidence(it: Dict[str, Any]) -> None:
@@ -2097,6 +2122,10 @@ def perform_reporting(session, cfg: Dict, results: Dict, logger: 'logging.Logger
     written: Dict[str, str] = {}
     os.makedirs(out_dir, exist_ok=True)
 
+    # Attack-attempt telemetry → results (per-input "denenen payloadlar" log),
+    # before any format is rendered/serialised so JSON/MD/HTML all see it.
+    _attach_runtime_telemetry(results)
+
     # JSON — results.json olarak yazılıyor (aşağıda), report.json alias
     # Çift yazımı önlemek için burada yalnızca path saklıyoruz
     written['json'] = os.path.join(out_dir, 'results.json')
@@ -2669,6 +2698,9 @@ _NON_FINDING_BUCKETS: frozenset = frozenset({
     "discovered_params", "param_candidates", "assets", "ws_endpoints",
     "js_endpoints", "api_endpoints", "sse_endpoints", "graphql_hints",
     "json_keys", "coverage", "sections", "delta", "scan_meta",
+    # Saldırı-denemesi telemetrisi (denenen payloadlar + sonuç) bir RAPOR paneli;
+    # bulgu/severity sayısına KATILMAZ (başarılı denemeler zaten offensive'de bulgu).
+    "attack_attempts",
     # httpx host-probe verisi RECON'dur (canlı host/status/tech), zafiyet değil —
     # rapordaki dedike "HTTP Probe Sonuçları" tablosunda gösterilir; bulgu/severity
     # sayısına KATILMAMALI (gerçek httpx bulguları zaten 'meta'ya yazılıyor).

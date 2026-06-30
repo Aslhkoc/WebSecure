@@ -225,6 +225,93 @@ def _max_finding_bucket_len(results: dict, exclude: str = "final") -> int:
     return _mx
 
 
+def _render_attack_attempts(results: dict) -> str:
+    """Collapsed per-input log of injection attempts (which payload was tried at
+    which input, and what came back). Successful/confirmed attempts also appear in
+    the Findings table; this panel is the full record incl. the misses, kept
+    collapsed so it never clutters the report ("basınca açılsın başarısızlıklar").
+
+    Reads ``results['attack_attempts']`` (set by reporting._attach_runtime_telemetry);
+    falls back to the live HTTP-layer snapshot if a caller rendered without it.
+    """
+    attempts = results.get("attack_attempts") if isinstance(results, dict) else None
+    if not attempts:
+        try:
+            from websecure.core.http import snapshot_attack_attempts
+            attempts = snapshot_attack_attempts()
+        except Exception:
+            attempts = None
+    if not isinstance(attempts, list) or not attempts:
+        return ""
+
+    _OUT = {
+        "passed":       ("Geçti / Yansıdı", "var(--sev-high)"),
+        "server_error": ("Sunucu Hatası (500)", "var(--sev-critical)"),
+        "blocked":      ("Engellendi (WAF/4xx)", "var(--text-muted)"),
+        "error":        ("Bağlantı Hatası", "var(--text-muted)"),
+        "other":        ("Diğer", "var(--text-muted)"),
+    }
+    total_inputs = len(attempts)
+    total_payloads = sum(len(a.get("payloads") or []) for a in attempts)
+    total_reqs = sum(int(a.get("total") or 0) for a in attempts)
+
+    rows = []
+    for a in attempts[:80]:
+        method = _escape(str(a.get("method", "GET")))
+        endpoint = _escape(str(a.get("endpoint", ""))[:160])
+        param = _escape(str(a.get("param", "")))
+        total = int(a.get("total") or 0)
+        outcomes = a.get("outcomes") or {}
+        badges = ""
+        for oc, cnt in sorted(outcomes.items(), key=lambda x: -x[1]):
+            lbl, col = _OUT.get(oc, (oc, "var(--text-muted)"))
+            badges += (f"<span style='background:rgba(0,0,0,0.25); border:1px solid {col}; color:{col}; "
+                       f"border-radius:4px; padding:1px 6px; font-size:0.73rem; margin-right:4px; white-space:nowrap;'>"
+                       f"{_escape(lbl)}: {cnt}</span>")
+        pl_rows = "".join(
+            f"<li><code style='color:var(--sev-high); font-size:0.8rem; word-break:break-all;'>{_escape(str(p)[:160])}</code></li>"
+            for p in (a.get("payloads") or [])
+        )
+        samp_html = ""
+        for s in (a.get("samples") or []):
+            lbl, col = _OUT.get(s.get("outcome"), ("?", "var(--text-muted)"))
+            resp = str(s.get("response", "") or "")
+            resp_block = (
+                f"<details style='margin-top:3px;'><summary style='cursor:pointer; font-size:0.74rem; color:var(--accent);'>dönen yanıt</summary>"
+                f"<pre style='font-size:0.74rem; max-height:170px; overflow:auto; margin:3px 0 0;'>{_escape(resp[:600])}</pre></details>"
+                if resp else ""
+            )
+            samp_html += (
+                f"<div style='margin:6px 0; padding:6px 8px; background:#0d1117; border-left:3px solid {col}; border-radius:3px;'>"
+                f"<div style='font-size:0.78rem; word-break:break-all;'>💉 <code style='color:var(--sev-high)'>{_escape(str(s.get('payload',''))[:160])}</code> "
+                f"→ <strong style='color:{col}'>HTTP {int(s.get('status') or 0)} ({_escape(lbl)})</strong></div>"
+                f"{resp_block}</div>"
+            )
+        rows.append(
+            f"<details style='border:1px solid var(--border); border-radius:5px; margin-bottom:6px; padding:6px 10px;'>"
+            f"<summary style='cursor:pointer; line-height:1.7;'><code style='color:var(--accent)'>{method}</code> "
+            f"<code style='font-size:0.82rem;'>{endpoint}</code> — giriş: <code style='color:var(--sev-high)'>{param}</code> "
+            f"<span style='color:var(--text-muted); font-size:0.8rem;'>({total} istek)</span> {badges}</summary>"
+            f"<div style='margin-top:8px;'>"
+            f"<div style='font-weight:600; font-size:0.82rem; margin-bottom:4px;'>Denenen payloadlar ({len(a.get('payloads') or [])}):</div>"
+            f"<ul style='margin:0 0 8px 18px;'>{pl_rows}</ul>"
+            + (f"<div style='font-weight:600; font-size:0.82rem; margin:8px 0 4px;'>Örnek istek/yanıtlar:</div>{samp_html}" if samp_html else "")
+            + "</div></details>"
+        )
+    more = ("<p style='color:var(--text-muted); font-size:0.8rem; margin-top:8px;'>… ve daha fazla giriş noktası "
+            f"(en yoğun ilk 80 gösteriliyor / toplam {total_inputs})</p>") if total_inputs > 80 else ""
+
+    return f"""
+    <details class="card" style="background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:1.5rem; margin-bottom:2rem;">
+        <summary style="cursor:pointer; font-size:1.05rem; font-weight:600;">[flask] Saldırı Denemeleri — {total_inputs} giriş noktası · {total_payloads} farklı payload · {total_reqs} istek</summary>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin:0.8rem 0;">
+            Her giriş noktasında denenen payloadlar ve dönen yanıtlar. <strong>Başarılı/doğrulanan</strong> denemeler ayrıca yukarıdaki <strong>Bulgular</strong> tablosunda yer alır; bu panel başarısız denemeleri de kapsar. Satıra tıkla → payload listesi ve örnek yanıtları aç.
+        </p>
+        <div style="margin-top:1rem;">{"".join(rows)}{more}</div>
+    </details>
+    """
+
+
 def _derive_target_from_results(results: dict) -> str:
     """meta.target kaybolduğunda hedef adını bulgulardan/nmap/sertifikadan türet."""
     if not isinstance(results, dict):
@@ -1519,6 +1606,9 @@ def render_html_dashboard(results: dict) -> str:
         </div>
         """
 
+    # --- Attack-attempt log (denenen payloadlar + yanıtlar, collapsed) ---
+    attempts_html = _render_attack_attempts(results)
+
     # --- SSL Data Prep ---
     ssl_html = ""
     tls_raw = results.get("tls") or {}
@@ -2013,6 +2103,9 @@ def render_html_dashboard(results: dict) -> str:
 
     <!-- Phase Errors -->
     { phase_errors_html }
+
+    <!-- Attack-attempt log (denenen payloadlar + yanıtlar, collapsed) -->
+    { attempts_html }
 
     <!-- Findings Table -->
     <h2>[search] Bulgular (<span id="findingCount">{total_issues}</span> / {total_issues})</h2>
