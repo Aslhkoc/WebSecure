@@ -376,11 +376,64 @@ class InteractshClient(_BaseOSAT, IOSATClient):
         self._public_key_b64: Optional[str] = None
         self._encrypted: bool = True  # Sunucu şifreleme kullanıyor mu
 
+    async def _oast_server_reachable(self, timeout: float = 6.0) -> bool:
+        """interact_base'e KISA bir erişim probu (Tor-farkında, requests yoluyla).
+
+        Public interactsh sunucuları (interact.sh/oast.fun) sık sık kapalıdır.
+        Kayıt-ölü bir kanala tam RSA+register denemesi 30s'e kadar bekleyip
+        korkutucu bir hata basıyordu. Bu prob, herhangi bir HTTP yanıtı (kod fark
+        etmez — sunucu ayakta demektir) alınırsa True döner; bağlantı/SSL/timeout
+        hatasında False. Böylece ulaşılamazsa hızlı + sakin biçimde atlanır.
+        """
+        base = (self.cfg.interact_base or "").rstrip("/")
+        if not base:
+            return False
+
+        def _probe() -> bool:
+            try:
+                import requests as _rq
+            except Exception:
+                return True  # requests yoksa engelleme yapma; normal akış denesin
+            proxy = getattr(self.cfg, "proxy", None)
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            try:
+                _rq.get(
+                    base,
+                    proxies=proxies,
+                    verify=bool(getattr(self.cfg, "verify_tls", True)),
+                    timeout=timeout,
+                )
+                return True  # herhangi bir yanıt = sunucu erişilebilir
+            except Exception:
+                return False
+
+        try:
+            return await asyncio.to_thread(_probe)
+        except Exception:
+            return False
+
     async def _ensure_registered(self) -> None:
         # _register_failed: kayıt bir kez başarısız olduysa tekrar deneme (her
         # token/poll çağrısında yeniden denenip ~1000 tekrarlı WARNING basmasını önler).
         if self._registered or getattr(self, "_register_failed", False):
             return
+
+        # HIZLI ERİŞİM PROBU: sunucu ulaşılamazsa tam kayıt denemeden, SAKİN bir
+        # mesajla atla. Sunucu ileride erişilir olursa (örn. kendi interactsh'ini
+        # kurup oast.interact_base'i ayarlarsan) bu prob geçer → OOB kendiliğinden
+        # tekrar açılır (kalıcı kapatma YOK).
+        if not await self._oast_server_reachable():
+            self._register_failed = True
+            _logger.warning(
+                "[OAST] Sunucu erişilemez (%s) → kör/OOB callback doğrulaması bu "
+                "tarama için ATLANDI. Bu bir HATA DEĞİL: diğer tüm tespitler "
+                "(time-based, differential, error-based dâhil) normal çalışır. Kör "
+                "SSRF/RCE/XXE'yi callback ile doğrulamak istersen kendi interactsh "
+                "sunucunu kurup config'de oast.interact_base'i ona çevir.",
+                self.cfg.interact_base,
+            )
+            return
+
         url = self.cfg.interact_base.rstrip("/") + self.cfg.interact_register_path
         secret = uuid.uuid4().hex
 
