@@ -774,15 +774,46 @@ class SubdomainScanner(BaseScanner):
         self.passive_only = passive_only
         self.securitytrails_key = securitytrails_key or os.environ.get("SECURITYTRAILS_API_KEY", "")
 
+    @staticmethod
+    def _enrich(item: Dict[str, Any], domain: str) -> Dict[str, Any]:
+        """Fill the display fields a single subdomain record needs in the report."""
+        sub = item.get("subdomain", "")
+        item.setdefault("severity", "info")
+        item.setdefault("title", f"Subdomain: {sub}")
+        item.setdefault("domain", domain)
+        item.setdefault("url", f"https://{sub}")
+        item.setdefault("message", f"{sub} ({item.get('ip', '')}) [{item.get('method', '')}]")
+        return item
+
     def run(self, target: str, **kwargs) -> List[Dict[str, Any]]:
         """BaseScanner interface — delegates to scan."""
-        return self.scan(target)
+        return self.scan(target, stream=bool(kwargs.get("stream", False)))
 
-    def scan(self, target: str) -> List[Dict[str, Any]]:
+    def scan(self, target: str, stream: bool = False) -> List[Dict[str, Any]]:
+        """Enumerate subdomains from every available source.
+
+        When ``stream=True`` each newly discovered subdomain (and the
+        zone-transfer / ASN findings) is written to the central report bucket the
+        MOMENT its source finishes — instead of only after the whole scan returns.
+        This is critical because active ``amass`` (passive_only=False) under
+        no_timeout can run for many minutes; with the old all-or-nothing return,
+        if that long tail was abandoned or the scan ended first, even the instant
+        crt.sh / HackerTarget hits were silently lost (no ``subdomains`` bucket in
+        the report at all). Streaming makes partial results always survive.
+        """
         domain = _extract_domain(target)
         if not domain:
             logger.warning("[Subdomain] Geçerli domain çıkarılamadı.")
             return []
+
+        # Lazy import so standalone use (stream=False) keeps zero reporting coupling.
+        _emit = None
+        if stream:
+            try:
+                from websecure.core.reporting import add_result as _emit
+            except Exception as _imp_exc:  # pragma: no cover
+                logger.debug(f"[Subdomain] streaming devre dışı (import): {_imp_exc!r}")
+                _emit = None
 
         logger.info(f"[Subdomain] Hedef domain: {domain}")
         all_results: List[Dict[str, Any]] = []
@@ -793,7 +824,13 @@ class SubdomainScanner(BaseScanner):
                 sub = item.get("subdomain", "")
                 if sub and sub not in seen_subs:
                     seen_subs.add(sub)
+                    self._enrich(item, domain)
                     all_results.append(item)
+                    if _emit:                      # persist immediately — survive abandonment
+                        try:
+                            _emit("subdomains", item)
+                        except Exception as _e:
+                            logger.debug(f"[Subdomain] stream emit hatası: {_e!r}")
 
         # 1. crt.sh — hızlı, pasif, araç gerektirmez
         if self.use_crtsh:
@@ -806,38 +843,48 @@ class SubdomainScanner(BaseScanner):
         if self.use_subfinder:
             _add(SubfinderWrapper().run(domain))
 
-        # 4. Amass — harici araç (kuruluysa)
-        if self.use_amass:
-            _add(AmassWrapper().run(domain, passive=self.passive_only))
-
-        # 5. SecurityTrails — key varsa
+        # 5. SecurityTrails — key varsa (hızlı API, amass'tan ÖNCE)
         if self.securitytrails_key:
             _add(SecurityTrailsWrapper(api_key=self.securitytrails_key).run(domain))
 
-        # 6. DNS brute-force — her zaman çalışır
+        # 6. DNS brute-force — her zaman çalışır (kendi bütçesiyle sınırlı)
         brute = DNSBruteForce(wordlist_path=self.wordlist_path, threads=self.threads)
         _add(brute.run(domain))
 
+        # 4. Amass — harici araç (kuruluysa). EN SONA alındı: aktif enum (passive_only
+        #    False) çok uzun sürebilir; yukarıdaki hızlı kaynaklar artık çoktan
+        #    rapora yazıldığı için amass uzasa/terk edilse bile sonuç KAYBOLMAZ.
+        if self.use_amass:
+            # Aktif modda bile sonlu tut: no_timeout watchdog bütçesi (~600s) ile
+            # hizalı — aksi halde tek bir hedef için amass faz join'ini saatlerce
+            # bloklayabilir.
+            _amass_timeout = 600 if not self.passive_only else 240
+            _add(AmassWrapper().run(domain, passive=self.passive_only, timeout=_amass_timeout))
+
         logger.info(f"[Subdomain] Toplam {len(all_results)} benzersiz subdomain bulundu")
 
-        # 7. DNS Zone Transfer — kritik güvenlik testi
+        # 7. DNS Zone Transfer — kritik güvenlik testi. Bulgular ARTIK merkezî rapora
+        #    akar (eskiden run() taze bir {} verdiğinden self.results'a yazılıp KAYBOLUYORDU).
         zone_findings = DNSZoneTransfer().run(domain)
-        if zone_findings and isinstance(self.results, dict):
-            self.results.setdefault("passive", []).extend(zone_findings)
+        for zf in zone_findings:
+            if isinstance(self.results, dict):
+                self.results.setdefault("passive", []).append(zf)
+            if _emit:
+                try:
+                    _emit("offensive", zf)   # Critical bulgu — bulgu kovasına
+                except Exception:
+                    pass
 
         # 8. ASN / IP Blok haritalama
         asn_findings = ASNMapper().run(domain)
-        if asn_findings and isinstance(self.results, dict):
-            self.results.setdefault("passive", []).extend(asn_findings)
-
-        # Sonuçları zenginleştir ve döndür
-        for r in all_results:
-            r.setdefault("severity", "info")
-            r.setdefault("title", f"Subdomain: {r['subdomain']}")
-            r.setdefault("domain", domain)
-            r.setdefault("url", f"https://{r['subdomain']}")
-            r.setdefault("message",
-                         f"{r['subdomain']} ({r.get('ip', '')}) [{r.get('method', '')}]")
+        for af in asn_findings:
+            if isinstance(self.results, dict):
+                self.results.setdefault("passive", []).append(af)
+            if _emit:
+                try:
+                    _emit("passive", af)
+                except Exception:
+                    pass
 
         return all_results
 
@@ -871,4 +918,6 @@ def run(target: str, cfg: Optional[Dict[str, Any]] = None, session=None) -> List
         securitytrails_key=sub_cfg.get("securitytrails_key"),
     )
 
-    return scanner.scan(target)
+    # stream=True → her kaynak biter bitmez merkezî 'subdomains' kovasına yaz
+    # (yavaş/aktif amass terk edilse bile hızlı kaynakların sonucu rapora düşer).
+    return scanner.scan(target, stream=True)

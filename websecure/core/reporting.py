@@ -682,6 +682,98 @@ def _is_contentless_vuln(it: Dict[str, Any]) -> bool:
     return True
 
 
+# Evidence-dict keys that carry the real "what was injected and where" when the
+# canonical top-level fields are blank. Hoisting them lets EVERY reporter
+# (html/markdown/sarif/pdf/db) show the parameter + payload instead of a bare URL.
+# Order = priority (first non-empty wins).
+_EVID_PARAM_KEYS = ("param", "parameter", "field", "input", "injection_point", "header")
+_EVID_PAYLOAD_KEYS = (
+    "payload", "poc", "bypass_variant", "injection", "test_value",
+    "injected_value", "mutation", "vector", "marker_value",
+)
+
+
+def _hoist_injection_evidence(it: Dict[str, Any]) -> None:
+    """Lift injection detail (parameter/payload/request/response) from the
+    ``evidence`` dict into the canonical top-level fields when those are empty.
+
+    Many scanners (CRLF, IDOR, 403-bypass, business-logic, mass-assignment …)
+    record the real injection point and payload ONLY inside ``evidence`` — e.g.
+    ``evidence.param='redirect'``, ``evidence.bypass_variant='/.env?/'`` — leaving
+    the top-level ``parameter``/``payload`` blank. The report's Parametre / Payload /
+    Test-URL sections read the top-level fields, so such findings rendered as a
+    bare target URL with a "vulnerable" verdict and no proof of WHAT was sent.
+
+    This non-destructively fills only empty fields, and also synthesises a readable
+    ``request``/``response`` block from the evidence headers/status when the scanner
+    did not capture a live exchange. Gated to genuine vuln findings (must have a
+    ``type``/``vuln_type``) so recon buckets (subdomains/endpoints) are untouched.
+    Best-effort; never raises.
+    """
+    try:
+        if not (it.get("type") or it.get("vuln_type")):
+            return  # not a vuln finding — leave recon/meta items alone
+        ev = it.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}
+
+        # --- parameter ---
+        if not (it.get("parameter") or it.get("param")):
+            for k in _EVID_PARAM_KEYS:
+                v = ev.get(k)
+                if v:
+                    it["parameter"] = str(v)
+                    break
+
+        # --- payload ---
+        if not it.get("payload"):
+            for k in _EVID_PAYLOAD_KEYS:
+                v = ev.get(k)
+                if v:
+                    it["payload"] = str(v)
+                    break
+            # CRLF / header-injection composite (sequence + injected header + canary)
+            if not it.get("payload"):
+                _seq = ev.get("seq") or ev.get("sequence") or ""
+                _hdr = ev.get("injected_header")
+                _can = ev.get("canary")
+                if _hdr:
+                    it["payload"] = f"{_seq}{_hdr}: {_can or ''}".strip()
+                elif _seq and _can:
+                    it["payload"] = f"{_seq}{_can}"
+
+        # --- response (synthesise from evidence headers/status when not captured) ---
+        if not (it.get("response") or it.get("raw_response")):
+            status = ev.get("status") or ev.get("status_code") or it.get("http_status")
+            rhdrs = ev.get("response_headers")
+            if status or isinstance(rhdrs, dict):
+                lines = [f"HTTP {status}" if status else "HTTP (status belirsiz)"]
+                if isinstance(rhdrs, dict):
+                    for hk, hv in list(rhdrs.items())[:20]:
+                        lines.append(f"{hk}: {str(hv)[:300]}")
+                it["response"] = "\n".join(lines)
+
+        # --- request (reconstruct a minimal request line when missing) ---
+        if not (it.get("request") or it.get("raw_request")) and it.get("url"):
+            method = str(it.get("method") or "GET").upper()
+            try:
+                from urllib.parse import urlparse as _up
+                p = _up(str(it.get("url")))
+                path = (p.path or "/") + (f"?{p.query}" if p.query else "")
+                rl = [f"{method} {path} HTTP/1.1"]
+                if p.netloc:
+                    rl.append(f"Host: {p.netloc}")
+                _pm, _pl = it.get("parameter"), it.get("payload")
+                if _pm and _pl:
+                    rl += ["", f"[*] Enjeksiyon noktası: '{_pm}'", f"[*] Gönderilen payload: {_pl}"]
+                elif _pl:
+                    rl += ["", f"[*] Gönderilen payload: {_pl}"]
+                it["request"] = "\n".join(rl)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def add_result(bucket: str, item: Any) -> None:
     if not bucket:
         return
@@ -739,6 +831,11 @@ def add_result(bucket: str, item: Any) -> None:
         if it.get("severity") and it["severity"] != "Info" and _is_contentless_vuln(it):
             it["severity"] = "Info"
             it.setdefault("_note", "contentless-downgraded")
+
+        # Hoist injection detail (parameter/payload/request/response) out of the
+        # evidence dict into the canonical fields so the report never shows a bare
+        # URL with a "vulnerable" verdict and no proof of WHAT was sent / WHERE.
+        _hoist_injection_evidence(it)
 
         enforce = globals().get("_ENFORCE_REDACT", True)
         # [WS3] Bypass redaction for explicit 'sessions' bucket if user requested visibility

@@ -2265,14 +2265,13 @@ def _runner_subdomain(ctx) -> None:
         if not target:
             return
         cfg = getattr(ctx, "config", {}) or {}
+        # _sub_run (stream=True) her subdomain'i bulunduğu an KANONİK 'subdomains'
+        # kovasına (ÇOĞUL) yazar — rapor (html_dashboard "Keşfedilen Subdomain'ler"
+        # + pdf reporter) bunu okur. Akış sayesinde yavaş/aktif amass terk edilse
+        # bile crt.sh/HackerTarget/subfinder sonuçları rapora düşer (eski hâl:
+        # scan() yalnız HEPSİ bitince dönüyordu → uzun amass kuyruğu kesilince
+        # TÜM subdomain'ler kayboluyordu). Burada TEKRAR add_result YOK (çift kayıt).
         results = _sub_run(target, cfg=cfg)
-        for r in results:
-            # KANONİK KOVA = 'subdomains' (ÇOĞUL). Rapor (html_dashboard
-            # FINDING_BUCKETS + dedike "Keşfedilen Subdomain'ler" bölümü),
-            # pdf reporter ve subdomain.py docstring'i HEPSİ çoğul okur.
-            # Eski 'subdomain' (tekil) hiçbir tüketicinin okumadığı öksüz
-            # kovaydı → tarama subdomain buluyor ama rapora HİÇ düşmüyordu.
-            add_result("subdomains", r)
         _logger.info(f"[phases] Subdomain tarama tamamlandı: {len(results)} bulgu")
     except Exception as e:
         _logger.warning(f"[phases] Subdomain tarama hatası: {e}")

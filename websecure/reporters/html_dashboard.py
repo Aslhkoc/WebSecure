@@ -2397,6 +2397,31 @@ def render_html_dashboard(results: dict) -> str:
             html += `</div>`;
         }}
 
+        // --- 5b. Çıkarılan Veri (enjeksiyon kanıtı: DB / tablo / kolon adları) ---
+        // SQLi/komut enjeksiyonu başarılı olduğunda scanner ``extracted_data`` ile
+        // veritabanı/tablo/kolon adlarını, kullanıcıyı, sürümü taşır. Eskiden bu
+        // alan yalnız "Tüm Ham Alanlar" dökümünde görünüyordu → kullanıcı "name
+        // tablosu çıktı, id çıktı" gibi kanıtı bulamıyordu. Artık öne çıkan blok.
+        const exd = (typeof d.extracted_data === 'object' && d.extracted_data && !Array.isArray(d.extracted_data)) ? d.extracted_data : null;
+        if (exd && Object.keys(exd).length) {{
+            const exLabels = {{databases:'Veritabanları', tables:'Tablolar', columns:'Kolonlar',
+                current_user:'DB Kullanıcısı', current_db:'Geçerli DB', current_database:'Geçerli DB',
+                version:'DB Sürümü', hostname:'Hostname', banner:'Banner',
+                dumped_rows:'Dökülen Satırlar', dumped_data:'Dökülen Veri', rows:'Satırlar'}};
+            html += `<div style="margin-top:16px; border:1px solid var(--sev-high); border-radius:6px; overflow:hidden;">`;
+            html += `<div style="background:var(--sev-high); color:#000; padding:8px 12px; font-weight:bold; font-size:0.9rem;">🩸 Çıkarılan Veri (Enjeksiyon Kanıtı)</div>`;
+            html += `<div style="padding:12px; background:var(--bg-card);"><div class="kv-grid" style="margin:0;">`;
+            Object.keys(exd).forEach(k => {{
+                let v = exd[k];
+                if (v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length)) return;
+                if (Array.isArray(v)) v = v.join(', ');
+                else if (typeof v === 'object') v = JSON.stringify(v, null, 2);
+                const label = exLabels[k] || k;
+                html += `<div class="label">${{escapeHtml(label)}}</div><div><code style="color:var(--sev-high); word-break:break-all;">${{escapeHtml(String(v))}}</code></div>`;
+            }});
+            html += `</div></div></div>`;
+        }}
+
         // --- 6. Evidence Forensics (object tipinde) ---
         const ev = (typeof d.evidence === 'object' && d.evidence && !Array.isArray(d.evidence)) ? d.evidence : {{}};
         const hasEvidence = Object.keys(ev).length > 0;
@@ -2436,7 +2461,7 @@ def render_html_dashboard(results: dict) -> str:
         const handledKeys = new Set(["url","method","severity","location","param","confidence","score",
             "verified","confirmed","tool","scanner","source","technique","attack_type","attack","vector",
             "category","script","script_name","template","waf_bypass","bypass_technique","encoding",
-            "payload","poc","reason","message","description","request","raw_request","response","raw_response","evidence","ts"]);
+            "payload","poc","reason","message","description","request","raw_request","response","raw_response","evidence","extracted_data","ts"]);
         const extraKeys = Object.keys(d).filter(k => !handledKeys.has(k) && !k.startsWith("_"));
         if (extraKeys.length > 0) {{
             html += `<details style="margin-top:12px;"><summary style="cursor:pointer; color:var(--text-muted); font-size:0.85rem;">▶ Tüm Ham Alanlar (${{extraKeys.length}})</summary>`;
