@@ -469,7 +469,11 @@ class InteractshClient(_BaseOSAT, IOSATClient):
         found: List[Dict[str, Any]] = []
 
         try:
-            r = await self._client.get(
+            # Polling de aynı httpx-transport TypeError'una düşebilir (Tor/SOCKS) —
+            # kayıt gibi requests fallback'ine sahip _resilient_request'ten geç,
+            # yoksa kayıt başarılı olsa bile OOB eventleri sessizce alınamaz.
+            r = await self._resilient_request(
+                "get",
                 poll_url,
                 params={"id": self._correlation_id, "secret": self._secret},
             )
