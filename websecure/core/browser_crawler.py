@@ -327,6 +327,9 @@ class BrowserCrawler:
                     _logger.error(f"[BrowserCrawler] Chromium başlatılamadı/zaman aşımı: {e}")
                     return self._result
             ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
+            # Güvenlik tarayıcısı: TLS sertifika hatalarını yok say (test/iç hedeflerde
+            # süresi dolmuş/self-signed cert yaygın; aksi halde sayfa hiç yüklenmez).
+            ctx_opts.setdefault("ignore_https_errors", True)
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state
 
@@ -1511,6 +1514,12 @@ class BrowserFormInjector:
                 else:
                     return self._findings
             ctx_opts: Dict[str, Any] = _random_browser_fingerprint()
+            # GÜVENLİK TARAYICISI: TLS sertifika hatalarını YOK SAY. Test/iç hedeflerde
+            # süresi dolmuş / self-signed / hatalı-isim sertifika ÇOK yaygın; Chrome
+            # varsayılan olarak ERR_CERT_DATE_INVALID ile sayfayı reddeder → form hiç
+            # yüklenmez, "form bulunamadı" yanılgısı (demo.testfire.net cert'i bunun
+            # canlı örneğiydi). Tarayıcı zaten saldırı amaçlı; cert doğrulamak anlamsız.
+            ctx_opts.setdefault("ignore_https_errors", True)
             if self.config.auth_storage_state:
                 ctx_opts["storage_state"] = self.config.auth_storage_state
             try:
