@@ -282,6 +282,44 @@ class _BaseOSAT:
         except RuntimeError:
             self._client_loop = None
 
+    async def _resilient_request(self, method: str, url: str, **kwargs):
+        """httpx isteği; httpx'in 'argument 1 must be str, not bytes' transport
+        edge-case'inde (h2/hpack VEYA bazı SOCKS/Tor yığınlarında görülür) senkron
+        ``requests`` (urllib3 — h2/hpack yok, PySocks SOCKS proxy'yi taşır) ile bir
+        thread'de yeniden dener. Böylece httpx'e özgü bu TypeError OAST kaydını
+        tamamen öldürmez. Dönen nesne .status_code ve .json() sunar.
+        """
+        try:
+            return await getattr(self._client, method)(url, **kwargs)
+        except TypeError as te:
+            # 1) http2/hpack şüphesi — http2'siz, yığın-içi tek deneme (ucuz).
+            if self._http2_enabled and not self._force_no_http2:
+                _logger.debug("[OAST] %s TypeError (%s) — http2 kapatılıp yeniden", method, te)
+                self._force_no_http2 = True
+                self._client_obj = None  # _client property http2'siz yeniden kursun
+                try:
+                    return await getattr(self._client, method)(url, **kwargs)
+                except TypeError as te2:
+                    te = te2  # hâlâ patlıyorsa → requests fallback
+            # 2) Farklı transport (requests/urllib3) ile thread'de yeniden dene.
+            _logger.debug("[OAST] %s httpx TypeError (%s) — requests fallback", method, te)
+            return await asyncio.to_thread(self._requests_call, method, url, kwargs)
+
+    def _requests_call(self, method: str, url: str, kwargs: Dict[str, Any]):
+        """Senkron requests çağrısı (thread'de). httpx ile aynı kwarg adlarını
+        (json=/params=) kabul eder; SOCKS proxy PySocks ile taşınır."""
+        import requests as _rq
+        proxy = getattr(self.cfg, "proxy", None)
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        fn = getattr(_rq, method)
+        return fn(
+            url,
+            proxies=proxies,
+            verify=bool(getattr(self.cfg, "verify_tls", True)),
+            timeout=float(getattr(self.cfg, "timeout", 10) or 10),
+            **kwargs,
+        )
+
     async def aclose(self) -> None:
         obj = self._client_obj
         if obj is not None:
@@ -361,23 +399,12 @@ class InteractshClient(_BaseOSAT, IOSATClient):
             payload["public-key"] = self._public_key_b64
 
         try:
-            try:
-                r = await self._client.post(url, json=payload)
-            except TypeError as _te:
-                # "argument 1 must be str, not bytes" — büyük olasılıkla HTTP/2
-                # (h2/hpack) gönderim katmanı. http2 olmadan bir kez daha dene.
-                if self._http2_enabled and not self._force_no_http2:
-                    _logger.debug(
-                        "[OAST] kayıt TypeError (%s) — http2 kapatılıp yeniden deneniyor", _te
-                    )
-                    self._force_no_http2 = True
-                    self._client_obj = None  # _client property yeniden kursun
-                    r = await self._client.post(url, json=payload)
-                else:
-                    raise
+            # http2/hpack VEYA SOCKS-proxy yığını "argument 1 must be str, not bytes"
+            # fırlatırsa _resilient_request http2-off + requests fallback ile çözer.
+            r = await self._resilient_request("post", url, json=payload)
             if r.status_code not in (200, 201):
                 # Bazı self-hosted örnekler GET ile kayıt destekler
-                r = await self._client.get(url, params={"secret": secret})
+                r = await self._resilient_request("get", url, params={"secret": secret})
 
             if r.status_code in (200, 201):
                 data = r.json() or {}
