@@ -1230,7 +1230,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Etkileşimli soruları atla ve sadece yapılandırmayı doğrula")
     p.add_argument("--batch", action="store_true",
                    help="Etkileşimli soruları atla ve varsayılanlarla devam et (Non-interactive)")
-    p.add_argument("--profile", help="Tarama profili (aggressive, stealth)")
+    p.add_argument("--profile",
+                   help="Tarama profili: aggressive, stealth, cicd, bug_bounty, "
+                        "compliance, api_only, authenticated (+ YAML özel profiller)")
     p.add_argument("--debug", action="store_true",
                    help="Detaylı hata ayıklama çıktılarını (DEBUG logs) göster")
     p.add_argument("--visible", action="store_true", help="Tarayıcıyı AÇ (Varsayılan)")
@@ -1496,13 +1498,23 @@ def _select_profile(cfg: dict, args) -> tuple[str, dict]:
         profile, cfg = _offer_scan_profile_and_confirm(cfg)
     else:
         profile = args.profile or (cfg.get("settings") or {}).get("scan_profile") or "aggressive"
-        # noinspection PyProtectedMember
-        from websecure.core.scan_profile import _apply_aggressive_profile, _apply_stealth_profile  # noqa: PLC0415
-        if profile in ("stealth",):
-            cfg = _apply_stealth_profile(cfg)
-        else:
-            cfg = _apply_aggressive_profile(cfg)
+        # Tüm yerleşik profiller (aggressive, stealth, cicd, bug_bounty, compliance,
+        # api_only, authenticated) + YAML özel profiller komut satırından da seçilebilmeli.
+        # Önceki kod yalnız 'stealth'i tanıyıp diğer 5 profili SESSİZCE 'aggressive'e
+        # düşürüyordu (README/interaktif menü 7 profil sunarken CLI 2 profil işliyordu).
+        # apply_profile_by_name ProfileRegistry'ye köprüdür ve tüm profilleri uygular;
+        # bilinmeyen adda güvenli stealth/aggressive fallback yapar.
+        from websecure.core.scan_profile import apply_profile_by_name  # noqa: PLC0415
+        try:
+            from websecure.core.profiles import get_registry as _get_reg  # noqa: PLC0415
+            _valid_profiles = set(_get_reg().list())
+        except Exception:
+            _valid_profiles = {"aggressive", "stealth"}
+        if profile not in _valid_profiles:
+            print(f"[!] Bilinmeyen profil '{profile}'. Geçerli profiller: "
+                  f"{', '.join(sorted(_valid_profiles))}. 'aggressive' kullanılıyor.")
             profile = "aggressive"
+        cfg = apply_profile_by_name(profile, cfg)
         cfg = apply_active_profile(cfg)
         if args.dry_run:
             print(f"[Dry-Run] Profil uygulandı: {profile}.")

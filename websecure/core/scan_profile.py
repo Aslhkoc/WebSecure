@@ -3,7 +3,14 @@ websecure.core.scan_profile
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Profil seçme/uygulama yardımcıları.
 
-SADECE 2 MOD:
+Profil sistemi ProfileRegistry (core/profiles.py) üzerinden 7 yerleşik profil
+sunar: aggressive, stealth, cicd, bug_bounty, compliance, api_only,
+authenticated (+ config/profiles/ altındaki YAML özel profiller). Hepsi hem
+interaktif menüden (_offer_scan_profile_and_confirm) hem komut satırından
+(apply_profile_by_name) seçilebilir.
+
+Aşağıdaki iki fonksiyon (_apply_aggressive_profile / _apply_stealth_profile)
+ProfileRegistry erişilemezse kullanılan yerel yedek (fallback) uygulamalardır:
   - Agresif : Tam kapsam, maksimum hız, tüm araçlar/payload/wordlist/script aktif
   - Stealth : Tam kapsam, yavaş, WAF bypass, sakin adımlar — kapsam AYNI
 """
